@@ -184,7 +184,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
     resources,
     signal,
     onEvent,
-    onPhase,
+    diagnostics,
   }: {
     initial: Awaited<ReturnType<typeof startCronGateway>>;
     receiptId: string;
@@ -192,10 +192,11 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
     resources: AsyncDisposableStack;
     signal: AbortSignal;
     onEvent?: Parameters<typeof connectGatewayClient>[0]["onEvent"];
-    onPhase?: (phase: string) => void;
+    diagnostics?: ReturnType<typeof createCronRestartDiagnostics>;
   }) {
     const { instance, gateway, anchor, applicationName, bootId, closed } = initial;
     const child = instance.child!;
+    diagnostics?.trackChild(child);
     const pid = child.pid!;
     expect(bootId).toEqual(expect.any(String));
     const pool = await observePostgresPoolReuse(gateway, () => instance.logs());
@@ -223,21 +224,20 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         [applicationName, lockerPid],
       );
     // The provider is still running: restart-intent consumption must precede finalization.
-    onPhase?.("request-restart");
+    diagnostics?.trace("request-restart");
     const restart = await gateway.request<{ preflight: { counts: { cronRuns: number } } }>(
       "gateway.restart.request",
       { skipDeferral: true, reason: "postgres-cron-in-process-test" },
     );
     expect(restart).toMatchObject({ ok: true, status: "scheduled" });
     expect(restart.preflight.counts.cronRuns).toBeGreaterThan(0);
-    onPhase?.("restart-replied");
-    onPhase?.("await-provider-abort");
+    diagnostics?.trace("await-provider-abort");
     await withinTest(aborted, signal);
-    onPhase?.("provider-aborted");
+    diagnostics?.trace("provider-aborted");
     await expect.poll(blockedBackends, { timeout: 15_000 }).toEqual([{ pid: expect.any(Number) }]);
-    onPhase?.("finalizer-blocked");
+    diagnostics?.trace("finalizer-blocked");
     // Ingress retires after cron's grace window, before the retained finalizer joins.
-    onPhase?.("await-ingress-close");
+    diagnostics?.trace("await-ingress-close");
     await expect(withinTest(closed, signal)).resolves.toEqual({
       code: 1012,
       reason: "service restart",
@@ -248,7 +248,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
     expect(child.signalCode).toBeNull();
     pool.expectBeforeRestart();
     await lock.disposeAsync();
-    onPhase?.("finalizer-unlocked");
+    diagnostics?.trace("finalizer-unlocked");
     await disconnectGatewayClient(gateway);
     await expect
       .poll(
@@ -281,6 +281,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       signal,
       onHelloOk: (hello) => nextBoot.resolve(hello.server.bootId),
       onEvent,
+      onClose: diagnostics?.onClose,
     });
     resources.defer(() => disconnectGatewayClient(restarted));
     const nextBootId = await nextBoot.promise;
@@ -299,7 +300,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       ).status,
     ).toBe(200);
     await pool.expectAfterRestart(restarted);
-    onPhase?.("replacement-ready");
+    diagnostics?.trace("replacement-ready");
     return restarted;
   }
 
@@ -494,7 +495,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         aborted: aborted.promise,
         resources,
         signal,
-        onPhase: trace,
+        diagnostics,
         onEvent: ({ event, payload }) => {
           if (event !== "cron") {
             return;

@@ -9,10 +9,11 @@ import {
   readRequestText,
 } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
+import type { OpenClawTestProcess } from "../../test/helpers/openclaw-test-process.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
-import type { GatewayClient } from "./client.js";
+import { GatewayClientRequestError, type GatewayClient } from "./client.js";
 
 type CronRetrySnapshot = {
   enabled: boolean;
@@ -126,8 +127,17 @@ export function createCronRestartDiagnostics(
 ) {
   const started = performance.now();
   let phase = "setup";
-  let ownerLogs: Record<string, number | boolean> | undefined;
+  let ownerLogs: Record<string, number | boolean | string> | undefined;
+  let child: OpenClawTestProcess | undefined;
+  let childExit:
+    | { elapsedMs: number; code: number | null; signal: NodeJS.Signals | null }
+    | undefined;
+  let socketClose: { elapsedMs: number; code: number } | undefined;
   const elapsedMs = () => Math.round(performance.now() - started);
+  const liveness = () => ({
+    child: child && { exitCode: child.exitCode, signalCode: child.signalCode, exit: childExit },
+    socketClose,
+  });
   const trace = (next: string) => {
     phase = next;
     console.info("cron-restart-diagnostic", {
@@ -135,6 +145,7 @@ export function createCronRestartDiagnostics(
       elapsedMs: elapsedMs(),
       requests: requests(),
       ownerLogs,
+      ...(next.startsWith("aborted-during-") ? liveness() : {}),
     });
   };
   const onAbort = () => trace(`aborted-during-${phase}`);
@@ -172,13 +183,45 @@ export function createCronRestartDiagnostics(
           line.message.startsWith("gateway post-ready maintenance deferred task failed:"),
         ).length,
       };
-    } catch {
-      ownerLogs = { available: false };
+    } catch (error) {
+      const name = error instanceof Error ? error.name : "unknown";
+      const code = error instanceof GatewayClientRequestError ? error.gatewayCode : "unknown";
+      ownerLogs = {
+        available: false,
+        errorName: [
+          "Error",
+          "TypeError",
+          "GatewayClientRequestError",
+          "GatewayClientRequestTimeoutError",
+        ].includes(name)
+          ? name
+          : "unknown",
+        errorCode: ["INVALID_REQUEST", "FORBIDDEN", "UNAVAILABLE"].includes(code)
+          ? code
+          : error instanceof Error && error.message === "gateway not connected"
+            ? "CLIENT_NOT_CONNECTED"
+            : "unknown",
+      };
     }
-    console.info("cron-restart-owner-snapshot", { elapsedMs: elapsedMs(), ...ownerLogs });
+    console.info("cron-restart-owner-snapshot", {
+      elapsedMs: elapsedMs(),
+      ...liveness(),
+      ...ownerLogs,
+    });
   };
   return {
     trace,
+    trackChild(original: OpenClawTestProcess) {
+      child = original;
+      const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+        childExit ??= { elapsedMs: elapsedMs(), code, signal };
+      };
+      child.once("exit", onExit);
+      resources.defer(() => original.removeListener("exit", onExit));
+    },
+    onClose(code: number) {
+      socketClose ??= { elapsedMs: elapsedMs(), code };
+    },
     observeRetry<T>(
       retry: Promise<T>,
       gateway: GatewayClient,
