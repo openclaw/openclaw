@@ -415,14 +415,16 @@ describe("native plugin session actions", () => {
     const setDraft = vi.fn((text: string) => {
       draft = text;
     });
-    const tasks = createComposerTasks();
+    const tasks = createComposerTasks(() => true);
     element.composer = {
       draft: "stale render",
       getDraft: () => draft,
       onDraftChange: setDraft,
       tasks: () => tasks,
+      loadTasks: async () => tasks,
     };
     element.querySelector<HTMLButtonElement>("button")?.click();
+    await vi.waitFor(() => expect(run).toHaveBeenCalled());
     const composer = run.mock.calls[0]?.[0].composer;
     if (!composer) {
       throw new Error("Expected the composer action to receive its pane draft");

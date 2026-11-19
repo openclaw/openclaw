@@ -4,8 +4,7 @@ import { createComposerTasks } from "./chat-composer-task.ts";
 
 function setup(value: string) {
   return createRoot((dispose) => {
-    const tasks = createComposerTasks();
-    const release = tasks.present();
+    const tasks = createComposerTasks(() => true);
     const textarea = document.createElement("textarea");
     textarea.value = value;
     document.body.append(textarea);
@@ -13,7 +12,6 @@ function setup(value: string) {
       tasks,
       textarea,
       dispose: () => {
-        release();
         textarea.remove();
         dispose();
       },
@@ -27,7 +25,6 @@ describe("composer tasks", () => {
     try {
       const outcome = tasks.offer("rewritten", "Rewrite", new AbortController().signal);
       flush();
-      // Dictation and pending goals make the textarea read-only.
       textarea.readOnly = true;
       expect(tasks.accept(textarea)).toBe(false);
       flush();

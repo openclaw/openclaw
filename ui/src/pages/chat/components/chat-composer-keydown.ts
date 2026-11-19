@@ -103,7 +103,7 @@ export function createComposerKeyDownHandler({
       return;
     }
 
-    if (state.tasks.card?.kind === "proposal") {
+    if (state.tasks()?.card?.kind === "proposal") {
       if (
         event.key === "Tab" &&
         !event.shiftKey &&
@@ -117,7 +117,7 @@ export function createComposerKeyDownHandler({
       }
       if (event.key === "Escape") {
         event.preventDefault();
-        state.tasks.dismiss();
+        state.tasks()?.dismiss();
         return;
       }
     }

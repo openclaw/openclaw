@@ -1,6 +1,6 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import type { Signal, StoreSetter } from "solid-js";
+import type { Accessor, Signal, StoreSetter } from "solid-js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -305,6 +305,9 @@ export type ChatComposerState = {
   dictation: ComposerDictationOwner | null;
   composerDraftScope: { key: string } | null;
   dictationSelection: { start: number; end: number; value: string } | null;
-  /** Plugin composer tasks and proposals; per pane, cleared when the draft scope changes. */
-  tasks: ComposerTasks;
+  /** Plugin composer tasks and proposals; null until the first plugin composer action loads it. */
+  tasks: Accessor<ComposerTasks | null>;
+  loadTasks: () => Promise<ComposerTasks>;
+  /** Mounted built-in composers; a replacement composer mounts none and so cannot run tasks. */
+  taskPresenters: number;
 };

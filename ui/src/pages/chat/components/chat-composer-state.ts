@@ -8,7 +8,7 @@ import { createComposerEmojiMenu } from "./chat-composer-emoji-state.ts";
 import { createHumanMentionMenu } from "./chat-composer-mention-menu-state.ts";
 import { createSkillMenu } from "./chat-composer-skill-menu-state.ts";
 import { createSlashMenu } from "./chat-composer-slash-menu-state.ts";
-import { createComposerTasks } from "./chat-composer-task.ts";
+import type { ComposerTasks } from "./chat-composer-task.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 function createChatComposerState(): ChatComposerState {
@@ -17,7 +17,9 @@ function createChatComposerState(): ChatComposerState {
     goalExpandedId: null,
     queuedSubmit: null,
   });
-  return {
+  const [tasks, setTasks] = createSignal<ComposerTasks | null>(null);
+  let loading: Promise<ComposerTasks> | undefined;
+  const state: ChatComposerState = {
     // Admission survives composer remounts while the same goal mode is pending.
     goalPending: createSignal<ChatGoalDraftMode | null>(null),
     presentation,
@@ -43,7 +45,27 @@ function createChatComposerState(): ChatComposerState {
     dictation: null,
     composerDraftScope: null,
     dictationSelection: null,
-    tasks: createComposerTasks(),
+    tasks,
+    // The owner loads with the first plugin composer action, outside the chat boot bundle.
+    loadTasks: () =>
+      (loading ??= import("./chat-composer-task.ts").then(({ createComposerTasks }) => {
+        const owner = createComposerTasks(() => state.taskPresenters > 0);
+        setTasks(owner);
+        return owner;
+      })),
+    taskPresenters: 0,
+  };
+  return state;
+}
+
+/** A mounted built-in composer presents the pane's tasks; a replacement composer cannot. */
+export function presentComposerTasks(state: ChatComposerState) {
+  state.taskPresenters += 1;
+  return () => {
+    state.taskPresenters -= 1;
+    if (state.taskPresenters === 0) {
+      state.tasks()?.cancel();
+    }
   };
 }
 

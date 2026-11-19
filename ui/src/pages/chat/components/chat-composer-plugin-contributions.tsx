@@ -27,7 +27,8 @@ export function ChatComposerPluginContributions(props: {
     },
     getDraft: () => props.composer.getDraft?.() ?? props.composer.draft,
     onDraftChange: (next) => props.composer.onDraftChange(next),
-    tasks: () => getChatComposerState(props.composer.paneId).tasks,
+    tasks: () => getChatComposerState(props.composer.paneId).tasks(),
+    loadTasks: () => getChatComposerState(props.composer.paneId).loadTasks(),
   };
   return (
     <Show when={application}>

@@ -228,12 +228,12 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
   type Action = ReturnType<typeof actions>[number];
   // A composer action whose task is working shows pressed; clicking it again cancels the task.
   const runningTask = (action: Action) => {
-    const card = host.composer?.tasks().card;
+    const card = host.composer?.tasks()?.card;
     return card?.kind === "working" && card.actionKey === action.entry.key;
   };
   const runAction = (current: Action) => {
     if (runningTask(current)) {
-      host.composer?.tasks().cancel();
+      host.composer?.tasks()?.cancel();
       return;
     }
     const runtime = context?.plugins;
@@ -267,7 +267,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
         props.kind === "composer-toolbar" &&
         host.composer
           ?.tasks()
-          .report(current.state?.label ?? current.entry.value.label, formatUiError(error))
+          ?.report(current.state?.label ?? current.entry.value.label, formatUiError(error))
       ) {
         return;
       }

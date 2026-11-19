@@ -740,13 +740,6 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
   min-width: 0;
 }
 
-.chat-handoff-resume__rule {
-  padding: 0;
-  border: 0;
-  background: none;
-  font-family: inherit;
-}
-
 .chat-handoff-sessions,
 .chat-handoff-resume__rule {
   color: var(--muted);
@@ -784,6 +777,10 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
 .chat-handoff-resume__rule {
   display: flex;
   align-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
   gap: 8px;
   width: 100%;
   margin: 8px 0;

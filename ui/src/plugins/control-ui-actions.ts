@@ -16,8 +16,9 @@ export type ControlUiComposerDraft = {
   draft: string;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
-  /** The pane's task owner; it refuses tasks where no card can show them (a replacement). */
-  tasks: () => ComposerTasks;
+  /** The pane's task owner once loaded; it refuses tasks where no card can show them. */
+  tasks: () => ComposerTasks | null;
+  loadTasks: () => Promise<ComposerTasks>;
 };
 
 export function pluginSessionMenuActions(
@@ -117,33 +118,33 @@ export async function runControlUiPluginAction(
   // Tasks this invocation started. A rejection fails the latest one, so its card never stays
   // working after the action has ended; a cancelled or retired latest task expects the error.
   const tasks: ReturnType<ComposerTasks["start"]>[] = [];
+  const owner = composer ? await composer.loadTasks() : undefined;
   try {
     await entry.value.run({
       ...context,
       host: scopeControlUiHost(entry.host, signal, params.isCurrent),
       signal,
-      composer: composer && {
-        get draft() {
-          checkComposer();
-          return composer.getDraft?.() ?? composer.draft;
+      composer: composer &&
+        owner && {
+          get draft() {
+            checkComposer();
+            return composer.getDraft?.() ?? composer.draft;
+          },
+          setDraft: (text: string) => {
+            checkComposer();
+            composer.onDraftChange(text);
+          },
+          startTask: ({ title }: { title: string }) => {
+            checkComposer();
+            const task = owner.start({ title, signal, actionKey: entry.key, retry: params.retry });
+            tasks.push(task);
+            return task;
+          },
+          propose: async (text: string, proposal: ControlUiDraftProposal) => {
+            checkComposer();
+            return owner.offer(text, proposal.title, signal);
+          },
         },
-        setDraft: (text: string) => {
-          checkComposer();
-          composer.onDraftChange(text);
-        },
-        startTask: ({ title }: { title: string }) => {
-          checkComposer();
-          const task = composer
-            .tasks()
-            .start({ title, signal, actionKey: entry.key, retry: params.retry });
-          tasks.push(task);
-          return task;
-        },
-        propose: async (text: string, proposal: ControlUiDraftProposal) => {
-          checkComposer();
-          return composer.tasks().offer(text, proposal.title, signal);
-        },
-      },
     });
   } catch (error) {
     // Only the latest task matters: starting a newer one retires the earlier ones.

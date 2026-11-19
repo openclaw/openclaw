@@ -35,8 +35,9 @@ import { ChatComposerPluginContributions } from "./chat-composer-plugin-contribu
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
 import { ComposerQueue, ComposerInputScope, ComposerProgress } from "./chat-composer-regions.tsx";
+import { presentComposerTasks } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
-import { composerTaskAnnouncement } from "./chat-composer-task.ts";
+import { ComposerTaskSlot } from "./chat-composer-task-slot.tsx";
 import { renderComposerTextarea, type ComposerTextareaProps } from "./chat-composer-textarea.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import { ComposerWidthEdge, prepareComposerWidthEdge } from "./chat-composer-width-ref.tsx";
@@ -52,10 +53,6 @@ const HumanMentionMenuView = lazy(() => import("./chat-composer-mention-menu.tsx
   export: "HumanMentionMenuView",
 });
 const EmojiMenu = lazy(() => import("./chat-composer-emoji.tsx"), { export: "EmojiMenu" });
-// Loaded with the first plugin composer task; idle chats never fetch it.
-const ComposerTaskCardView = lazy(() => import("./chat-composer-task-card.tsx"), {
-  export: "ComposerTaskCardView",
-});
 // The reply strip loads with the first reply, outside the chat boot bundle.
 const ReplyPreview = lazy(() => import("./chat-composer-reply-preview.tsx"), {
   export: "ComposerReplyPreview",
@@ -209,7 +206,7 @@ export function renderChatComposerView(
     </Show>
   );
   // The built-in composer can show plugin tasks; a replacement composer cannot.
-  onSettled(() => state.tasks.present());
+  onSettled(() => presentComposerTasks(state));
   const application = useOptionalApplication();
   const memberWelcome = createMemberWelcomeSlot(() => application);
   const showComposerInput = createMemo(
@@ -315,17 +312,12 @@ export function renderChatComposerView(
       <div class="agent-chat__composer-float" ref={[elementRef(props.onComposerFloatRef)]}>
         <div class="chat-footer__context" ref={(element) => (state.composerContext = element)}>
           {props.footerContent}
-          <Show when={state.tasks.card || state.tasks.accepted}>
-            <ChatLazyBoundary>
-              <ComposerTaskCardView
-                tasks={state.tasks}
-                draft={context().visibleDraft}
-                canCompose={context().canCompose}
-                keyHints={!props.mobileComposer}
-                textarea={() => state.composerTextarea}
-              />
-            </ChatLazyBoundary>
-          </Show>
+          <ComposerTaskSlot
+            state={state}
+            draft={context().visibleDraft}
+            canCompose={context().canCompose}
+            keyHints={!props.mobileComposer}
+          />
           <div class="agent-chat__composer-notices">
             {props.notices} {composerStatus()} {composerAlerts()} {fallbackStatus()}
             <Show when={context().cancellationCaveat}>
@@ -610,7 +602,7 @@ export function renderChatComposerView(
                   {predictionAnnouncement()}
                 </span>
                 <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
-                  {composerTaskAnnouncement(state.tasks)}
+                  {state.tasks()?.announcement}
                 </span>
                 <span
                   id={slashMenuAnnouncementId()}

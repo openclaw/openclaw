@@ -24,7 +24,7 @@ const fixture = `export default { id: "composer-fixture", activate(host) {
       proof.cancelled = false;
       task.signal.addEventListener("abort", () => { proof.cancelled = true; }, { once: true });
       task.update({ summary: "2 steps", steps: [{ label: "read notes.md", state: "done" }, { label: "ls src", state: "running" }] });
-      await new Promise((resolve) => { proof.finish = resolve; task.signal.addEventListener("abort", resolve, { once: true }); });
+      await new Promise((resolve) => { proof.finish = () => (resolve(), true); task.signal.addEventListener("abort", resolve, { once: true }); });
       if (task.signal.aborted) return;
       if (proof.mode === "fail") { task.fail("Fixture model unavailable"); return; }
       proof.outcomes.push(await task.propose(${JSON.stringify(PROPOSED)}, { title: "Fixture rewrite" }));
@@ -37,14 +37,6 @@ const fixture = `export default { id: "composer-fixture", activate(host) {
   host.ui.registerAction({
     id: "restore", label: "Restore rewrite", icon: "rotateCcw", placement: "composer",
     run({ composer }) { composer.setDraft(${JSON.stringify(PROPOSED)}); },
-  });
-  host.ui.registerAction({
-    id: "task-broken", label: "Task broken", icon: "wandSparkles", placement: "composer",
-    async run({ composer }) {
-      composer.startTask({ title: "Breaking" });
-      await Promise.resolve();
-      throw new Error("Backend went away");
-    },
   });
   host.ui.registerAction({
     id: "replace-broken", label: "Replace and break", icon: "sparkles", placement: "composer",
@@ -115,7 +107,7 @@ async function open(page: Page) {
 // Globals the fixture plugin and the mock Gateway install in the page.
 type ComposerProofWindow = Window & {
   composerProof?: {
-    finish?: () => void;
+    finish?: () => boolean;
     outcomes: string[];
     runs: number;
     mode: string;
@@ -126,7 +118,7 @@ type ComposerProofWindow = Window & {
   openclawControlUiE2eGateway: { findRequests: (method: string) => unknown[] };
 };
 const finish = (page: Page) =>
-  page.evaluate(() => (window as unknown as ComposerProofWindow).composerProof?.finish?.());
+  page.waitForFunction(() => (window as unknown as ComposerProofWindow).composerProof?.finish?.());
 const outcomes = (page: Page) =>
   page.evaluate(() => (window as unknown as ComposerProofWindow).composerProof?.outcomes ?? []);
 const sendCount = (page: Page) =>
@@ -202,24 +194,11 @@ suite.define(() => {
     });
   });
 
-  it("fails the action's own task when the action rejects after starting it", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      await open(page);
-      const action = page.getByRole("button", { name: "Task broken", exact: true });
-      await action.click();
-      const failed = page.locator('.agent-chat__composer-task[data-state="failed"]');
-      await failed.getByText("Backend went away").waitFor();
-      expect(await page.locator('.agent-chat__composer-task[data-state="working"]').count()).toBe(
-        0,
-      );
-      expect(await action.getAttribute("aria-pressed")).toBe("false");
-    });
-  });
-
   it("aborts a replaced task at once and fails the latest one on rejection", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       await open(page);
-      await page.getByRole("button", { name: "Replace and break", exact: true }).click();
+      const action = page.getByRole("button", { name: "Replace and break", exact: true });
+      await action.click();
       const failed = page.locator('.agent-chat__composer-task[data-state="failed"]');
       await failed.getByText("Second task failed").waitFor();
       expect(
@@ -230,34 +209,28 @@ suite.define(() => {
       expect(await page.locator('.agent-chat__composer-task[data-state="working"]').count()).toBe(
         0,
       );
+      expect(await action.getAttribute("aria-pressed")).toBe("false");
     });
   });
 
-  it("reports a rejection that comes after the task settled", async () => {
+  it("reports a rejection after the task settles, keeping an Undo receipt", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const { textarea } = await open(page);
-      await page.getByRole("button", { name: "Propose then break", exact: true }).click();
-      await page.getByRole("region", { name: "Fixture proposal" }).waitFor();
+      const action = page.getByRole("button", { name: "Propose then break", exact: true });
+      const proposal = page.getByRole("region", { name: "Fixture proposal" });
+      const failed = page.locator('.agent-chat__composer-task[data-state="failed"]');
+      await action.click();
+      await proposal.waitFor();
       await textarea.focus();
       await textarea.press("Escape");
-      await page
-        .locator('.agent-chat__composer-task[data-state="failed"]')
-        .getByText("Follow-up failed")
-        .waitFor();
-    });
-  });
-
-  it("keeps the Undo receipt when the action fails after the user accepts", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const { textarea } = await open(page);
-      await page.getByRole("button", { name: "Propose then break", exact: true }).click();
-      await page.getByRole("region", { name: "Fixture proposal" }).waitFor();
-      await textarea.focus();
+      await failed.getByText("Follow-up failed").waitFor();
+      await action.click();
+      await proposal.waitFor();
       await textarea.press("Tab");
       await expect.poll(() => textarea.inputValue()).toBe("Proposed text");
       await page.getByRole("alert").filter({ hasText: "Follow-up failed" }).waitFor();
       await page.getByRole("button", { name: "Undo" }).waitFor();
-      expect(await page.locator('.agent-chat__composer-task[data-state="failed"]').count()).toBe(0);
+      expect(await failed.count()).toBe(0);
     });
   });
 
