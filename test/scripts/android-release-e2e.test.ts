@@ -28,6 +28,7 @@ vi.mock("../../src/gateway/call.js", async (importOriginal) => ({
 vi.mock("../helpers/openclaw-test-instance.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../helpers/openclaw-test-instance.js")>()),
   createOpenClawTestInstance: async () => ({
+    readiness: [],
     startGateway: async () => {},
     cleanup: async () => {},
     logs: () => "",
@@ -123,15 +124,6 @@ it.each([
       separateCandidate && scenario !== "candidate-missing"
         ? checkout(candidateRoot)
         : candidateSha;
-    if (separateCandidate && scenario !== "candidate-missing") {
-      mkdirSync(path.join(candidateRoot, "dist"));
-      writeFileSync(
-        path.join(candidateRoot, "dist/build-info.json"),
-        JSON.stringify({ commit: targetSha }),
-      );
-      // Build output is ignored just as it is in a prepared candidate checkout.
-      writeFileSync(path.join(candidateRoot, ".git/info/exclude"), "dist/\n");
-    }
     const client = path.join(root, "stable");
     const clientSha = checkout(client);
     git(client, "tag", tag);
@@ -158,10 +150,14 @@ it.each([
     const apkPaths: string[] = [];
     mocks.gateway.mockImplementation(async (options) => {
       if (separateCandidate) {
-        const actual = await vi.importActual<
-          typeof import("../../scripts/lib/ios-release-gateway.js")
-        >("../../scripts/lib/ios-release-gateway.js");
-        return actual.prepareIOSReleaseGateway(options);
+        if (["candidate-mismatch", "candidate-missing"].includes(scenario)) {
+          throw new Error("candidate-source-invalid");
+        }
+        return {
+          cwd: mocks.repo,
+          entrypoint: ["isolated-fixture.mjs"],
+          identity: { kind: "candidate-source", targetSha, sourceSha: targetSha },
+        };
       }
       return {
         cwd: options.candidateDir ?? "/synthetic/published-gateway",

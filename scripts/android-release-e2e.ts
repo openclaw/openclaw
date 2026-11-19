@@ -330,6 +330,10 @@ export async function main(argv = process.argv.slice(2)) {
           abort.abort();
         }
         if (code !== 0 && !stop.signal.aborted) {
+          diagnostic("service", {
+            ...androidReleaseCommandFacts(bin, args, raw, ""),
+            exitCode: code,
+          });
           throw new Error(`service-exit-${code}`);
         }
       })
@@ -338,6 +342,10 @@ export async function main(argv = process.argv.slice(2)) {
           preserveRoot = true;
         }
         if (!(stop.signal.aborted || closing) || hasUnjoinedWork(error)) {
+          diagnostic("service", {
+            ...androidReleaseCommandFacts(bin, args, raw, ""),
+            ...androidReleaseErrorFacts(error),
+          });
           throw error;
         }
       })
@@ -543,6 +551,7 @@ export async function main(argv = process.argv.slice(2)) {
       modelRef: "openai/android-e2e",
       utilityModelRef: "openai/android-utility",
     });
+    phase("gateway-fixture");
     const fixtureOwnedKeys = new Set([
       "HOME",
       "USERPROFILE",
@@ -579,6 +588,7 @@ export async function main(argv = process.argv.slice(2)) {
       },
       signal: abort.signal,
     });
+    phase("gateway-readiness");
     await instance.startGateway();
     instance.child?.once("exit", () => {
       if (!closing) {
@@ -955,6 +965,20 @@ export async function main(argv = process.argv.slice(2)) {
   } catch (error) {
     evidence.failure = stage;
     diagnostic("runner", androidReleaseErrorFacts(error));
+    if (instance) {
+      diagnostic(
+        "gateway-readiness",
+        instance.readiness.map((entry) => ({
+          outcome: entry.outcome,
+          elapsedMs: entry.elapsedMs,
+          attempts: entry.attempts,
+          exitCode: entry.child.exitCode,
+          signalCode: entry.child.signalCode,
+          lastError: entry.lastProbe?.error,
+          lastStatus: entry.lastProbe?.status,
+        })),
+      );
+    }
     if (hasUnjoinedWork(error)) {
       preserveRoot = true;
     }
