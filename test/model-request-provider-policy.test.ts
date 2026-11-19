@@ -17,12 +17,14 @@ import {
 import { wrapStreamFnWithModelRequestGate } from "../src/agents/embedded-agent-runner/model-request-hook.js";
 import type { StreamFn } from "../src/agents/runtime/index.js";
 import { makeProviderModelFixture } from "../src/agents/test-helpers/provider-model-fixture.js";
-import type { PluginHookBeforeModelRequestEvent } from "../src/plugins/hook-model.types.js";
+import type { ModelRequestHooks } from "../src/plugins/hook-model.types.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../src/plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../src/plugins/hooks.test-helpers.js";
+
+type PluginHookBeforeModelRequestEvent = Parameters<ModelRequestHooks["before_model_request"]>[0];
 
 // Keep the real providers, encoding, hook runner and request policies. Only intercept final I/O.
 const { wire } = vi.hoisted(() => ({ wire: vi.fn<typeof fetch>() }));

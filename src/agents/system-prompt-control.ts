@@ -39,6 +39,7 @@ export function buildOpenClawControlSection({
       : []),
     [
       "For the Gateway hosting this session:",
+      "Use the built-in updater by default. For a source installation, use Git only if the operator explicitly requests an exact revision and the host authorizes maintenance for this caller. Shell access alone is not update authority.",
       ...(restartCommandsEnabled
         ? [
             "In a connected chat, the owner can send `/update` with commands.restart enabled (the default), regardless of the agent's tool profile.",

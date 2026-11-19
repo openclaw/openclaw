@@ -283,7 +283,8 @@ module.exports = {
     for (revision of [2, 3]) {
       const nativeProvider = revision === 3 ? UNSEEN_NATIVE_PROVIDER : PROVIDER_ID;
       const nativeEntry = nativeRow(revision);
-      clock += 1001;
+      // Renewal waits for the listing age floor, not only the response cache TTL.
+      clock += 15 * 60_000 + 1;
       fs.writeFileSync(path.join(fixture.root, "catalog-clock.txt"), String(clock));
       held = createDeferred();
       entered = createDeferred();

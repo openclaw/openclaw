@@ -379,6 +379,9 @@ export async function runActiveReplySteer(
             allowCollaborativeSteering: true,
           }
         : {}),
+      ...(followupRun.run.approvalReviewerDeviceId
+        ? { inputRequesterDeviceId: followupRun.run.approvalReviewerDeviceId }
+        : {}),
       personalToolParticipant: {
         operatorAuthority: followupRun.operatorAuthority,
         requesterOrigin: followupRun.run.requesterOrigin,

@@ -723,6 +723,22 @@ describe("resolveTsdownBuildInvocation", () => {
       );
     }
     await fixture.run(async () => {
+      let parentReadable = true;
+      const priorRead = vi.mocked(fs.readFileSync).getMockImplementation()!;
+      vi.mocked(fs.readFileSync).mockImplementation(
+        (filePath, options?: BufferEncoding | fs.ReadFileSyncOptions | null) => {
+          if (filePath === `/proc/${process.ppid}/status` && options === "utf8") {
+            if (!parentReadable) {
+              throw Object.assign(new Error("parent status unavailable"), { code: "EACCES" });
+            }
+            return "VmRSS: 64 kB\n";
+          }
+          return priorRead(
+            filePath,
+            typeof options === "string" ? { encoding: options } : (options ?? {}),
+          );
+        },
+      );
       const capacity = readProcessMemoryCapacity({
         ...NO_MEMORY_LIMIT,
         cgroupMemoryLimitBytes: 4 * GiB,
@@ -731,7 +747,13 @@ describe("resolveTsdownBuildInvocation", () => {
       const snapshot = vi.spyOn(processMemory, "readProcessCgroupV2Snapshot").mockReturnValue(
         Array.from({ length: 10 }, () => ({
           directory: "/private-cgroup-path",
-          counters: { "memory.current": "123", "memory.peak": "456" },
+          counters: {
+            "memory.current": "123",
+            "memory.peak": "456",
+            "memory.max": "8192",
+            "memory.high": "max",
+            "memory.stat": "anon 1000\ninactive_file 789\n",
+          },
         })),
       );
       const error = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -754,16 +776,30 @@ describe("resolveTsdownBuildInvocation", () => {
           sample: "after-refusal",
           memoryCapacity: capacity,
           rssBytes: expect.any(Number),
+          parentRssBytes: process.platform === "linux" ? 65536 : null,
           cgroup: Array.from({ length: 8 }, (_, depth) => ({
             depth,
             currentBytes: 123,
             peakBytes: 456,
+            maxBytes: 8192,
+            highBytes: null,
+            inactiveFileBytes: 789,
           })),
         });
+        expect(snapshot).toHaveBeenCalledWith({}, { includeMemoryDetails: true });
         expect(error).toHaveBeenCalledWith(expect.stringContaining("full build needs 4352MB"));
         expect(remove).not.toHaveBeenCalled();
         expect(compiler).not.toHaveBeenCalled();
+        parentReadable = false;
+        await expect(runTsdownBuild([], { cwd: createTempDir("tsdown-refusal-") })).resolves.toBe(
+          1,
+        );
+        const unavailable = error.mock.calls.findLast(
+          ([label]) => label === "[tsdown-build:memory-refusal]",
+        );
+        expect(JSON.parse(String(unavailable?.[1])).parentRssBytes).toBeNull();
       } finally {
+        vi.mocked(fs.readFileSync).mockImplementation(priorRead);
         vi.unstubAllEnvs();
         compiler.mockRestore();
         remove.mockRestore();
@@ -845,19 +881,31 @@ describe("resolveTsdownBuildInvocation", () => {
   it("observes raw counters along the mapped cgroup subtree and ancestors", () => {
     const mountPoint = "/sys/fs/cgroup dir";
     const leaf = `${mountPoint}/parent/leaf`;
-    const snapshot = readProcessCgroupV2Snapshot(
-      cgroupMemory(
-        "0::/container/parent/leaf\n",
-        "30 25 0:26 /container /sys/fs/cgroup\\040dir rw - cgroup2 cgroup2 rw\n",
-        [
-          [`${leaf}/cpu.stat`, "usage_usec 1200\n"],
-          [`${leaf}/memory.peak`, "900\n"],
-          [`${leaf}/cpuset.cpus.effective`, "0-3\n"],
-          [`${mountPoint}/parent/cpu.max`, "200000 100000\n"],
-          [`${mountPoint}/cpu.max`, "max 100000\n"],
-        ],
-      ),
+    const memory = cgroupMemory(
+      "0::/container/parent/leaf\n",
+      "30 25 0:26 /container /sys/fs/cgroup\\040dir rw - cgroup2 cgroup2 rw\n",
+      [
+        [`${leaf}/cpu.stat`, "usage_usec 1200\n"],
+        [`${leaf}/memory.peak`, "900\n"],
+        [`${leaf}/memory.max`, "8192\n"],
+        [`${leaf}/memory.high`, "max\n"],
+        [`${leaf}/memory.stat`, "inactive_file 789\n"],
+        [`${leaf}/cpuset.cpus.effective`, "0-3\n"],
+        [`${mountPoint}/parent/cpu.max`, "200000 100000\n"],
+        [`${mountPoint}/cpu.max`, "max 100000\n"],
+      ],
     );
+    const readSnapshotFile = vi.spyOn(memory.fs!, "readFileSync");
+    const snapshot = readProcessCgroupV2Snapshot(memory);
+    expect(readSnapshotFile).not.toHaveBeenCalledWith(`${leaf}/memory.stat`, "utf8");
+    expect(snapshot?.[0]?.counters).not.toHaveProperty("memory.max");
+    expect(
+      readProcessCgroupV2Snapshot(memory, { includeMemoryDetails: true })?.[0]?.counters,
+    ).toMatchObject({
+      "memory.max": "8192\n",
+      "memory.high": "max\n",
+      "memory.stat": "inactive_file 789\n",
+    });
     expect(snapshot?.map((row) => row.directory)).toEqual([
       leaf,
       `${mountPoint}/parent`,

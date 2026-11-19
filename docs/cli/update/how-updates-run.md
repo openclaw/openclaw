@@ -706,6 +706,10 @@ Live snapshots use SQLite read transactions and private backups while writers
 continue. Artifact-preserving planning and Doctor checks retain byte-neutral
 copies that leave source SHM unchanged. WAL copies capture a bounded prefix
 within one verified WAL generation, so appended commits do not require a quiet database.
+When a live writer checkpoints during every copy attempt, the WAL family takes
+one read transaction instead of refusing: that writer keeps the WAL index current,
+so SQLite may update reader slots but not the commit header that update captures
+compare. Families without a live index never churn and stay byte-neutral.
 Incomplete WAL families and crash journals are recovered privately without
 creating missing source sidecars. Inspection budgets include database
 and journal sizes, cold startup, and repeated IO passes for every discovered
@@ -915,6 +919,15 @@ Required database migrations, refused or invalid configuration, Doctor refusals,
 and Gateway readiness are never owed. They still block completion. A failed or
 rolled-back update owes nothing, including a step recorded before it failed.
 
+When plugin convergence changes no config, the updater publishes the plugin
+install records without writing the config file. The file keeps its bytes,
+including its `meta.lastTouchedVersion` stamp, and a config file the update
+cannot replace, such as a link to a provisioned read-only file, cannot fail
+that publication. Other writes in the same update, such as a requested channel
+change or a Doctor repair, still need a writable config. Plugin convergence
+that does change config needs a config write too, and a refused write still
+fails the update.
+
 A plugin or Doctor failure is owed only when the updater can show what it left
 behind. These failures still fail the command, and roll back a replaced core:
 
@@ -965,7 +978,9 @@ Later commands settle what is owed:
 A retry that fails keeps the step owed and warns again. It does not fail the
 command, except for the plugin convergence cases above. The command that retried
 it then holds the step in its own run. Gateway startup does not retry owed steps.
-See
+With automatic updates on, a Gateway whose core is current can retry owed plugin
+convergence once through an update campaign; see
+[Automatic updates](/install/updating/automatic-updates#owed-plugin-steps). See
 [Status and history](/cli/update/status-and-history#update-status) to inspect them.
 
 An updater records and retries owed steps only when its own version supports
@@ -974,8 +989,10 @@ updater runs these steps and still drops a failed shell completion refresh
 without a record. It records no plugin step either. Plugin convergence runs in
 the new version's own process, which keeps that first update only when the
 previously installed updater retained the plugin set before activation, and
-otherwise fails as before. The post-plugin Doctor pass behaves as it did in the
-previously installed updater whenever that updater runs the pass itself.
+otherwise fails as before. A convergence that changes no config writes no
+config file, so its plugin publication does not fail on a config the update
+cannot write. The post-plugin Doctor pass behaves as it did in the previously
+installed updater whenever that updater runs the pass itself.
 
 <a id="durable-serving-recovery" />
 
@@ -1736,17 +1753,38 @@ for the installed version and restarts a Gateway the update had stopped.
 The next `openclaw update` settles that recovery itself, after the publication,
 when nothing needs an operator:
 
-- the installation is a package install, and the killed update was a
-  command-line `openclaw update`, not one the Gateway started, whose recorded
-  process is no longer running;
+- the installation is a package install, or a source checkout that still holds
+  exactly the build the killed update installed (see below);
+- the killed update was a command-line `openclaw update`, not one the Gateway
+  started, whose recorded process is no longer running;
 - the update lease store still holds that process's lease, so claiming the
-  installation shows its child processes are gone too.
+  installation shows its child processes are gone too. When a restart emptied
+  that store, the update instead checks the boot each of that update's
+  processes recorded. If every one ran on this same Linux or macOS machine in an
+  earlier boot, none of them can still be running, and the update claims the
+  installation as usual before it settles anything.
 
 It settles the plugin and configuration changes the way repair does. When the
 version from before that update is still installed they are rolled back, and
 when the Gateway was verified on the version it installed they are kept. The
 update prints what it settled, continues, and records an
 `interrupted-update-recovery` warning in its run history.
+
+A source checkout's version does not show whether the killed update had
+replaced its build. An update of a checkout in place records the commit and
+build it activates before it reserves its plugin recovery. The next update
+settles that recovery only when all of these still hold:
+
+- the killed update recorded that activation, for the same build its plugin
+  recovery targets;
+- the checkout is still at that commit and has no local changes;
+- its build is complete, was made from that commit, and is that same build.
+
+Then the checkout runs the killed update's build, and the update treats it like
+a package install that has the candidate installed. A checkout that was pulled,
+edited or rebuilt by hand, or a run recorded by an older updater, keeps the
+refusal below. Updates through the Git release layout never reserve plugin
+recovery, so they are unaffected.
 
 Some killed updates also leave work that repair finishes and an update that
 finds its core already current would skip:
@@ -1781,16 +1819,20 @@ repair can settle the recovery, the message adds the reason and the command:
 - **An update is still recorded as running** and its process is not known to
   have exited, or another updater holds the installation. Wait for it; run
   `openclaw update repair` if it has stopped.
-- **The update lease store no longer holds the killed update's lease.** A
-  restart cleared temporary files, the store was replaced, or another command
-  already claimed the installation. That includes an earlier `openclaw update`
-  that claimed it and then refused for one of the reasons above, so a second
-  attempt reports this reason. Run `openclaw update repair`.
+- **The update lease store no longer holds the killed update's lease.** The
+  store was removed or replaced, or another command already claimed the
+  installation. That includes an earlier `openclaw update` that claimed it and
+  then refused for one of the reasons above, so a second attempt reports this
+  reason. After a restart the update also refuses this way when the boot record
+  cannot show the killed update's processes gone: the killed update ran an
+  older version that did not record its boot, the machine has no stable
+  identity, it runs on Windows or inside a container, or one of that update's
+  processes recorded no boot. Run `openclaw update repair`.
 - **The recovery could not be settled.** The message includes the cause. Run
   `openclaw update repair`.
-- **The installation is a source checkout.** Its version does not show whether
-  the killed update had already switched the sources. Run
-  `openclaw update repair`.
+- **The installation is a source checkout that cannot show the killed update's
+  build.** The message names the reason: no recorded activation, a commit or
+  build that differs from it, or local changes. Run `openclaw update repair`.
 - **The recovery belongs to another installation.** Run `openclaw update repair`
   from that installation.
 - **A dry run** changes nothing. Run `openclaw update`.

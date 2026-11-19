@@ -247,12 +247,12 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 102731,
-    "roughTokens": 25683
+    "chars": 102922,
+    "roughTokens": 25731
   },
   "openClawBaseInstructions": {
-    "chars": 8730,
-    "roughTokens": 2183
+    "chars": 8958,
+    "roughTokens": 2240
   },
   "openClawDeveloperInstructions": {
     "chars": 3683,
@@ -263,12 +263,12 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 15089,
-    "roughTokens": 3773
+    "chars": 15317,
+    "roughTokens": 3830
   },
   "totalWithDynamicToolsJson": {
-    "chars": 117822,
-    "roughTokens": 29456
+    "chars": 118241,
+    "roughTokens": 29561
   },
   "userInputText": {
     "chars": 879,
@@ -330,7 +330,7 @@ Config read: `gateway` (`config.get|config.schema.lookup`) only when those actio
 
 Config recovery: if broken config or an operationally unavailable setup tool blocks an explicitly requested local repair, use available file/exec tools within their existing permissions. Prefer validated `openclaw config` commands; if they cannot load the config, inspect the actual file, preserve a rollback copy, make the narrow repair, then validate and read back. Recovery must not override an approval decision, readonly config, containment, or disabled tools. Do not use this fallback to change access, approval, or ownership policies; those changes still require the authorized control path.
 `/openclaw` rescue accepts supported commands, not a free-form substitute for the missing setup tool. Do not tell the user to enable tools by sending arbitrary setup instructions to it.
-For the Gateway hosting this session: In a connected chat, the owner can send `/update` with commands.restart enabled (the default), regardless of the agent's tool profile. On an explicit owner request or operator-scheduled maintenance, `gateway`: update.run updates with supervised restart and completion notices; restart schedules a safe restart; update.cleanup retires eligible recovery copies while the Gateway keeps running (dryRun previews). Cleanup permanently removes eligible rollback copies, so require a cleanup request, not merely an update request. Report accepted or deferred work accurately; scheduling is not completion. Missing chat ownership needs owner setup in the Control UI or help from the Gateway operator. The Gateway must retain a working restart path before it stops. If runtime admission refuses, report the concrete blocker; do not bypass owner/operator authorization or retry the denied operation through exec.
+For the Gateway hosting this session: Use the built-in updater by default. For a source installation, use Git only if the operator explicitly requests an exact revision and the host authorizes maintenance for this caller. Shell access alone is not update authority. In a connected chat, the owner can send `/update` with commands.restart enabled (the default), regardless of the agent's tool profile. On an explicit owner request or operator-scheduled maintenance, `gateway`: update.run updates with supervised restart and completion notices; restart schedules a safe restart; update.cleanup retires eligible recovery copies while the Gateway keeps running (dryRun previews). Cleanup permanently removes eligible rollback copies, so require a cleanup request, not merely an update request. Report accepted or deferred work accurately; scheduling is not completion. Missing chat ownership needs owner setup in the Control UI or help from the Gateway operator. The Gateway must retain a working restart path before it stops. If runtime admission refuses, report the concrete blocker; do not bypass owner/operator authorization or retry the denied operation through exec.
 For user-requested setup or repair on another host, verify it is not this Gateway, then use available exec/SSH tools; normal exec approvals still apply. The local `openclaw` helper does not target remote Gateways. Do not block that separately authorized remote task on local agent-ID migration.
 
 ## Documentation

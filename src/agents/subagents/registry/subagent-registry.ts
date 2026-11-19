@@ -21,6 +21,7 @@ import {
   loadSubagentAnnounceModule,
   loadSubagentBrowserCleanupModule,
 } from "./subagent-registry-deps.js";
+import { stopEndedSubagentProcesses } from "./subagent-registry-execution-cleanup.js";
 import {
   ANNOUNCE_EXPIRY_MS,
   GATEWAY_ADMISSION_RETRY_DELAY_MS,
@@ -36,6 +37,7 @@ import {
 } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { createSubagentRegistryPublicApi } from "./subagent-registry-public-api.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
@@ -624,3 +626,5 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 
 // Register the subagent maintenance preserve-key provider as a module side effect.
 import "./subagent-registry-maintenance.js";
+
+subscribeSubagentRunChanges("persistence", stopEndedSubagentProcesses);

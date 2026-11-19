@@ -20,7 +20,7 @@
  * Timing and GC gates use untraced, unsampled runs. Defaults: 10k rows, 10 clients,
  * two identities, 100-row pages, 1,000 warm reads. --sessions 10 --operations 10
  * is a setup smoke. The clients are in-process recipients, not live sockets.
- * <output>.wire.json captures packed bytes with fixture profile IDs and snapshotAt
+ * <output>.wire.json captures packed bytes with fixture profile IDs, avatar versions, and snapshotAt
  * normalized; packedGolden compares those bytes across revisions and preserves field order.
  * --page-size 200 --churn replaces one visible row before each measured read;
  * measures full-page packing under writes. Call latency excludes the write;
@@ -375,6 +375,10 @@ try {
       (key, value) => (key === "snapshotAt" ? 1_800_000_000_000 : value),
     );
     for (const [index, profile] of profiles.entries()) {
+      bytes = bytes.replaceAll(
+        `/api/users/${profile.id}/avatar?v=${profile.updatedAt}`,
+        `/api/users/${profile.id}/avatar?v=1800000000000`,
+      );
       bytes = bytes.replaceAll(profile.id, `synthetic-profile-${index}`);
     }
     const digest = createHash("sha256").update(bytes).digest("hex");
@@ -586,6 +590,7 @@ try {
         [
           "session-row-presentation.ts",
           "session-list-view-cache.ts",
+          "session-utils-list.ts",
           "session-row-prepared-read.ts",
           "session-utils-display.ts",
           "session-utils-core.ts",
@@ -631,7 +636,7 @@ try {
         "within-run stability only; includes generated profile IDs and presentation timestamps",
       golden,
       packedGoldenScope:
-        "Exact sessions/sharedFacts JSON, with generated profile IDs and snapshotAt normalized",
+        "Exact sessions/sharedFacts JSON, with generated profile IDs, avatar versions, and snapshotAt normalized",
       packedGolden,
       churnPackedGolden,
       loadStart,

@@ -60,6 +60,8 @@ export async function continueSessionQueuedInputs(
   options: {
     signal: AbortSignal;
     assertCurrent: () => void;
+    /** Ends every row with this cause instead of replaying it. */
+    endCause?: SessionPendingInputEndCause;
   },
 ): Promise<DeferredQueuedInputReplay | undefined> {
   const assertCurrent = () => {
@@ -68,6 +70,10 @@ export async function continueSessionQueuedInputs(
   };
   const admit = async (row: SessionPendingInputRow) => {
     assertCurrent();
+    if (options.endCause) {
+      await failQueuedInput(target, row, assertCurrent, options.endCause);
+      return undefined;
+    }
     let admitted: Awaited<ReturnType<typeof restoreGatewayQueuedOperatorRecovery>> | undefined;
     let dispatchAttempted = false;
     try {

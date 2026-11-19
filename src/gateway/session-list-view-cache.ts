@@ -446,7 +446,8 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
       const { key, kind, updatedAt, sessionId, rowMode } = row;
       return { key, kind, updatedAt, sessionId, rowMode };
     };
-    const retainedRows = sessions.map((row, index) => {
+    // Capture aliases before any occurrence publishes a new packing layout.
+    const previousRows = sessions.map((row, index) => {
       let retained = prepared.get(row);
       rows.push(retained?.packed?.row ?? required(row));
       let facts = retained?.facts;
@@ -495,19 +496,19 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
           candidates.set(fact.encoded, fact);
         }
       }
-      return retained!;
+      return retained?.packed;
     });
-    // A source can occur twice in one page; publishing one occurrence must not
-    // replace the comparison layout of its later aliases.
-    const previousRows = retainedRows.map((retained) => retained.packed);
     // Compare each response-local layout against the immutable source's last packed row.
     // Copy only the matching singleton prefix when that layout actually changes.
-    const writable = (index: number) => {
+    const writable = (index: number, complete = false) => {
       const previous = previousRows[index];
       let row = rows[index]!;
       if (previous && row === previous.row) {
         row = required(sessions[index]!);
-        const prefix = previous.fields.slice(0, fieldCounts[index]);
+        const prefix =
+          complete && previous.fields.length === fieldCounts[index]
+            ? previous.fields
+            : previous.fields.slice(0, fieldCounts[index]);
         for (const field of prefix) {
           Object.assign(row, field.fact);
         }
@@ -563,12 +564,11 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
         ) {
           continue;
         }
-        const row = writable(index);
+        const row = writable(index, true);
         (row.sharedFacts ??= previous?.row.sharedFacts?.slice(0, position) ?? []).push(reference);
       }
     }
     for (let index = 0; index < rows.length; index++) {
-      const retained = retainedRows[index]!;
       const previous = previousRows[index];
       const references = referenceCounts[index]!;
       if (
@@ -577,7 +577,7 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
         (previous.fields.length !== fieldCounts[index] ||
           (previous.row.sharedFacts?.length ?? 0) !== references)
       ) {
-        const row = writable(index);
+        const row = writable(index, true);
         if (references > 0) {
           row.sharedFacts = previous.row.sharedFacts!.slice(0, references);
         }
@@ -607,7 +607,11 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
           const suffix = JSON.stringify(row.sharedFacts) + "}";
           registerSerializedSessionRow(row, prefix.json + suffix, prefix.utf8Bytes + suffix.length);
         }
-        retained.packed = { row, fields: sameKeys ? previous.fields : currentFields, prefix };
+        prepared.get(sessions[index]!)!.packed = {
+          row,
+          fields: sameKeys ? previous.fields : currentFields,
+          prefix,
+        };
       }
     }
     return { sessions: rows, sharedFacts };

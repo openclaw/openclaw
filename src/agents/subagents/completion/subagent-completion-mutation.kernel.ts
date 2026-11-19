@@ -155,7 +155,7 @@ function prepareBlockedSubagentCompletion(
     return undefined;
   }
   // A block carries no turn outcome, so only the private rule can settle it as consumed.
-  const consumed = hasConsumedPrivateRequesterInput(subagent);
+  const consumed = params.disposition !== "ambiguous" && hasConsumedPrivateRequesterInput(subagent);
   if (params.operatorAuthorityUnavailable) {
     subagent.suppressCompletionDelivery = true;
     subagent.requesterSettleWake = undefined;

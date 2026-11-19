@@ -155,6 +155,11 @@ export async function executeMutableUpdate(
   let databaseCapture: Awaited<ReturnType<typeof rollbackCapture.capture>>;
   const onTransaction = async (transaction: PackageUpdateTransaction) => {
     packageTransaction = transaction;
+    // Before the cohort, so every cohort a killed checkout update leaves names its build.
+    const gitActivation = await transaction.readGitActivation?.();
+    if (gitActivation) {
+      await recordPhase("activating", { origin: { gitActivation } });
+    }
     databaseCapture = await rollbackCapture.capture(transaction, ownedManagedUpdateContext);
   };
   let schemaVersions: UpdateStateSchemaVersion[] | undefined;

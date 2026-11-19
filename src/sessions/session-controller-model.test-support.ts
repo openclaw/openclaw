@@ -248,13 +248,13 @@ export function generatePilotSequence(seed: number, length = 48): PilotEvent[] {
   return events;
 }
 
-export type DurablePilotInput = Readonly<{ id: string; recoverable: boolean }>;
+type DurablePilotInput = Readonly<{ id: string; recoverable: boolean }>;
 export type DurablePilotEvent =
   | { type: "append"; input: DurablePilotInput }
   | { type: "claim" | "adopt" | "resend"; id: string }
   | { type: "crash" }
   | { type: "replay"; dispatchAvailable: boolean };
-export type DurablePilotCustody = "queued" | "consumed" | "restart-unrecoverable";
+type DurablePilotCustody = "queued" | "consumed" | "restart-unrecoverable";
 export type DurablePilotState = Readonly<
   Record<string, { recoverable: boolean; custody: DurablePilotCustody }>
 >;

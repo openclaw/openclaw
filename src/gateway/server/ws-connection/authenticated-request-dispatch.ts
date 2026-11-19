@@ -42,6 +42,7 @@ import {
 } from "../../openclaw-id/tunnel-principal.js";
 import { hasCurrentGatewayOperatorAccess } from "../../operator-access-policy.js";
 import { onOperatorRolePolicyChanged } from "../../operator-role-policy.js";
+import { isPublicationReaderCurrent } from "../../publication-reader.js";
 import { bindWebSocketRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
 import type { GatewayRequestEntry } from "../../server-request-entry.js";
 import { SharedGatewaySessionGenerationState } from "../../server-shared-auth-generation.js";
@@ -198,11 +199,24 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
         ? client.internal.operatorDeviceTokenIdentity
         : undefined;
     const reconnectProfile = client.authenticatedUserProfile?.profileId;
+    const hasCurrentPublicationReader = () => {
+      const reader = client.internal?.publicationReader;
+      if (!reader || isPublicationReaderCurrent(reader)) {
+        return true;
+      }
+      invalidateGatewayPolicyClient(client, {
+        reason: "publication-reader-authority-changed",
+        code: 4001,
+        message: "publication reader authority changed",
+        close: () => close(4001, "publication reader authority changed"),
+      });
+      return false;
+    };
     const clientAuthority = captureGatewayDeviceRevocation(
       context,
       { deviceId: client.connect.device?.id, role: client.connect.role },
       () => {
-        if (!hasCurrentIngress()) {
+        if (!hasCurrentPublicationReader() || !hasCurrentIngress()) {
           return false;
         }
         if (!hasCurrentGatewayOperatorAccess(client.internal?.operatorAccessAuthority)) {
@@ -273,6 +287,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                 : {}),
             },
             isCurrent: () =>
+              hasCurrentPublicationReader() &&
               hasCurrentIngress() &&
               hasCurrentGatewayPolicyClientSource(client) &&
               isCommittedGrantCurrent(),
