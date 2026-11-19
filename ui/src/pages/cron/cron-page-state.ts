@@ -507,8 +507,8 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     pendingRunScroll = Boolean(selection.runId);
     setDetailTab(selection.tab);
     cron.cronCreateOpen = false;
-    // Inspecting another run of the current saved job must not discard its draft.
-    if (cron.cronEditingJob !== job) {
+    // Run links refetch job objects; keep the current draft and its conflict revision.
+    if (cron.cronEditingJob?.id !== job.id) {
       startCronEdit(cron, job);
       deliveryDirectory.openEditor();
     }
