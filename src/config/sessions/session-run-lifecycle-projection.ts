@@ -6,11 +6,7 @@ import {
   classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
-import {
-  isAcpSessionKey,
-  isCronSessionKey,
-  isSubagentSessionKey,
-} from "../../routing/session-key.js";
+import { isAcpSessionKey, isCronSessionKey } from "../../routing/session-key.js";
 import type { ProviderReviewTerminalFact } from "../../sessions/provider-review-terminal.js";
 import { buildUpdatedSessionGoalStatus } from "./goals-transitions.js";
 import {
@@ -114,9 +110,6 @@ export function restartResumeSkipReason(sessionKey: string, entry?: SessionEntry
   }
   if (isAcpSessionKey(sessionKey) || entry?.acp || entry?.modelSelectionLocked) {
     return "external-owner";
-  }
-  if (isSubagentSessionKey(sessionKey) || entry?.createdVia === "spawn") {
-    return "subagent";
   }
   if (entry?.archivedAt !== undefined) {
     return "archived";

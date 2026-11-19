@@ -574,11 +574,6 @@ export function initSubagentRegistry() {
   return subagentRestorer.restoreOnce();
 }
 
-export {
-  listLiveSubagentRootSessions,
-  resolveRootSubagentRequester,
-} from "./subagent-registry-read.js";
-
 /** Shutdown interrupts execution; the completion owner still owes the requester its outcome. */
 export async function terminateLiveSubagentsForShutdown(
   resolveGatewayContext: GatewayContextResolver,

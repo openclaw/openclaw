@@ -1,7 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { listLiveAgentRunIds } from "../../../infra/agent-run-registry.js";
-import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { listSwarmRunReservationIds } from "../swarm/swarm-scheduler.js";
@@ -62,51 +61,6 @@ export {
   resolveSubagentSessionStatus,
 } from "./subagent-session-metrics.js";
 
-export type SubagentRootRequester = {
-  sessionKey: string;
-  agentId?: string;
-  storePath?: string;
-};
-
-/** Shutdown follows subagent ancestry; ordinary conversations own their own resume. */
-export function resolveRootSubagentRequester(
-  sessionKey: string,
-  agentId?: string,
-): SubagentRootRequester {
-  let root: SubagentRootRequester = { sessionKey, agentId };
-  const visited = new Set<string>();
-  while (isSubagentSessionKey(root.sessionKey)) {
-    const identity = JSON.stringify([root.agentId, root.sessionKey]);
-    if (visited.has(identity)) {
-      return root;
-    }
-    visited.add(identity);
-    const entry = latestSubagentRun(getSubagentRunsForChildSession(root.sessionKey, root.agentId));
-    if (!entry) {
-      return root;
-    }
-    root = {
-      sessionKey: entry.requesterSessionKey,
-      agentId: resolveRecordedRequester(entry),
-      storePath: entry.requesterStorePath,
-    };
-  }
-  return root;
-}
-
-export function listLiveSubagentRootSessions(): SubagentRootRequester[] {
-  const roots = new Map<string, SubagentRootRequester>();
-  for (const runId of listLiveAgentRunIds()) {
-    const entry = subagentRuns.get(runId);
-    if (!entry || !isSubagentRunLive(entry)) {
-      continue;
-    }
-    const root = resolveRootSubagentRequester(entry.childSessionKey, entry.childAgentId);
-    roots.set(JSON.stringify([root.agentId, root.storePath, root.sessionKey]), root);
-  }
-  return [...roots.values()];
-}
-
 function isWaitingSubagentRun(entry: SubagentRunRecord): boolean {
   return !entry.collect && isYieldedSubagentRun(entry);
 }
@@ -136,7 +90,10 @@ function resolveYieldWaitingChild(
           ? resolveSubagentYieldWaitSource(child, visited)
           : undefined
         : owesRequesterCompletion(child) &&
-            (isSubagentRunLive(child) || child.execution.status === "terminal")
+            (isSubagentRunLive(child) ||
+              child.execution.status === "terminal" ||
+              // An interrupted child resumes itself and still owes this completion.
+              typeof child.execution.endedAt !== "number")
           ? "waiting"
           : "resume";
     // Stopped descendants need root reconciliation, even beside a surviving wait.
@@ -205,7 +162,7 @@ export function resolveSessionYieldWait(
     | "pendingFinalDelivery"
   >,
   agentId: string,
-): YieldWaitSource | "unreachable" {
+): YieldWaitSource {
   if (session.archivedAt !== undefined || session.incognito) {
     return undefined;
   }
@@ -233,7 +190,8 @@ export function resolveSessionYieldWait(
   );
   if (ownWait) {
     // Its requester owns reconciliation; paused children are never independently replayed.
-    return resolveSubagentYieldWaitSource(ownWait) ? "waiting" : "unreachable";
+    // A wait whose wake source did not survive resumes itself.
+    return resolveSubagentYieldWaitSource(ownWait) ? "waiting" : "resume";
   }
   // The lifecycle owner records only a yield as an ended execution without a
   // terminal status. A running or replaced turn must not inherit an older wait.
@@ -246,10 +204,7 @@ export function resolveSessionYieldWait(
   ) {
     return undefined;
   }
-  return (
-    resolveYieldWaitingChild(sessionKey, agentId, session.lifecycleRunId, new Set()) ??
-    "unreachable"
-  );
+  return resolveYieldWaitingChild(sessionKey, agentId, session.lifecycleRunId, new Set()) ?? "resume";
 }
 
 /** Resolve live owners through the existing aliases without scanning retained history. */

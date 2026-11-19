@@ -1,10 +1,6 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
-import {
-  listLiveSubagentRootSessions,
-  listYieldWaitingSessions,
-  resolveRootSubagentRequester,
-} from "../agents/subagents/registry/subagent-registry-read.js";
+import { listYieldWaitingSessions } from "../agents/subagents/registry/subagent-registry-read.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { restartResumeSkipReason } from "../config/sessions/session-run-lifecycle-projection.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
@@ -43,46 +39,40 @@ export function selectLiveRestartResumeSessions(
   summary: ReturnType<typeof createRestartResumeSummary>,
 ): Map<string, SessionIdentity> {
   const sessions = new Map<string, SessionIdentity>();
-  const add = (input: Partial<SessionIdentity> & { sessionKey: string }) => {
-    const root = input.parked
-      ? input
-      : resolveRootSubagentRequester(input.sessionKey, input.agentId);
+  const add = (session: Partial<SessionIdentity> & { sessionKey: string }) => {
     const agentId =
-      root.agentId ?? parseAgentSessionKey(root.sessionKey)?.agentId ?? resolveDefaultAgentId(cfg);
+      session.agentId ?? parseAgentSessionKey(session.sessionKey)?.agentId ?? resolveDefaultAgentId(cfg);
     const storePath =
-      root.storePath ??
-      (root.sessionKey === input.sessionKey ? input.storePath : undefined) ??
-      resolveSessionStorePathCore(cfg.session?.store, { agentId });
+      session.storePath ?? resolveSessionStorePathCore(cfg.session?.store, { agentId });
     const skip =
       (resolveExplicitIncognitoAgentSqliteTarget(storePath, { agentId })
         ? "incognito"
-        : undefined) ?? restartResumeSkipReason(root.sessionKey);
-    if (skip && !(skip === "subagent" && input.parked)) {
-      summary.record(agentId, root.sessionKey, skip);
+        : undefined) ?? restartResumeSkipReason(session.sessionKey);
+    if (skip) {
+      summary.record(agentId, session.sessionKey, skip);
       return;
     }
-    const key = JSON.stringify([agentId, root.sessionKey]);
+    const key = JSON.stringify([agentId, session.sessionKey]);
     const existing = sessions.get(key);
     if (!existing) {
-      summary.record(agentId, root.sessionKey, "persistence-incomplete");
+      summary.record(agentId, session.sessionKey, "persistence-incomplete");
       sessions.set(key, {
         agentId,
         storePath,
-        sessionKey: root.sessionKey,
-        sessionId: root.sessionKey === input.sessionKey ? input.sessionId : undefined,
-        needsResume: input.needsResume !== false,
-        scheduledAutomation: root.sessionKey === input.sessionKey && input.scheduledAutomation,
-        parked: input.parked,
-        operatorSource: root.sessionKey === input.sessionKey ? input.operatorSource : undefined,
+        sessionKey: session.sessionKey,
+        sessionId: session.sessionId,
+        needsResume: session.needsResume !== false,
+        scheduledAutomation: session.scheduledAutomation,
+        parked: session.parked,
+        operatorSource: session.operatorSource,
       });
     } else {
-      existing.scheduledAutomation ||=
-        root.sessionKey === input.sessionKey && input.scheduledAutomation;
+      existing.scheduledAutomation ||= session.scheduledAutomation;
       existing.needsResume =
         !existing.scheduledAutomation &&
-        (existing.needsResume || (!input.parked && input.needsResume !== false));
-      if (root.sessionKey === input.sessionKey && input.operatorSource) {
-        existing.operatorSource = input.operatorSource;
+        (existing.needsResume || (!session.parked && session.needsResume !== false));
+      if (session.operatorSource) {
+        existing.operatorSource = session.operatorSource;
       }
     }
   };
@@ -137,9 +127,6 @@ export function selectLiveRestartResumeSessions(
     if (run?.sessionKey && (!run.cronRunsByJobId?.size || run.acceptedUserReply)) {
       add({ sessionKey: run.sessionKey, agentId: run.agentId, sessionId: run.sessionId });
     }
-  }
-  for (const root of listLiveSubagentRootSessions()) {
-    add(root);
   }
   for (const session of listYieldWaitingSessions()) {
     add(session);

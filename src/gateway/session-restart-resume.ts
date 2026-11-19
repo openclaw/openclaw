@@ -50,7 +50,6 @@ import {
 import {
   acceptRestartResumeReceipt,
   recordRestartResumeFailure,
-  recordRestartYieldFailure,
 } from "./session-restart-resume-failure.js";
 import { createRestartResumeSummary } from "./session-restart-resume-log.js";
 import { GATEWAY_RESTART_RESUME_TEXT } from "./session-restart-resume-prompt.js";
@@ -117,9 +116,8 @@ async function persistRunningSessions(
             if (!session) {
               continue;
             }
-            const ownerSkip = restartResumeSkipReason(sessionKey, entry);
             const skip =
-              (ownerSkip === "subagent" && session.parked ? undefined : ownerSkip) ??
+              restartResumeSkipReason(sessionKey, entry) ??
               (session.sessionId && session.sessionId !== entry.sessionId
                 ? "session-changed"
                 : session.parked && !resolveSessionYieldWait(sessionKey, entry, session.agentId)
@@ -420,9 +418,7 @@ async function resumeRestartStore(
               // Keep durable custody until the new turn accepts, including another
               // restart while its workspace is still being prepared.
               resumeAfterRestart:
-                (!parked || parked === "resume") && (!skip || (parked && skip === "subagent"))
-                  ? marker
-                  : undefined,
+                (!parked || parked === "resume") && !skip ? marker : undefined,
               mainRestartRecovery: undefined,
               ...(orphanedRun
                 ? derivePersistedSessionLifecyclePatch({
@@ -463,17 +459,14 @@ async function resumeRestartStore(
         }
         const { entry, marker, parked, skip } = resumed;
         let admissionStage = "principal";
-        if (skip && !(parked && skip === "subagent")) {
+        if (skip) {
           summary.record(agentId, sessionKey, skip);
           log.warn(
             `Skipped restart resume for ${sessionKey}: session is archived or has another execution owner`,
           );
           continue;
         }
-        if (parked === "unreachable") {
-          await recordRestartYieldFailure({ sessionKey, agentId, entry, signal });
-          summary.record(agentId, sessionKey, "yield-source-unavailable");
-        } else if (parked === "waiting") {
+        if (parked === "waiting") {
           // The registry retains the wait; a new requester message owns fresh admission.
           summary.record(agentId, sessionKey, "parked");
           log.warn(

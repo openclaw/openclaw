@@ -12,6 +12,7 @@ import {
   isSameSubagentRun,
   isSameSubagentRunOwner,
 } from "../agents/subagents/registry/subagent-run-generation.js";
+import { isSubagentRunLive } from "../agents/subagents/registry/subagent-run-liveness.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -52,7 +53,9 @@ export async function reactivateCompletedSubagentSession(params: {
     return false;
   }
   const existing = paused ?? (await getLatestSubagentRunByChildSessionKey(params.sessionKey));
-  if (!existing || typeof existing.execution.endedAt !== "number") {
+  // A restart stops the execution without ending its row; the next turn continues that task.
+  const interrupted = existing && typeof existing.execution.endedAt !== "number";
+  if (!existing || (interrupted && isSubagentRunLive(existing))) {
     return false;
   }
   if (params.gatewayContextResolver && !params.gatewayContextResolver()) {
@@ -100,7 +103,8 @@ export async function reactivateCompletedSubagentSession(params: {
     if (
       !isSameSubagentRunOwner(current, source) ||
       (latest ? !isSameSubagentRunOwner(currentLatest, latest) : currentLatest !== undefined) ||
-      (current && typeof current.execution.endedAt !== "number")
+      (current &&
+        (interrupted ? isSubagentRunLive(current) : typeof current.execution.endedAt !== "number"))
     ) {
       throw new Error("subagent follow-up source changed while its writes settled");
     }
@@ -118,8 +122,17 @@ export async function reactivateCompletedSubagentSession(params: {
   const gatewayBinding = params.gatewayContextResolver
     ? { gatewayContextResolver: params.gatewayContextResolver }
     : {};
-  const replaced =
-    source.pauseReason === "sessions_yield"
+  const replaced = interrupted
+    ? await runtime.replaceSubagentRunAfterSteerCore({
+        previousRunId: source.runId,
+        nextRunId: runId,
+        refreshCompletionAuthority: true,
+        preserveRequesterSettleWake: true,
+        runTimeoutSeconds: source.runTimeoutSeconds ?? 0,
+        assertCurrent: assertOriginalOwnerCurrent,
+        ...gatewayBinding,
+      })
+    : source.pauseReason === "sessions_yield"
       ? await runtime.adoptPausedSubagentRunForFollowUp({
           childSessionKey: params.sessionKey,
           runId,
