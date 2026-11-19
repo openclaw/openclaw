@@ -21,7 +21,7 @@ import type {
   OpenClawIdAuthority,
 } from "./authority.js";
 import type { ClawNameRequest } from "./claw-name-check.js";
-import type { OpenClawIdAccount } from "./claw-store.js";
+import type { OpenClawIdAccount, StoredClaw } from "./claw-store.js";
 import { createOpenClawIdConnectionAccess } from "./connection-identity.js";
 import { setDeviceTokenBindingOwner } from "./device-token-binding.js";
 import type { TunnelApiHandler } from "./ingress-listener.js";
@@ -45,7 +45,6 @@ import {
   notifyOpenClawIdTunnelPrincipalsChanged,
 } from "./tunnel-principal.js";
 import type { TunnelRuntime } from "./tunnel-runtime.js";
-import { pendingUnlinkHosts } from "./unlink-operations.js";
 
 /** Side effects of membership changes that other Gateway owners perform. */
 export type OpenClawIdEffects = {
@@ -251,11 +250,11 @@ export function createOpenClawIdService(params: {
       return;
     }
     localPrincipals.publish();
+    // Pending unlinks go out once the claw record is loaded, even before remote access starts.
     if (authority) {
       await armOwnerExpiry(await getAuthority());
+      unlinkSteps.resume();
     }
-    // Pending unlinks go out even before remote access starts.
-    unlinkSteps.resume();
     const settings = resolveSettings(config, params.getStateDir());
     if ("missing" in settings) {
       await stopRuntime();
@@ -272,6 +271,7 @@ export function createOpenClawIdService(params: {
     await stopRuntime();
     try {
       await armOwnerExpiry(await getAuthority());
+      unlinkSteps.resume();
       // A linked claw whose Gateway key is gone stays off rather than sign with a new key.
       const keyRefusal = await gatewayKey.refusal();
       if (keyRefusal) {
@@ -362,13 +362,16 @@ export function createOpenClawIdService(params: {
       }));
     lastPublish = outcome;
     peopleChanged();
+    // Mirror progress for this claw only: one unlinked meanwhile is gone from the record.
+    const settled = (update: Partial<StoredClaw["discovery"]>) =>
+      owner.recordDiscovery(update, record.claw_id);
     if (outcome.state === "published") {
       const bindingSeq = record.binding?.body.binding_seq ?? 0;
       if (rebindPublication.published(bindingSeq, record.discovery.published_binding_seq)) {
         const event = { type: "notify_owners", event: "rebind", ref: `${bindingSeq}` } as const;
         void notifyOwners([event]).catch((error: unknown) => params.log.warn(String(error)));
       }
-      await owner.recordDiscovery({
+      await settled({
         owner_account_id: outcome.ownerAccountId,
         published_binding_seq: record.binding?.body.binding_seq ?? 0,
         published_snapshot_seq: outcome.snapshotSeq,
@@ -379,9 +382,7 @@ export function createOpenClawIdService(params: {
       params.log.warn(`openclaw-id: Discovery publication failed (${outcome.code})`);
       // Registered before failing: keep the account, so a retry needs no enrollment code.
       if (outcome.ownerAccountId) {
-        await (
-          await getAuthority()
-        ).recordDiscovery({
+        await settled({
           owner_account_id: outcome.ownerAccountId,
           published_binding_seq: record.binding?.body.binding_seq ?? 0,
         });
@@ -554,7 +555,7 @@ export function createOpenClawIdService(params: {
       clawId: record.claw_id,
       client,
       cursor: record.discovery.mailbox_cursor,
-      sink: createMailboxSink(owner),
+      sink: createMailboxSink(owner, record.claw_id),
       onEffects: async (events) => {
         await applyEvents(events);
       },
@@ -701,10 +702,11 @@ export function createOpenClawIdService(params: {
       const record = await (await getAuthority()).load();
       const state = record?.authority;
       if (!record || !state) {
-        return { linked: false as const, ...pendingUnlinkHosts(record) };
+        return { linked: false as const, ...unlinkSteps.pendingHosts(record) };
       }
       return {
         linked: true as const,
+        ...unlinkSteps.pendingHosts(record),
         clawId: record.claw_id,
         hostname: record.hostname ?? undefined,
         rootPub: state.anchor.root_pub,

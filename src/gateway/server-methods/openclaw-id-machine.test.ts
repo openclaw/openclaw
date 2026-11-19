@@ -36,7 +36,10 @@ it.each(["unlink_preview", "unlink", "rebind_prepare"])(
 
 it("runs unlink on direct loopback", async () => {
   const { respond, service, opts, typed } = setup();
-  await handleOpenClawIdMachineAction(opts, typed, "local_operator", { action: "unlink" });
-  expect(service.unlink.run).toHaveBeenCalledWith("local_operator");
+  await handleOpenClawIdMachineAction(opts, typed, "local_operator", {
+    action: "unlink",
+    clawId: "c".repeat(32),
+  });
+  expect(service.unlink.run).toHaveBeenCalledWith("local_operator", "c".repeat(32));
   expect(respond).toHaveBeenCalledWith(true, { ok: true, unlinked: true });
 });

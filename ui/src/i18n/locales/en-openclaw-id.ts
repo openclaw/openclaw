@@ -20,6 +20,7 @@ const enOpenClawId = {
       "Remote access is already set up. Close this dialog and check its status in the account menu.",
     errorBindingUnpublished:
       "OpenClaw ID doesn't have this claw's new keys yet. Publish them from the account menu, then unlink.",
+    errorClawChanged: "This claw changed since this warning. Close it and check again.",
     errorNotLinked:
       "Remote access is not set up. Turn it on from the computer that runs this claw.",
     errorIssuerUnavailable: "Could not reach OpenClaw ID. Try again shortly.",

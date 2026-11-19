@@ -8,7 +8,9 @@
 // token bindings stay until their revocation is confirmed. The signed statement is kept as a
 // pending unlink until Discovery confirms it; earlier pending unlinks are kept too.
 import {
+  bytesToHex,
   isIrohEndpointKey,
+  randomBytes,
   signStatement,
   type AuthorityEvent,
   type AuthorityState,
@@ -117,18 +119,25 @@ function unlinkEvents(record: LinkedRecord): AuthorityEvent[] {
   ];
 }
 
-/** The addresses of unlinked claws Discovery has not confirmed yet, for the link summary. */
-export function pendingUnlinkHosts(record: StoredClaw | undefined): { pendingUnlinks?: string[] } {
-  const hosts = record?.pending_unlinks?.map((entry) => entry.hostname) ?? [];
-  return hosts.length ? { pendingUnlinks: hosts } : {};
+/** An unlinked claw Discovery has not confirmed, as the link summary shows it. */
+export type PendingUnlinkSummary = { hostname: string; refused?: string };
+
+/** Unlinked claws Discovery has not confirmed yet, linked again or not, for the link summary. */
+export function pendingUnlinkHosts(record: StoredClaw | undefined): {
+  pendingUnlinks?: PendingUnlinkSummary[];
+} {
+  const pending = (record?.pending_unlinks ?? []).map(({ hostname, refused }) =>
+    refused ? { hostname, refused } : { hostname },
+  );
+  return pending.length ? { pendingUnlinks: pending } : {};
 }
 
 export function createUnlinkOperations(owner: {
   serialize: <T>(work: () => Promise<T>) => Promise<T>;
   load: () => Promise<StoredClaw | undefined>;
   commit: (record: StoredClaw, assertCurrent?: () => void) => Promise<void>;
-  /** A fresh, unlinked record under a new claw id. */
-  freshRecord: () => StoredClaw;
+  /** A fresh, unlinked record for `clawId`. */
+  emptyRecord: (clawId: string) => StoredClaw;
 }) {
   const { serialize, load, commit } = owner;
   return {
@@ -141,12 +150,14 @@ export function createUnlinkOperations(owner: {
     },
 
     /**
-     * Unlinks this claw, only over direct loopback. `gateway` must be the K_gw of the current
-     * binding. Commits the fresh record with the signed ClawUnlink added to the pending unlinks
+     * Unlinks this claw, only over direct loopback, if it is still `clawId`, the claw whose
+     * warning the owner confirmed (`claw_changed` otherwise). `gateway` must be the K_gw of the
+     * current binding. Commits the fresh record with the signed ClawUnlink added to the pending unlinks
      * for `discoveryUrl` (none when Discovery is not configured), and returns the removal effects.
      */
     commitUnlink(
       channel: Channel | undefined,
+      clawId: string,
       gateway: StatementSigner,
       gatewayPub: string,
       discoveryUrl: string | undefined,
@@ -165,6 +176,9 @@ export function createUnlinkOperations(owner: {
         if ("ok" in record) {
           return record;
         }
+        if (record.claw_id !== clawId) {
+          return refusal("claw_changed", "this claw changed since the warning: check it again");
+        }
         if (gatewayPub !== record.binding.body.k_gw) {
           return refusal("key_mismatch", "this computer's Gateway key isn't the claw's");
         }
@@ -180,7 +194,7 @@ export function createUnlinkOperations(owner: {
             : []),
         ];
         const next: StoredClaw = {
-          ...owner.freshRecord(),
+          ...owner.emptyRecord(bytesToHex(randomBytes(16))),
           ...(record.token_bindings?.length ? { token_bindings: record.token_bindings } : {}),
           ...(pending.length ? { pending_unlinks: pending } : {}),
         };
@@ -195,16 +209,26 @@ export function createUnlinkOperations(owner: {
       });
     },
 
-    /** Drops a pending unlink once Discovery has it (or can never take it). */
-    clearPendingUnlink(statement: SignedStatement<"ClawUnlink">): Promise<void> {
+    /** Drops a pending unlink Discovery confirmed, or marks one it refused for good. */
+    settlePendingUnlink(
+      statement: SignedStatement<"ClawUnlink">,
+      outcome: { kind: "confirmed" } | { kind: "refused"; code: string },
+    ): Promise<void> {
       return serialize(async () => {
         const current = await load();
         const pending = current?.pending_unlinks ?? [];
-        const kept = pending.filter((entry) => entry.statement.sig !== statement.sig);
-        if (current && kept.length !== pending.length) {
-          const { pending_unlinks: _all, ...rest } = current;
-          await commit(kept.length ? { ...rest, pending_unlinks: kept } : rest);
+        if (!current || !pending.some((entry) => entry.statement.sig === statement.sig)) {
+          return;
         }
+        const kept = pending.flatMap((entry) =>
+          entry.statement.sig !== statement.sig
+            ? [entry]
+            : outcome.kind === "confirmed"
+              ? []
+              : [{ ...entry, refused: outcome.code }],
+        );
+        const { pending_unlinks: _all, ...rest } = current;
+        await commit(kept.length ? { ...rest, pending_unlinks: kept } : rest);
       });
     },
   };

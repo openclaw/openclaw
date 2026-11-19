@@ -24,6 +24,7 @@ const CODE_KEYS: Record<string, string> = {
   already_linked: "errorAlreadyLinked",
   not_linked: "errorNotLinked",
   binding_unpublished: "errorBindingUnpublished",
+  claw_changed: "errorClawChanged",
   keys_refused: "keysRefusedDetail",
   issuer_unavailable: "errorIssuerUnavailable",
   issuer_invalid: "errorIssuerInvalid",

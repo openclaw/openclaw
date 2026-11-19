@@ -140,15 +140,19 @@ claw's address afterwards shows "This claw was unlinked by its owner."
 
 If Discovery can't be reached, the claw is still unlinked on this computer. The Gateway keeps
 the signed unlink and sends it as soon as Discovery answers, also after a restart;
-`openclaw id status` shows `Unlink pending` until then. Until Discovery has it, the address may
-still be listed, but this computer no longer accepts anyone through it.
+`openclaw id status` shows `Unlink pending` until then, also after you link this computer
+again. Until Discovery has it, the address may still be listed, but this computer no longer
+accepts anyone through it. If Discovery refuses the unlink for good, status shows
+`Unlink refused` with Discovery's reason and the Gateway does not send it again.
 
 In the Control UI on this computer the same action is **Unlink from OpenClaw ID** in the
 account menu, with the same warning. Neither is offered over the tunnel, and the Gateway
 refuses an unlink that arrives over it (`not_local_operator`). An unlink is refused with
 `binding_unpublished` while a move to new keys is not yet published: publish it first
 (`openclaw id publish --code <link-code>`). With `--json` the command needs `--yes`, and
-reports `discovery: "confirmed"`, `"pending"` or `"unconfigured"` with the counts it removed.
+reports `discovery: "confirmed"`, `"pending"`, `"refused"` or `"unconfigured"` with the counts it
+removed. If another unlink or link changes the claw while the warning is open, the unlink is
+refused with `claw_changed`; run it again to see the new warning.
 
 To link this computer again, use **Turn on remote access** with a new name: it becomes a new
 claw.

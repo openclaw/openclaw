@@ -34,8 +34,11 @@ async function setup(answers: Array<() => Response>) {
   const sender = createPendingUnlinkSender({
     // SAFETY: the sender reads only pending_unlinks.
     current: () => record as StoredClaw,
-    clear: async () => {
-      record = {};
+    settle: async (_statement, outcome) => {
+      record =
+        outcome.kind === "confirmed"
+          ? {}
+          : { pending_unlinks: [{ ...record.pending_unlinks![0]!, refused: outcome.code }] };
     },
     signer: async () => signer,
     log,
@@ -62,12 +65,47 @@ it("keeps an unlink Discovery could not take and sends it again after the backof
   sender.stop();
 });
 
-it("drops an unlink Discovery refused for good, with a warning", async () => {
-  const { sender, log, pending } = await setup([
+it("keeps an unlink Discovery refused for good as refused and does not send it again", async () => {
+  const { sender, fetchImpl, log, pending } = await setup([
     () => Response.json({ error: { code: "invalid_statement", message: "x" } }, { status: 400 }),
   ]);
   await sender.start();
-  expect(pending()).toBeUndefined();
+  expect(pending()).toEqual([expect.objectContaining({ refused: "invalid_statement" })]);
   expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("(invalid_statement)"));
+  await sender.start();
+  expect(fetchImpl).toHaveBeenCalledTimes(1);
+  sender.stop();
+});
+
+it("treats Discovery's unlinked answer as confirmed", async () => {
+  const { sender, pending } = await setup([
+    () => Response.json({ error: { code: "unlinked", message: "x" } }, { status: 410 }),
+  ]);
+  await sender.start();
+  expect(pending()).toBeUndefined();
+  sender.stop();
+});
+
+it("sends again when started after a stop that cut a send short", async () => {
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { sender, fetchImpl, pending } = await setup([]);
+  fetchImpl.mockImplementationOnce(async () => {
+    await held;
+    throw new TypeError("fetch failed");
+  });
+  fetchImpl.mockImplementationOnce(async () =>
+    Response.json({ claw_id: "a".repeat(32), hostname: "h", unlinked_at: 1 }),
+  );
+  const first = sender.start();
+  await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+  sender.stop();
+  const second = sender.start();
+  release();
+  await Promise.all([first, second]);
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
+  expect(pending()).toBeUndefined();
   sender.stop();
 });

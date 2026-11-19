@@ -34,7 +34,7 @@ beforeEach(() => {
     return true;
   });
   vi.mocked(callGatewayFromCli).mockImplementation(async (_method, _opts, params) => {
-    actions.push(params?.action);
+    actions.push(params?.action === "unlink" ? `unlink:${String(params.clawId)}` : params?.action);
     return params?.action === "unlink_preview"
       ? preview
       : { ok: true, unlinked: true, hostname: preview.hostname, discovery: "pending" };
@@ -74,7 +74,7 @@ describe("openclaw id unlink", () => {
   it("unlinks after confirmation and says when Discovery still needs it", async () => {
     vi.mocked(promptYesNo).mockResolvedValue(true);
     await runUnlink({}, write);
-    expect(actions).toEqual(["unlink_preview", "unlink"]);
+    expect(actions).toEqual(["unlink_preview", `unlink:${"c".repeat(32)}`]);
     expect(output).toContain("Unlinked studio-k7x2q.claws.example.test.");
     expect(output).toContain("OpenClaw ID couldn't be reached");
   });
@@ -82,7 +82,7 @@ describe("openclaw id unlink", () => {
   it("skips the question with --yes, and --json needs --yes", async () => {
     await runUnlink({ yes: true }, write);
     expect(promptYesNo).not.toHaveBeenCalled();
-    expect(actions).toEqual(["unlink_preview", "unlink"]);
+    expect(actions).toEqual(["unlink_preview", `unlink:${"c".repeat(32)}`]);
     await expect(runUnlink({ json: true }, write)).rejects.toThrow("--json needs --yes");
   });
 });

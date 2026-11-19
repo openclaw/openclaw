@@ -32,7 +32,8 @@ export type UnlinkPreview = {
 /** The Gateway's `unlink` answer. */
 type UnlinkResult = {
   hostname: string;
-  discovery: "confirmed" | "pending" | "unconfigured";
+  discovery: "confirmed" | "pending" | "refused" | "unconfigured";
+  discoveryCode?: string;
   followUpError?: string;
 };
 
@@ -96,7 +97,7 @@ export function showUnlinkDialog(params: {
         return stopFeature;
       });
 
-      const unlink = async () => {
+      const unlink = async (clawId: string) => {
         unlinking = true;
         setBusy(true);
         setError(null);
@@ -104,6 +105,7 @@ export function showUnlinkDialog(params: {
         try {
           result = await params.client.request<UnlinkResult>("openclawId.authority", {
             action: "unlink",
+            clawId,
           });
         } catch (cause) {
           setError(openClawIdUiError(cause, "setup"));
@@ -112,19 +114,22 @@ export function showUnlinkDialog(params: {
           unlinking = false;
           setBusy(false);
         }
+        const done = t("openclawId.unlinkDone", { host: result.hostname });
+        const description =
+          result.followUpError !== undefined
+            ? t("openclawId.unlinkFollowUpFailed")
+            : result.discovery === "pending"
+              ? t("openclawId.unlinkPending")
+              : result.discovery === "refused"
+                ? t("openclawId.unlinkRefused")
+                : undefined;
         showToast(
-          result.discovery !== "pending" && result.followUpError === undefined
-            ? {
-                severity: "success",
-                message: t("openclawId.unlinkDone", { host: result.hostname }),
-              }
+          description === undefined
+            ? { severity: "success", message: done }
             : {
                 severity: "warning",
-                message: t("openclawId.unlinkDone", { host: result.hostname }),
-                description:
-                  result.followUpError === undefined
-                    ? t("openclawId.unlinkPending")
-                    : t("openclawId.unlinkFollowUpFailed"),
+                message: done,
+                description,
                 ...(result.followUpError === undefined ? {} : { detail: result.followUpError }),
               },
         );
@@ -182,7 +187,12 @@ export function showUnlinkDialog(params: {
                 type="button"
                 class="btn danger"
                 disabled={busy() || !preview()}
-                onClick={() => void unlink()}
+                onClick={() => {
+                  const current = preview();
+                  if (current) {
+                    void unlink(current.claw_id);
+                  }
+                }}
               >
                 {t("openclawId.unlinkConfirm")}
               </button>
