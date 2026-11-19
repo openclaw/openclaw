@@ -270,10 +270,9 @@ export async function relocateRuntimeLauncher(
       const separator = forwardSlashes ? "/" : path.sep;
       for (const relocation of prepared.rules) {
         for (const sourceRoot of [relocation.sourceRoot, ...(relocation.sourceAliases ?? [])]) {
-          next = next.replaceAll(
-            `${spell(sourceRoot)}${separator}`,
-            `${spell(relocation.destinationRoot)}${separator}`,
-          );
+          // A callback keeps `$'`, `$&` and similar in a path literal, not replacement tokens.
+          const destination = `${spell(relocation.destinationRoot)}${separator}`;
+          next = next.replaceAll(`${spell(sourceRoot)}${separator}`, () => destination);
         }
       }
       return next;

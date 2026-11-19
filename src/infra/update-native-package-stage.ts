@@ -6,7 +6,7 @@ import { sha256Hex } from "./crypto-digest.js";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
 import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { hasErrnoCode } from "./errors.js";
-import { resolvePackageUpdateLauncherNames } from "./package-update-filesystem.js";
+import { resolvePackageUpdateLauncherNames } from "./package-update-launcher-names.js";
 import { mergePathPrepend } from "./path-prepend.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import { resolveNativePackageProjectRoot } from "./update-native-package-owner.js";
@@ -321,7 +321,9 @@ export async function finalizeNativePackageStage(
       : await fs.readFile(file, "utf8");
     if (content.includes(path.basename(stage.projectRoot))) {
       throw new Error(
-        `The staged ${entry.name} launcher still points into the update stage after relocation; the installation was left unchanged.`,
+        `The staged ${entry.name} launcher still points into the update stage after relocation; the installation was left unchanged. ` +
+          `To install the update directly, run \`pnpm add -g --allow-build=${packageName} ${packageName}@<version>\` as the account that owns this install, then \`openclaw gateway install --force\` and \`openclaw gateway restart\`. ` +
+          "Run `openclaw triage` to diagnose the launcher.",
       );
     }
   }
