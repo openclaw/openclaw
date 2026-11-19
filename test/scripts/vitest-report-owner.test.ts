@@ -163,11 +163,11 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       );
       expect(
         replay.projects
-          .map((project) => {
-            if (typeof project.config !== "string") {
+          .map((capturedProject) => {
+            if (typeof capturedProject.config !== "string") {
               throw new Error("Expected a file-backed replay project");
             }
-            return path.basename(project.config);
+            return path.basename(capturedProject.config);
           })
           .toSorted(),
       ).toEqual([
@@ -176,7 +176,9 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         "vitest.plugins-native-loader.config.ts",
         "vitest.plugins-source.config.ts",
       ]);
-      expect(replay.projects.every((project) => project.name.length > 0)).toBe(true);
+      expect(replay.projects.every((capturedProject) => capturedProject.name.length > 0)).toBe(
+        true,
+      );
       expect(index.merge).toMatchObject({ code: 0, signal: null });
     },
   );

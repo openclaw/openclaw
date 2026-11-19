@@ -347,6 +347,15 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
     if (mode === "file-backed-suites") {
       // These synthetic suites own their complete runtime; no product build is needed.
       env.OPENCLAW_E2E_SKIP_BUILD = "1";
+      env.OPENCLAW_VITEST_INCLUDE_FILE = path.join(root, "replay-fixture-files.json");
+      write(
+        env.OPENCLAW_VITEST_INCLUDE_FILE,
+        JSON.stringify(
+          ["alpha.test.ts", "beta.test.ts", "gamma.test.ts", "delta.test.ts"].map((file) =>
+            path.join(root, file),
+          ),
+        ),
+      );
       const leaf = (name: string, file: string, extra = "") => {
         const config = "test/vitest/vitest." + name + ".config.ts";
         writeConfig(
