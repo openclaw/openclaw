@@ -32,9 +32,9 @@ extension ChatTranscriptRow {
         guard !turns.isEmpty else { return rows }
 
         let (continuations, predecessors) = Self.continuationIndexes(in: turns)
-        let finalIndexes = turns.enumerated().map { index, turn in
-            continuations[index] == nil ? turn.lastIndex(where: { $0.workMessage?.isCompletedReply == true }) : nil
-        }
+        let ownership = Self.completedWorkOwnership(
+            in: turns, continuations: continuations, predecessors: predecessors)
+        let finalIndexes = ownership.finalIndexes
         var terminalReplies = turns.enumerated().map { index, turn in
             finalIndexes[index].flatMap { turn[$0].workMessage }
         }
@@ -73,15 +73,14 @@ extension ChatTranscriptRow {
                 return message.workRunID
             })
             // A continuing steer may borrow its successor's terminal reply, never its ownership.
-            let inputRunID = turn.first.flatMap { row -> String? in
-                guard row.startsTurn, let input = row.workMessage, !input.isNestedToolActivity else { return nil }
-                return input.workRunID
-            }
-            let turnRunID = inputRunID ??
-                finalIndex.flatMap { turn[$0].workMessage?.workRunID } ??
-                (replyRuns.count == 1 ? replyRuns.first : nil)
+            let turnRunID = ownership.runIDs[index]
             while end + 1 < turn.count, turn[end + 1].isWorkOutput {
-                if let runID = turn[end + 1].workMessage?.workRunID, !replyRuns.contains(runID) { break }
+                let joins = if let next = turn[end + 1].workMessage, next.isNestedToolActivity {
+                    next.belongsToWorkRun(turnRunID, allowUnknown: false)
+                } else {
+                    turn[end + 1].workMessage?.workRunID.map { replyRuns.contains($0) } ?? true
+                }
+                guard joins else { break }
                 end += 1
             }
             let parts = (start...end).flatMap { cursor -> [(row: Self, kind: ChatWorkPartKind)] in
@@ -89,9 +88,9 @@ extension ChatTranscriptRow {
                 guard let source = row.workMessage else { return [(row, .visible)] }
                 if source.role.lowercased() == "assistant", !source.hasWorkReplyContent,
                    !source.content.contains(where: \.isWorkContent) { return [] }
-                let ownsNestedWork = !source.isNestedToolActivity ||
-                    (source.workRunID != nil && source.workRunID == turnRunID)
-                let canFold = ownsNestedWork &&
+                let ownsWork = !ownership.fenced[index] ||
+                    source.belongsToWorkRun(turnRunID, allowUnknown: !source.isNestedToolActivity)
+                let canFold = ownsWork &&
                     ((finalIndex.map { cursor < $0 } ?? true) || !source.hasUnresolvedWork)
                 return source.workPresentationParts.map { message in
                     let kind: ChatWorkPartKind = canFold && message.isCollapsibleWork ? .work : .visible
@@ -114,6 +113,47 @@ extension ChatTranscriptRow {
             }
             return Array(turn[..<start]) + projected + Array(turn[(end + 1)...])
         }
+    }
+
+    private static func completedWorkOwnership(
+        in turns: [[Self]],
+        continuations: [Int: Int],
+        predecessors: [Int: Int]) -> (fenced: [Bool], runIDs: [String?], finalIndexes: [Int?])
+    {
+        var fenced = turns.map { turn in
+            turn.contains { row in
+                if case let .completedWork(work) = row {
+                    return work.messages.contains(where: \.isNestedToolActivity)
+                }
+                return row.workMessage?.isNestedToolActivity == true
+            }
+        }
+        // Only nested activity and its explicit steer chain need the stricter owner.
+        // Other turns (including every non-iOS turn) retain the legacy projection.
+        for index in turns.indices.reversed() {
+            if let next = continuations[index], fenced[next] { fenced[index] = true }
+        }
+        for index in turns.indices {
+            if let previous = predecessors[index], fenced[previous] { fenced[index] = true }
+        }
+        let runIDs = turns.enumerated().map { index, turn -> String? in
+            guard fenced[index] else { return nil }
+            let inputRunID = turn.first.flatMap { row -> String? in
+                guard row.startsTurn, let input = row.workMessage, !input.isNestedToolActivity else { return nil }
+                return input.workRunID
+            }
+            let replies = turn.compactMap(\.workMessage).filter { !$0.isNestedToolActivity && $0.hasWorkReplyContent }
+            let replyRuns = Set(replies.compactMap(\.workRunID))
+            return inputRunID ?? replies.last(where: \.isCompletedReply)?.workRunID ??
+                (replyRuns.count == 1 ? replyRuns.first : nil)
+        }
+        let finalIndexes = turns.enumerated().map { index, turn in
+            continuations[index] == nil ? turn.lastIndex(where: { row in
+                guard let reply = row.workMessage, reply.isCompletedReply else { return false }
+                return !fenced[index] || reply.belongsToWorkRun(runIDs[index], allowUnknown: true)
+            }) : nil
+        }
+        return (fenced, runIDs, finalIndexes)
     }
 
     private static func continuationIndexes(in turns: [[Self]]) -> (next: [Int: Int], previous: [Int: Int]) {
@@ -158,6 +198,12 @@ extension ChatTranscriptRow {
 }
 
 extension OpenClawChatMessage {
+    fileprivate func belongsToWorkRun(_ runID: String?, allowUnknown: Bool) -> Bool {
+        // Legacy ordinary history may omit ownership; two known owners must always match.
+        guard let sourceRunID = self.workRunID, let runID else { return allowUnknown }
+        return sourceRunID == runID
+    }
+
     /// The model stopped to call tools, so the run goes on: this row is a step, not where a reply ends.
     var stoppedForToolUse: Bool {
         ["tooluse", "tool_use", "tool_calls"].contains(self.stopReason?.lowercased() ?? "")
