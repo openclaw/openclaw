@@ -437,8 +437,8 @@ export async function takeStateUpgradePreImage(
       // The interrupted start of this build took it before this database changed.
       return { path: image, method: "kept" };
     }
-    // Left by an earlier, finished upgrade of this build: it is not this run's baseline.
-    fs.rmSync(image, { force: true });
+    // Left by an earlier, finished upgrade of this build: not this run's baseline. The new
+    // image replaces it by rename once it is complete; until then the old one stays.
   }
   // No writer runs: fold the WAL in so one file holds the whole database.
   const db = openNodeSqliteDatabase(file);

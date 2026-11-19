@@ -551,11 +551,16 @@ export async function upgradeStateDirectory(params: {
       }
       // The inventory before Doctor runs; a resumed run keeps the interrupted one's.
       const listed = priorInventory ?? listFiles(stateDir, skip);
+      // Durable before the interrupted records it replaces are removed.
+      const inventory = path.join(workDir, INVENTORY_FILE);
       fs.writeFileSync(
-        path.join(workDir, INVENTORY_FILE),
+        `${inventory}.tmp`,
         JSON.stringify({ files: [...listed], outdated: outdated.map((target) => target.path) }),
         { mode: 0o600 },
       );
+      fsyncPath(`${inventory}.tmp`);
+      fs.renameSync(`${inventory}.tmp`, inventory);
+      fsyncPath(workDir, true);
       // This run's record holds the inventory now; the interrupted ones it replaces can go.
       for (const dir of interruptedDirs) {
         fs.rmSync(dir, { recursive: true, force: true });
