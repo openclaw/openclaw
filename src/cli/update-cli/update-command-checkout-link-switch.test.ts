@@ -81,7 +81,7 @@ beforeEach(async () => {
   await fs.mkdir(path.join(base, "state"), { recursive: true });
   await fs.writeFile(
     path.join(base, "state", "openclaw.json"),
-    `${JSON.stringify({ update: { channel: "beta" } })}\n`,
+    `${JSON.stringify({ update: { channel: "dev" } })}\n`,
   );
   commands = [];
   vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation(async (argv) => {
@@ -141,23 +141,34 @@ it("names Bun's installer and a channel change when the stored channel differs",
   );
 });
 
-it("leaves switches it can complete to the package transaction", async () => {
+it.each([
   // npm links to a checkout are restored by the npm root-link transaction.
-  await expect(
-    inspect({ installTarget: { ...pnpmTarget(), manager: "npm", command: "npm" } }),
-  ).resolves.toBeNull();
-  // A pnpm package directory (installer wrapper layout) is not the checkout's command.
-  const packageRoot = path.join(base, "pnpm-home", "global", "v11", "other", "openclaw");
-  await writeManifest(packageRoot);
-  await expect(
-    inspect({ checkoutRoot: checkout, installTarget: pnpmTarget(packageRoot) }),
-  ).resolves.toBeNull();
-  // A pnpm link to another directory belongs to another installation.
-  const elsewhere = path.join(base, "elsewhere");
-  await writeManifest(elsewhere);
-  await fs.unlink(link);
-  await fs.symlink(elsewhere, link);
-  await expect(inspect({ checkoutRoot: checkout })).resolves.toBeNull();
+  [
+    "an npm link to the checkout",
+    async () => ({ installTarget: { ...pnpmTarget(), manager: "npm" as const, command: "npm" } }),
+  ],
+  // The installer's wrapper layout leaves a real package directory in the pnpm root.
+  [
+    "a pnpm package directory",
+    async () => {
+      const packageRoot = path.join(base, "pnpm-home", "global", "v11", "other", "openclaw");
+      await writeManifest(packageRoot);
+      return { checkoutRoot: checkout, installTarget: pnpmTarget(packageRoot) };
+    },
+  ],
+  // A link to another directory belongs to another installation.
+  [
+    "a pnpm link to another directory",
+    async () => {
+      const elsewhere = path.join(base, "elsewhere");
+      await writeManifest(elsewhere);
+      await fs.unlink(link);
+      await fs.symlink(elsewhere, link);
+      return { checkoutRoot: checkout };
+    },
+  ],
+] as const)("leaves %s to the package transaction", async (_name, arrange) => {
+  await expect(inspect(await arrange())).resolves.toBeNull();
 });
 
 it.each([true, false])(
@@ -175,6 +186,7 @@ it.each([true, false])(
       nodeEngine: null,
       schemaVersions: CURRENT_SCHEMA_VERSIONS,
     });
+    // Global-root discovery runs `pnpm root -g`; the fixture supplies its answer directly.
     vi.spyOn(updateGlobal, "resolveGlobalInstallTarget").mockResolvedValue(pnpmTarget());
     vi.spyOn(servicePlan, "resolveManagedServicePackageUpdatePlan").mockResolvedValue({
       rootRedirect: null,
@@ -193,12 +205,21 @@ it.each([true, false])(
         reason: "unsupported-package-target",
         failedStep: {
           failureFacts: [expect.objectContaining({ code: "unsupported-package-target" })],
+          // Agents read the commands that finish the switch from the failed step.
+          recoverySteps: [
+            { kind: "continue-update", command: `pnpm add -g openclaw@${TARGET}` },
+            { kind: "continue-update", command: "openclaw gateway install --force" },
+            { kind: "continue-update", command: "openclaw gateway restart" },
+          ],
         },
       });
     } else {
       expect(text).toContain(`Switch to openclaw@${TARGET} not started`);
       expect(text).toContain(`pnpm add -g openclaw@${TARGET}`);
       expect(text).toContain("openclaw gateway install --force");
+      expect(text).toContain(
+        "run `openclaw config set update.channel beta`, then `openclaw update`",
+      );
       // The run is refused at target admission, before staging begins.
       expect(text).not.toContain("Phase: staging");
     }
@@ -209,7 +230,7 @@ it.each([true, false])(
     expect(commands.filter((command) => /\b(add|install|i)\b/u.test(command))).toEqual([]);
     expect(await fs.realpath(link)).toBe(await fs.realpath(checkout));
     await expect(fs.readFile(path.join(base, "state", "openclaw.json"), "utf8")).resolves.toContain(
-      '"channel":"beta"',
+      '"channel":"dev"',
     );
     expect(
       (await fs.readdir(path.dirname(globalRoot))).filter((name) => name !== "node_modules"),
