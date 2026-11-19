@@ -101,11 +101,11 @@ access-policy unavailability leaves delivery owed for retry. Explicit cancellati
 requester incarnation checks, and consumed-result receipts remain authoritative.
 
 If a requester wake is refused because the child's completion owner changed,
-that attempt ends instead of retrying indefinitely. The same requester and wake
-generation can still record a result already delivered after child cleanup. Otherwise, OpenClaw records failed delivery and attempts to append a
-short notice to the requester session. If that session is unavailable, the failure
-is logged without retrying the wake. Retained wakes converge on their next
-attempt; no manual database edits are needed.
+that attempt yields to the current owner. The completion stays owed and the registry
+re-evaluates its retained wake. The same requester and wake generation can still
+record a result already delivered after child cleanup. The registry owns recovery
+of requester-settle continuations instead of starting a competing requester turn
+under the old run's operator authority.
 
 A crash or `SIGKILL` does not write a shutdown marker, so it resumes neither the
 parent nor its children. Their stored transcripts and task records remain available
