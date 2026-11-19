@@ -40,8 +40,12 @@ import { jsonResult } from "./tools/common.js";
 const hoisted = vi.hoisted(() => ({ resolvePluginTools: vi.fn<typeof resolvePluginTools>() }));
 vi.mock("../plugins/tools.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/tools.js")>()),
-  resolvePluginTools: (...args: Parameters<typeof resolvePluginTools>) =>
-    hoisted.resolvePluginTools(...args),
+  *resolvePluginToolsSteps(params: Parameters<typeof resolvePluginTools>[0], loadAsync = true) {
+    if (loadAsync) {
+      yield Promise.resolve();
+    }
+    return hoisted.resolvePluginTools(params);
+  },
 }));
 const TEST_AGENT_DIR = path.join(os.tmpdir(), "openclaw-plugin-tool-auth-test");
 const SESSION_KEY = "agent:main:telegram:group:123";

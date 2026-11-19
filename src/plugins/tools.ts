@@ -19,7 +19,11 @@ import {
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import type { PluginMetadataSnapshotScopeRunner } from "./current-plugin-metadata-snapshot.js";
 import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
-import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "./loader.js";
+import {
+  acquirePluginRegistryForInspection,
+  loadOpenClawPluginsAsync,
+  loadPluginRegistryHandle,
+} from "./loader.js";
 import {
   isManifestPluginAvailableForControlPlane,
   loadManifestContractSnapshot,
@@ -50,6 +54,7 @@ import { createPluginToolAllowlist } from "./tool-grant-allowlist.js";
 import {
   createPluginToolInspection,
   inspectionToolOwners,
+  recordToolDiagnostic,
   samePluginToolSource,
 } from "./tool-inspection-state.js";
 import { setPluginToolMeta } from "./tool-metadata.js";
@@ -291,23 +296,6 @@ function preparePluginToolRegistry(registry: PluginRegistry, snapshot: PluginMet
   return facts;
 }
 
-function recordToolDiagnostic(
-  registry: PluginRegistry,
-  diagnostic: PluginRegistry["diagnostics"][number],
-): void {
-  if (
-    !registry.diagnostics.some(
-      (entry) =>
-        entry.level === diagnostic.level &&
-        entry.pluginId === diagnostic.pluginId &&
-        entry.source === diagnostic.source &&
-        entry.message === diagnostic.message,
-    )
-  ) {
-    registry.diagnostics.push(diagnostic);
-  }
-}
-
 export type PluginToolInspectionScope = Omit<
   Parameters<typeof resolvePluginToolLoadState>[0],
   "preparedRuntime"
@@ -411,7 +399,7 @@ export async function acquireStandalonePluginToolRegistry(
 }
 
 export function resolvePluginTools(params: PluginToolResolutionParams): AnyAgentTool[] {
-  return resolvePluginToolsSynchronously(resolvePluginToolsSteps(params));
+  return resolvePluginToolsSynchronously(resolvePluginToolsSteps(params, false));
 }
 
 function resolvePluginToolsSynchronously(steps: Generator<Promise<void>, AnyAgentTool[], void>) {
@@ -425,16 +413,18 @@ function resolvePluginToolsSynchronously(steps: Generator<Promise<void>, AnyAgen
 
 export function* resolvePluginToolsSteps(
   params: PluginToolResolutionParams,
+  loadAsync = true,
 ): Generator<Promise<void>, AnyAgentTool[], void> {
   const loadState = resolvePluginToolLoadState(params);
   return loadState && loadState.onlyPluginIds.length > 0
-    ? yield* resolvePluginToolsFromRegistry(params, loadState)
+    ? yield* resolvePluginToolsFromRegistry(params, loadState, loadAsync)
     : [];
 }
 
 function* resolvePluginToolsFromRegistry(
   params: PluginToolResolutionParams,
   loadState: PluginToolLoadState,
+  loadAsync = false,
 ): Generator<Promise<void>, AnyAgentTool[], void> {
   const { context, env, onlyPluginIds, allowlist, snapshot } = loadState;
   const workspace = captureAgentWorkspaceReadiness(params.context.sessionKey);
@@ -485,10 +475,16 @@ function* resolvePluginToolsFromRegistry(
       !samePluginToolSource(inspection?.manifests.get(pluginId), snapshot.byPluginId.get(pluginId)),
   );
   if (missingPluginIds.length > 0) {
-    const registry = loadPluginRegistryHandle({
-      ...loadState.loadOptions,
-      onlyPluginIds: missingPluginIds,
-    });
+    const options = { ...loadState.loadOptions, onlyPluginIds: missingPluginIds };
+    let registry!: PluginRegistry;
+    if (loadAsync) {
+      // Readiness and source preparation belong to workers on the serving thread.
+      yield loadOpenClawPluginsAsync(options).then((loaded) => {
+        registry = loaded;
+      });
+    } else {
+      registry = loadPluginRegistryHandle(options);
+    }
     const registrations = preparePluginToolRegistry(registry, snapshot).registrations;
     for (const pluginId of missingPluginIds) {
       owners.set(pluginId, { registry, tools: registrations.get(pluginId) ?? [] });

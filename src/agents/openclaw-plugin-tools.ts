@@ -35,7 +35,7 @@ import type {
   OpenClawPluginToolAuthQuery,
   OpenClawPluginToolDelivery,
 } from "../plugins/tool-types.js";
-import { resolvePluginTools, resolvePluginToolsSteps } from "../plugins/tools.js";
+import { resolvePluginToolsSteps } from "../plugins/tools.js";
 import type { OpenClawPluginToolContext } from "../plugins/types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { sanitizeNodeIdFragment, sanitizeServerName } from "./agent-bundle-mcp-names.js";
@@ -318,7 +318,7 @@ type PluginToolOptions = {
 export async function resolveOpenClawPluginToolsForOptionsAsync(
   params: PluginToolOptions,
 ): Promise<AnyAgentTool[]> {
-  const steps = resolveOpenClawPluginToolSteps(params);
+  const steps = resolveOpenClawPluginToolSteps(params, true);
   let step = steps.next();
   while (!step.done) {
     await step.value;
@@ -339,6 +339,7 @@ export function resolveOpenClawPluginToolsForOptions(params: PluginToolOptions):
 
 function* resolveOpenClawPluginToolSteps(
   params: PluginToolOptions,
+  loadAsync = false,
 ): Generator<Promise<void>, AnyAgentTool[], void> {
   const inputConfig = params.resolvedConfig ?? params.options?.config;
   const availabilityConfig = selectLiveRuntimeConfig(inputConfig);
@@ -543,9 +544,7 @@ function* resolveOpenClawPluginToolSteps(
       : {}),
   };
   const pluginTools = applySkillLibraryGrant(
-    captureAgentWorkspaceReadiness(pluginToolInputs.context.sessionKey)
-      ? yield* resolvePluginToolsSteps(resolution)
-      : resolvePluginTools(resolution),
+    yield* resolvePluginToolsSteps(resolution, loadAsync),
     params.options,
     runtimeRegistry,
   );

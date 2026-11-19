@@ -185,16 +185,21 @@ vi.doMock("../tools/message-tool-execution.js", async () => {
 });
 vi.doMock("../../plugins/tools.js", async () => ({
   ...(await vi.importActual<typeof import("../../plugins/tools.js")>("../../plugins/tools.js")),
-  resolvePluginTools: () => [
-    pluginToolWithExecute(
-      "reload_runtime",
-      "Request a deferred plugin refresh",
-      async (_id, _args, signal) => {
-        await requestRefresh(signal);
-        return { ...jsonResult({ requested: true }), terminate: true };
-      },
-    ),
-  ],
+  *resolvePluginToolsSteps(_params: unknown, loadAsync = true) {
+    if (loadAsync) {
+      yield Promise.resolve();
+    }
+    return [
+      pluginToolWithExecute(
+        "reload_runtime",
+        "Request a deferred plugin refresh",
+        async (_id, _args, signal) => {
+          await requestRefresh(signal);
+          return { ...jsonResult({ requested: true }), terminate: true };
+        },
+      ),
+    ];
+  },
 }));
 const { runEmbeddedAgent } = await import("./run.js");
 

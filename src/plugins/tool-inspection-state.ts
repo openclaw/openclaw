@@ -109,3 +109,20 @@ export function samePluginToolSource(
       (right.packageManifest?.build?.bundledDist === false),
   );
 }
+
+export function recordToolDiagnostic(
+  registry: PluginRegistry,
+  diagnostic: PluginRegistry["diagnostics"][number],
+): void {
+  if (
+    !registry.diagnostics.some(
+      (entry) =>
+        entry.level === diagnostic.level &&
+        entry.pluginId === diagnostic.pluginId &&
+        entry.source === diagnostic.source &&
+        entry.message === diagnostic.message,
+    )
+  ) {
+    registry.diagnostics.push(diagnostic);
+  }
+}

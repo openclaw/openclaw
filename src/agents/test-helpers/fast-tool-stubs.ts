@@ -37,6 +37,12 @@ vi.mock("../tools/web-tools.js", () => ({
   createWebFetchTool: () => null,
 }));
 
+// mock-isolation: generic tool assembly excludes plugin discovery and execution.
 vi.mock("../../plugins/tools.js", () => ({
-  resolvePluginTools: () => [],
+  *resolvePluginToolsSteps(_params: unknown, loadAsync = true) {
+    if (loadAsync) {
+      yield Promise.resolve();
+    }
+    return [];
+  },
 }));
