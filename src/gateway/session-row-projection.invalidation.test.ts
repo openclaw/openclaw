@@ -223,13 +223,22 @@ describe("session model projection retained boundaries", () => {
         await projection.ensureMaterialized();
         expect((await list()).sessions.map((row) => row.model)).toEqual(["original", "original"]);
         expect(sequences()).toEqual(beforeEquivalent);
-        catalog = view("replacement");
+        const beforeCodeChange = projection.state.rowContext.thinkingFactsByModelRef;
+        catalog = view("original", "changed-code");
+        notifyPreparedModelRuntimePublication({ phase: "published" });
+        await projection.ensureMaterialized();
+        expect((await list()).sessions.map((row) => row.model)).toEqual(["original", "original"]);
+        expect(sequences()).not.toEqual(beforeEquivalent);
+        expect(projection.state.rowContext.thinkingFactsByModelRef).not.toBe(beforeCodeChange);
+        const beforeNormalization = sequences();
+        catalog = view("replacement", "changed-code");
         notifyPreparedModelRuntimePublication({ phase: "published" });
         await projection.ensureMaterialized();
         expect((await list()).sessions.map((row) => row.model)).toEqual([
           "replacement",
           "replacement",
         ]);
+        expect(sequences()).not.toEqual(beforeNormalization);
       } finally {
         await projection.ensureMaterialized();
         projection.dispose();
@@ -340,6 +349,15 @@ describe("session model projection retained boundaries", () => {
         expect(initial.sessions.find((row) => row.key === parentKey)?.childSessions).toEqual([
           children[0],
         ]);
+        const original = children.map(
+          (key) => projection.capture({ agentId: "main", key })?.materializedSequence,
+        );
+        Object.assign(parent, { label: "Updated parent", updatedAt: 10 });
+        replaceSessionEntrySync(scope, { ...parent });
+        await list();
+        expect(
+          children.map((key) => projection.capture({ agentId: "main", key })?.materializedSequence),
+        ).toEqual(original);
         const cases: Array<[Partial<SessionEntry>, string, string]> = [
           [{ providerOverride: "other-test" }, "other-test", "selected"],
           [{ modelOverride: "changed" }, "other-test", "changed"],

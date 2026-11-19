@@ -40,8 +40,12 @@ import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { beginSessionPermissionChange } from "./session-permission-change.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
 import { prepareLinkedSessionEntryFilter } from "./session-row-prepared-read.js";
-import { prepareProjectedSessionPresentation } from "./session-row-presentation.js";
+import {
+  prepareProjectedSessionPresentation,
+  prepareSessionRowPublication,
+} from "./session-row-presentation.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
+import { publishTranscriptFields } from "./session-row-projection-record.js";
 import {
   createTestProjection,
   holdSubagentExecution,
@@ -223,6 +227,44 @@ describe("session event privacy retained boundaries", () => {
           }
         } finally {
           finishPermissionChange?.();
+        }
+        const captured = projection.describe({ key, agentId: "main" })!;
+        const originalPreview = captured.lastMessagePreview;
+        const preview = "Unchanged preview 🦞 ".repeat(1024);
+        const publishPreview = (lastMessagePreview: string | undefined) =>
+          publishTranscriptFields(
+            captured,
+            { lastMessagePreview, fallbackModel: captured.fallbackModel },
+            cfg,
+            projection.state.rowContext,
+          );
+        const publication = prepareSessionRowPublication(projection, now);
+        const projectRun = createVisibleActiveSessionRunProjector(
+          projection.state.rowContext.projectedAgentRuns,
+        );
+        const present = (index: number) =>
+          publication(peers[index]!.client, projectRun)
+            .getPresentation()
+            .present(captured, request);
+        const stringify = vi.spyOn(JSON, "stringify");
+        try {
+          let previous: ReturnType<typeof present> | undefined;
+          for (const value of [preview, "Published replacement preview"]) {
+            publishPreview(value);
+            stringify.mockClear();
+            const row = present(1);
+            expect(row?.lastMessagePreview).toBe(value);
+            expect(present(2)).toBe(row);
+            expect(row).not.toBe(previous);
+            // Recipient cache lookups must not encode the unchanged large preview again.
+            expect(
+              stringify.mock.calls.some(([arg]) => Array.isArray(arg) && arg.includes(value)),
+            ).toBe(false);
+            previous = row;
+          }
+        } finally {
+          stringify.mockRestore();
+          publishPreview(originalPreview);
         }
         const compactRequest = { ...request, rowMode: "compact" as const };
         const expiresAt = now - 100 + 30 * 60_000;

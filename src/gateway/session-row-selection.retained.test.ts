@@ -37,7 +37,10 @@ import {
 } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { holdSubagentExecution } from "./session-row-projection.read-fixture.test-support.js";
-import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
+import {
+  createSessionRowProjectionFixture,
+  verifyConfiguredAgentOwnerFacets,
+} from "./session-row-projection.test-support.js";
 import { createSessionRowSelection } from "./session-row-selection.js";
 import {
   selectSessionEntries,
@@ -677,6 +680,10 @@ describe("session selection retained boundaries", () => {
 
   afterEach(() => {
     resetPluginRuntimeStateForTest();
+  });
+
+  it("refreshes agent owner facets when the sidebar roster changes", async () => {
+    await verifyConfiguredAgentOwnerFacets(expect);
   });
 
   it("selects canonical participant involvement without reading display fields", () => {

@@ -4,6 +4,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { NODE_RUNNER_UPDATE_REQUIRED_ISSUE } from "../../infra/node-runner-inventory.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
@@ -115,6 +116,46 @@ describe("device worker placement dispatch", () => {
 
   afterEach(() => {
     clearRuntimeConfigSnapshot();
+  });
+
+  it("records an unavailable device dispatch as a durable failed placement", async () => {
+    const harness = await createHarness(database, placementStore);
+    bindDeviceWorkerAvailability(harness.environments, async () => ({
+      available: false,
+      issue: NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+    }));
+    const states: string[] = [];
+    const request = {
+      ...REQUEST,
+      profileId: "device:offline-device",
+      deviceId: "offline-device",
+      devicePlacement: OPENCLAW_DEVICE_REQUIREMENT,
+      inheritedProfile: {
+        providerId: "device",
+        profileSnapshot: {
+          install: "bundle" as const,
+          settings: { device: "offline-device" },
+        },
+      },
+    };
+
+    await expect(
+      harness.service.dispatch(request, (placement) => states.push(placement.state)),
+    ).rejects.toThrow(
+      "device worker node offline-device requires an update before it can host sessions; run openclaw update, then reconnect it (for a headless node, run openclaw node restart)",
+    );
+
+    expect(states).toEqual(["requested", "failed"]);
+    expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
+    expect(
+      await createWorkerSessionPlacementStore({ database }).getAsync(REQUEST.sessionId),
+    ).toMatchObject({
+      state: "failed",
+      environmentId: null,
+      recoveryError: expect.stringContaining("run openclaw update"),
+      terminalReason: expect.stringContaining("run openclaw node restart"),
+      terminalAtMs: 1_000,
+    });
   });
 
   it("syncs paired-device remote-exec without launching an OpenClaw worker child", async () => {
