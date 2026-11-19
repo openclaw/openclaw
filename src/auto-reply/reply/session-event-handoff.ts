@@ -1,4 +1,6 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { setTimeout as delay } from "node:timers/promises";
+import { collectErrorGraphCandidates } from "@openclaw/normalization-core/error-coercion";
+import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
@@ -7,6 +9,7 @@ import {
 } from "../../agents/agent-run-terminal-outcome.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { FAILOVER_REASONS } from "../../agents/failover/signal.js";
+import { isWorkspaceAccessUnavailableError } from "../../agents/workspace-access.js";
 import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import {
   composeSessionSourceAssertion,
@@ -82,6 +85,24 @@ const loadGenerationReadmission = createLazyRuntimeNamedExport(
   "runOutsideAdmittedGenerationScopes",
 );
 
+// A dedicated workspace node reconnects a few seconds after a Gateway restart.
+const RESTART_WORKSPACE_RECONNECT_WINDOW_MS = 60_000;
+const RESTART_WORKSPACE_RECONNECT_POLL_MS = 1_000;
+
+/** Only a node.invoke refused before dispatch proves a retry cannot repeat an effect. */
+function isUndispatchedWorkspaceDisconnect(error: unknown): boolean {
+  return (
+    isWorkspaceAccessUnavailableError(error) &&
+    collectErrorGraphCandidates(error, (current) => [current.cause]).some((candidate) => {
+      const details = asNullableRecord(asNullableRecord(candidate)?.details);
+      return (
+        asNullableRecord(details?.nodeError)?.code === "NOT_CONNECTED" &&
+        details?.nodeCommandDispatched === false
+      );
+    })
+  );
+}
+
 /** Producer-owned occurrence; passive notices continue to use enqueueSystemEvent. */
 export function enqueueSessionEventForHost(
   text: string,
@@ -94,6 +115,8 @@ function enqueueSessionEventAttempt(
   text: string,
   { assertAcceptanceCurrent, ...options }: SessionEventOptions,
   readmissionAttempt: number,
+  configReadmissionAttempt = 0,
+  reconnectDeadline = Date.now() + RESTART_WORKSPACE_RECONNECT_WINDOW_MS,
 ): SessionEventReceipt {
   options.assertCurrent?.();
   options.expectedTarget?.assertCurrent?.();
@@ -307,6 +330,7 @@ function enqueueSessionEventAttempt(
     }
     settlement = "settling";
     const complete = async () => {
+      let pendingInputSettled = true;
       try {
         await settleUserTurnPendingInput(
           inputRecorder,
@@ -317,6 +341,7 @@ function enqueueSessionEventAttempt(
           accepted,
         );
       } catch (error) {
+        pendingInputSettled = false;
         failure ??= error instanceof Error ? error : String(error);
       }
       // Submitting custody ends at the first acceptance; a pre-acceptance re-admission
@@ -331,12 +356,39 @@ function enqueueSessionEventAttempt(
         !started &&
         !delivery.deliveryAttempted &&
         !signal.aborted &&
-        !abandoned;
-      if (retainForConfigChange() && configPolicy.canReadmit(readmissionAttempt)) {
-        await waitForSessionEventReadmission(readmissionAttempt, signal);
+        !abandoned &&
+        configPolicy.canReadmit(configReadmissionAttempt);
+      // A restart input that reached a workspace node before it reconnected was never
+      // dispatched; retry it within the reconnect window. Anything that may have had
+      // effects, or whose staged input was not durably cancelled, stays terminal.
+      const retainForWorkspaceReconnect = () =>
+        pendingInputSettled &&
+        options.source === "restart" &&
+        !accepted &&
+        !adopted &&
+        !started &&
+        !conversationResultCommitted &&
+        !delivery.delivered &&
+        !delivery.deliveryAttempted &&
+        !delivery.deliveryAmbiguous &&
+        !signal.aborted &&
+        !abandoned &&
+        Date.now() < reconnectDeadline &&
+        isUndispatchedWorkspaceDisconnect(failure);
+      const configRetry = retainForConfigChange();
+      if (configRetry) {
+        await waitForSessionEventReadmission(configReadmissionAttempt, signal);
+      } else if (retainForWorkspaceReconnect()) {
+        await delay(RESTART_WORKSPACE_RECONNECT_POLL_MS, undefined, { signal }).catch(
+          (error: unknown) => {
+            if (!signal.aborted) {
+              throw error;
+            }
+          },
+        );
       }
       settlement = "finished";
-      const canReadmit = retainForConfigChange() && configPolicy.canReadmit(readmissionAttempt);
+      const canReadmit = retainForConfigChange() || retainForWorkspaceReconnect();
       const terminal = resolveSessionEventTerminalOutcome({
         operation,
         signal,
@@ -371,7 +423,14 @@ function enqueueSessionEventAttempt(
           attempt: readmissionAttempt + 1,
           adopted,
           occurrenceId,
-          enqueue: enqueueSessionEventAttempt,
+          enqueue: (nextText, nextOptions, attempt) =>
+            enqueueSessionEventAttempt(
+              nextText,
+              nextOptions,
+              attempt,
+              configReadmissionAttempt + (configRetry ? 1 : 0),
+              reconnectDeadline,
+            ),
           log,
         });
         readmittedReceipt = readmission.receipt;
