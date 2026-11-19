@@ -21,7 +21,7 @@ describe("setAtPath array indexes", () => {
     const root = { items: ["a", "b"] };
 
     expect(() => setAtPath(root, ["items", "5"], "z")).toThrow(
-      "Array index 5 is out of range for an array of length 2",
+      "Array index 5 is out of range for an array of length 2. Use an index from 0 to 1 to update an existing item, or index 2 to append.",
     );
     expect(root.items).toEqual(["a", "b"]);
   });
@@ -30,9 +30,18 @@ describe("setAtPath array indexes", () => {
     const root = { items: ["a", "b"] };
 
     expect(() => setAtPath(root, ["items", "5", "name"], "z")).toThrow(
-      "Array index 5 is out of range for an array of length 2",
+      "Array index 5 is out of range for an array of length 2. Use an index from 0 to 1 to update an existing item, or index 2 to append.",
     );
     expect(root.items).toEqual(["a", "b"]);
+  });
+
+  it("suggests the first index when appending to an empty array", () => {
+    const root: { items: unknown[] } = { items: [] };
+
+    expect(() => setAtPath(root, ["items", "2"], "z")).toThrow(
+      "Array index 2 is out of range for an array of length 0. Use index 0 to append the first item.",
+    );
+    expect(root.items).toEqual([]);
   });
 
   it("appends at the current array length", () => {
