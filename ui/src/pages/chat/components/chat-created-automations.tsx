@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onSettled, Show, untrack } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { AutomationSavedDefinition } from "../../../../../src/shared/automation-saved-definition.js";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -86,17 +86,22 @@ function SlotStatus(props: {
 }
 
 /** Only a confirmed job ID mounts a scheduler observer; a plan name is never a write target. */
-function LiveAutomation(props: { id: string; name: string; initial?: AutomationSavedDefinition }) {
+type ConfirmedJob = { id: string; initial?: AutomationSavedDefinition };
+function LiveAutomation(props: { job: ConfirmedJob; name: string }) {
   const app = useOptionalApplication();
   const [state, publish] = createSignal<CronJobObservation>({
     loading: Boolean(app),
     writable: false,
   });
-  const initial = untrack(() => props.initial);
   let watch: ReturnType<typeof watchCronJobDefinition> | undefined;
   onSettled(() => {
     if (app) {
-      const observer = watchCronJobDefinition(app.gateway, props.id, publish, initial);
+      const observer = watchCronJobDefinition(
+        app.gateway,
+        props.job.id,
+        publish,
+        props.job.initial,
+      );
       watch = observer;
       return () => observer.dispose();
     }
@@ -114,7 +119,7 @@ function LiveAutomation(props: { id: string; name: string; initial?: AutomationS
       ? t("cron.scheduleLabel.withTimeZone", { value: label, timeZone: value.tz })
       : label;
   });
-  const search = () => `?${new URLSearchParams({ job: props.id, tab: "settings" })}`;
+  const search = () => `?${new URLSearchParams({ job: props.job.id, tab: "settings" })}`;
   return (
     <>
       <Show
@@ -166,16 +171,31 @@ function LiveAutomation(props: { id: string; name: string; initial?: AutomationS
 }
 
 function AutomationRow(props: { row: AutomationCreationRow; single: boolean }) {
-  const beganPending = untrack(() => props.row.status === "pending");
-  const jobId = () => {
+  // A receipt seeds only the observer for a transition this mounted slot saw.
+  // Retain that identity through unrelated plan updates; a remount starts without it.
+  const binding = createMemo<ConfirmedJob | "pending" | undefined>((previous) => {
     const row = props.row;
-    return row.status === "created" ? row.jobId : undefined;
+    if (row.status !== "created") {
+      return row.status === "pending" || previous === "pending" ? "pending" : undefined;
+    }
+    if (previous && previous !== "pending" && previous.id === row.jobId) {
+      return previous;
+    }
+    return { id: row.jobId, initial: previous === "pending" ? row.definition : undefined };
+  });
+  const confirmed = () => {
+    const value = binding();
+    return value === "pending" ? undefined : value;
   };
   return (
-    <li class="chat-created-automations__row" data-slot-id={props.row.slotId} data-job-id={jobId()}>
+    <li
+      class="chat-created-automations__row"
+      data-slot-id={props.row.slotId}
+      data-job-id={confirmed()?.id}
+    >
       {props.single && <ClockTile />}
       <Show
-        when={jobId()}
+        when={confirmed()}
         keyed
         fallback={
           <SlotStatus
@@ -184,15 +204,7 @@ function AutomationRow(props: { row: AutomationCreationRow; single: boolean }) {
           />
         }
       >
-        {(id) => (
-          <LiveAutomation
-            id={id}
-            name={props.row.name}
-            initial={
-              beganPending && props.row.status === "created" ? props.row.definition : undefined
-            }
-          />
-        )}
+        {(job) => <LiveAutomation job={job} name={props.row.name} />}
       </Show>
     </li>
   );
