@@ -17,6 +17,7 @@ import {
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { embedSessionColdArchivesInSnapshot } from "../config/sessions/session-cold-storage-backup.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveDaemonRuntimePinStorePath } from "../daemon/runtime-pin-store.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { capturePostgresBackup, readBackupEngineImage } from "../snapshot/database-backup.js";
@@ -89,7 +90,10 @@ type CanonicalSqliteSource = {
   archiveSourcePath: string;
   identity: BigIntStats;
   sourcePath: string;
-} & ({ role: "global" | "quarantine" | "client" } | { role: "agent"; agentId: string });
+} & (
+  | { role: "global" | "quarantine" | "client" | "services" }
+  | { role: "agent"; agentId: string }
+);
 
 // The sealed inventory also bounds header answers to one backup capture.
 const sqliteHeaderAnswers = new WeakMap<BackupResourceInventory, Map<string, boolean>>();
@@ -573,6 +577,12 @@ export async function createBackupSqliteSnapshotPlan(params: {
     {
       role: "client",
       sourcePath: resolveClientCredentialStorePath({
+        OPENCLAW_STATE_DIR: params.resources.stateDir,
+      }),
+    },
+    {
+      role: "services",
+      sourcePath: resolveDaemonRuntimePinStorePath({
         OPENCLAW_STATE_DIR: params.resources.stateDir,
       }),
     },
