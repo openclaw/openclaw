@@ -136,7 +136,7 @@ extension ChatTranscriptRow {
                 $0.role.lowercased() == "assistant" && !$0.isForwardedTurnBoundary && $0.hasWorkReplyContent
             }
             // Bounded history can omit the backing input. Local reply evidence resolves ownership, not a link.
-            let steerTarget = input?.steerTargetRunID.flatMap { target in
+            let steerTarget: String? = input?.steerTargetRunID.flatMap { target in
                 guard input?.role.lowercased() == "user" else { return nil }
                 return predecessors[index] != nil || ordinaryReplies.contains { $0.workRunID == target } ? target : nil
             }
