@@ -129,12 +129,12 @@ function isCanonicalImmutableOutput(value: unknown): boolean {
 
 function captureProgressEvent(
   event: AgentEventPayload,
-  deferOutput: boolean,
+  mode: "scalars" | "output" | undefined,
 ): CapturedProgressEvent | undefined {
   try {
     // The owner built this envelope; scalar fields and canonical frozen output
     // already have their JSON representation. Other producer values need capture.
-    const plainEnvelope = !("toJSON" in event) && !("toJSON" in event.data);
+    const plainEnvelope = mode !== undefined && !("toJSON" in event) && !("toJSON" in event.data);
     if (
       plainEnvelope &&
       typeof event.runId === "string" &&
@@ -151,7 +151,7 @@ function captureProgressEvent(
           typeof value === "string" ||
           typeof value === "boolean" ||
           (typeof value === "number" && Number.isFinite(value) && !Object.is(value, -0)) ||
-          (deferOutput && isCanonicalImmutableOutput(value)),
+          (mode === "output" && isCanonicalImmutableOutput(value)),
       )
     ) {
       // Canonical immutable facts need no JSON copy. Keep the existing byte
@@ -168,7 +168,7 @@ function captureProgressEvent(
     if (byteLength > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES) {
       return undefined;
     }
-    if (deferOutput && plainEnvelope) {
+    if (mode === "output" && plainEnvelope) {
       // Capture producer getters/toJSON now, but decode only the retained receipt
       // when recovery reads it. Output bodies are not used by owner predicates.
       const { partialResult: _partialResult, ...data } = event.data;
@@ -455,14 +455,19 @@ export function updateChatRunProgressSnapshot(
     ...(event.sessionKey ? { sessionKey: event.sessionKey } : {}),
     ...(event.agentId ? { agentId: event.agentId } : {}),
   };
-  const deferOutput = isTool && mode === "full" && phase === "update" && data.outputOnly === true;
-  let captured = captureProgressEvent(storedEvent, deferOutput);
+  const captureMode =
+    isTool && mode === "full"
+      ? phase === "update" && data.outputOnly === true
+        ? "output"
+        : undefined
+      : "scalars";
+  let captured = captureProgressEvent(storedEvent, captureMode);
   if (!captured && isTool) {
     delete storedData.args;
     delete storedData.partialResult;
     delete storedData.diff;
     delete storedData.result;
-    captured = captureProgressEvent(storedEvent, deferOutput);
+    captured = captureProgressEvent(storedEvent, captureMode);
   }
   if (!captured) {
     return next;
