@@ -244,7 +244,7 @@ describe("msteams adaptive card action invoke", () => {
     },
     {
       label: "agent button",
-      action: { type: "Action.Submit", data: { value: ":/pick a", label: "Pick" } },
+      action: { type: "Action.Submit", data: { value: "::/pick a", label: "Pick" } },
       text: "callback_data: /pick a",
     },
     {

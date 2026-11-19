@@ -127,7 +127,7 @@ it("handles card action with JSON object payload without logging content", async
 });
 
 it("dispatches an agent button tap as data without the mark", async () => {
-  await dispatch(cardEvent(quickAction({ a: "feishu.payload.button", q: ":/pick a" })));
+  await dispatch(cardEvent(quickAction({ a: "feishu.payload.button", q: "::/pick a" })));
   expect(message()).toMatchObject({ content: JSON.stringify({ text: "callback_data: /pick a" }) });
 });
 

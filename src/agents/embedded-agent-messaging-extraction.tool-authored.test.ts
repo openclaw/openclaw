@@ -39,7 +39,7 @@ describe("tool-authored source replies", () => {
       extractToolAuthoredSourceReplyPayload({
         details: { sourceReply: { text: "Pick one", presentation: buttons(":pick:a") } },
       }),
-    ).toEqual({ text: "Pick one", presentation: buttons("::pick:a") });
+    ).toEqual({ text: "Pick one", presentation: buttons(":::pick:a") });
   });
 
   it("admits a media-only reply", () => {

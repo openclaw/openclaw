@@ -116,11 +116,11 @@ describe("Slack interaction lifecycle", () => {
       action: {
         type: "button",
         action_id: "openclaw:callback_button:1:1",
-        value: ":/pick a",
+        value: "::/pick a",
         text: plainText("Choose"),
       },
     });
-    expect(dispatchPluginInteractiveHandlerMock.mock.calls[0]?.[0].data).toBe(":/pick a");
+    expect(dispatchPluginInteractiveHandlerMock.mock.calls[0]?.[0].data).toBe("::/pick a");
     expect(enqueueSessionEventMock.mock.calls[0]?.[0]).toBe("callback_data: /pick a");
   });
 });

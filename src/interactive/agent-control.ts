@@ -4,8 +4,9 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 
-// An empty namespace is unregistrable, so no plugin claims a value by its mark.
-const AGENT_CONTROL_MARK = ":";
+// An empty namespace is unregistrable, so no plugin claims a value by its mark. Two
+// colons keep marking idempotent across runner re-entry for nearly every authored value.
+const AGENT_CONTROL_MARK = "::";
 
 function stampAgentControl(control: unknown): unknown {
   const record = toRecord(control);
@@ -16,7 +17,7 @@ function stampAgentControl(control: unknown): unknown {
       ? undefined
       : (action ?? record);
   const value = normalizeOptionalString(target?.value);
-  if (!value) {
+  if (!value || value.startsWith(AGENT_CONTROL_MARK)) {
     return control;
   }
   const stamped = { ...target, value: `${AGENT_CONTROL_MARK}${value}` };
@@ -30,7 +31,7 @@ function stampAgentControlBlock(block: unknown): unknown {
   return Array.isArray(controls) ? { ...record, [key]: controls.map(stampAgentControl) } : block;
 }
 
-/** Marks message-action callback values as the conversation agent's. Call once per action. */
+/** Marks message-action callback values as the conversation agent's; re-marking is a no-op. */
 export function stampAgentControls(payload: Record<string, unknown>): Record<string, unknown> {
   const stamped = { ...payload };
   for (const key of ["presentation", "interactive"] as const) {
@@ -45,7 +46,9 @@ export function stampAgentControls(payload: Record<string, unknown>): Record<str
 /** The value behind a tapped agent-authored control, without its mark; undefined otherwise. */
 export function agentControlValue(data: unknown): string | undefined {
   const value = typeof data === "string" ? data.trim() : "";
-  return value.length > 1 && value.startsWith(AGENT_CONTROL_MARK) ? value.slice(1) : undefined;
+  return value.length > AGENT_CONTROL_MARK.length && value.startsWith(AGENT_CONTROL_MARK)
+    ? value.slice(AGENT_CONTROL_MARK.length)
+    : undefined;
 }
 
 /** The agent input for a tapped agent-authored control; undefined otherwise. */

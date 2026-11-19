@@ -150,7 +150,7 @@ Button semantics:
   agent as `callback_data: <value>`, on every channel and without expiry.
   Channels decode a tapped value with `agentControlText(data)` from
   `openclaw/plugin-sdk/interactive-runtime`: it returns that agent input for a
-  marked value and `undefined` for any other value. The mark takes 1 byte of the
+  marked value and `undefined` for any other value. The mark takes 2 bytes of the
   channel's value limit.
 - `action.type: "approval"` identifies one durable operator approval, its
   explicit `exec` or `plugin` kind, and the requested decision. Channel plugins

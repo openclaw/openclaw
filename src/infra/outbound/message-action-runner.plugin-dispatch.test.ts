@@ -505,7 +505,7 @@ describe("runMessageAction plugin dispatch", () => {
     const buttons = (value: string) => ({
       blocks: [{ type: "buttons", buttons: [{ label: "A", value }] }],
     });
-    const presentation = buttons(hop ? ":a" : "a");
+    const presentation = buttons(hop ? "::a" : "a");
     const pending = runMessageAction({
       cfg: {},
       action: "send",
@@ -522,7 +522,7 @@ describe("runMessageAction plugin dispatch", () => {
       const result = await pending;
       // Message-action callbacks reach the channel marked once as the conversation agent's.
       expect(result.payload).toEqual(
-        expect.objectContaining({ ok: true, presentation: buttons(":a") }),
+        expect.objectContaining({ ok: true, presentation: buttons("::a") }),
       );
     } else {
       await expect(pending).rejects.toThrow(/--presentation must be valid JSON/);

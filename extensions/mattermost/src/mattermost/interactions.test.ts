@@ -311,7 +311,7 @@ describe("createMattermostInteractionHandler", () => {
     const context = {
       action_id: actionId,
       __openclaw_channel_id: channelId,
-      callback_data: ":approve",
+      callback_data: "::approve",
     };
     return { context, token: generateInteractionToken(context, "acct") };
   }
@@ -609,7 +609,7 @@ describe("createMattermostInteractionHandler", () => {
       userName: "alice",
       actionId: "approve",
       actionName: "Approve",
-      callbackData: ":approve",
+      callbackData: "::approve",
       postId: "post-1",
       post: fetchedPost,
     });

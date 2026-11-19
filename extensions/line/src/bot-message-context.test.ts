@@ -365,7 +365,7 @@ describe("buildLineMessageContext", () => {
     },
     {
       name: "agent button",
-      postback: { data: ":pick:a line.action=volume_up" },
+      postback: { data: "::pick:a line.action=volume_up" },
       expected: "callback_data: pick:a line.action=volume_up",
     },
   ];

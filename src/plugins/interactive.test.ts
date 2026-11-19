@@ -274,19 +274,19 @@ describe("plugin interactive handlers", () => {
     const handler = vi.fn(async (_ctx: unknown) => ({ handled: true }));
     register(handler);
 
-    await expect(dispatchTelegram(":codex:resume", "cb-agent")).resolves.toEqual(handled);
+    await expect(dispatchTelegram("::codex:resume", "cb-agent")).resolves.toEqual(handled);
     expect(handler.mock.calls[0]?.[0]).toMatchObject({
       callback: { data: "codex:resume", namespace: "codex", payload: "resume" },
     });
-    await expect(dispatchTelegram(":other:resume", "cb-agent-unclaimed")).resolves.toEqual({
+    await expect(dispatchTelegram("::other:resume", "cb-agent-unclaimed")).resolves.toEqual({
       matched: false,
       handled: false,
       duplicate: false,
     });
-    expect(agentControlText(":other:resume")).toBe("callback_data: other:resume");
+    expect(agentControlText("::other:resume")).toBe("callback_data: other:resume");
     expect(agentControlText("other:resume")).toBeUndefined();
-    // Exactly one mark is removed, so an authored leading colon survives.
-    expect(agentControlText("::other")).toBe("callback_data: :other");
+    // An authored leading colon survives the mark.
+    expect(agentControlText(":::other")).toBe("callback_data: :other");
   });
 
   it.each(["telegram", "discord", "slack"] as const)(

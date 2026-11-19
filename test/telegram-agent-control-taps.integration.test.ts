@@ -30,8 +30,8 @@ const presentation = (value: string) => ({
       type: "buttons",
       buttons: [
         { label: "Typed", action: { type: "callback", value } },
-        // Legacy values keep their 64-byte budget minus the 1-byte mark.
-        { label: "Legacy", value: "x".repeat(63) },
+        // Legacy values keep their 64-byte budget minus the 2-byte mark.
+        { label: "Legacy", value: "x".repeat(62) },
       ],
     },
   ],
@@ -94,9 +94,9 @@ it("sends message-action callbacks with the agent mark on the send and edit path
   } finally {
     await botApi.close();
   }
-  const legacy = `:${"x".repeat(63)}`;
+  const legacy = `::${"x".repeat(62)}`;
   expect(keyboards).toEqual([
-    { method: "sendMessage", data: [":/pick a|1", legacy] },
-    { method: "editMessageText", data: [":pick:b", legacy] },
+    { method: "sendMessage", data: ["::/pick a|1", legacy] },
+    { method: "editMessageText", data: ["::pick:b", legacy] },
   ]);
 });

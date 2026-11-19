@@ -554,10 +554,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
   if (action === "broadcast") {
     return handleBroadcastAction({ ...input, agentId: resolvedAgentId }, params);
   }
-  // The Gateway hop re-enters with params its delegating runner already marked.
-  if (!input.callerRecordsDestinationHistory) {
-    params = stampAgentControls(params);
-  }
+  params = stampAgentControls(params);
   if (action === "send" && hasPollCreationParams(params)) {
     throw new Error('Poll fields require action "poll"; use action "poll" instead of "send".');
   }

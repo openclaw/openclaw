@@ -190,7 +190,7 @@ it("gives the agent the value behind an agent button, without the mark", async (
     userName: "ada",
     actionId: "pickb",
     actionName: "Beta",
-    callbackData: ":/pick b",
+    callbackData: "::/pick b",
     postId: "post-1",
     post: { id: "post-1" },
   } as never);

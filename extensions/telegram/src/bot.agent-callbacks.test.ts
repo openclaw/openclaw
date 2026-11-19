@@ -15,7 +15,7 @@ const { createTelegramBotCore } = await import("./bot-core.js");
 
 // callback_data bytes core sends for message-action controls, as recorded by
 // test/telegram-agent-control-taps.integration.test.ts.
-const AGENT_CALLBACK = ":/pick a|1";
+const AGENT_CALLBACK = "::/pick a|1";
 
 const useConfig = (telegram: TelegramChannelConfig) =>
   getLoadConfigMock().mockReturnValue(makeTelegramConfig(telegram));
@@ -73,7 +73,7 @@ it("offers an agent tap to the plugin that owns its value first", async () => {
     namespace: "pick",
     handler,
   });
-  await tap(":pick:a");
+  await tap("::pick:a");
 
   expect(handler).toHaveBeenCalledOnce();
   expect(handler.mock.calls[0]?.[0]).toMatchObject({
