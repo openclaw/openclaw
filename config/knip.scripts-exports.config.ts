@@ -30,7 +30,6 @@ const repositoryToolEntries = [
   // ui/config/control-ui-locales.ts invokes the catalogue through Vite's runnerImport.
   "config/knip-vite-consumers.mjs!",
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
-  ".github/workflows/full-release-validation.yml!",
   ".github/workflows/labeler.yml!",
   ".github/workflows/openclaw-release-publish.yml!",
   ".github/workflows/full-release-validation.yml!",

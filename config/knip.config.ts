@@ -167,8 +167,6 @@ const repositoryScriptEntries = [
   ".github/workflows/plugin-prerelease.yml!",
   // Labeler steps import their shared helper through workspace file URLs.
   ".github/workflows/labeler.yml!",
-  // Full release validation imports policy from its trusted workflow checkout.
-  ".github/workflows/full-release-validation.yml!",
   // Stable closeout imports its recovery verifier from the trusted tooling checkout.
   ".github/workflows/openclaw-stable-main-closeout.yml!",
   // Prepared publication imports its verifier from the frozen release harness.
