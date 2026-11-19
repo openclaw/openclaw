@@ -45,10 +45,14 @@ and support the required input modalities. Listing does not prove account
 entitlement.
 
 Native discovery is demand-driven. Gateway startup publishes configured model
-hints without starting an app-server for each agent. Opening an agent's model
-picker or catalog, creating a Codex session, running a turn, or requesting native
-auth/status information starts that agent's client when needed. Before discovery,
-native account readiness is unknown; configured hints are not proof of sign-in.
+hints without starting an app-server for each agent. The default agent keeps its
+background catalog warmup when it has a configured primary model, an explicit
+runtime policy, or a prepared credential for its default provider. An empty
+installation's built-in fallback model does not trigger that warmup. Opening an
+agent's model picker or catalog, creating a Codex session, running a turn, or
+requesting native auth/status information starts that agent's client when needed.
+Before discovery, native account readiness is unknown; configured hints are not
+proof of sign-in.
 First use of an idle agent can take a few seconds for the cold start.
 
 Discovery reads `model/list` and `account/read` from the same scoped

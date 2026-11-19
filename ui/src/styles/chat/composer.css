@@ -4080,10 +4080,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   opacity: 0.6;
 }
 
-.chat-controls__model-option-provider .provider-brand-icon {
-  color: var(--muted);
-}
-
 /* Search and a single-provider catalog use the entire list column. */
 .chat-controls__model-browser[data-single-provider],
 .chat-controls__model-menu[data-chat-model-filtering] .chat-controls__model-browser {
@@ -4599,7 +4595,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 /* A locked account is a label, not a control; this follows the hover rule to win. */
-.chat-controls__account-trigger:disabled {
+.chat-controls__account-trigger.chat-controls__account-trigger--locked {
   min-width: 0;
   padding: 0;
   background: none;

@@ -227,6 +227,12 @@ configured remote workspace during registration so callers cannot fall back to
 local files before its service starts. Register its bridge when ready and release
 it when the service stops. Callers keep their existing document authorization.
 
+`AgentHarnessHostCapabilities.prepareLocalExecScratch({ cwd })` prepares the admitted local workspace's
+`.openclaw/tmp/` and returns `TMPDIR`, `TMP`, and `TEMP` for its child shells.
+The host closes this operation with its admitted run. Native harnesses apply these values to the session's shell environment, without
+changing a shared server's process environment. Do not project local paths into
+remote or sandbox processes; those execution owners select their own paths.
+
 The bridge's optional `createFileExclusive` operation publishes a complete file
 only if its path does not exist, returning `"created"` or `"exists"`. It must use
 an atomic exclusive-create operation, never a separate existence check followed

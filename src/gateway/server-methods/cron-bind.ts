@@ -10,7 +10,6 @@ import { resolveCronOperatorExecutionRevision } from "../../cron/service/jobs-to
 import type { CronStoredJob } from "../../cron/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getCronManagementAuthority } from "../cron-creator-authority-grant.js";
-import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import {
   cronJobMatchesCallerScope,
   readCronCallerScope,
@@ -88,7 +87,6 @@ export const cronBindHandler: GatewayRequestHandler = defineValidatedGatewayHand
   async (options) => {
     const { params, respond, context, client, signal } = options;
     const { sessionMutationCommitGuard, hasCurrentClientAuthority } = options;
-    assertActiveAgentRuntimeAuthority(client, context);
     sessionMutationCommitGuard?.();
     if (hasCurrentClientAuthority?.() === false) {
       throw new Error("Automation caller authority is no longer active");

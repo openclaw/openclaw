@@ -1135,6 +1135,42 @@ Temporary instrumentation was restored byte for byte. Scoped scripts-test
 typecheck, lint, formatting and both line-cap ratchets pass. Independent
 preservation and local ClawSweeper reviews found no actionable defects.
 
+### Standalone resolver fixture cleanup
+
+At `11b65598aa4d6b56ce786a611efbb172775a165b`, the module-resolution and
+fresh-export-resolver suites clear their directory trackers before removal
+and stop at the first error. Reuse the shared cleanup owner in both synchronous
+hooks. Preserve all five declarations / ten expanded cases, including lazy
+builtins and aliases, emitted/typed resolution after pruning and relocation,
+dynamic and shadowed resolution, and fresh-process export recovery/rejection.
+Keep registration of original, typed, image and relocated roots, plus all
+child-process inputs and assertions. Production and shared helpers are unchanged.
+
+Actual Vitest-hook controls reproduce lost failed and unattempted roots in both
+suites. The shared owner preserves the same error, cleans the healthy root,
+retains the failed root and removes it on retry, including a present relocated
+root beside an already absent original root. Clean baseline and candidate runs
+pass all ten cases; temporary instrumentation is restored byte for byte.
+Scoped typecheck, lint, formatting and line-cap checks pass. Independent
+preservation and local reviews found no actionable defects.
+
+### Standalone declaration fixture cleanup
+
+At `cd2ae19272a3ee7be456385fa7efc56d6e2109a6`, the standalone declaration suite clears its
+temporary-root tracker before removal. A removal failure loses ownership of the
+failed root. Reuse the shared cleanup owner without changing the single
+declaration / case. Retain worker and WebSocket declaration identity, positive
+type compatibility and both expected type errors. Keep registration before
+fallible fixture setup and compiler disposal before teardown.
+
+Actual registered-hook controls reproduce the lost failed and unattempted roots.
+The shared owner preserves the same error, removes the healthy root, retains the
+failed root and removes it on retry. The compiler is disposed before cleanup and
+the dependency symlink target stays intact. Clean baseline and candidate runs
+each pass the case; temporary instrumentation is restored byte for byte.
+Scoped typecheck, lint, formatting and line-cap checks pass. Independent
+preservation review found no gaps. Production and shared helpers are unchanged.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.

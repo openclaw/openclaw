@@ -44,6 +44,7 @@ import {
   retireUnmanifestedRecovery,
   selectUnmanifestedRecovery,
 } from "./update-cleanup-unmanifested.js";
+import { retireDisplacedDatabases } from "./update-displaced-database-cleanup.js";
 
 type RecoveryCleanupProgress = {
   phase: "verifying" | "claiming" | "removing-capture" | "removing-unmanifested";
@@ -241,7 +242,7 @@ export async function retireOwnedSessionSqliteRecovery(
     env: params.env,
     paths: params.includeUnmanifested,
   });
-  const { report, references, manifestPaths, captureIdentities } = inventory;
+  const { report, references, manifestPaths, captureIdentities, displacedRetirement } = inventory;
   authority.assertCurrent();
   if (
     report.stateDir !== params.preview.stateDir ||
@@ -259,7 +260,7 @@ export async function retireOwnedSessionSqliteRecovery(
   );
   const originals = report.artifacts.filter(
     (item) =>
-      item.kind !== "update-capture" &&
+      item.kind === undefined &&
       !unmanifested.has(item.path) &&
       (item.outcome === "candidate" || item.outcome === "verification-required"),
   );
@@ -326,11 +327,7 @@ export async function retireOwnedSessionSqliteRecovery(
   }
   // Historical adoption also opens SQLite readers; finish those before fencing sidecar state.
   for (const item of report.artifacts) {
-    if (
-      item.outcome !== "candidate" ||
-      item.kind === "update-capture" ||
-      unmanifested.has(item.path)
-    ) {
+    if (item.outcome !== "candidate" || item.kind !== undefined || unmanifested.has(item.path)) {
       continue;
     }
     try {
@@ -352,10 +349,13 @@ export async function retireOwnedSessionSqliteRecovery(
   const candidates = verified.artifacts.filter((item) => item.outcome === "candidate");
   const explicit = candidates.filter((item) => unmanifested.has(item.path));
   const selected = candidates.filter(
-    (item) => item.kind !== "update-capture" && !unmanifested.has(item.path),
+    (item) => item.kind === undefined && !unmanifested.has(item.path),
   );
   const captures = candidates.filter(
     (item) => item.kind === "update-capture" && !unmanifested.has(item.path),
+  );
+  const displaced = candidates.filter(
+    (item) => item.kind === "displaced-database" && !unmanifested.has(item.path),
   );
   if (!(await params.confirm(verified))) {
     return { ...verified, status: "refused" };
@@ -449,6 +449,11 @@ export async function retireOwnedSessionSqliteRecovery(
         total: captures.length,
         bytes: item.bytes,
       }),
+  });
+  await retireDisplacedDatabases({
+    selected: displaced,
+    retirement: displacedRetirement,
+    assertCurrent: () => authority.assertCurrent(),
   });
   await retireUnmanifestedRecovery({
     selected: explicit,
