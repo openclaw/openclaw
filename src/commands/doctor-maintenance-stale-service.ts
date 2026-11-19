@@ -126,10 +126,15 @@ export async function assertStaleDoctorGatewayStopped(params: {
   params.assertCurrent?.();
   if (runtime.status !== "stopped" || (runtime.pid ?? 0) > 0 || port !== "free" || legacy) {
     const observed = `service=${runtime.status}, PID=${runtime.pid ?? "none"}, port ${params.stale.port}=${port}, legacy lock owner=${legacy?.pid ?? "none"}`;
+    const stale = `Stale Gateway PID ${params.stale.pid ?? "unknown"}`;
+    // Only a running service, a busy port or a live lock shows the old Gateway still runs.
+    const stillRunning = runtime.status === "running" || port === "busy" || Boolean(legacy);
     throw new Error(
       params.skipped
-        ? `Stale Gateway PID ${params.stale.pid ?? "unknown"} was not stopped: ${params.skipped} Observed: ${observed}.`
-        : `Stale Gateway PID ${params.stale.pid ?? "unknown"} did not stop: ${observed}.`,
+        ? `${stale} was not stopped: ${params.skipped} Observed: ${observed}.`
+        : stillRunning
+          ? `${stale} did not stop: ${observed}.`
+          : `${stale} could not be confirmed stopped: ${observed}.`,
     );
   }
 }
