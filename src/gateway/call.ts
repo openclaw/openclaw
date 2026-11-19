@@ -59,6 +59,7 @@ import {
 } from "./client.js";
 import {
   buildGatewayConnectionDetailsWithResolvers,
+  GATEWAY_PAIRING_APPROVAL_HINT,
   projectGatewayConnectionDetailsForDiagnostics,
   projectGatewayUrlForDiagnostics,
   type GatewayConnectionDetails,
@@ -552,7 +553,8 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       throw new GatewayStoredDeviceAuthUnavailableError(
         [
           "No stored device auth for this gateway origin.",
-          `Run \`openclaw tui${bootstrap.sshTunnel ? "" : ` --url ${projectGatewayUrlForDiagnostics(url)}`}\` to send a pairing request, approve it in that gateway's Control UI (Settings -> Devices) or run \`openclaw devices approve --latest\` on the gateway host, then retry.`,
+          `Run \`openclaw tui${bootstrap.sshTunnel ? "" : ` --url ${projectGatewayUrlForDiagnostics(url)}`}\` to send a pairing request.`,
+          GATEWAY_PAIRING_APPROVAL_HINT,
         ].join("\n"),
       );
     }
