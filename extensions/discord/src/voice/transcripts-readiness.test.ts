@@ -348,7 +348,10 @@ defineDiscordVoiceTests(
             expect(controlRealtimeVoiceAgentRunMock).not.toHaveBeenCalled();
             expect(agentCommandMock).not.toHaveBeenCalled();
           }
-          if (origin === "native" && mode !== "stt-tts") {
+          if (
+            (origin === "native" && mode !== "stt-tts") ||
+            (origin === "playback" && mode === "bidi")
+          ) {
             expect(sentAudioCount()).toBeGreaterThan(0);
           } else {
             expect(sentAudioCount()).toBe(0);
