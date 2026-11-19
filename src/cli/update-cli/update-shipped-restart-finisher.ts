@@ -33,6 +33,7 @@ import { inspectUpdateRunDriver, type UpdateRunDriver } from "../../infra/update
 import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout } from "../../process/exec-runner.js";
 import { sleep } from "../../utils/sleep.js";
 import {
@@ -65,11 +66,13 @@ const DRIVER_EXIT_WAIT_MS = 2 * DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 const UPDATE_COMMAND_TIMEOUT_MS = 60 * 60_000;
 const POLL_MS = 2_000;
 const FINISHER_COMMAND = "finish-gateway-restart";
+// Verified in the failed state: `gateway restart` alone exits 78 on the old definition, so the
+// two commands are always named together.
 export const FINISHER_NOTICE =
-  "If this updater leaves the Gateway stopped, OpenClaw will rerun `openclaw update` for the installed version after the updater exits.";
-// Verified in the failed state: `gateway restart` alone exits 78 on the old definition.
+  "If this updater leaves the Gateway stopped, OpenClaw will try to restart it after the updater exits; if the Gateway is still stopped a few minutes later, run `openclaw gateway install --force` and then `openclaw gateway restart`.";
+// Without a waiter only the manual part is true.
 export const MANUAL_RECOVERY_NOTICE =
-  "If this updater leaves the Gateway stopped, run `openclaw gateway install --force`, then `openclaw gateway restart`, or ask this instance's agent with `openclaw triage`.";
+  "If this updater leaves the Gateway stopped, run `openclaw gateway install --force` and then `openclaw gateway restart`.";
 
 type ServiceFacts = { packageRoot?: string; owned: boolean; writable: boolean; running: boolean };
 
@@ -77,6 +80,8 @@ export type FinisherDeps = {
   /** Ledger and child environment: the Doctor's, without the updater's markers. */
   env: NodeJS.ProcessEnv;
   inspectService: (root: string) => Promise<ServiceFacts | undefined>;
+  /** Durable decision trace: OpenClaw's file log, never the user's terminal or the run. */
+  trace: (message: string) => void;
   /** Runs the CLI from the lexical active global entry (a package root). */
   runUpdate: (entry: string, args: string[]) => Promise<void>;
   withServiceLock: <T>(operation: () => Promise<T>) => Promise<T>;
@@ -251,11 +256,30 @@ export async function resolveHandOffTag(
     : installedVersion;
 }
 
-/** Until each is provably gone, a driver or handoff helper may still restore or triage. */
-function updateProcessesMayRun(run: UpdateRunRecord): boolean {
+/** Every driver and handoff helper of the run that is not provably gone, with its state. */
+function liveUpdateProcesses(run: UpdateRunRecord): string[] {
   const helper = run.origin.managedHandoff?.helper;
-  return [...recordedUpdateRunDrivers(run), ...(helper ? [helper] : [])].some(
-    (driver) => inspectUpdateRunDriver(driver) !== "dead",
+  return [...recordedUpdateRunDrivers(run), ...(helper ? [helper] : [])].flatMap((driver) => {
+    const state = inspectUpdateRunDriver(driver);
+    return state === "dead" ? [] : [`PID ${driver.pid} on ${driver.host} (${state})`];
+  });
+}
+
+/**
+ * Whether a driver that still looks live, or cannot be read, may be treated as gone. The
+ * shipped CLI driver writes its terminal record and exits about 11 s later (shim cell
+ * `fin-pnpm-2026.11.5-to-r6fin-8866f6a`: finished at +162.8 s, exit at +174.1 s); its slowest
+ * observed tail before the restart, package backup retention, took 97-134 s. A process that
+ * outlives that by more than double is a zombie or an unreadable identity, not update work,
+ * but only for the outcome this waiter acts on. The stopped-service check comes later.
+ */
+const DRIVER_EXIT_GRACE_MS = 5 * 60_000;
+function driversExitedByEvidence(run: UpdateRunRecord, now: number): boolean {
+  return (
+    run.status === "failed" &&
+    run.reason === "service-revalidation-failed" &&
+    run.finishedAtMs !== null &&
+    now - run.finishedAtMs >= DRIVER_EXIT_GRACE_MS
   );
 }
 
@@ -290,12 +314,30 @@ export async function runShippedRestartFinisher(params: {
     return "duplicate";
   }
   params.onReady?.(true);
+  const trace = (message: string) => deps.trace(`run ${runId}: ${message}`);
   try {
     const deadline = deps.now() + DRIVER_EXIT_WAIT_MS;
     let run = getUpdateRun(runId, options);
-    while (run && (run.status === "running" || updateProcessesMayRun(run))) {
+    let waitingOn: string | undefined;
+    while (run) {
+      const live = liveUpdateProcesses(run);
+      if (run.status !== "running" && live.length === 0) {
+        break;
+      }
+      if (run.status !== "running" && driversExitedByEvidence(run, deps.now())) {
+        trace(
+          `treating ${live.join(", ")} as exited: the run ended ${run.reason} more than ${DRIVER_EXIT_GRACE_MS / 1_000} s ago`,
+        );
+        break;
+      }
+      const summary = `waiting: run ${run.status}; ${live.join(", ") || "no live driver"}`;
+      if (summary !== waitingOn) {
+        trace(summary);
+        waitingOn = summary;
+      }
       if (deps.now() >= deadline) {
         // The run may still succeed; leave its record to its own updater.
+        trace(`gave up after ${DRIVER_EXIT_WAIT_MS / 60_000} min; ${summary}`);
         return "timed-out";
       }
       await deps.sleep(POLL_MS);
@@ -307,6 +349,9 @@ export async function runShippedRestartFinisher(params: {
       run.reason !== "service-revalidation-failed" ||
       run.verification.recovery?.serviceRestartSafe === false
     ) {
+      trace(
+        `not needed: the run ended ${run ? `${run.status} (${run.reason ?? "no reason"})` : "missing"}${run?.verification.recovery?.serviceRestartSafe === false ? " with data at risk" : ""}`,
+      );
       return "not-needed";
     }
     const createdAtMs = run.createdAtMs;
@@ -319,30 +364,37 @@ export async function runShippedRestartFinisher(params: {
         );
         // Includes this run: a second row is a newer update, and an active row is one in flight.
         if (later.length > 1 || listUpdateRuns({ active: true, limit: 1 }, options).length) {
-          return undefined;
+          return { skip: "another update has started" };
         }
         // A helper that restored the old definition and started it left a working Gateway.
         const pnpm = await inspectPnpmSwitch(params.root, deps);
-        return !("skip" in pnpm) &&
-          !pnpm.service.running &&
-          pnpm.service.owned &&
-          pnpm.service.writable
+        return "skip" in pnpm
           ? pnpm
-          : undefined;
+          : pnpm.service.running
+            ? { skip: "the Gateway service is running" }
+            : !pnpm.service.owned || !pnpm.service.writable
+              ? { skip: "the service is not this installation's writable definition" }
+              : pnpm;
       })
-      .catch(() => undefined);
-    if (!target) {
+      .catch((error: unknown) => ({
+        skip: `the service operation lock was unavailable: ${formatErrorMessage(error)}`,
+      }));
+    if ("skip" in target) {
+      trace(`yielded: ${target.skip}`);
       return "yielded";
     }
     // From here the update owns admission: it refuses a concurrent update and revalidates the
     // service itself, so the short gap after the lock release cannot double-apply anything.
-    await deps.runUpdate(target.entry, [
+    const args = [
       "update",
       "--tag",
       await resolveHandOffTag(run.target.tag, target.version),
       "--yes",
       "--json",
-    ]);
+    ];
+    trace(`handing off: ${path.join(target.entry, "openclaw.mjs")} ${args.join(" ")}`);
+    await deps.runUpdate(target.entry, args);
+    trace("the handed-off update exited");
     return "handed-off";
   } finally {
     await lock.release();
@@ -535,9 +587,14 @@ export async function finishShippedRestartCommand(runId: string): Promise<void> 
     argv1: process.argv[1],
   });
   const entry = root ? await resolveGatewayInstallEntrypoint(root) : undefined;
+  const log = createSubsystemLogger("update/restart-finisher");
   if (!root || !entry) {
+    log.warn("The OpenClaw package root for the Gateway restart could not be resolved.", {
+      consoleMessage: false,
+    });
     throw new Error("The OpenClaw package root for the Gateway restart could not be resolved.");
   }
+  log.info(`started for run ${runId} from ${root}`, { consoleMessage: false });
   await runShippedRestartFinisher({
     runId,
     root,
@@ -560,6 +617,7 @@ export async function finishShippedRestartCommand(runId: string): Promise<void> 
         );
       },
       withServiceLock: (operation) => withGatewayServiceOperationLock(env, () => operation()),
+      trace: (message) => log.info(message, { consoleMessage: false }),
       lockDir: resolvePreferredOpenClawTmpDir({ purpose: "coordination" }),
       now: Date.now,
       sleep,

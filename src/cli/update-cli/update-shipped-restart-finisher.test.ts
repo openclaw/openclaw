@@ -266,6 +266,13 @@ describe("Doctor gate for a shipped updater's refused pnpm restart", () => {
     });
     expect(spawned).toEqual(variant.gate === false ? [] : [runId]);
     expect(logged).toEqual(variant.notice ? [variant.notice] : []);
+    // Whether or not a waiter is left, the line carries the verified manual pair, never
+    // `gateway restart` alone.
+    for (const line of logged) {
+      expect(line).toContain(
+        "run `openclaw gateway install --force` and then `openclaw gateway restart`.",
+      );
+    }
     // A rejection past the cheap updater-flag checks names its check on the diagnostic channel.
     expect(diagnosed).toEqual(
       variant.gate === false && !("quiet" in variant)
@@ -291,6 +298,7 @@ describe("shipped-updater Gateway restart waiter", () => {
       lockDir: path.join(fixture.base, "locks"),
       now: () => 0,
       sleep: async () => {},
+      trace: () => {},
       ...overrides,
     };
     return { deps, service, updates, entries };
@@ -343,22 +351,65 @@ describe("shipped-updater Gateway restart waiter", () => {
     },
   );
 
+  // A process that never exits stands in for a zombie driver or an unreadable identity.
   it.each([
+    // 2026.11.4, 2026.11.5 and 2026.11.6 CLI runs all record `readUpdateRunDriver()`:
+    // `{ host, pid, startIdentity }`, with no previous drivers or handoff helper.
+    { name: "the CLI driver 2026.11.4-2026.11.6 record", origin: { driver: liveDriver } },
     { name: "a previous driver", origin: { driver: deadDriver, previousDrivers: [liveDriver] } },
     {
       name: "a handoff helper",
       origin: { driver: deadDriver, managedHandoff: { parent: deadDriver, helper: liveDriver } },
     },
-  ])("never acts while $name is alive, and its deadline writes nothing", async ({ origin }) => {
+  ])(
+    "waits on a live-looking $name for the grace period after the refused restart, then hands off",
+    async ({ origin }) => {
+      const fixture = pnpmSwitch();
+      const runId = startShippedRun(fixture, origin);
+      failRevalidation(fixture, runId);
+      const finishedAtMs = ledger.getUpdateRun(runId, fixture.options)!.finishedAtMs!;
+      let clock = finishedAtMs;
+      const traces: string[] = [];
+      const { deps, updates } = harness(fixture, {
+        now: () => clock,
+        sleep: async () => {
+          // Nothing acts while the driver may still restore, triage or exit.
+          expect(updates).toEqual([]);
+          clock += 60_000;
+        },
+        trace: (message) => traces.push(message),
+      });
+
+      await expect(finish(fixture, runId, deps)).resolves.toBe("handed-off");
+      expect(clock - finishedAtMs).toBe(5 * 60_000);
+      expect(traces).toEqual([
+        `run ${runId}: waiting: run failed; PID ${liveDriver.pid} on ${liveDriver.host} (alive)`,
+        `run ${runId}: treating PID ${liveDriver.pid} on ${liveDriver.host} (alive) as exited: the run ended service-revalidation-failed more than 300 s ago`,
+        expect.stringMatching(
+          new RegExp(
+            `^run ${runId}: handing off: .+/openclaw\\.mjs update --tag 2026\\.11\\.6 --yes --json$`,
+            "u",
+          ),
+        ),
+        `run ${runId}: the handed-off update exited`,
+      ]);
+    },
+  );
+
+  it("never acts while the run is still running, and its deadline writes nothing", async () => {
     const fixture = pnpmSwitch();
-    const runId = startShippedRun(fixture, origin);
-    failRevalidation(fixture, runId);
+    const runId = startShippedRun(fixture, { driver: liveDriver });
     const settled = unchanged(fixture, runId);
     let clock = 0;
-    const { deps, updates } = harness(fixture, { now: () => (clock += 30 * 60_000) });
+    const traces: string[] = [];
+    const { deps, updates } = harness(fixture, {
+      now: () => (clock += 30 * 60_000),
+      trace: (message) => traces.push(message),
+    });
 
     await expect(finish(fixture, runId, deps)).resolves.toBe("timed-out");
     expect(updates).toEqual([]);
+    expect(traces.at(-1)).toMatch(/: gave up after 60 min; waiting: run running; PID \d+/u);
     settled();
   });
 
@@ -380,7 +431,10 @@ describe("shipped-updater Gateway restart waiter", () => {
       ledger.createUpdateRun({ trigger: "cli" }, fixture.options);
     }
     const settled = unchanged(fixture, runId);
-    const { deps, service, updates } = harness(fixture);
+    const traces: string[] = [];
+    const { deps, service, updates } = harness(fixture, {
+      trace: (message) => traces.push(message),
+    });
     deps.withServiceLock = async (operation) => {
       if (outcome === "lock") {
         throw new Error("Native service operation ownership has closed.");
@@ -392,6 +446,12 @@ describe("shipped-updater Gateway restart waiter", () => {
 
     await expect(finish(fixture, runId, deps)).resolves.toBe(result);
     expect(updates).toEqual([]);
+    // Each decision leaves its reason in the durable trace.
+    expect(traces).toEqual([
+      expect.stringMatching(
+        new RegExp(`^run ${runId}: ${result === "yielded" ? "yielded" : "not needed"}: .+`, "u"),
+      ),
+    ]);
     settled();
   });
 
