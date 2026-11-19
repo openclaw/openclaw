@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
 
@@ -34,8 +33,10 @@ function readHistoryId(entries: SessionEntry[], boundaryCount: number | undefine
 }
 
 /**
- * Omit the boundary count only for a view that holds the newest boundary. An unknown history
- * gets an id of its own for this attempt, so it never matches a saved series and restarts once.
+ * Omit the boundary count only for a view that holds the newest boundary. An unknown history is
+ * named by its count: the count changes only at a compaction or reset on the active path, so a
+ * checkpoint that recorded `unknown:N` at count N belongs to the same history. The series then
+ * restarts at most twice: once to `unknown:N`, and once more when the boundary fits a window.
  */
 export function resolvePromptHistoryId(params: {
   state: { historyBoundary?: { count: number; id: string | null } };
@@ -49,7 +50,7 @@ export function resolvePromptHistoryId(params: {
     return previous.id;
   }
   const read = readHistoryId(params.entries, params.historyBoundaryCount);
-  const id = read === undefined ? `unknown:${randomUUID()}` : read;
+  const id = read === undefined ? `unknown:${params.historyBoundaryCount}` : read;
   if (params.historyBoundaryCount !== undefined) {
     params.state.historyBoundary = { count: params.historyBoundaryCount, id };
   }

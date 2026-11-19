@@ -449,7 +449,7 @@ describe("system prompt series", () => {
 describe("prompt history identity across bounded windows", () => {
   const routeKey = "openai/gpt-6-sol/openai-responses";
   const fixture = promptFixture("history-identity", routeKey);
-  const prepare = (
+  const prepareCounted = (
     systemPrompt: string,
     entries: SessionEntry[],
     historyBoundaryCount?: number,
@@ -468,11 +468,11 @@ describe("prompt history identity across bounded windows", () => {
 
   it("restarts when the window's checkpoint predates a compaction outside it", async () => {
     const entries: SessionEntry[] = [];
-    prepare("Base.", entries, 0);
+    prepareCounted("Base.", entries, 0);
     await fixture.persist(entries);
     // A compaction committed after this checkpoint, and its summary did not fit the next window.
     fixture.reload();
-    const next = prepare(refreshed, entries, 1);
+    const next = prepareCounted(refreshed, entries, 1);
     expect(next).toMatchObject({
       restart: true,
       seriesStatus: "restarted:history",
@@ -484,29 +484,32 @@ describe("prompt history identity across bounded windows", () => {
   it("does not pin when neither window names the history of a compacted session", async () => {
     // A checkpoint written before the boundary count was recorded names no count.
     const entries: SessionEntry[] = [];
-    prepare("Base.", entries);
+    prepareCounted("Base.", entries);
     await fixture.persist(entries);
     expect(entries.at(-1)).toMatchObject({ data: { historyId: null } });
     expect(JSON.stringify(entries.at(-1))).not.toContain("boundaryCount");
     fixture.reload();
-    expect(prepare(refreshed, entries, 1)).toMatchObject({
+    expect(prepareCounted(refreshed, entries, 1)).toMatchObject({
       restart: true,
       systemPrompt: refreshed,
     });
     await fixture.persist(entries);
     // The restarted checkpoint records the count, so later runs on the same history keep it.
     fixture.reload();
-    expect(prepare("Base.", entries, 1)).toMatchObject({ restart: false, systemPrompt: refreshed });
+    expect(prepareCounted("Base.", entries, 1)).toMatchObject({
+      restart: false,
+      systemPrompt: refreshed,
+    });
   });
 
   it.each([0, undefined])(
     "keeps a never-compacted session pinned (checkpoint boundary count %s)",
     async (writtenCount) => {
       const entries: SessionEntry[] = [];
-      prepare("Base.", entries, writtenCount);
+      prepareCounted("Base.", entries, writtenCount);
       await fixture.persist(entries);
       fixture.reload();
-      const next = prepare(refreshed, entries, 0);
+      const next = prepareCounted(refreshed, entries, 0);
       expect(next).toMatchObject({ restart: false, seriesStatus: "pinned", systemPrompt: "Base." });
       expect(next.update?.content).toContain("New rule.");
     },
@@ -754,11 +757,20 @@ describe("session tool surface", () => {
 
   it("keeps the series when a bounded window starts after the compaction", async () => {
     const entries: SessionEntry[] = [historyEntry("compaction", "compaction-1")];
-    await persist(entries);
+    // Production passes the transcript's boundary count beside every window.
+    const prepareWindow = (systemPrompt: string, window: SessionEntry[]) =>
+      prepareSessionSystemPrompt({
+        state: fixture.state,
+        routeKey,
+        systemPrompt,
+        entries: window,
+        historyBoundaryCount: 1,
+      });
+    prepareWindow("Base.", entries).commit();
+    await fixture.persist(entries);
     fixture.reload();
     // The reload sees only entries after the compaction, then a workspace file changed.
-    const window = entries.slice(1);
-    const prepared = fixture.prepare("Base.\n## AGENTS.md\nNew rule.", window);
+    const prepared = prepareWindow("Base.\n## AGENTS.md\nNew rule.", entries.slice(1));
     expect(prepared.restart).toBe(false);
     expect(prepared.systemPrompt).toBe("Base.");
     expect(prepared.update?.content).toContain("New rule.");
