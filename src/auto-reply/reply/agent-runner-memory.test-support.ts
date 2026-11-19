@@ -241,5 +241,6 @@ export type CompactEmbeddedAgentSessionParams = {
   sessionEntry?: SessionEntry;
   sessionFile?: string;
   sessionId?: string;
+  skillsSnapshot?: unknown;
   trigger?: string;
 };

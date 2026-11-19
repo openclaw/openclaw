@@ -818,25 +818,22 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
   });
 
-  it("passes persisted session policy and runtime policy key to preflight compaction", async () => {
-    registerMemoryFlushPlanResolverForTest(() =>
-      createModifiedMemoryFlushPlan({ softThresholdTokens: 1, reserveTokensFloor: 0 }),
-    );
-    const sessionEntry: SessionEntry = createFreshSessionEntry({
-      totalTokens: 120,
+  it("passes persisted policy and hydrated turn skills to preflight compaction", async () => {
+    const persistedSkills = { prompt: "selected", skills: [{ name: "selected" }] };
+    const turnSkills = { ...persistedSkills, resolvedSkills: [] };
+    const { sessionEntry, run } = await createRequiredPreflight({
       permissionMode: "full",
       sessionRoot: "/tmp/workspace",
+      skillsSnapshot: persistedSkills,
     });
-
-    await runDefaultPreflight(sessionEntry, {
+    await run({
       followupRun: createTestFollowupRun({
         sessionId: "session",
         sessionKey: "agent:main:main",
         cwd: "/tmp/task-repo",
+        skillsSnapshot: turnSkills,
         runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
       }),
-      modelContextTokens: 100,
-      sessionKey: "agent:main:main",
       runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
     });
 
@@ -846,6 +843,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.cwd).toBe("/tmp/task-repo");
     expect(compactCall.sandboxSessionKey).toBe("agent:main:telegram:default:direct:12345");
     expect(compactCall.sessionEntry).toBe(sessionEntry);
+    expect(compactCall.skillsSnapshot).toBe(turnSkills);
   });
 
   it("applies session compaction at reported pressure after a runtime fallback with memory flush disabled", async () => {
