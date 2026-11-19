@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  createMessageMethodTestDriver,
+  makeContext,
+} from "../../gateway/server-methods/send.test-support.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   createGatewayActionPlugin,
   messageActionRunnerMocks as mocks,
@@ -153,6 +158,101 @@ describe("runMessageAction gateway dispatch", () => {
         });
         expect(mocks.executePollAction).not.toHaveBeenCalled();
       }
+    },
+  );
+
+  it.each([
+    { scheduled: false, scopes: [] },
+    { scheduled: false, scopes: ["operator.write"] },
+    { scheduled: false, scopes: ["operator.admin"] },
+    { scheduled: true, scopes: ["operator.write"] },
+  ])(
+    "preserves namespace intent, recipient, and caller scopes (scheduled=$scheduled, scopes=$scopes)",
+    async ({ scheduled, scopes }) => {
+      await withOpenClawTestState({ prefix: "gateway-namespace-provenance-" }, async () => {
+        const handleAction = vi.fn(async () => jsonResult({ ok: true }));
+        const plugin = createGatewayActionPlugin({
+          pluginId: "gatewaychat",
+          label: "Gateway Chat",
+          blurb: "Gateway namespace test plugin.",
+          actions: ["edit"],
+          messaging: {
+            targetPrefixes: ["g"],
+            normalizeTarget: (raw) => (raw.startsWith("@") ? raw : `@${raw}`),
+            targetResolver: { looksLikeId: () => true },
+          },
+          handleAction,
+        });
+        let receiving = false;
+        plugin.directory = {
+          listPeers: async () => [
+            { kind: "user", id: receiving ? "recipient-2" : "recipient-1", name: "g" },
+          ],
+        };
+        setTestPlugin(plugin, "gatewaychat");
+        const cfg = createEnabledMessageActionConfig("gatewaychat");
+        const { sendHandlers } = await import("../../gateway/server-methods/send.js");
+        const { runMessageActionRequest } = createMessageMethodTestDriver(() => sendHandlers);
+        mocks.callGatewayLeastPrivilege.mockImplementation(
+          async ({ params }: { params: Record<string, unknown> }) => {
+            receiving = true;
+            try {
+              const { respond } = await runMessageActionRequest(
+                params,
+                { connect: { scopes } },
+                makeContext(() => ({ ...cfg })),
+              );
+              const [ok, payload, error]: readonly unknown[] = respond.mock.calls[0] ?? [];
+              if (!ok) {
+                throw new Error(
+                  String(readRecordField({ error }, "error", "Gateway error").message),
+                );
+              }
+              return payload;
+            } finally {
+              receiving = false;
+            }
+          },
+        );
+        const invoke = (to: string, channel?: string) =>
+          runMessageAction({
+            cfg,
+            action: "edit",
+            params: { channel, to, messageId: "message-1", message: "updated" },
+            conversationReadOrigin: "direct-operator",
+            messageActionAuthorization: scheduled
+              ? { scheduled: { policy: { version: 1, mode: "trusted" }, assertCurrent: () => {} } }
+              : undefined,
+            gateway: { clientName: "cli", mode: "cli" },
+          });
+
+        await expect(invoke("gatewaychat")).rejects.toThrow("does not specify a destination");
+        expect(handleAction).not.toHaveBeenCalled();
+        await expect(invoke("g")).resolves.toMatchObject({ payload: { ok: true } });
+        expect(handleAction).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            gatewayClientScopes: scopes,
+            params: expect.objectContaining({ to: scheduled ? "@recipient-2" : "@recipient-1" }),
+          }),
+        );
+        await expect(invoke("gatewaychat", "gatewaychat")).resolves.toMatchObject({
+          payload: { ok: true },
+        });
+        await expect(invoke("@recipient-1")).resolves.toMatchObject({ payload: { ok: true } });
+        const call = readMockCallArg(
+          mocks.callGatewayLeastPrivilege,
+          "concrete destination",
+          scheduled ? 3 : 2,
+        );
+        expect(readRecordField(call, "params", "concrete RPC")).not.toHaveProperty(
+          "channelInferred",
+        );
+        expect(handleAction).toHaveBeenLastCalledWith(
+          expect.objectContaining({ gatewayClientScopes: scopes }),
+        );
+        expect(handleAction).toHaveBeenCalledTimes(3);
+        expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledTimes(scheduled ? 4 : 3);
+      });
     },
   );
 

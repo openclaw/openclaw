@@ -181,6 +181,7 @@ type PreparedMessageRoute = {
   accountId?: string | null;
   dryRun: boolean;
   defersExternalTargetResolution: boolean;
+  channelInferred?: true;
   assertReadAuthorityCurrent?: () => void;
   assertTargetAuthorityCurrent?: () => void;
 };
@@ -207,7 +208,7 @@ export async function prepareMessageRoute(params: {
   }
 
   const requestedChannel = readToolStringParam(actionParams, "channel");
-  const { channel, plugin: channelPlugin } = await resolveMessageChannelSelection({
+  const selection = await resolveMessageChannelSelection({
     cfg,
     channel: requestedChannel,
     // Explicit reads must never fall back to the source conversation's provider.
@@ -215,6 +216,7 @@ export async function prepareMessageRoute(params: {
       action === "read" && requestedChannel ? undefined : input.toolContext?.currentChannelProvider,
     agentId,
   });
+  const { channel, plugin: channelPlugin } = selection;
   actionParams.channel = channel;
   const explicitAccountId = await validateExplicitMessageAccountSelection({
     cfg,
@@ -349,6 +351,7 @@ export async function prepareMessageRoute(params: {
     accountId,
     dryRun,
     defersExternalTargetResolution,
+    channelInferred: input.channelInferred ?? selection.channelInferred,
     assertReadAuthorityCurrent,
     assertTargetAuthorityCurrent,
   };
@@ -363,6 +366,7 @@ export async function resolveMessageTarget(params: {
   toolContext?: ChannelThreadingToolContext;
   agentId?: string | null;
   deferExternalTargetResolution?: boolean;
+  channelInferred?: true;
   plugin?: ChannelPlugin;
 }): Promise<ResolvedMessagingTarget | undefined> {
   let resolvedTarget: ResolvedMessagingTarget | undefined;
@@ -377,6 +381,7 @@ export async function resolveMessageTarget(params: {
         channel: params.channel,
         input,
         accountId: params.accountId ?? undefined,
+        channelInferred: params.channelInferred,
         plugin: params.plugin,
         ...(key === "channelId" ? { preferredKind: "group" as const } : {}),
       });

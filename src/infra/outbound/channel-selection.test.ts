@@ -277,6 +277,7 @@ describe("resolveMessageChannelSelection", () => {
     if (scenario.expected) {
       await expect(resolveMessageChannelSelection(params)).resolves.toMatchObject({
         channel: "delta",
+        channelInferred: true,
       });
     } else {
       await expect(resolveMessageChannelSelection(params)).rejects.toThrow(

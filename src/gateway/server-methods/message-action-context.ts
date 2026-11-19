@@ -7,14 +7,19 @@ import {
 import {
   isFencedProviderReadAction,
   isScheduledMessageWriteAction,
+  prepareExternalMessageActionTargetForResolution,
 } from "../../channels/plugins/message-action-dispatch.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelMessageActionContext } from "../../channels/plugins/types.public.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveBareTargetChannelNamespace } from "../../infra/outbound/channel-target-prefix.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseAgentSessionKey,
 } from "../../sessions/session-key-utils.js";
+import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import {
   readMessageActionInvocationConfig,
   resolveMessageActionTurnAuthorization,
@@ -49,6 +54,44 @@ export function resolveAgentRuntimeMessageActionConfig(
   return resolveAgentRuntimeMessageActionAuthorization(client)?.scheduled
     ? readMessageActionInvocationConfig(token)
     : undefined;
+}
+
+/** Resolve an inferred namespace without changing dispatch or authenticated caller context. */
+export async function resolveMessageActionNamespace(
+  context: ChannelMessageActionContext & {
+    messageActionAuthorization?: MessageActionAuthorization;
+  },
+  plugin: ChannelPlugin,
+  channelInferred?: true,
+): Promise<void> {
+  if (
+    !channelInferred ||
+    !["to", "channelId"].some((key) =>
+      resolveBareTargetChannelNamespace({
+        raw: normalizeOptionalString(context.params[key]),
+        plugin,
+      }),
+    )
+  ) {
+    return;
+  }
+  const prepared = await prepareExternalMessageActionTargetForResolution(context);
+  context.params = prepared.params;
+  context.accountId = prepared.accountId ?? context.accountId;
+  context.assertDirectAdapterHandoff =
+    prepared.assertTargetAuthorityCurrent ??
+    prepared.assertReadAuthorityCurrent ??
+    context.assertDirectAdapterHandoff;
+  context.assertDirectAdapterHandoff?.();
+  const { resolveMessageTarget } = await import("../../infra/outbound/message-action-routing.js");
+  await withChannelReadAuthority(context.assertDirectAdapterHandoff, () =>
+    resolveMessageTarget({
+      ...context,
+      args: context.params,
+      channelInferred: true,
+      plugin,
+    }),
+  );
 }
 
 /** Retain the live caller and scheduled source through this action's requests. */

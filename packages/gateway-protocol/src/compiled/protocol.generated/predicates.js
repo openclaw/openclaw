@@ -896,7 +896,7 @@ var External = [
     /(^selector$)/u,
     /(^selector$|^includeUtterances$|^limit$|^cursor$|^query$)/u,
     /(^selector$|^format$)/u,
-    /(^channel$|^action$|^params$|^reply$|^accountId$|^requesterAccountId$|^requesterSenderId$|^senderIsOwner$|^sessionKey$|^sessionId$|^inboundTurnKind$|^agentId$|^toolContext$|^conversationReadOrigin$|^idempotencyKey$)/u,
+    /(^channel$|^action$|^params$|^reply$|^accountId$|^requesterAccountId$|^requesterSenderId$|^senderIsOwner$|^sessionKey$|^sessionId$|^inboundTurnKind$|^agentId$|^toolContext$|^conversationReadOrigin$|^channelInferred$|^idempotencyKey$)/u,
     /(^replyToId$|^source$)/u,
     /(^replyToId$|^source$|^mode$)/u,
     /(^currentChannelId$|^currentMessagingTarget$|^currentGraphChannelId$|^currentChannelProvider$|^currentThreadTs$|^currentMessageId$|^replyToMode$|^hasRepliedRef$|^sameChannelThreadRequired$|^skipCrossContextDecoration$)/u,
@@ -6635,6 +6635,9 @@ var External = [
     (value.conversationReadOrigin === void 0 ||
       !("conversationReadOrigin" in value) ||
       check_608(value.conversationReadOrigin)) &&
+    (value.channelInferred === void 0 ||
+      !("channelInferred" in value) ||
+      check_330(value.channelInferred)) &&
     check_6(value.idempotencyKey),
   check_911 = (value) => check_912(value) || check_914(value),
   check_912 = (value) =>
