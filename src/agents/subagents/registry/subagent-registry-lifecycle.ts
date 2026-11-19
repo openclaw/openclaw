@@ -1,5 +1,6 @@
 import pLimit from "p-limit";
 import type { ProgressContinuationState } from "../../../channels/progress-continuation.js";
+import { pluginInvocationContext } from "../../../plugins/plugin-instance-scope.js";
 import {
   getCanonicalGatewayContextResolver,
   getGatewayContextResolver,
@@ -396,13 +397,15 @@ export class SubagentLifecycleController {
     };
     // Restored work shares the Gateway's recovery capacity. Reserve its root before
     // waiting, then revalidate authority when capacity becomes available.
-    return withoutGatewayToolCallerIdentity(() =>
-      runWithGatewayDetachedWorkContinuation(() => {
-        if (!this.restoredRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))) {
-          return runCurrent(() => {});
-        }
-        return this.runBackgroundWork(entry, runCurrent);
-      }, "subagents:lifecycle-wake"),
+    return pluginInvocationContext.exit(() =>
+      withoutGatewayToolCallerIdentity(() =>
+        runWithGatewayDetachedWorkContinuation(() => {
+          if (!this.restoredRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))) {
+            return runCurrent(() => {});
+          }
+          return this.runBackgroundWork(entry, runCurrent);
+        }, "subagents:lifecycle-wake"),
+      ),
     );
   };
 
@@ -433,29 +436,32 @@ export class SubagentLifecycleController {
     // Task finalization can make the run disappear from suspension blockers
     // before browser/MCP retirement and cleanup delivery hand off. Own this
     // entire transition as an independent root so that boundary stays atomic.
-    // Callers can detach while retaining parent ALS, so nesting is intentional.
-    await runWithGatewayIndependentRootWorkContinuation(async () => {
-      const entry = completeParams.expectedEntry
-        ? getCurrentSubagentRunOwner(this.options.runs, completeParams.expectedEntry)
-        : this.options.runs.get(completeParams.runId);
-      const identity = entry && this.trackRun(entry);
-      if (identity) {
-        this.terminalEffectUsers.set(identity, (this.terminalEffectUsers.get(identity) ?? 0) + 1);
-      }
-      try {
-        await completeSubagentRunAttempt(this, completeParams);
-      } finally {
+    // Callers can retain a closed plugin invocation scope in ALS. This owner
+    // starts fresh plugin calls without changing Gateway or completion authority.
+    await pluginInvocationContext.exit(() =>
+      runWithGatewayIndependentRootWorkContinuation(async () => {
+        const entry = completeParams.expectedEntry
+          ? getCurrentSubagentRunOwner(this.options.runs, completeParams.expectedEntry)
+          : this.options.runs.get(completeParams.runId);
+        const identity = entry && this.trackRun(entry);
         if (identity) {
-          const count = (this.terminalEffectUsers.get(identity) ?? 1) - 1;
-          if (count) {
-            this.terminalEffectUsers.set(identity, count);
-          } else {
-            this.terminalEffectUsers.delete(identity);
-          }
+          this.terminalEffectUsers.set(identity, (this.terminalEffectUsers.get(identity) ?? 0) + 1);
         }
-        this.pruneRetiredRuns([completeParams.runId]);
-      }
-    }, "subagents:lifecycle-complete");
+        try {
+          await completeSubagentRunAttempt(this, completeParams);
+        } finally {
+          if (identity) {
+            const count = (this.terminalEffectUsers.get(identity) ?? 1) - 1;
+            if (count) {
+              this.terminalEffectUsers.set(identity, count);
+            } else {
+              this.terminalEffectUsers.delete(identity);
+            }
+          }
+          this.pruneRetiredRuns([completeParams.runId]);
+        }
+      }, "subagents:lifecycle-complete"),
+    );
   };
 
   completeCleanupBookkeeping = (params: CleanupBookkeepingParams) =>

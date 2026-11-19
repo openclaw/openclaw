@@ -18,6 +18,7 @@ import { captureRequesterCronAuthorityAdmissionAssertion } from "../../agents/su
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { claimAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { pluginInvocationContext } from "../../plugins/plugin-instance-scope.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
 import {
   isCronExecutionInputProvenance,
@@ -365,26 +366,29 @@ export async function prepareAgentRunDispatch(
     replyDispatchRuntime = publishedRuntime;
     const acquireRuntime = (workspaceDir: string | undefined) =>
       runtimeLease.run(() =>
-        acquireAgentRunPreparedModelRuntime(
-          {
-            config: replyDispatchRuntime.config,
-            agentId: replyDispatchRuntime.agentId,
-            agentDir: replyDispatchRuntime.agentDir,
-            allowGatewaySubagentBinding: true,
-            workspaceDir: workspaceDir ?? replyDispatchRuntime.workspaceDir,
-            runtimePluginSelections: [
-              {
-                provider: resolvedRuntime.provider,
-                modelId: resolvedRuntime.model,
-                runtime: resolvedRuntime.harness,
-              },
-            ],
-          },
-          {
-            catalogMode: "static",
-            pluginGeneration: replyDispatchRuntime.pluginGeneration,
-            abortSignal: activeRunAbort.controller.signal,
-          },
+        // The selected run retains its own generation beyond this short dispatch lease.
+        pluginInvocationContext.exit(() =>
+          acquireAgentRunPreparedModelRuntime(
+            {
+              config: replyDispatchRuntime.config,
+              agentId: replyDispatchRuntime.agentId,
+              agentDir: replyDispatchRuntime.agentDir,
+              allowGatewaySubagentBinding: true,
+              workspaceDir: workspaceDir ?? replyDispatchRuntime.workspaceDir,
+              runtimePluginSelections: [
+                {
+                  provider: resolvedRuntime.provider,
+                  modelId: resolvedRuntime.model,
+                  runtime: resolvedRuntime.harness,
+                },
+              ],
+            },
+            {
+              catalogMode: "static",
+              pluginGeneration: replyDispatchRuntime.pluginGeneration,
+              abortSignal: activeRunAbort.controller.signal,
+            },
+          ),
         ),
       );
     if (canPrepareAgentSessionWorktree(params.resolvedSessionKey, params.sessionEntry)) {

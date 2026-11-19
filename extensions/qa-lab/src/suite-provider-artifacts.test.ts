@@ -41,8 +41,48 @@ it("retains mock provider requests in the QA artifact directory", async () => {
   expect(release).toHaveBeenCalledOnce();
   await expect(
     fs.readFile(path.join(outputDir, "artifacts", "mock-openai-requests.json"), "utf8"),
-  ).resolves.toBe(`${JSON.stringify(requests, null, 2)}\n`);
+  ).resolves.toBe(JSON.stringify(requests));
 });
+
+it.each(["http", "stream"] as const)(
+  "preserves the prior artifact when capture fails at the %s boundary",
+  async (failure) => {
+    const outputDir = await makeTempDir("qa-provider-artifact-failure-");
+    const artifactDir = path.join(outputDir, "artifacts");
+    const artifactPath = path.join(artifactDir, "mock-openai-requests.json");
+    const previous = '[{"cursor":1,"raw":"retained evidence"}]\n';
+    await fs.mkdir(artifactDir);
+    await fs.writeFile(artifactPath, previous);
+    let chunks = 0;
+    const response =
+      failure === "http"
+        ? new Response("capture failed", { status: 500 })
+        : new Response(
+            new ReadableStream<Uint8Array>({
+              pull(controller) {
+                if (chunks++ === 0) {
+                  controller.enqueue(new TextEncoder().encode('[{"cursor":2},'));
+                } else {
+                  controller.error(new Error("request stream interrupted"));
+                }
+              },
+            }),
+          );
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({ response, release });
+
+    await expect(
+      captureQaMockProviderRequests({
+        outputDir,
+        providerMode: "mock-openai",
+        provider: { baseUrl: "http://127.0.0.1:18789" } as QaMockProviderServer,
+      }),
+    ).rejects.toThrow(failure === "http" ? /HTTP 500/ : /stream interrupted/);
+    await expect(fs.readFile(artifactPath, "utf8")).resolves.toBe(previous);
+    await expect(fs.readdir(artifactDir)).resolves.toEqual(["mock-openai-requests.json"]);
+    expect(release).toHaveBeenCalledOnce();
+  },
+);
 
 it("does not request artifacts from live providers", async () => {
   await captureQaMockProviderRequests({

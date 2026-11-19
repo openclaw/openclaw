@@ -1,3 +1,4 @@
+import { pluginInvocationContext } from "../../../plugins/plugin-instance-scope.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
@@ -70,14 +71,18 @@ export async function completeCleanupBookkeeping(
           await run();
         }
       };
-      void runWithGatewayDetachedWorkContinuation(
-        () => context.runBackgroundWork(entry, cleanup),
-        "subagents:lifecycle-cleanup",
-      ).catch((error: unknown) => {
-        defaultRuntime.log(
-          `[warn] subagent ${label} failed (${cleanupParams.runId}): ${String(error)}`,
-        );
-      });
+      void pluginInvocationContext
+        .exit(() =>
+          runWithGatewayDetachedWorkContinuation(
+            () => context.runBackgroundWork(entry, cleanup),
+            "subagents:lifecycle-cleanup",
+          ),
+        )
+        .catch((error: unknown) => {
+          defaultRuntime.log(
+            `[warn] subagent ${label} failed (${cleanupParams.runId}): ${String(error)}`,
+          );
+        });
     };
     // The admitted tails report their own failures after bookkeeping has committed.
     if (!cleanupParams.preserveTranscript) {

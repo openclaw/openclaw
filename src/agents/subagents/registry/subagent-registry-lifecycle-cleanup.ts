@@ -1,5 +1,6 @@
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
+import { pluginInvocationContext } from "../../../plugins/plugin-instance-scope.js";
 import {
   runWithGatewayDetachedWorkAdmission,
   runWithGatewayDetachedWorkContinuation,
@@ -110,9 +111,12 @@ type SubagentCleanupAttempt = {
 };
 
 export function runWithSubagentCleanupWorkAdmission<T>(run: () => Promise<T>): Promise<T> {
-  // Required cleanup continues under its admitted owner after ingress closes.
-  return withoutGatewayToolCallerIdentity(() =>
-    runWithGatewayDetachedWorkContinuation(run, "subagents:lifecycle-cleanup"),
+  // Required cleanup owns fresh plugin invocations, not the spawning turn's
+  // finite scope. Gateway and row authority still govern the detached work.
+  return pluginInvocationContext.exit(() =>
+    withoutGatewayToolCallerIdentity(() =>
+      runWithGatewayDetachedWorkContinuation(run, "subagents:lifecycle-cleanup"),
+    ),
   );
 }
 

@@ -5,6 +5,7 @@ import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { readOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { enqueueKeyedTask } from "../plugin-sdk/keyed-async-queue.js";
+import { pluginInvocationContext } from "../plugins/plugin-instance-scope.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -709,9 +710,9 @@ function invalidateForAuthMutation(event: PreparedModelRuntimeAuthMutation): voi
     });
   };
   // Wait for plugin replacement without occupying its queue. Publication owns its reads
-  // and must outlive the auth emitter's temporary SQLite reader scope.
-  const publication = readOnlyWorkerScope.exit(() =>
-    modelRuntimeDrain.runAfter(publicationQueue, publish),
+  // and plugin calls, independently of the auth emitter's finite invocation and reader scopes.
+  const publication = pluginInvocationContext.exit(() =>
+    readOnlyWorkerScope.exit(() => modelRuntimeDrain.runAfter(publicationQueue, publish)),
   );
   notifyPreparedModelRuntimePublication({ phase: "invalidated" });
   void publication.catch((error: unknown) => {
