@@ -522,12 +522,12 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         completionStatus: "failed",
       });
       completeRetry();
+      // Broadcasts carry bounded status; the persisted history below owns response text.
       expect(await withinTest(finished.promise, signal)).toMatchObject({
         jobId: job.id,
         runId: expect.stringContaining(retry.receipt_id),
         status: "ok",
         completionStatus: "succeeded",
-        summary,
       });
       const history = await readHistory();
       expect(history.entries).toHaveLength(2);
