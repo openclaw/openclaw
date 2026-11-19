@@ -90,6 +90,7 @@ jobs:
           # The native artifact entrypoint imports the shared private-plugin policy.
           sparse-checkout: |
             /.github/actions/setup-playwright-chromium/
+            /.github/actions/setup-playwright-webkit/
             /package.json
             /scripts/
             /src/shared/non-packaged-plugin-dirs.ts
@@ -163,7 +164,7 @@ jobs:
           cache-mode: restore
       - name: Install Playwright WebKit for Control UI E2E
         if: startsWith(matrix.command, 'pnpm test:ui:e2e')
-        run: pnpm --dir ui exec playwright install --with-deps webkit
+        uses: ./.release-harness/.github/actions/setup-playwright-webkit
       - name: Build sandbox image
         run: scripts/sandbox-setup.sh
       - name: Download Bun test runtime
