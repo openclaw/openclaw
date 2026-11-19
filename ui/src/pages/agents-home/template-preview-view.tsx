@@ -9,6 +9,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import { TemplateArtwork } from "./template-artwork.tsx";
+import { createTemplateAutomationSummary } from "./template-automation-summary.ts";
 import { TemplatePluginIcon } from "./template-plugin-icon.tsx";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import { TemplateAddFeedback } from "./templates-detail-view.tsx";
@@ -28,6 +29,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
   const [category, setCategory] = createSignal<Category | null>(null);
   const [selectedName, setSelectedName] = createSignal<string | null>(null);
   const [allFiles, setAllFiles] = createSignal(false);
+  const automationSummary = createTemplateAutomationSummary();
   const identity = () => props.view.detail ?? props.view.selected;
   const contents = () => props.view.readDetail()?.contents;
   const items = (key: Category) => contents()?.[key] ?? [];
@@ -79,17 +81,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
       return "";
     }
     if ("schedule" in item) {
-      return (
-        item.schedule +
-        " · " +
-        item.timezone +
-        " · " +
-        t(
-          item.enabled
-            ? "templatesCatalog.automationEnabled"
-            : "templatesCatalog.automationDisabled",
-        )
-      );
+      return automationSummary(item);
     }
     if ("source" in item && item.source === "bundled") {
       return t("templatesCatalog.dependencyBundled");
@@ -240,15 +232,7 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                                         {"excerpt" in item
                                           ? item.excerpt
                                           : "schedule" in item
-                                            ? item.schedule +
-                                              " · " +
-                                              item.timezone +
-                                              " · " +
-                                              t(
-                                                item.enabled
-                                                  ? "templatesCatalog.automationEnabled"
-                                                  : "templatesCatalog.automationDisabled",
-                                              )
+                                            ? automationSummary(item)
                                             : ""}
                                       </small>
                                     </span>

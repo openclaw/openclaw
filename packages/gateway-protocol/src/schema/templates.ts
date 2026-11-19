@@ -103,6 +103,7 @@ const TemplatesCatalogContentsSchema = closedObject({
       enabled: Type.Boolean(),
       schedule: NonEmptyString,
       timezone: NonEmptyString,
+      message: NonEmptyString,
     }),
   ),
 });
