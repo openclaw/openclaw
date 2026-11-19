@@ -23,6 +23,7 @@ import {
   type CacheTtlCheckpoint,
   type CacheTtlProjectionInput,
 } from "./cache-ttl-checkpoint.js";
+import { log } from "./logger.js";
 import { extractAttemptPermissionNotice } from "./run/attempt-system-prompt.js";
 import { buildSystemUpdateMessage } from "./run/runtime-context-prompt.js";
 import { promptDelta } from "./session-prompt-delta.js";
@@ -359,6 +360,15 @@ export function prepareSessionToolSurface(
     };
   }
   const built = new Map(params.tools.map((tool) => [tool.name, tool]));
+  const pinnedNames = new Set(pinned.map((pin) => pin.name));
+  const unsent = params.tools
+    .filter((tool) => !pinnedNames.has(tool.name))
+    .map((tool) => tool.name);
+  if (unsent.length > 0) {
+    log.warn(
+      `tools built after the session pin wait for the next prompt series: ${unsent.join(", ")}`,
+    );
+  }
   return pinned.map((pin) => {
     const tool = built.get(pin.name);
     return tool ? copyAgentToolMetadata(tool, { ...tool, ...pin }) : refusePinnedTool(pin);

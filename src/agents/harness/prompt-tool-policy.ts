@@ -182,7 +182,14 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
             : undefined,
         callableToolNames: normalizeUniqueStringEntries([
           ...tools.map((tool) => tool.name),
-          ...(catalogReachable ? allowedEntries.map((entry) => entry.name) : []),
+          // A cataloged tool this turn refuses is not callable guidance.
+          ...(catalogReachable
+            ? allowedEntries
+                .filter(
+                  (entry) => !isAgentTool(entry.tool) || isAgentToolExecutionAvailable(entry.tool),
+                )
+                .map((entry) => entry.name)
+            : []),
         ]),
       };
     },

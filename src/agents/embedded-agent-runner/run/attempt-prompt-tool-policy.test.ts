@@ -143,6 +143,15 @@ it("leaves a listed tool the turn refuses out of the callable guidance", () => {
   expect(finalize(result.callableToolNames)).toBe("cron:false");
 });
 
+it("leaves a cataloged tool the turn refuses out of the callable guidance", () => {
+  const tools = [markAgentToolExecutionUnavailable(createStubTool("exec")), createStubTool("read")];
+  const result = createPolicyFixture(["tool_search"], tools, catalog(tools)).policy.apply(
+    undefined,
+  );
+  expect(result.callableToolNames).toContain("read");
+  expect(result.callableToolNames).not.toContain("exec");
+});
+
 it("keeps cataloged plugin tools allowed through the plugin group", () => {
   const pluginTool = createStubTool("plugin_lookup");
   setPluginToolMeta(pluginTool, { pluginId: "example", optional: false });
