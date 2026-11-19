@@ -1522,13 +1522,14 @@ describe("FRV continuation preflight", () => {
 
 describe("FRV same-parent recovery", () => {
   it.each([
-    ["matching current Q grant", true, false, 1, true],
-    ["removed current Q grant", false, false, 1, false],
-    ["unrelated failure", true, true, 1, false],
-    ["different original attempt", true, false, 2, false],
+    ["matching current Q grant", true, false, 1, 1, true],
+    ["removed current Q grant", false, false, 1, 1, false],
+    ["unrelated failure", true, true, 1, 1, false],
+    ["different original attempt", true, false, 2, 2, false],
+    ["later failed attempt", true, false, 1, 2, false],
   ])(
     "classifies raw failures with %s only",
-    async (_label, granted, unrelated, originalAttempt, passed) => {
+    async (_label, granted, unrelated, originalAttempt, effectiveAttempt, passed) => {
       const selected = {
         ...child("normalCi", "101"),
         runAttempt: originalAttempt,
@@ -1560,7 +1561,7 @@ describe("FRV same-parent recovery", () => {
             });
           },
         }),
-        getRun: async () => runFor(selected, originalAttempt + 1, "failure"),
+        getRun: async () => runFor(selected, effectiveAttempt, "failure"),
         getAttemptJobs: async () => [
           job("synthetic known failure", "failure"),
           ...(unrelated ? [job("unrelated failure", "failure")] : []),
@@ -1570,7 +1571,7 @@ describe("FRV same-parent recovery", () => {
       expect(result.children[0]).toMatchObject({
         conclusion: "failure",
         plannedRunAttempt: originalAttempt,
-        effectiveRunAttempt: originalAttempt + 1,
+        effectiveRunAttempt: effectiveAttempt,
         status: passed ? "passed" : "failed",
       });
     },
@@ -3259,7 +3260,16 @@ describe("FRV watch", () => {
     ]);
   });
 
-  it.each(["reported", "restamped", "omitted", "rerun", "recovered", "waived", "removed waiver"])(
+  it.each([
+    "reported",
+    "restamped",
+    "omitted",
+    "rerun",
+    "recovered",
+    "waived",
+    "expired waiver",
+    "removed waiver",
+  ])(
     "labels carried-forward blockers once per effective attempt across restarts (%s)",
     async (kind) => {
       const statePath = path.join(tempDirs.make("frv-carried-watch-"), "state.json");
@@ -3281,26 +3291,25 @@ describe("FRV watch", () => {
             expect(sourcePath).toBe("scripts/lib/release-validation-waivers.json");
             return JSON.stringify({
               schema: "openclaw.release-validation-waivers/v1",
-              waivers:
-                kind === "waived"
-                  ? [
-                      {
-                        targetVersion: "2099.1.1",
-                        childRole: "normalCi",
-                        jobName: "carried failure",
-                        reason: "Synthetic Q watcher grant",
-                        aggregates: [],
-                        evidence: { runId: "101", runAttempt: 1 },
-                      },
-                    ]
-                  : [],
+              waivers: ["waived", "expired waiver"].includes(kind)
+                ? [
+                    {
+                      targetVersion: "2099.1.1",
+                      childRole: "normalCi",
+                      jobName: "carried failure",
+                      reason: "Synthetic Q watcher grant",
+                      aggregates: [],
+                      evidence: { runId: "101", runAttempt: kind === "waived" ? 2 : 1 },
+                    },
+                  ]
+                : [],
             });
           },
         }),
         getRun: async (runId: string) =>
           runId === "77" ? rootRun(1, null) : runFor(ci, attempt, "failure"),
         getParentJobs: async () => [
-          ...(["waived", "removed waiver"].includes(kind)
+          ...(["waived", "expired waiver", "removed waiver"].includes(kind)
             ? [{ ...job("Seal release execution plan"), run_attempt: 1 }]
             : []),
           { ...job("Run normal full CI"), id: 5, run_attempt: 1, status: "completed" },

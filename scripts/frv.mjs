@@ -1149,7 +1149,7 @@ export async function inspectContinuation(plan, client, options = {}) {
         jobs: evidence.jobs,
         key: child.key,
         runId: child.runId,
-        runAttempt: child.runAttempt,
+        runAttempt: effectiveRunAttempt,
         status: run.status,
       };
       const policy = evaluateReleaseChildPolicy({
@@ -3724,8 +3724,7 @@ async function pollRelease(state, client, pending, observation, readOptions) {
               key: child.key,
               jobs: composite.jobs,
               runId,
-              runAttempt: observation.plan?.children.find((entry) => entry.runId === runId)
-                ?.runAttempt,
+              runAttempt: current,
             },
             targetVersion: observation.plan?.targetVersion,
             targetSha: observation.plan?.targetSha,
