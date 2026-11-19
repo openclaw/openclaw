@@ -66,18 +66,30 @@ suite.define(() => {
           await rowSlot(solRow)
             .locator("[data-provider-icon]")
             .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-provider-icon"))),
-        ).toEqual(["codex", "clawrouter"]);
+        ).toEqual(["clawrouter", "codex"]);
         expect(
           await rowSlot(opusRow)
             .locator("[data-provider-icon]")
             .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-provider-icon"))),
-        ).toEqual(["claude", "clawrouter"]);
+        ).toEqual(["clawrouter", "claude"]);
         expect(await rowSlot(unknownRow).getAttribute("data-provider-icon")).toBe("clawrouter");
         expect(await solRow.getAttribute("aria-label")).toContain("via ClawRouter");
         for (const icon of [triggerIcon, rowSlot(solRow), rowSlot(opusRow)]) {
+          const size = (node: HTMLElement) => [node.offsetWidth, node.offsetHeight];
+          expect(await icon.evaluate(size)).toEqual([16, 16]);
+          expect(await icon.locator('[data-provider-icon="clawrouter"]').evaluate(size)).toEqual([
+            16, 16,
+          ]);
           expect(
-            await icon.evaluate((node: HTMLElement) => [node.offsetWidth, node.offsetHeight]),
-          ).toEqual([16, 16]);
+            await icon
+              .locator(".chat-controls__routed-brand-badge")
+              .evaluate((node: HTMLElement) => [
+                node.offsetLeft,
+                node.offsetTop,
+                node.offsetWidth,
+                node.offsetHeight,
+              ]),
+          ).toEqual([8, 0, 8, 8]);
         }
         await opusRow.click();
         expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({

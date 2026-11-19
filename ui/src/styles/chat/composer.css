@@ -2581,31 +2581,30 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   color: var(--icon-interactive, var(--chat-composer-secondary));
 }
 
-/* Both marks share the old slot; the knockout keeps the corner light on any surface. */
 .chat-controls__routed-brand {
   position: relative;
   display: inline-block;
   color: var(--muted);
 }
 
-.chat-controls__routed-brand-maker {
+/* Keep the router at its normal size and replace its upper-right node with the
+   maker mark. Cut through to the actual surface so hover and selection match. */
+.chat-controls__routed-brand-base {
   position: absolute;
   inset: 0;
-  mask-image: radial-gradient(circle at 77% 77%, transparent 25%, black 30%);
+  mask-image: radial-gradient(circle at 75% 25%, transparent 33%, black 36%);
 }
 
-.chat-controls__routed-brand-maker .provider-brand-icon {
+.chat-controls__routed-brand-base .provider-brand-icon {
   position: absolute;
-  inset: 0 auto auto 0;
-  width: 76%;
-  height: 76%;
+  inset: 0;
 }
 
 .chat-controls__routed-brand-badge {
   position: absolute;
-  inset: auto 0 0 auto;
-  width: 47%;
-  height: 47%;
+  inset: 0 0 auto auto;
+  width: 50%;
+  height: 50%;
 }
 
 .chat-controls__routed-brand .provider-brand-icon {

@@ -21,14 +21,10 @@ export function ChatModelBrandIcon(props: {
     >
       {(maker) => (
         <span class={[props.class, "chat-controls__routed-brand"]} aria-hidden="true">
-          <span class="chat-controls__routed-brand-maker">
-            <ProviderBrandIcon provider={maker()} />
+          <span class="chat-controls__routed-brand-base">
+            <ProviderBrandIcon provider={props.provider} presentation={props.presentation} />
           </span>
-          <ProviderBrandIcon
-            provider={props.provider}
-            presentation={props.presentation}
-            class="chat-controls__routed-brand-badge"
-          />
+          <ProviderBrandIcon provider={maker()} class="chat-controls__routed-brand-badge" />
         </span>
       )}
     </Show>
