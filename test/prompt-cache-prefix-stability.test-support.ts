@@ -34,7 +34,8 @@ const OTHER = "agent:other:prefix-stability-other";
 // A chat whose first turn is a scheduled job; its next owner turn must list the same tools.
 const CRON_FIRST = "agent:main:prefix-stability-cron-first";
 // Main adds `message` on that owner turn (13 -> 14 tools); its owner lists one tool set from a
-// series' first request. Remove the entry when the owner lands; the journey then fails until it goes.
+// series' first request. The journey requires the growth, so it fails once the owner lands until
+// this entry goes.
 const CRON_FIRST_GROWTH = {
   tools: ["message"],
   owner: "https://github.com/openclaw/openclaw/pull/201710",
@@ -93,7 +94,8 @@ function outputTrimmed(before: string, after: string): boolean {
   return changed && JSON.stringify(trimmed) === before;
 }
 
-// Gemini replay also drops the call id of the merged call and of its result.
+// Gemini replay also drops the call id of the merged call and of its result; the merged side must
+// carry no id, not a different one.
 const withoutCallIds = (message: string) =>
   message.replace(/("function(?:Call|Response)":\{.*?),"id":"[^"]*"\}/g, "$1}");
 
@@ -116,13 +118,13 @@ function cronReplyMerged(previous: WireRequest, current: WireRequest): boolean {
   return (
     /"text":"ok \d+"/.test(previous.messages[at]!) &&
     merged !== undefined &&
-    withoutCallIds(current.messages[at]!) === withoutCallIds(JSON.stringify(merged)) &&
+    current.messages[at] === withoutCallIds(JSON.stringify(merged)) &&
     previous.messages
       .slice(at + 2)
       .every(
         (message, index) =>
           current.messages[at + 1 + index] === message ||
-          (index === 0 && withoutCallIds(current.messages[at + 1]!) === withoutCallIds(message)),
+          (index === 0 && current.messages[at + 1] === withoutCallIds(message)),
       )
   );
 }
@@ -215,13 +217,18 @@ export function usePrefixStabilityJourney() {
     let childKey: string | undefined;
     const seen: string[] = [];
     let ordinal = 0;
+    // Sessions the journey does not expect; every request must belong to a known chat.
+    const unclassified: string[] = [];
     const script = (request: WireRequest): Reply => {
       const latest = lastMessage(request);
       const hasToolResult = containsToolResult(latest);
-      if (request.tools === "[]") {
+      // The request's own session leads its system prompt; later text can name the child. Only a
+      // compaction summary request has none.
+      const session = /session=([^\s"\\|]+)/.exec(request.text)?.[1];
+      if (!session) {
         return { text: "Summary: the session ran the probe journey." };
       }
-      if (request.text.includes(`session=${OTHER}`)) {
+      if (session === OTHER) {
         otherRequests.push(request);
         const chunk = Number(/overflow-chunk-(\d+)/.exec(latest)?.[1] ?? 0);
         if (
@@ -234,11 +241,11 @@ export function usePrefixStabilityJourney() {
         }
         return { text: `other ${otherRequests.length}` };
       }
-      if (request.text.includes(`session=${CRON_FIRST}`)) {
+      if (session === CRON_FIRST) {
         cronFirstRequests.push(request);
         return { text: "ok" };
       }
-      if (request.text.includes(`session=${SENDER}`)) {
+      if (session === SENDER) {
         return hasToolResult || !latest.includes("forward a ping")
           ? { text: "REPLY_SKIP" }
           : {
@@ -246,9 +253,7 @@ export function usePrefixStabilityJourney() {
               args: { sessionKey: TARGET, message: "INTER-SESSION ping", timeoutSeconds: 0 },
             };
       }
-      // The request's own session leads its system prompt; later text can name the child.
-      const session = /session=(\S+)/.exec(request.text)?.[1];
-      const child = session?.startsWith("agent:main:subagent:") ? session : undefined;
+      const child = session.startsWith("agent:main:subagent:") ? session : undefined;
       if (child) {
         childKey ??= child;
         if (child === childKey) {
@@ -256,7 +261,8 @@ export function usePrefixStabilityJourney() {
         }
         return { text: "child-done" };
       }
-      if (!request.text.includes(`session=${TARGET}`)) {
+      if (session !== TARGET) {
+        unclassified.push(session);
         return { text: "child-done" };
       }
       targetRequests.push(request);
@@ -498,11 +504,20 @@ export function usePrefixStabilityJourney() {
           await settle();
           await client.request("cron.remove", { id: first.id });
           await send(CRON_FIRST, "OWNER turn after a scheduled first turn");
-          // Whole declarations in order; only the known growth may differ.
-          const [cronTools, ownerTools] = [cronFirstRequests[0]!, cronFirstRequests.at(-1)!].map(
-            (request) => withoutTools(request, CRON_FIRST_GROWTH.tools).tools,
+          const owner = cronFirstRequests.at(-1)!;
+          expect(owner.text).toContain("OWNER turn after a scheduled first turn");
+          // Whole declarations in order; only the known growth, which must still occur, may differ.
+          const names = cronFirstRequests.map((request) => toolNames(request.tools).join(","));
+          expect(toolNames(cronFirstRequests[0]!.tools), names[0]).not.toContain("message");
+          expect(toolNames(owner.tools), names.at(-1)).toEqual(
+            expect.arrayContaining(CRON_FIRST_GROWTH.tools),
           );
-          expect(ownerTools, toolNames(cronFirstRequests.at(-1)!.tools).join(",")).toBe(cronTools);
+          const cronFirstBreaks = prefixBreaks(
+            cronFirstRequests.map((request) =>
+              request === owner ? withoutTools(request, CRON_FIRST_GROWTH.tools) : request,
+            ),
+          );
+          expect(cronFirstBreaks, JSON.stringify(cronFirstBreaks, null, 2)).toEqual([]);
         }
         // An unrelated chat on a small window: its tool results fill the window inside one run,
         // and the pressure check before the next request acts.
@@ -556,12 +571,18 @@ export function usePrefixStabilityJourney() {
         // The unrelated chat rebuilds only at its compactions: the one its pressure check ran
         // inside the overflow run, and the explicit one. A silent rewrite of a tool result
         // it already sent would show as another break.
+        const matched = new Set<(typeof KNOWN_BREAKS)[number]>();
         const isKnown =
-          (chat: "target" | "other") => (previous: WireRequest, current: WireRequest) =>
-            KNOWN_BREAKS.some(
-              (known) =>
-                known.api === api && known.chat === chat && known.accepts(previous, current),
+          (chat: "target" | "other") => (previous: WireRequest, current: WireRequest) => {
+            const known = KNOWN_BREAKS.find(
+              (entry) =>
+                entry.api === api && entry.chat === chat && entry.accepts(previous, current),
             );
+            if (known) {
+              matched.add(known);
+            }
+            return known !== undefined;
+          };
         const allOtherBreaks = prefixBreaks(otherRequests);
         const otherMessage = JSON.stringify(allOtherBreaks, null, 2);
         const inOverflow = ({ at }: { at: number }) => at > overflowStartAt && at < overflowEndAt;
@@ -584,6 +605,7 @@ export function usePrefixStabilityJourney() {
             "compacted into the following summary",
           );
         }
+        expect(unclassified).toEqual([]);
         expect(childRequests.length).toBeGreaterThan(1);
         const childBreaks = prefixBreaks(childRequests);
         expect(childBreaks, JSON.stringify(childBreaks, null, 2)).toEqual([]);
@@ -600,6 +622,12 @@ export function usePrefixStabilityJourney() {
             ? [compactionAt]
             : [providerCompactionAt, compactionAt],
         );
+        // A known break that no longer occurs has landed: remove its entry.
+        expect(
+          KNOWN_BREAKS.filter((known) => known.api === api && !matched.has(known)).map(
+            ({ chat, owner }) => `${chat}: ${owner}`,
+          ),
+        ).toEqual([]);
         if (providerCompactionAt !== undefined) {
           // The cache observer attributes the provider checkpoint to compaction, not to drift.
           const trace = await fs.readFile(
