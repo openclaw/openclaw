@@ -74,6 +74,7 @@ export function projectAgentActivityItem<
     return { ...item, hideFromChannelProgress: true };
   }
   const name = normalizeLowercaseStringOrEmpty(item.name);
+  const args = asRecord(facts.args);
   const details = asRecord(asRecord(facts.result)?.details);
   // Tool completion is not command success. Preserve the execution contract and
   // expose a normal nonzero exit only in the prepared activity outcome.
@@ -94,11 +95,48 @@ export function projectAgentActivityItem<
     facts.nativeOperation === "process.poll" ||
     isAgentPlanProgressToolName(name) ||
     name === "sessions_yield" ||
-    (name === "process" && asRecord(facts.args)?.action === "poll") ||
-    (name === "message" && asRecord(facts.args)?.action === "react");
+    (name === "process" && args?.action === "poll") ||
+    (name === "message" &&
+      (args?.action === "react" || isCurrentConversationSend(item.status, args, details)));
   return routine && (item.status === "running" || item.status === "completed")
     ? { ...item, hideFromChannelProgress: true }
     : item;
+}
+
+const MESSAGE_ROUTE_KEYS = [
+  "accountId",
+  "channel",
+  "channelId",
+  "provider",
+  "target",
+  "targets",
+  "threadId",
+  "to",
+];
+
+/**
+ * A message send into the conversation it came from is recorded there as the agent's own
+ * reply, so its tool row would only repeat it. Until its result says where it landed, a send
+ * without an explicit route is presumed to be one; a result routed elsewhere shows the row.
+ * Accepted gap: the external-channel transcript mirror is best-effort, so a failed mirror
+ * leaves the reply out of the thread with its row hidden; delivery itself still succeeded.
+ */
+function isCurrentConversationSend(
+  status: string | undefined,
+  args: Record<string, unknown> | undefined,
+  details: Record<string, unknown> | undefined,
+): boolean {
+  if (args?.action !== "send" || args.dryRun === true) {
+    return false;
+  }
+  if (status === "running") {
+    return MESSAGE_ROUTE_KEYS.every((key) => args[key] === undefined || args[key] === "");
+  }
+  return (
+    details?.sourceReplyTranscriptOwner === true ||
+    (details?.sourceReplyRoute === "current-source" &&
+      asRecord(details.messageDelivery)?.partialDelivery !== true)
+  );
 }
 
 export function isCompleteAgentPreamble(item: { phase?: string; progressText?: string }): boolean {

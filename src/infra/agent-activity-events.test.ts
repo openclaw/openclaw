@@ -328,3 +328,85 @@ test("marks only unpaired history calls as provisional, including terminal unkno
     expect(entry.items[0]).not.toHaveProperty("unpairedCall");
   }
 });
+
+test.each([
+  {
+    name: "a reply recorded in this transcript",
+    args: { action: "send", message: "Hi" },
+    details: { sourceReplyTranscriptOwner: true },
+    shown: false,
+  },
+  {
+    name: "a reply delivered to the current channel conversation",
+    args: { action: "send", message: "Hi" },
+    details: { sourceReplyRoute: "current-source" },
+    shown: false,
+  },
+  {
+    name: "a send routed to another conversation",
+    args: { action: "send", target: "channel:release", message: "Shipped" },
+    details: {},
+    shown: true,
+  },
+  {
+    name: "a poll created in the current conversation",
+    args: { action: "poll" },
+    details: { sourceReplyRoute: "current-source" },
+    shown: true,
+  },
+  {
+    name: "a partially delivered send",
+    args: { action: "send" },
+    details: { sourceReplyRoute: "current-source", messageDelivery: { partialDelivery: true } },
+    shown: true,
+  },
+  {
+    name: "a send whose result does not confirm the current conversation",
+    args: { action: "send", message: "Shipped" },
+    details: {},
+    shown: true,
+  },
+])("shows a completed message send for $name: $shown", ({ args, details, shown }) => {
+  const projected = projectAgentHistoryActivity([
+    call("send", "send", { runId: "run" }, "message", args),
+    {
+      messageId: "result",
+      message: toolResult("send", "message", { runId: "run", details }),
+    },
+  ]);
+  expect(projected.find((entry) => entry.messageId === "send")?.items.length).toBe(shown ? 1 : 0);
+});
+
+test("keeps live current-conversation sends hidden from start and failed sends visible", () => {
+  const send = { toolCallId: "send", name: "message", args: { action: "send", message: "Hi" } };
+  expect(projectAgentToolActivity({ ...send, phase: "start" }).hideFromChannelProgress).toBe(true);
+  expect(
+    projectAgentToolActivity({
+      ...send,
+      args: { ...send.args, channel: "discord", target: "channel:release" },
+      phase: "start",
+    }).hideFromChannelProgress,
+  ).toBeUndefined();
+  expect(
+    projectAgentToolActivity({
+      ...send,
+      phase: "result",
+      result: { details: { sourceReplyTranscriptOwner: true } },
+      isError: false,
+    }).hideFromChannelProgress,
+  ).toBe(true);
+  const failed = projectAgentToolActivity({
+    ...send,
+    phase: "result",
+    result: { details: {} },
+    isError: true,
+  });
+  expect(failed.status).toBe("failed");
+  expect(failed.hideFromChannelProgress).toBeUndefined();
+  for (const overrides of [{ threadId: "other-thread" }, { dryRun: true }]) {
+    expect(
+      projectAgentToolActivity({ ...send, args: { ...send.args, ...overrides }, phase: "start" })
+        .hideFromChannelProgress,
+    ).toBeUndefined();
+  }
+});
