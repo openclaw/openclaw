@@ -723,11 +723,11 @@ process.stdout.write(JSON.stringify(createReleaseEvidenceClient("openclaw/opencl
           ],
           { encoding: "utf8", env },
         );
-      const acquired = acquire(Number(fixture.parentRun.run_attempt));
+      const acquired = acquire(fixture.parentRun.run_attempt);
       expect(acquired.stderr).toBe("");
       expect(acquired.status).toBe(0);
       expect(JSON.parse(acquired.stdout)).toEqual(fixture.manifest);
-      const staleAttempt = acquire(Number(fixture.parentRun.run_attempt) + 1);
+      const staleAttempt = acquire(fixture.parentRun.run_attempt + 1);
       expect(staleAttempt.status).not.toBe(0);
       expect(staleAttempt.stderr).toMatch(/attempt/i);
     },
