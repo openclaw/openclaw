@@ -9,6 +9,7 @@ import {
   finalizeAgentToolAvailability,
   gateAgentToolExecution,
 } from "../../agent-tool-availability.js";
+import { isAgentToolExecutionAvailable } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { isCodeModeControlTool } from "../../code-mode-control-tools.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../../code-mode.js";
@@ -252,16 +253,20 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
     const explicitlyAllowedClientTool = (clientTools ?? []).some(({ function: fn }) =>
       Boolean(fn?.name?.trim() && clientToolMatchers.some((matches) => matches(fn.name))),
     );
-    const emptyAllowlistVisibleToolNames = deferredDirectoryToolsCallable
-      ? collectAllowedToolNames({ tools: effectiveTools })
-      : visibleAllowedToolNames;
-    // Auto-added controls cannot conceal an explicit allowlist that matched nothing.
+    // Auto-added controls, and listed tools this turn refuses, cannot conceal an explicit
+    // allowlist that matched nothing.
     const hasCallableTools =
       preparedToolBase.hasNativeWebSearch ||
-      toolSearch.catalogToolCount > 0 ||
       ((catalogedClientToolNames.size > 0 || deferredDirectoryToolsCallable) &&
         explicitlyAllowedClientTool) ||
-      [...emptyAllowlistVisibleToolNames].some((toolName) => !nonTaskControlNames.has(toolName));
+      [
+        ...collectAllowedToolNames({
+          tools: uncompactedEffectiveTools.filter(isAgentToolExecutionAvailable),
+          clientTools: clientTools?.filter(
+            (tool) => !catalogedClientToolNames.has(tool.function.name),
+          ),
+        }),
+      ].some((toolName) => !nonTaskControlNames.has(toolName));
     const toolSearchRunPlan = {
       visibleAllowedToolNames,
       replayAllowedToolNames,

@@ -10,6 +10,7 @@ import {
 import { isAgentToolExecutionAvailable } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
+import { refuseRunAllowlistTool } from "../../agent-tools.turn-authority.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
@@ -110,9 +111,13 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     toolOverrides: params.attempt.toolOverrides,
     toolDenylist: runtimeCapabilityProfile.policy.explicitToolDenylist,
   };
+  const { toolSearchConfig, toolSearchControlsEnabledForRun } = params.preparedToolBase;
+  const fixedListing = listsFixedToolSet(toolSearchConfig, toolSearchControlsEnabledForRun);
+  // A fixed listing builds bundled tools whatever the allowlist names; policy gates their calls.
+  const listingToolsAllow = fixedListing ? undefined : params.attempt.toolsAllow;
   const bundleMcpEnabled = shouldCreateBundleMcpRuntimeForAttempt({
     toolsEnabled: auxiliaryToolsEnabled,
-    toolsAllow: params.attempt.toolsAllow,
+    toolsAllow: listingToolsAllow,
     resolveConfiguredMcpNamespaces: () => {
       const configuredNames = Object.keys(params.attempt.config?.mcp?.servers ?? {});
       if (configuredNames.length === 0) {
@@ -175,7 +180,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     phases.mark("attempt.bundle-tools.lsp");
     const bundleLspEnabled = shouldCreateBundleLspRuntimeForAttempt({
       toolsEnabled: auxiliaryToolsEnabled,
-      toolsAllow: params.attempt.toolsAllow,
+      toolsAllow: listingToolsAllow,
     });
     bundleLspRuntime = bundleLspEnabled
       ? await createBundleLspToolRuntime({
@@ -204,10 +209,19 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         conversationCapabilityProfile: runtimeCapabilityProfile,
         warn: (message) => log.warn(message),
       });
-    const filteredBundledTools = applyBundlePolicy([
-      ...applyRuntimeAllowlist(bundleMcpRuntime?.tools ?? []),
-      ...applyRuntimeAllowlist(bundleLspRuntime?.tools ?? []),
-    ]);
+    const bundledSourceTools = [
+      ...(bundleMcpRuntime?.tools ?? []),
+      ...(bundleLspRuntime?.tools ?? []),
+    ];
+    const allowedBundledTools = new Set(
+      applyBundlePolicy(applyRuntimeAllowlist(bundledSourceTools)),
+    );
+    // A fixed listing keeps every bundled tool listed and refuses what policy does not allow.
+    const filteredBundledTools = fixedListing
+      ? bundledSourceTools.map((tool) =>
+          allowedBundledTools.has(tool) ? tool : refuseRunAllowlistTool(tool),
+        )
+      : [...allowedBundledTools];
     if (bundleMcpRuntime?.restrictAppTools) {
       // The view outlives this attempt; capture policy against the complete MCP catalog now.
       bundleMcpRuntime.restrictAppTools(
@@ -239,7 +253,9 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
       // Listed tools this turn refuses are never delegated or captured as authority.
       const denied = new Set(
-        coreTools.filter((tool) => !isAgentToolExecutionAvailable(tool)).map((tool) => tool.name),
+        [...coreTools, ...filteredBundledTools]
+          .filter((tool) => !isAgentToolExecutionAvailable(tool))
+          .map((tool) => tool.name),
       );
       const executable = schemaProjection.tools.filter((tool) => !denied.has(tool.name));
       // Cron is constructed before bundled tools; capture only the executable
@@ -272,9 +288,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       // Presentation-only absence must not become a delegated capability denial.
       // Capture after final policy/quarantine, then omit from the model surface,
       // unless the session lists one fixed set (the call then fails visibly).
-      const { toolSearchConfig, toolSearchControlsEnabledForRun } = params.preparedToolBase;
-      return !params.preparedToolBase.messageToolAvailable &&
-        !listsFixedToolSet(toolSearchConfig, toolSearchControlsEnabledForRun)
+      return !params.preparedToolBase.messageToolAvailable && !fixedListing
         ? schemaProjection.tools.filter((tool) => tool.name !== "message")
         : schemaProjection.tools;
     };

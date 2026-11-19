@@ -1,6 +1,7 @@
 // A scheduled run's toolsAllow is an authority boundary: keeping the session's tools listed
 // must refuse exactly the calls the allowlist refused when it removed those tools.
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { getInternalToolExecutionPreparer } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
@@ -10,10 +11,11 @@ import {
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
-import { isAgentToolExecutionAvailable } from "../../agent-tool-availability.js";
 import { rewrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import type { AnyAgentTool } from "../../tools/common.js";
+import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
@@ -42,6 +44,25 @@ vi.mock("../../openclaw-plugin-tools.js", async (importOriginal) => {
   };
 });
 
+// One bundle MCP server tool, through the production bundle pass.
+vi.mock("../../agent-bundle-mcp-tools.js", () => ({
+  acquireSessionMcpRuntime: async () => ({ runtime: {}, releaseLease: () => {} }),
+  materializeBundleMcpToolsForRun: async () => {
+    const tool = createStubTool("notion__search");
+    setPluginToolMeta(tool, {
+      pluginId: "bundle-mcp",
+      optional: false,
+      mcp: {
+        serverName: "notion",
+        safeServerName: "notion",
+        toolName: "search",
+        operation: "tool",
+      },
+    });
+    return { tools: [tool], dispose: async () => {} };
+  },
+}));
+
 const baseConfig: OpenClawConfig = {
   agents: { entries: { main: {} } },
   tools: {
@@ -50,6 +71,7 @@ const baseConfig: OpenClawConfig = {
     codeMode: false,
     toolSearch: { enabled: true, mode: "tools" },
   },
+  mcp: { servers: { notion: { command: "notion-mcp" } } },
 };
 const sessionKey = "agent:main:telegram:direct:owner";
 // Names, a group, a glob, and `message`, which the allowlist adds over the coding profile.
@@ -100,12 +122,21 @@ async function prepareTools(
   });
   resources.defer(() => result.toolSurfaceRuntime.cleanup());
   resources.defer(() => result.releaseTools("test-complete"));
-  const tools = result.toolsRaw;
+  const setup = createAttemptSetupFixture({ sandboxSessionKey: sessionKey });
+  // The production bundle pass: final policy, delegation and cron-creator capture.
+  const bundle = await prepareEmbeddedAttemptBundleTools({
+    agentDir: "/tmp/openclaw-scheduled-tools-allow-agent",
+    attempt,
+    setup,
+    isRawModelRun: false,
+    preparedToolBase: result,
+  });
+  const tools = bundle.uncompactedEffectiveTools as AnyAgentTool[];
   const catalog = await prepareEmbeddedAttemptToolCatalog({
     attempt,
-    setup: createAttemptSetupFixture({ sandboxSessionKey: sessionKey }),
+    setup,
     preparedToolBase: result,
-    bundleTools: { clientTools: undefined, uncompactedEffectiveTools: tools },
+    bundleTools: bundle,
     abortSignal: result.toolAbortSignal,
     executeCodeModeTool: async () => ({ content: [], details: {} }),
   });
@@ -113,16 +144,64 @@ async function prepareTools(
   const dispatched = target
     ? await rewrapToolWithBeforeToolCallHook(target).execute("dispatch", { command: "true" })
     : undefined;
+  // Execute every listed tool through the direct, preparer and dispatch paths.
+  const refusals = await Promise.all(
+    tools.map(async (tool) => [tool.name, await refusedVia(tool)] as const),
+  );
   return {
     dispatched,
     emptyAllowlistError: catalog.emptyExplicitToolAllowlistError?.message,
     listed: tools.map((tool) => tool.name).toSorted(),
-    callable: tools
-      .filter(isAgentToolExecutionAvailable)
-      .map((tool) => tool.name)
+    callable: refusals
+      .filter(([, refused]) => !refused.direct)
+      .map(([name]) => name)
       .toSorted(),
+    refusals,
+    inherited: result.inheritedToolAllowlist
+      ? [...result.inheritedToolAllowlist].toSorted()
+      : undefined,
+    cronCreator: result.cronCreatorToolAllowlist
+      ? result.cronCreatorToolAllowlist
+          .map((entry) => (typeof entry === "string" ? entry : entry.name))
+          .toSorted()
+      : undefined,
     tools,
   };
+}
+
+const isGated = (value: unknown) =>
+  (value as { details?: { gated?: unknown } } | undefined)?.details?.gated === true;
+
+/** Runs a call far enough to see a refusal; an allowed tool fails validation or times out. */
+async function settle(run: () => Promise<unknown>): Promise<unknown> {
+  return Promise.race([
+    run().catch(() => undefined),
+    new Promise((resolve) => {
+      setTimeout(resolve, 1500);
+    }),
+  ]);
+}
+
+async function refusedVia(tool: AnyAgentTool) {
+  const direct = isGated(await settle(() => tool.execute("direct", {})));
+  const preparer = getInternalToolExecutionPreparer(tool);
+  const prepared = preparer
+    ? await settle(async () => {
+        const step = await preparer({ toolCallId: "prepared", args: {} });
+        try {
+          return step.kind === "ready" ? await step.execute() : step;
+        } finally {
+          step.dispose();
+        }
+      })
+    : undefined;
+  const viaPreparer = preparer
+    ? isGated(prepared) || isGated((prepared as { result?: unknown } | undefined)?.result)
+    : direct;
+  const dispatch = isGated(
+    await settle(() => rewrapToolWithBeforeToolCallHook(tool).execute("dispatch", {})),
+  );
+  return { direct, preparer: viaPreparer, dispatch };
 }
 
 const scheduled = {
@@ -170,14 +249,14 @@ it("allows exactly the calls a scheduled toolsAllow allowed before", async () =>
 });
 
 it("keeps the session's tools listed on a scheduled run and refuses the rest visibly", async () => {
-  const run = await prepareTools(scheduled);
+  const run = await prepareTools(scheduled, baseConfig, "exec");
   const user = await prepareTools({ runId: "user", trigger: "user", senderIsOwner: true });
   // progress_card registration reads the allowlist itself; it stays unlisted here.
   expect(run.listed).toEqual(user.listed.filter((name) => name !== "progress_card"));
-  const exec = run.tools.find((tool) => tool.name === "exec")!;
-  const refused = await exec.execute("scheduled-exec", { command: "true" });
-  expect(refused.details).toMatchObject({ gated: true });
-  expect(JSON.stringify(refused.content)).toContain("exec is outside the tools this run allows");
+  expect(run.dispatched?.details).toMatchObject({ gated: true });
+  expect(JSON.stringify(run.dispatched?.content)).toContain(
+    "exec is outside the tools this run allows",
+  );
   // A refused MCP tool keeps its provenance, so the catalog still treats it as MCP.
   const mcp = run.tools.find((tool) => tool.name === "world__calendar_list")!;
   expect(getPluginToolMeta(mcp)?.mcp?.serverName).toBe("world");
@@ -241,6 +320,7 @@ const guestCallable = [
   "dispatch_action",
   "get_goal",
   "ls",
+  "notion__search",
   "presence",
   "progress_card",
   "read",
@@ -288,6 +368,15 @@ const expectedCallable: Record<(typeof refusalCases)[number]["name"], readonly s
 it.each(refusalCases)("allows exactly the calls main allowed: $name", async (c) => {
   const run = await prepareTools(c.overrides as never, c.config);
   expect(run.callable).toEqual(expectedCallable[c.name]);
+  // Direct calls, the preparer the agent loop prefers, and dispatch_action agree.
+  for (const [name, refused] of run.refusals) {
+    expect({ name, ...refused }).toEqual({
+      name,
+      direct: refused.direct,
+      preparer: refused.direct,
+      dispatch: refused.direct,
+    });
+  }
 });
 
 it("lists one tool set for every sender of a group and refuses the guest through dispatch", async () => {
@@ -307,4 +396,69 @@ it("keeps a run allowlist refusal through a catalog rewrap", async () => {
   expect(JSON.stringify(run.dispatched?.content)).toContain(
     "exec is outside the tools this run allows",
   );
+});
+
+it("lists the full set under an allowlist that names only an MCP tool", async () => {
+  // A cron first after /compact must not pin only the Tool Search controls.
+  const run = await prepareTools({ ...scheduled, toolsAllow: ["world__calendar_list"] });
+  const user = await prepareTools({ runId: "user", trigger: "user", senderIsOwner: true });
+  expect(run.listed).toEqual(user.listed.filter((name) => name !== "progress_card"));
+  expect(run.emptyAllowlistError).toBeUndefined();
+  expect(run.callable).toEqual([
+    "dispatch_action",
+    "tool_describe",
+    "tool_search",
+    "world__calendar_list",
+  ]);
+});
+
+const guestGroup = {
+  runId: "g",
+  trigger: "user",
+  sessionKey: "agent:main:telegram:group:g1",
+  senderId: "guest",
+  senderIsOwner: false,
+} as const;
+const withSenderPolicy = (policy: Record<string, unknown>): OpenClawConfig => ({
+  ...baseConfig,
+  tools: { ...baseConfig.tools, toolsBySender: { "id:guest": policy } },
+});
+
+it("fails loudly when only refused tools remain", async () => {
+  // A sender allowlist with a typo, and a run allowlist naming only a tool the sender may not use.
+  const typo = await prepareTools(guestGroup, withSenderPolicy({ allow: ["raed"] }));
+  expect(typo.emptyAllowlistError).toContain("No callable tools remain");
+  const refusedOnly = await prepareTools(
+    { ...guestGroup, toolsAllow: ["exec"] },
+    withSenderPolicy({ deny: ["exec"] }),
+  );
+  expect(refusedOnly.emptyAllowlistError).toContain("No callable tools remain");
+});
+
+it("refuses what sender allow and deny policies removed, including MCP tools", async () => {
+  const allow = await prepareTools(guestGroup, withSenderPolicy({ allow: ["read", "sessions_*"] }));
+  expect(allow.callable).toEqual([
+    "dispatch_action",
+    "read",
+    "sessions_create",
+    "sessions_history",
+    "sessions_list",
+    "sessions_search",
+    "sessions_send",
+    "sessions_spawn",
+    "sessions_yield",
+    "tool_describe",
+    "tool_search",
+  ]);
+  const deny = await prepareTools(guestGroup, withSenderPolicy({ deny: ["world__calendar_list"] }));
+  expect(deny.callable).not.toContain("world__calendar_list");
+  expect(deny.listed).toContain("world__calendar_list");
+});
+
+it("never delegates or captures a tool the guest sender is refused", async () => {
+  const run = await prepareTools({ ...guestGroup, trigger: "user" }, guestConfig);
+  for (const name of ["exec", "write", "process"]) {
+    expect(run.inherited ?? []).not.toContain(name);
+    expect(run.cronCreator ?? []).not.toContain(name);
+  }
 });

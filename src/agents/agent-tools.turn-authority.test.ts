@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { getInternalToolExecutionPreparer } from "../../packages/agent-core/src/internal-hooks.js";
 import {
   bindAgentToolAvailability,
   finalizeAgentToolAvailability,
@@ -157,4 +158,32 @@ it("keeps a run allowlist refusal when dispatch rewraps the hook layer", async (
   expect(ran).toBe(false);
   expect(result.details).toMatchObject({ gated: true });
   expect(JSON.stringify(result.content)).toContain("exec is outside the tools this run allows");
+});
+
+it.each([
+  ["a run allowlist", (wrapped: AnyAgentTool) => refuseRunAllowlistTool(wrapped)],
+  [
+    "a turn policy",
+    (wrapped: AnyAgentTool) =>
+      resolveTurnToolSurface({
+        turnTools: [],
+        sessionTools: [wrapped],
+        outsideTurnReason: (name) => `${name} refused`,
+        ownerOnlyDenied: new Set(),
+      }).tools[0]!,
+  ],
+])("never hands the source's preparer to a tool %s refuses", async (_label, refuse) => {
+  let ran = false;
+  const source = fakeTool("exec");
+  source.execute = async () => {
+    ran = true;
+    return { content: [{ type: "text", text: "ran" }], details: {} };
+  };
+  const wrapped = wrapToolWithBeforeToolCallHook(source);
+  expect(getInternalToolExecutionPreparer(wrapped)).toBeDefined();
+  const refused = refuse(wrapped);
+  // The agent loop and the definition adapter prefer the preparer over execute.
+  expect(getInternalToolExecutionPreparer(refused)).toBeUndefined();
+  expect((await refused.execute("call", {})).details).toMatchObject({ gated: true });
+  expect(ran).toBe(false);
 });
