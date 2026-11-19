@@ -335,7 +335,7 @@ describe.skipIf(!connection)("agent database port", () => {
     );
   }, 120_000);
 
-  it.each([27, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38, 39, 40])(
+  it.each([27, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43])(
     "round-trips version %s with its historical trajectory layout and revision triggers",
     async (version) => {
       const descriptor = await agentPortProvider.loadDescriptor(undefined, version);
@@ -357,7 +357,7 @@ describe.skipIf(!connection)("agent database port", () => {
       const storeId = randomUUID();
       namespaces.add(namespace);
       await port(sqlite(source), pg(namespace), descriptor, storeId);
-      // Continuation: a historical source sits below the schema-41 authority step, so its port
+      // Continuation: a historical source sits below the schema-44 authority step, so its port
       // must not create the authority table; the port's exact catalog check covers the store.
       expect(descriptor.preData).not.toContain('CREATE TABLE "session_recipient_authority"');
       const trajectoryColumns =

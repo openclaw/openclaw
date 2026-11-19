@@ -527,7 +527,8 @@ describe.skipIf(!connection)("PostgreSQL pending-input endings migration", () =>
             db.close();
             publishSqliteDatabaseSchemaChange(anchor);
             db = open(agentEngineSchema);
-            expect(getPostgresPhysicalFacts(db)?.version).toBe(43);
+            // Continuation (karmaterminal): recipient authority (44) follows upstream's 43.
+            expect(getPostgresPhysicalFacts(db)?.version).toBe(44);
             expect(
               db
                 .prepare(`SELECT column_name, data_type, is_nullable
@@ -554,8 +555,10 @@ describe.skipIf(!connection)("PostgreSQL pending-input endings migration", () =>
               })),
             );
           }
+          // Continuation (karmaterminal): opening the current schema also runs authority (44);
+          // the absent-table case runs upstream's step 43 alone.
           expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
-            schema_version: 43,
+            schema_version: absentPendingTable ? 43 : 44,
           });
         } finally {
           if (db.isOpen) {
