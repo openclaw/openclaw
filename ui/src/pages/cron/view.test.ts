@@ -165,10 +165,10 @@ describe("cron view editor", () => {
 
   it("announces field validation errors as alerts", async () => {
     const container = await renderEditor(
-      { name: "", everyAmount: "0" },
+      { payloadText: "", everyAmount: "0" },
       {
         fieldErrors: {
-          name: "cron.errors.nameRequired",
+          payloadText: "cron.errors.agentMessageRequired",
           everyAmount: "cron.errors.everyAmountInvalid",
         },
         canSubmit: false,
@@ -177,8 +177,10 @@ describe("cron view editor", () => {
     const alerts = Array.from(container.querySelectorAll('[role="alert"]'), (alert) =>
       alert.textContent?.trim(),
     );
-    expect(alerts).toEqual(["Name is required.", "Interval must be greater than 0."]);
-    expectInvalidField(container, "name", "name", "Name is required.");
+    expect(alerts).toEqual(["Agent message is required.", "Interval must be greater than 0."]);
+    const prompt = getElement(container, "#cron-payload-text", HTMLTextAreaElement);
+    expect(prompt.getAttribute("aria-invalid")).toBe("true");
+    expect(prompt.getAttribute("aria-describedby")).toContain("cron-error-payloadText");
   });
 
   it("waits for scheduler status before presenting trigger capability", async () => {

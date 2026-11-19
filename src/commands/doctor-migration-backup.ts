@@ -183,6 +183,15 @@ export async function backupDoctorMigrationDatabases(params: {
   if (!maintenance?.ownsSchemaMaintenance) {
     throw new Error("Pre-migration SQLite backups require Doctor maintenance ownership.");
   }
+  // A fresh credential capture falls back to Doctor's own shared image (legacy
+  // STAT4 on runtimes without it). Archive-only and rehearsal coverage cannot serve it.
+  const retainSharedImage =
+    !hasUpdateDoctorMigrationCapture() &&
+    params.pendingMigrations?.some(
+      (migration) =>
+        migration.kind === "state" &&
+        migration.foundVersion < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
+    );
   // The start covers exactly the stores its own record names, resolved; a store Doctor finds
   // elsewhere (a configured agent directory, or one behind a link) gets Doctor's normal set.
   const covered =
@@ -193,7 +202,13 @@ export async function backupDoctorMigrationDatabases(params: {
       : new Set<string>();
   const coveredByStart = (pathname: string) =>
     existsSync(pathname) && covered.has(realpathSync.native(pathname));
-  if (params.preImageOwner === "state-upgrade" && [...pending].every(coveredByStart)) {
+  // A credential cutover below v29 needs Doctor's own shared image (see above), so the
+  // start's image does not stand in for it there.
+  if (
+    params.preImageOwner === "state-upgrade" &&
+    !retainSharedImage &&
+    [...pending].every(coveredByStart)
+  ) {
     // Gateway start already took (or, without room, skipped) the one pre-migration
     // image of each of these databases; a second full set protects nothing more.
     // The version phase runs only where a bounded migration exists, as with backups.
@@ -221,16 +236,9 @@ export async function backupDoctorMigrationDatabases(params: {
         : {}),
     };
   }
-  // Archive-only coverage cannot serve a fresh credential capture inside its transaction.
-  const verifiedSnapshots =
-    !hasUpdateDoctorMigrationCapture() &&
-    params.pendingMigrations?.some(
-      (migration) =>
-        migration.kind === "state" &&
-        migration.foundVersion < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
-    )
-      ? params.verifiedSnapshots?.filter((snapshot) => snapshot.role !== "global")
-      : params.verifiedSnapshots;
+  const verifiedSnapshots = retainSharedImage
+    ? params.verifiedSnapshots?.filter((snapshot) => snapshot.role !== "global")
+    : params.verifiedSnapshots;
   const integrityChecks = new Map<string, SqliteIntegrityCheckOptions>();
   for (const pathname of new Set([...pending, ...params.databasePaths, sharedPath])) {
     const engine = pathname === sharedPath ? stateEngineInput() : agentEngineInput();
@@ -286,6 +294,7 @@ export async function backupDoctorMigrationDatabases(params: {
       databasePaths: params.databasePaths.filter((pathname) => !postgresPaths.has(pathname)),
       authority: { assertCurrent: () => maintenance.assertAdmission() },
       stateFamilyBackedUp: postgresPaths.has(sharedPath) ? true : undefined,
+      retainSharedImage,
       integrityChecks,
     });
     return {
@@ -345,6 +354,7 @@ export async function backupDoctorMigrationDatabases(params: {
       pendingDatabasePaths: [...pending],
       authority: { assertCurrent: () => maintenance.assertAdmission() },
       migrationTables: migrationTables.size > 0 ? migrationTables : undefined,
+      retainSharedImage,
       integrityChecks,
     });
   };
@@ -400,6 +410,8 @@ export async function backupDoctorSqliteDatabases(params: {
   stateFamilyBackedUp?: true;
   /** Recovery must retain its own verified originals, including on disposable rehearsals. */
   requireSnapshots?: true;
+  /** Fresh credential capture needs the shared image, including on disposable rehearsals. */
+  retainSharedImage?: boolean;
 }): Promise<MigrationMessages & { snapshots?: readonly { sourcePath: string; path: string }[] }> {
   const pending = new Set(params.pendingDatabasePaths);
   if (pending.size === 0) {
@@ -422,7 +434,11 @@ export async function backupDoctorSqliteDatabases(params: {
   const disposable = params.requireSnapshots
     ? undefined
     : createDoctorRehearsalDatabaseCoverage(params.env);
-  disposable?.admit([...pending, ...params.databasePaths]);
+  disposable?.admit(
+    [...pending, ...params.databasePaths].filter(
+      (pathname) => !params.retainSharedImage || pathname !== sharedPath,
+    ),
+  );
   const retainedPaths = [...new Set([...pending, ...params.databasePaths])].filter(
     (pathname) => !disposable?.excludes(pathname),
   );

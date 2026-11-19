@@ -2370,9 +2370,17 @@ describe("GitHub API public fallback", () => {
 
 describe("receipt recovery checklist consumption", () => {
   it.each([
-    ["Full Release Receipt Recovery", ".github/workflows/full-release-receipt-recovery.yml", true],
-    ["Full Release Receipt Recovery", ".github/workflows/unrelated.yml", false],
-    ["Unrelated workflow", ".github/workflows/full-release-receipt-recovery.yml", false],
+    [
+      "Receipt Recovery 12345678-1234-4123-8123-123456789abc",
+      ".github/workflows/full-release-receipt-recovery.yml",
+      true,
+    ],
+    [
+      "Receipt Recovery 12345678-1234-4123-8123-123456789abc",
+      ".github/workflows/unrelated.yml",
+      false,
+    ],
+    ["Unrelated workflow", ".github/workflows/full-release-receipt-recovery.yml", true],
   ])("binds workflow %s to its exact path %s", async (workflowName, workflowPath, accepted) => {
     const result = runInNewContext(
       stripNodeTypeScriptTypes(
