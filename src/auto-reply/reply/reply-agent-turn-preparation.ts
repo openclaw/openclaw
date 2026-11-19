@@ -537,7 +537,9 @@ export async function prepareReplyAgentTurn<TConfigured>(
           sessionEntry: activeEntry,
         });
         if (!participation?.isObserving) {
-          await params.signalRunStart?.();
+          if (!participation || participation.mode === "ordinary") {
+            await params.signalRunStart?.();
+          }
           const resolvedVerboseLevel =
             normalizeVerboseLevel(
               turn.queued.run.verboseLevelOverride ??

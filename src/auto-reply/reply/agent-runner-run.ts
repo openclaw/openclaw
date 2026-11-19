@@ -53,7 +53,10 @@ import type { CompactionNoticePhase } from "./compaction-notice.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { recordGroupParticipationInput } from "./group-participation-inputs.js";
-import { readGroupParticipationRun } from "./group-participation-run.js";
+import {
+  resolveGroupParticipationCandidate,
+  readGroupParticipationRun,
+} from "./group-participation-run.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import {
@@ -511,7 +514,16 @@ export async function runReplyAgent(
       const queuedBehindActiveRun = (await isRunActive?.()) === true;
       await touchActiveSessionEntry();
       if (queuedBehindActiveRun) {
-        await typingSignals.signalToolStart();
+        if (
+          !resolveGroupParticipationCandidate({
+            run: followupRun,
+            sessionKey: sessionKey ?? followupRun.run.sessionKey,
+            storePath,
+            sessionEntry: activeSessionEntry,
+          })
+        ) {
+          await typingSignals.signalToolStart();
+        }
       } else {
         typing.cleanup();
       }

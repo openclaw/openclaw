@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, vi } from "vitest";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import type { DecisionProviderV1 } from "../../decisions/provider-types.js";
+import { registered } from "../../decisions/runtime.test-support.js";
 import { createGroupReplyFixture } from "./group-participation.reply.test-support.js";
 
 const models = vi.hoisted(() => ({
   embedded: vi.fn<typeof import("../../agents/embedded-agent.js").runEmbeddedAgent>(),
   cli: vi.fn<typeof import("../../agents/cli-runner.js").runCliAgent>(),
-  decision: vi.fn<typeof import("../../decisions/runtime.js").evaluateDecision>(),
+  decision: vi.fn<DecisionProviderV1["evaluate"]>(),
 }));
 vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/embedded-agent.js")>()),
@@ -15,10 +15,6 @@ vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
 vi.mock("../../agents/cli-runner.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/cli-runner.js")>()),
   runCliAgent: models.cli,
-}));
-vi.mock("../../decisions/runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../decisions/runtime.js")>()),
-  evaluateDecision: models.decision,
 }));
 
 export { models };
@@ -33,11 +29,13 @@ beforeEach(async () => {
   models.cli.mockReset();
   models.decision.mockReset();
   fixture.config.agents!.defaults!.experimental = { decisionAssistance: true };
-  const registry = createTestRegistry();
+  const { registry } = registered(async (...args) => {
+    const outcome = await models.decision(...args);
+    return outcome.status === "ok" ? { status: "ok", result: outcome.result } : outcome;
+  });
   registry.cliBackends.push({
     pluginId: "synthetic-cli",
     source: "test",
     backend: { id: "fixture-cli", config: { command: "synthetic-cli" }, bundleMcp: false },
   });
-  setActivePluginRegistry(registry);
 });

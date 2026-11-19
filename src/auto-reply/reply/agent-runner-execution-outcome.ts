@@ -178,6 +178,12 @@ export async function runAgentTurnWithOutcome(
               await params.completeObservedTurn?.();
               return { runId, outcome: { kind: "observed" } };
             }
+            if (participation?.mode === "ordinary") {
+              await params.typingSignals.signalRunStart();
+            } else if (participation) {
+              await (params.typingSignals.signalExecutionActivity?.() ??
+                params.typingSignals.signalRunStart());
+            }
             return run();
           },
         ),

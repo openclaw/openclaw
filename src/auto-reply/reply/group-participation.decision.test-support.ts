@@ -1,6 +1,9 @@
 import type { DecisionAnswer, DecisionBatch, DecisionOutcome } from "../../decisions/types.js";
 
-export function judgment(batch: DecisionBatch, choices: Record<string, string>): DecisionOutcome {
+export function judgment(
+  batch: DecisionBatch,
+  choices: Record<string, string>,
+): Extract<DecisionOutcome, { status: "ok" }> {
   const answers: Record<string, DecisionAnswer> = {};
   for (const [id, question] of Object.entries(batch.questions)) {
     if (question.type !== "choice") {

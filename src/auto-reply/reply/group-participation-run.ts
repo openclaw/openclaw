@@ -39,6 +39,50 @@ type GroupParticipationSnapshot = {
 export type GroupParticipationRun = ReturnType<typeof createGroupParticipationRun>;
 const runs = new WeakMap<ReplyOperation, GroupParticipationRun>();
 
+export function resolveGroupParticipationCandidate(params: {
+  run: InternalFollowupRun;
+  sessionKey?: string;
+  storePath?: string;
+  sessionEntry?: SessionEntry;
+}) {
+  if (
+    !params.run.groupParticipation ||
+    !params.run.userTurnTranscriptRecorder ||
+    !params.sessionKey ||
+    !params.storePath
+  ) {
+    return undefined;
+  }
+  const executionRun = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
+    run: params.run.run,
+    entry: params.sessionEntry,
+    sessionKey: params.sessionKey,
+  });
+  const config = selectLiveRuntimeConfig(executionRun.config);
+  if (
+    !isDecisionAssistanceEligible(config, executionRun.agentId) ||
+    resolveReplyCandidateRuntime({
+      run: executionRun,
+      config,
+      provider: executionRun.provider,
+      model: executionRun.model,
+      sessionEntry: params.sessionEntry,
+      sessionRuntimeOverride: resolveSessionRuntimeOverrideForProvider({
+        provider: executionRun.provider,
+        entry: params.sessionEntry,
+        cfg: config,
+      }),
+    }).useCliExecution
+  ) {
+    return undefined;
+  }
+  return {
+    recorder: params.run.userTurnTranscriptRecorder,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  };
+}
+
 function createGroupParticipationRun(params: {
   run: () => InternalFollowupRun;
   operation: ReplyOperation;
@@ -217,49 +261,20 @@ export async function prepareGroupParticipationRun(params: {
   if (existing) {
     return existing;
   }
-  if (
-    !run.groupParticipation ||
-    !run.userTurnTranscriptRecorder ||
-    !params.sessionKey ||
-    !params.storePath
-  ) {
-    return undefined;
-  }
-  const executionRun = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
-    run: run.run,
-    entry: params.sessionEntry,
-    sessionKey: params.sessionKey,
-  });
-  const config = selectLiveRuntimeConfig(executionRun.config);
-  if (!isDecisionAssistanceEligible(config, run.run.agentId)) {
-    return undefined;
-  }
-  if (
-    resolveReplyCandidateRuntime({
-      run: executionRun,
-      config,
-      provider: executionRun.provider,
-      model: executionRun.model,
-      sessionEntry: params.sessionEntry,
-      sessionRuntimeOverride: resolveSessionRuntimeOverrideForProvider({
-        provider: executionRun.provider,
-        entry: params.sessionEntry,
-        cfg: config,
-      }),
-    }).useCliExecution
-  ) {
+  const candidate = resolveGroupParticipationCandidate({ ...params, run });
+  if (!candidate) {
     return undefined;
   }
   recordGroupParticipationInput(operation, run, "initial");
   const owner = createGroupParticipationRun({
     run: params.run,
     operation,
-    recorder: run.userTurnTranscriptRecorder,
+    recorder: candidate.recorder,
     target: {
       agentId: run.run.agentId,
       sessionId: operation.sessionId,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
+      sessionKey: candidate.sessionKey,
+      storePath: candidate.storePath,
     },
   });
   await runWithReplyOperationLifecycleAdmission(operation, owner.refresh);

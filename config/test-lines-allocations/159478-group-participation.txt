@@ -1,6 +1,0 @@
-1031
-# Group participation needs distinct consent, CLI/room-event, queue, transcript,
-# conversation-evidence, and reply-path proof, with shared harnesses reused by the suites.
-# Includes parent/child hook custody across attribution and dispatch preparation.
-# Includes the persisted terminal state of observed group turns.
-# Allocates only the excess above the standard 400-line allowance.
