@@ -24,6 +24,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import type { ConversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
+import type { readSessionDeletionSurvivors } from "./session-accessor.sqlite-entry-store.js";
 import type {
   SessionEntryMaintenanceAgeChange,
   SessionEntryMaintenanceAgeFact,
@@ -176,6 +177,9 @@ export type ReclamationDatabaseOptions = OpenClawAgentDatabaseOptions & {
 };
 
 export type SqliteSessionReclamationCallbacks = {
+  preparedSurvivors?: (
+    sessionKey: string,
+  ) => ReturnType<typeof readSessionDeletionSurvivors> | undefined;
   beforeMutation?: () => void;
   onCommit?: (database: OpenClawAgentDatabase, result?: SqliteSessionReclamationResult) => void;
   afterCommit?: () => void;

@@ -226,6 +226,7 @@ function reclaimSqliteRowsInTransaction(
           transactionDb,
           plan.deleteParams.target,
           snapshot,
+          callbacks.preparedSurvivors,
         );
         if (plan.deleteParams.deleteDeliveryArtifacts === true) {
           deleteSessionDeliveryArtifacts(
