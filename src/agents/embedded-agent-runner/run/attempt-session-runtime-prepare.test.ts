@@ -38,7 +38,7 @@ import {
   sessionManagerReadToolResultProjectionEntries,
   sessionManagerReadTranscriptBranch,
 } from "../../sessions/session-manager-view-types.js";
-import { createMcpStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import { createMcpStubTool, createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createToolSearchTools, applyToolSearchCatalog } from "../../tool-search.js";
 import { createGitHubPublishTool } from "../../tools/github-publish-tool.js";
@@ -515,12 +515,21 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
         ...config,
         agents: { defaults: { experimental: { usageRankedToolIndex: enabled } } },
       };
-      fixture.input.toolBase.toolSearchCatalogRef = catalogRef;
+      Object.assign(fixture.input.toolBase, {
+        toolSearchCatalogRef: catalogRef,
+        toolSearchControlsEnabledForRun: true,
+      });
       const refreshTools = vi.fn();
       Object.assign(fixture.agentSession, { refreshTools });
       const runtime = await fixture.prepare();
       const { pinTools } = mocks.prepareAgentSession.mock.calls.at(-1)![0].clientToolPreparation;
       const sent = searchDescription(pinTools(tools));
+      // A fixed listing never admits a tool a later turn builds (production admitNewTools wiring).
+      expect(
+        pinTools([...tools, createStubTool("late")]).some(
+          (t: { name: string }) => t.name === "late",
+        ),
+      ).toBe(false);
       if (!enabled) {
         expect(mocks.readToolUsage).not.toHaveBeenCalled();
         expect(sent).toBe(description);

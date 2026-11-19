@@ -227,6 +227,16 @@ it("lets a fork send the source's tool list unchanged", () => {
   expect(definitions(listSessionForkTools(pin, fork))).toEqual(definitions(pinned));
 });
 
+it("lets a fork that runs before the first post-upgrade turn add message once", () => {
+  // Accepted edge case: the fork reads the old pin (no toolPolicy check) and appends the
+  // `message` definition it built; the source re-pins on its own next turn.
+  using chat = retainEmbeddedSessionPromptState(sessionId);
+  const built = send(chat.state, turns.user!).built;
+  const oldPin = { prefix: "system", tools: built.filter((tool) => tool.name !== "message") };
+  const names = listSessionForkTools(oldPin, built).map((tool) => tool.name);
+  expect(names).toEqual([...oldPin.tools.map((tool) => tool.name), "message"]);
+});
+
 it("lets a later user turn send with message in a series a cron turn started", async () => {
   using chat = retainEmbeddedSessionPromptState(sessionId);
   const cron = send(chat.state, turns.cron!);

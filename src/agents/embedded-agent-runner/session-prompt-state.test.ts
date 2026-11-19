@@ -701,6 +701,27 @@ describe("session tool surface", () => {
     expect(fixture.state.pendingToolSurface?.tools?.map((entry) => entry.name)).toEqual(["read"]);
   });
 
+  it("starts one new pin after an upgrade changes the tool policy digest", async () => {
+    const entries: SessionEntry[] = [];
+    // A pin written before the upgrade, without `message`.
+    surface([tool("read")], entries, routeKey, "pre-upgrade-policy");
+    await persist(entries);
+    fixture.reload();
+    const after = surface(
+      [tool("read"), tool("message")],
+      entries,
+      routeKey,
+      "post-upgrade-policy",
+    );
+    expect(after.map((entry) => entry.name)).toEqual(["message", "read"]);
+    await persist(entries);
+    fixture.reload();
+    // The new pin holds from then on.
+    expect(
+      surface([tool("read")], entries, routeKey, "post-upgrade-policy").map((entry) => entry.name),
+    ).toEqual(["message", "read"]);
+  });
+
   it("drops pinned tools when the tool policy changes", () => {
     surface([tool("read"), tool("exec")]);
     expect(surface([tool("read")], [], routeKey, "policy-b").map((entry) => entry.name)).toEqual([
