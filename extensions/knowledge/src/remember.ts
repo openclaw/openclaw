@@ -1,6 +1,6 @@
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { Envelope, Evidence, LoadedRecord } from "./model.js";
-import type { ClaimInput } from "./mutation-contract.js";
+import type { ClaimInput, Receipt } from "./mutation-contract.js";
 import type { RememberInput, RememberItem, RememberResult } from "./remember-contract.js";
 import { exactLookup } from "./retrieval.js";
 import { inferSubject, resolveHint } from "./subject-infer.js";
@@ -83,8 +83,12 @@ export function planRemember(
   active: LoadedRecord[],
   input: RememberInput,
   withdrawn: Set<string>,
+  legacyReceipt?: Receipt,
 ): PlannedItem[] {
   const claims = active.filter((r) => r.kind === "claim" && r.lifecycle === "active");
+  // Prefer original receipt IDs over equal-text assertions added after upgrade.
+  const published = new Set(legacyReceipt?.items?.map((item) => item.id));
+  claims.sort((a, b) => Number(published.has(b.id)) - Number(published.has(a.id)));
   const planned: PlannedItem[] = [];
   const keys: string[] = [];
   for (const item of input.items) {
@@ -98,10 +102,10 @@ export function planRemember(
         r.metadata.claim_kind === item.kind &&
         normalize(r.body) === text &&
         sameSet(r.metadata.entities ?? [], entities) &&
-        assertionKey(r.metadata) === assertion,
+        (legacyReceipt || assertionKey(r.metadata) === assertion),
     );
     // Exact repeat inside this call collapses to its first occurrence.
-    const key = `${item.kind}\0${text}\0${entities.join(",")}\0${assertion}`,
+    const key = `${item.kind}\0${text}\0${entities.join(",")}\0${legacyReceipt ? "" : assertion}`,
       earlier = keys.indexOf(key);
     keys.push(key);
     planned.push({

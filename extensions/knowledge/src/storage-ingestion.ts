@@ -272,7 +272,18 @@ export class StorageIngestion extends StorageLifecycle {
           withdrawnIds(db, this.retrievalBinding(access)),
         );
       return {
-        plan: planRemember(data, eligible(data, withdrawn, false), input, withdrawn),
+        // Legacy receipts recorded the text/kind/subjects decision, not the
+        // original assertions. Replay that decision only; never publish newly
+        // distinguished assertions under an already accepted request ID.
+        plan: planRemember(
+          data,
+          eligible(data, withdrawn, false),
+          input,
+          withdrawn,
+          prior && !prior.intent.startsWith("remember:")
+            ? (JSON.parse(prior.receipt) as Receipt)
+            : undefined,
+        ),
         fingerprint: data.ontology?.fingerprint,
       };
     });
@@ -285,7 +296,8 @@ export class StorageIngestion extends StorageLifecycle {
         );
       }
       // Legacy receipts retain their batch digest, not the original remember input.
-      // Keep their published-claim reconciliation without inventing missing intent.
+      // Original excerpt, attribution and suppressed assertions are unknowable;
+      // retain historical reconciliation without inventing missing intent.
       // A replay finds its own published claims as duplicates; keys map them back.
       receipt = this.resume(access, requestId);
       for (const item of receipt.items ?? []) {
