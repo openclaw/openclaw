@@ -1,7 +1,6 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import type {
   ControlUiAction,
-  ControlUiComposerTask,
   ControlUiDraftProposal,
   ControlUiSession,
 } from "../../../src/plugin-sdk/control-ui.js";
@@ -117,7 +116,7 @@ export async function runControlUiPluginAction(
   };
   // Tasks this invocation started. A rejection fails the latest one, so its card never stays
   // working after the action has ended; a cancelled or retired latest task expects the error.
-  const tasks: ControlUiComposerTask[] = [];
+  const tasks: ReturnType<ComposerTasks["start"]>[] = [];
   try {
     await entry.value.run({
       ...context,
@@ -152,8 +151,12 @@ export async function runControlUiPluginAction(
     if (!latest) {
       throw error;
     }
-    if (!latest.signal.aborted) {
-      latest.fail(formatUiError(error));
+    if (latest.signal.aborted) {
+      return;
+    }
+    // A settled task cannot show it; the error then reaches the inline alert.
+    if (!latest.fail(formatUiError(error))) {
+      throw error;
     }
   }
   check();

@@ -140,7 +140,7 @@ export function ComposerTaskCardView(props: {
               <button
                 type="button"
                 class="btn btn--sm primary"
-                disabled={!props.canCompose}
+                disabled={!props.canCompose || props.textarea()?.readOnly === true}
                 onClick={() => props.tasks.accept(props.textarea())}
               >
                 {t("chat.composer.proposal.use")}

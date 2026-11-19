@@ -121,9 +121,9 @@ export function createComposerTasks() {
         });
         return promise;
       },
-      fail(message: string) {
+      fail(message: string): boolean {
         if (!live()) {
-          return;
+          return false;
         }
         current!.phase = "failed";
         setState((draft) => {
@@ -134,13 +134,15 @@ export function createComposerTasks() {
             retry: options.retry ?? null,
           };
         });
+        return true;
       },
     };
   }
 
   function accept(target: HTMLTextAreaElement | null) {
     const card = state.card;
-    if (!target || card?.kind !== "proposal") {
+    // Dictation and pending goals lock the editor; the proposal waits until it is writable.
+    if (!target || target.readOnly || target.disabled || card?.kind !== "proposal") {
       return false;
     }
     settle("accepted");

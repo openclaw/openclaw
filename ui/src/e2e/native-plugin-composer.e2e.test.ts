@@ -57,6 +57,14 @@ const fixture = `export default { id: "composer-fixture", activate(host) {
     },
   });
   host.ui.registerAction({
+    id: "after-propose", label: "Propose then break", icon: "pencilSparkles", placement: "composer",
+    async run({ composer }) {
+      const task = composer.startTask({ title: "Proposing" });
+      await task.propose("Proposed text", { title: "Fixture proposal" });
+      throw new Error("Follow-up failed");
+    },
+  });
+  host.ui.registerAction({
     id: "slow-broken", label: "Slow broken", icon: "pencilLine", placement: "composer",
     async run() {
       await new Promise((resolve) => { proof.failSlow = resolve; });
@@ -222,6 +230,20 @@ suite.define(() => {
       expect(await page.locator('.agent-chat__composer-task[data-state="working"]').count()).toBe(
         0,
       );
+    });
+  });
+
+  it("reports a rejection that comes after the task settled", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const { textarea } = await open(page);
+      await page.getByRole("button", { name: "Propose then break", exact: true }).click();
+      await page.getByRole("region", { name: "Fixture proposal" }).waitFor();
+      await textarea.focus();
+      await textarea.press("Escape");
+      await page
+        .locator('.agent-chat__composer-task[data-state="failed"]')
+        .getByText("Follow-up failed")
+        .waitFor();
     });
   });
 
