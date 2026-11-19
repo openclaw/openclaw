@@ -406,55 +406,65 @@ describe("gateway server agent", () => {
   ] as const)(
     "remote write-scoped %s/%s device cannot hide its prompt from the transcript",
     async (clientId, mode) => {
-      const { writeConfigFile } = await import("../config/io.js");
-      await writeConfigFile({ gateway: { trustedProxies: ["127.0.0.1"] } });
-      await setTestSessionStore({ main: sessionEntry(`remote-write-${mode}-session`) });
-      const device = await pairDeviceIdentity({
-        name: `remote-write-${mode}`,
-        role: "operator",
-        scopes: ["operator.write"],
-        clientId,
-        clientMode: mode,
-        platform: "test",
-      });
-      const deviceToken = (await getPairedDevice(device.identity.deviceId))?.tokens?.operator
-        ?.token;
-      expect(deviceToken).toBeTypeOf("string");
-      const ws = await openTrackedWs(gatewaySuite.port, {
-        "x-forwarded-for": "203.0.113.50",
-        "x-forwarded-proto": "https",
+      const { readConfigFileSnapshot, writeConfigFile } = await import("../config/io.js");
+      const previousConfig = (await readConfigFileSnapshot()).sourceConfig;
+      await writeConfigFile({
+        ...previousConfig,
+        gateway: { ...previousConfig.gateway, trustedProxies: ["127.0.0.1"] },
       });
       try {
-        const hello = await connectReq(ws, {
-          skipDefaultAuth: true,
-          client: { id: clientId, version: "1.0.0", platform: "test", mode },
-          deviceIdentityPath: device.identityPath,
-          deviceToken,
+        await setTestSessionStore({ main: sessionEntry(`remote-write-${mode}-session`) });
+        const device = await pairDeviceIdentity({
+          name: `remote-write-${mode}`,
+          role: "operator",
           scopes: ["operator.write"],
+          clientId,
+          clientMode: mode,
+          platform: "test",
         });
-        expect(hello.ok, JSON.stringify(hello)).toBe(true);
-        const hidden = await rpcReq(ws, "agent", {
-          message: "steer without a transcript row",
-          sessionKey: "main",
-          idempotencyKey: `remote-write-hidden-${mode}`,
-          suppressPromptPersistence: true,
+        const deviceToken = (await getPairedDevice(device.identity.deviceId))?.tokens?.operator
+          ?.token;
+        expect(deviceToken).toBeTypeOf("string");
+        const ws = await openTrackedWs(gatewaySuite.port, {
+          "x-forwarded-for": "203.0.113.50",
+          "x-forwarded-proto": "https",
         });
-        expect(hidden).toMatchObject({
-          ok: false,
-          error: { message: "internal session-effect controls are reserved for backend callers." },
-        });
-        // The declared mode alone still admits ordinary turns.
-        const visibleRunId = `remote-write-visible-${mode}`;
-        const visible = await rpcReq(ws, "agent", {
-          message: "an ordinary turn",
-          sessionKey: "main",
-          idempotencyKey: visibleRunId,
-        });
-        expect(visible.ok, JSON.stringify(visible)).toBe(true);
-        await waitForAgentCommandCall(visibleRunId);
-        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        try {
+          const hello = await connectReq(ws, {
+            skipDefaultAuth: true,
+            client: { id: clientId, version: "1.0.0", platform: "test", mode },
+            deviceIdentityPath: device.identityPath,
+            deviceToken,
+            scopes: ["operator.write"],
+          });
+          expect(hello.ok, JSON.stringify(hello)).toBe(true);
+          const hidden = await rpcReq(ws, "agent", {
+            message: "steer without a transcript row",
+            sessionKey: "main",
+            idempotencyKey: `remote-write-hidden-${mode}`,
+            suppressPromptPersistence: true,
+          });
+          expect(hidden).toMatchObject({
+            ok: false,
+            error: {
+              message: "internal session-effect controls are reserved for backend callers.",
+            },
+          });
+          // The declared mode alone still admits ordinary turns.
+          const visibleRunId = `remote-write-visible-${mode}`;
+          const visible = await rpcReq(ws, "agent", {
+            message: "an ordinary turn",
+            sessionKey: "main",
+            idempotencyKey: visibleRunId,
+          });
+          expect(visible.ok, JSON.stringify(visible)).toBe(true);
+          await waitForAgentCommandCall(visibleRunId);
+          await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        } finally {
+          ws.close();
+        }
       } finally {
-        ws.close();
+        await writeConfigFile(previousConfig);
       }
     },
   );
