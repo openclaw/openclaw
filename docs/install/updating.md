@@ -1822,6 +1822,23 @@ the retention phase already running in an older updater.
 
 Post-activation schema inspection preserves captured SQLite database, WAL, and shared-memory
 artifacts so the final Doctor can verify the same migration source.
+A Git checkout update that switches the release link captures no databases and runs no
+Doctor: the previous Gateway keeps serving, and the Gateway that starts from the new
+release migrates state. Its inspection reads each agent and local store's schema version
+directly, in milliseconds and without a copy, even while the serving Gateway writes; the
+shared state database keeps its consistent online-backup read.
+
+The inspection reports data at risk only on evidence: a schema that moved, or a store it
+cannot read after a new-version Doctor or boot check may have written it. When no
+new-version process has opened state yet, an unreadable store is a recorded warning
+(`state-schema-verification`), not data at risk, and the update continues or fails for its
+own recorded reason. On a Git release the new release migrates state when it starts, and its
+trial switches back if it fails to start. The Git release inspection also does not
+require the new schema before that start: "migration did not finish" applies only to
+installs whose updater runs Doctor before restarting. Installed updaters that run Git
+releases without this change (main builds since the release layout landed) fail
+every Git update that changes a schema in their own process, before the new release runs;
+rebuild the checkout once to get an updater with the fix.
 
 Database rehearsal also avoids a second full backup of each private snapshot.
 Candidate inventory reads database registrations and the installed plugin index
