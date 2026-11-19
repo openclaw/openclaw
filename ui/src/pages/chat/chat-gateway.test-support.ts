@@ -23,6 +23,7 @@ export function createState(overrides: Partial<ChatState> = {}): ChatState {
     connectionEpoch: 0,
     hello: null,
     lastError: null,
+    chatError: null,
     sessionKey: "main",
     ...overrides,
   };

@@ -22,6 +22,7 @@ import {
   type ToolSearchCatalogEntry,
   type ToolSearchCatalogRef,
 } from "../tool-search.js";
+import type { ToolUsageRankingSnapshot } from "../tool-usage-ranking.js";
 import type { AnyAgentTool } from "../tools/common.js";
 
 type NamedTool = { name: string };
@@ -92,6 +93,7 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
     sessionKey?: string;
     contextTokenBudget?: number;
     toolSearchDirectoryLean?: boolean;
+    usageRanking?: ToolUsageRankingSnapshot;
   };
 }) {
   const baselineTools = [...params.tools];
@@ -167,12 +169,14 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
               ? buildCodeModeCatalogPrompt(
                   { ...params.catalogPrompt, catalogRef: catalog.ref },
                   catalog.ref.current?.entries ?? [],
+                  params.catalogPrompt.usageRanking,
                 )
               : buildToolSchemaDirectoryPrompt(
                   { ...params.catalogPrompt, catalogRef: catalog.ref },
                   {
                     contextTokenBudget: params.catalogPrompt.contextTokenBudget,
                     toolSearchDirectoryLean: params.catalogPrompt.toolSearchDirectoryLean,
+                    usageRanking: params.catalogPrompt.usageRanking,
                   },
                 )
             : undefined,

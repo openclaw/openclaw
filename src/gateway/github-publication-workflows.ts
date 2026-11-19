@@ -7,6 +7,7 @@ import {
 } from "./github-publication-failure.js";
 import {
   TREE_LISTING_MAX_OUTPUT_BYTES,
+  gitHubPublicationObjectSha as objectSha,
   type runPublicationCommand,
 } from "./github-publication-git-transport.js";
 import type { GitHubPublicationRequesterPolicy } from "./github-publication-requester.js";
@@ -281,4 +282,95 @@ export async function hasGitHubPublicationWorkflowChanges(params: {
       return { ancestor, sourceAncestor, source, target };
     },
   });
+}
+
+const MAX_WORKFLOW_ANCESTRY_COMMITS = 1_000;
+const MAX_WORKFLOW_ANCESTRY_BOUNDARIES = 32;
+
+/** Prove one best common ancestor before exempting inherited workflow definitions. */
+export async function hasUniqueGitHubPublicationWorkflowAncestor(params: {
+  sourceCommit: string;
+  ancestor: string;
+  readPage: (page: number) => Promise<unknown>;
+  readMergeBase: (source: string, target: string) => Promise<string>;
+}): Promise<boolean> {
+  const { sourceCommit, ancestor } = params;
+  const unavailableAncestry = new GitHubPublicationKnownFailure(
+    "GitHub returned incomplete workflow ancestry.",
+    {
+      code: "unavailable",
+      nextAction: "Retry after GitHub can return the complete source commit history.",
+    },
+  );
+  const parents = new Map<string, string[]>();
+  let total = 0;
+  for (let page = 1; page === 1 || parents.size < total; page++) {
+    const value = await params.readPage(page);
+    if (
+      !isRecord(value) ||
+      !Array.isArray(value.commits) ||
+      typeof value.total_commits !== "number" ||
+      !Number.isSafeInteger(value.total_commits) ||
+      value.total_commits < 1 ||
+      (page > 1 && value.total_commits !== total) ||
+      value.commits.length === 0
+    ) {
+      throw unavailableAncestry;
+    }
+    total = value.total_commits;
+    if (total > MAX_WORKFLOW_ANCESTRY_COMMITS) {
+      throw new GitHubPublicationKnownFailure(
+        "Workflow inheritance exceeds the source-history limit.",
+        {
+          code: "github_rejected",
+          nextAction: `Ask a maintainer to publish this workspace; guest workflow inheritance checks at most ${MAX_WORKFLOW_ANCESTRY_COMMITS} source commits.`,
+        },
+      );
+    }
+    for (const commit of value.commits) {
+      const sha = objectSha(commit);
+      if (!isRecord(commit) || !Array.isArray(commit.parents) || parents.has(sha)) {
+        throw unavailableAncestry;
+      }
+      parents.set(sha, commit.parents.map(objectSha));
+    }
+  }
+  if (parents.size !== total || !parents.has(sourceCommit)) {
+    throw unavailableAncestry;
+  }
+  // The inverse comparison contains every source-only commit. Its boundary
+  // parents are common ancestors; all must be below the reported merge-base
+  // to prove it is unique, including when the source itself contains merges.
+  const boundary = new Set<string>();
+  for (const commitParents of parents.values()) {
+    if (!commitParents.length) {
+      // Keep merges of unrelated roots maintainer-only rather than infer
+      // workflow ownership across a history with no common boundary.
+      return false;
+    }
+    for (const parent of commitParents) {
+      if (!parents.has(parent)) {
+        boundary.add(parent);
+      }
+    }
+  }
+  if (!boundary.size) {
+    return false;
+  }
+  boundary.delete(ancestor);
+  if (boundary.size > MAX_WORKFLOW_ANCESTRY_BOUNDARIES) {
+    throw new GitHubPublicationKnownFailure(
+      "Workflow inheritance exceeds the ancestry-boundary limit.",
+      {
+        code: "github_rejected",
+        nextAction: `Ask a maintainer to publish this workspace; guest workflow inheritance checks at most ${MAX_WORKFLOW_ANCESTRY_BOUNDARIES} additional ancestry boundaries.`,
+      },
+    );
+  }
+  for (const parent of boundary) {
+    if ((await params.readMergeBase(parent, ancestor)) !== parent) {
+      return false;
+    }
+  }
+  return true;
 }

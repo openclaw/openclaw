@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createSandbox } from "./fs-bridge.test-helpers.js";
+import type { ReadOnlyWorkspaceSkillMount } from "./fs-bridge.types.js";
 import { buildSandboxFsMounts, resolveSandboxFsPathWithMounts } from "./fs-paths.js";
 import { createRemoteShellSandboxFsBridge } from "./remote-fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "./remote-fs-bridge.test-helpers.js";
@@ -10,7 +11,6 @@ import {
   ensureReadOnlyWorkspaceSkillMountSources,
   resolveWorkspaceMounts,
   resolveSandboxMountSelection,
-  type ReadOnlyWorkspaceSkillMount,
 } from "./workspace-mounts.js";
 
 function mountParams(workspaceDir: string) {

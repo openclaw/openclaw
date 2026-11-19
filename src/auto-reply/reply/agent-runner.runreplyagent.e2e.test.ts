@@ -643,6 +643,7 @@ describe("runReplyAgent active steering", () => {
           run: { ...followupRun.run, sessionId: operation.sessionId },
         },
         replyOperation: operation,
+        runId: sourceTurnId,
         sourceTurnId,
         sessionKey: "main",
         setEntry: (nextEntry) => {
@@ -650,10 +651,7 @@ describe("runReplyAgent active steering", () => {
         },
         storePath,
       });
-      return Object.assign(controller, {
-        releaseActor: () => actor.release(),
-        [Symbol.asyncDispose]: () => actor[Symbol.asyncDispose](),
-      });
+      return Object.assign(controller, actor);
     };
     await using firstController = await createController(first, "source-first");
     attachSourceTurnRecorder({
@@ -697,7 +695,7 @@ describe("runReplyAgent active steering", () => {
       clearReplyRunForResetBySessionId("session");
       // The write has committed; only this fixture's response wrapper remains held.
       // Its manually created operation has no execution callback to release its owner.
-      await withinTest(firstController.releaseActor(), signal);
+      await withinTest(firstController.release(), signal);
       first.complete();
       const replacementEntry = makeSessionEntry({ sessionId: "replacement-session" });
       await replaceSessionEntry({ storePath, sessionKey: "main" }, replacementEntry);
@@ -831,7 +829,7 @@ describe("runReplyAgent active steering", () => {
       reason: "tool_authority_mismatch",
       disposition: "followup-policy",
       channel: "whatsapp",
-      sessionId: provided.sessionId,
+      sessionKey: provided.key,
       runId: undefined,
       activeRunId: undefined,
     });

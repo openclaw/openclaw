@@ -36,6 +36,9 @@ describe.each<[string, GatewayOpenClawIdConfig | undefined]>([
       expect((await call("openclawId.authority", { action })).ok, action).toBe(false);
     }
     expect((await call("openclawId.people")).ok).toBe(false);
+    for (const action of ["device_begin", "device_poll"]) {
+      expect((await call("openclawId.account", { action })).ok, action).toBe(false);
+    }
     expect((await call("openclawId.status")).payload).toMatchObject({
       status: { state: "off" },
       link: { linked: false },

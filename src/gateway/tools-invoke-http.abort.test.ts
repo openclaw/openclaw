@@ -20,6 +20,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeScopedGatewayHttpRequestOrReply as authorizeHttpRequest } from "./http-auth-utils.js";
 import type { authorizeScopedGatewayHttpRequestOrReply } from "./http-utils.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   setOpenClawIdTunnelPrincipalResolver,
@@ -376,7 +377,7 @@ describe("POST /tools/invoke request cancellation", () => {
     });
   });
 
-  it("executes an HTTP member under its membership role and revokes retained work with that device", async () => {
+  it("keeps an HTTP member's admitted work after membership removal but refuses another start", async () => {
     await withOpenClawTestState({ label: "http-tool-membership" }, async () => {
       const cfg: OpenClawConfig = {
         gateway: {
@@ -384,6 +385,7 @@ describe("POST /tools/invoke request cancellation", () => {
             default: "reader",
             definitions: {
               reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+              operator: structuredClone(MEMBER_ROLE_PRESETS.operator),
             },
           },
         },
@@ -459,9 +461,10 @@ describe("POST /tools/invoke request cancellation", () => {
         expect(authority).toBeDefined();
         expect(() => authority?.assertCurrent()).not.toThrow();
         membership.delete(principal.peerKey);
-        expect(() => authority?.assertCurrent()).toThrow(
-          /OpenClaw ID membership authority changed/,
-        );
+        expect(() => authority?.assertCurrent()).not.toThrow();
+        expect(() => authority?.reauthorize?.()).toThrow();
+        admission?.close();
+        expect(() => authority?.assertCurrent()).toThrow(/no longer active/);
       } finally {
         admission?.close();
         resolveGatewayContext = undefined;

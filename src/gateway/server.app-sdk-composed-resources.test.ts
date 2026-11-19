@@ -96,8 +96,8 @@ async function proveWorkerCreation(): Promise<void> {
     };
     const context = {
       workerEnvironmentService: {
-        create: async () => record,
-      } satisfies Pick<WorkerEnvironmentServiceContract, "create">,
+        createWithRequest: async () => record,
+      } satisfies Pick<WorkerEnvironmentServiceContract, "createWithRequest">,
     } as unknown as GatewayRequestHandlerOptions["context"];
     gateway.setRequestHandler((socket, frame) => {
       void (async () => {

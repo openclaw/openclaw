@@ -89,33 +89,6 @@ function requireCronConfigRevision(revision: string | null | undefined): string 
   throw new Error(t("cron.missingConfigRevision"));
 }
 
-export function updateCronJobsFilter(
-  state: CronState,
-  patch: Partial<
-    Pick<
-      CronState,
-      | "cronJobsQuery"
-      | "cronJobsEnabledFilter"
-      | "cronJobsScheduleKindFilter"
-      | "cronJobsLastStatusFilter"
-      | "cronJobsTriggerFilter"
-      | "cronJobsSortBy"
-      | "cronJobsSortDir"
-    >
-  >,
-) {
-  if (patch.cronJobsQuery !== undefined) {
-    state.cronJobsQuery = patch.cronJobsQuery;
-  }
-  state.cronJobsEnabledFilter = patch.cronJobsEnabledFilter ?? state.cronJobsEnabledFilter;
-  state.cronJobsScheduleKindFilter =
-    patch.cronJobsScheduleKindFilter ?? state.cronJobsScheduleKindFilter;
-  state.cronJobsLastStatusFilter = patch.cronJobsLastStatusFilter ?? state.cronJobsLastStatusFilter;
-  state.cronJobsTriggerFilter = patch.cronJobsTriggerFilter ?? state.cronJobsTriggerFilter;
-  state.cronJobsSortBy = patch.cronJobsSortBy ?? state.cronJobsSortBy;
-  state.cronJobsSortDir = patch.cronJobsSortDir ?? state.cronJobsSortDir;
-}
-
 function clearCronEditState(state: CronState) {
   retireCronSelectedJobRead(state);
   state.cronError = null;
@@ -283,7 +256,8 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
     const sessionKeyRaw = form.sessionKey.trim();
     const sessionKey = sessionKeyRaw || (editingJob?.sessionKey ? null : undefined);
     const job: Record<string, unknown> = {
-      name: form.name.trim(),
+      // Without a name, cron.add names a new automation from its prompt and an edit keeps the old one.
+      name: form.name.trim() || undefined,
       description: form.description.trim(),
       agentId: agentId === null ? null : agentId || undefined,
       sessionKey,
@@ -451,13 +425,13 @@ export async function toggleCronJob(
   return updated;
 }
 
-export async function runCronJob(state: CronState, jobId: string, mode: "force" | "due" = "force") {
+export async function runCronJob(state: CronState, jobId: string) {
   const job =
     state.cronEditingJob?.id === jobId
       ? state.cronEditingJob
       : (state.cronJobs.find((candidate) => candidate.id === jobId) ?? { id: jobId, name: jobId });
   return withCronBusy(state, job, async (client, reportFeedback, isCurrent) => {
-    const result = await client.request<CronRunResult>("cron.run", { id: jobId, mode });
+    const result = await client.request<CronRunResult>("cron.run", { id: jobId, mode: "force" });
     if (!isCurrent()) {
       return;
     }

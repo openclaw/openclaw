@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../../agents/admitted-run-context.js";
+import { GatewayOperatorAccessUnavailableError } from "../../../infra/operator-authority-error.js";
 import {
   beginSessionControllerSourceInjection,
   bindSessionControllerSource,
@@ -134,13 +135,42 @@ it("rechecks channel execution authority after waiting for native settlement", a
   const firstReservation = await queue.admit(first);
   const secondReservation = queue.reserve(second);
   const secondAdmission = secondReservation.admit();
-  const rejected = expect(secondAdmission).rejects.toThrow("source authority revoked");
+  const rejected = expect(secondAdmission).resolves.toBe("cancelled");
   current = false;
   firstReservation.consume("consumed");
   await rejected;
   await settleSource(second.controllerInput!);
   expect(second.controllerInput?.phase).toBe("consumed");
 });
+
+it.each([new GatewayOperatorAccessUnavailableError(), new Error("internal SDK assertion failure")])(
+  "queues an unaccepted steer after an unrecorded authority refusal (%s)",
+  async (error) => {
+    const [first, second] = [source("first"), source("second")];
+    let refusing = false;
+    second.operatorAuthority = {
+      profileId: "fixture",
+      scopes: ["operator.write"],
+      signal: new AbortController().signal,
+      assertCurrent() {
+        if (refusing) {
+          refusing = false;
+          throw error;
+        }
+      },
+    };
+    const { delivered, drained } = recordDelivery(1);
+    const firstReservation = await queue.admit(first);
+    const secondAdmission = queue.reserve(second).admit();
+    const rejected = expect(secondAdmission).rejects.toBe(error);
+    refusing = true;
+    firstReservation.consume("consumed");
+    await rejected;
+    expect(second.controllerInput?.abortSignal.aborted).toBe(false);
+    await drained;
+    expect(delivered).toEqual(["second"]);
+  },
+);
 
 it.each(["accepted", "rejected"] as const)(
   "tries newer input after an earlier steer rejects and drains %s fallback in order",

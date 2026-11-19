@@ -282,21 +282,20 @@ describe("registerQrCli", () => {
   ];
 
   it.each(conflictingQrOptions)("rejects conflicting $name in human mode", async (testCase) => {
-    await expect(runQr(["--setup-code-only", ...testCase.args])).rejects.toThrow("exit");
+    await expect(runQr(["--setup-code-only", ...testCase.args])).rejects.toThrow(testCase.message);
 
-    expect(runtimeError).toHaveBeenCalledExactlyOnceWith(testCase.message);
-    expect(runtimeExit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(runtimeError).not.toHaveBeenCalled();
+    expect(runtimeExit).not.toHaveBeenCalled();
     expect(loadConfig).not.toHaveBeenCalled();
   });
 
   it("fails fast for insecure remote mobile pairing setup urls", async () => {
     loadConfig.mockReturnValue(createTokenGatewayConfig("gateway.example"));
 
-    await expectQrExit(["--setup-code-only"]);
-
-    const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
-    expect(output).toContain("Tailscale and public mobile pairing require a secure gateway URL");
-    expect(output).toContain("gateway.tailscale.mode=serve");
+    await expect(runQr(["--setup-code-only"])).rejects.toThrow(
+      /secure gateway URL.*gateway\.tailscale\.mode=serve/u,
+    );
+    expect(issueDevicePairSetupBootstrapToken).not.toHaveBeenCalled();
   });
 
   it("allows private LAN IP cleartext setup urls", async () => {
@@ -400,10 +399,10 @@ describe("registerQrCli", () => {
       },
     });
 
-    await expectQrExit(["--setup-code-only", "--remote"]);
-
-    const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
-    expect(output).toContain("Configured gateway.remote.url is invalid.");
+    await expect(runQr(["--setup-code-only", "--remote"])).rejects.toThrow(
+      "Configured gateway.remote.url is invalid.",
+    );
+    expect(issueDevicePairSetupBootstrapToken).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
@@ -443,9 +442,8 @@ describe("registerQrCli", () => {
   it("errors when --remote is set but no remote URL is configured", async () => {
     loadConfig.mockReturnValue(createTokenGatewayConfig("gateway.local"));
 
-    await expectQrExit(["--remote"]);
-    const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
-    expect(output).toContain("qr --remote requires");
+    await expect(runQr(["--remote"])).rejects.toThrow("qr --remote requires");
+    expect(issueDevicePairSetupBootstrapToken).not.toHaveBeenCalled();
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 

@@ -5,6 +5,20 @@ import {
 } from "./worker-task-capacity.js";
 import { WorkerTaskError } from "./worker-task-error.js";
 
+type ClassedTask = {
+  inputBytes: number;
+  admitted: boolean;
+  options: { pointRead?: true; onRequest?: unknown; onRequestSync?: unknown };
+};
+
+/** Class 0 (point reads) keeps its own arrival order ahead of every queued bulk task. */
+export function enqueueWorkerTask<T extends Pick<ClassedTask, "options">>(queue: T[], task: T) {
+  const firstBulk = task.options.pointRead
+    ? queue.findIndex((queued) => !queued.options.pointRead)
+    : -1;
+  queue.splice(firstBulk === -1 ? queue.length : firstBulk, 0, task);
+}
+
 /** Owns a pool's admitted inputs and notifies rejected callers when their budget can fit. */
 export class WorkerTaskAdmission {
   private taskCount = 0;
@@ -31,6 +45,19 @@ export class WorkerTaskAdmission {
 
   get pendingBytes(): number {
     return this.byteCount;
+  }
+
+  /** Class 0 skips the pending caps; it carries every fact it needs, so it cannot call the host. */
+  admitTask(task: ClassedTask, describeTask: () => string | undefined): Error | undefined {
+    const { pointRead, onRequest, onRequestSync } = task.options;
+    if (pointRead) {
+      return onRequest || onRequestSync
+        ? new TypeError("Point reads carry their facts and cannot call back into the host")
+        : undefined;
+    }
+    const refusal = this.admit(task.inputBytes, describeTask);
+    task.admitted = refusal === undefined;
+    return refusal;
   }
 
   /** Formats diagnostics only on refusal; successful admission returns undefined. */

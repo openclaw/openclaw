@@ -3,6 +3,7 @@ import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
 import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import { enqueueGitRefMutation, requireGitCommandOutput } from "../../infra/git-exec.js";
+import type { GitOperationStarter } from "../../infra/git-network-retry.js";
 import { lstatIfExists } from "../../infra/path-existence.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
@@ -22,10 +23,13 @@ import {
 } from "../../state/config-machine-state-async.js";
 import {
   OpenClawStateLeaseError,
-  withOpenClawStateLease,
+  type OpenClawStateAsyncLeaseContext,
+  withOpenClawStateLeaseAsync,
 } from "../../state/openclaw-state-lease.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
-import { listGitWorktrees, requireGit, resolveGitMetadataPath, runGit } from "./git.js";
+import * as git from "./git.js";
 import { readRegistryWorktrees } from "./registry-read.js";
 import type { ManagedWorktreeGcResult } from "./types.js";
 
@@ -55,8 +59,9 @@ type MaintenanceParams = {
 async function repairWorktreeObjects(
   repoRoot: string,
   remote: string,
-  env: NodeJS.ProcessEnv,
   params: Pick<MaintenanceParams, "signal" | "commitGuard">,
+  startRun: GitOperationStarter,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
   const started = performance.now();
   const fetched = new Set<string>();
@@ -77,6 +82,7 @@ async function repairWorktreeObjects(
         params.signal?.throwIfAborted();
         params.commitGuard?.();
       },
+      startRun,
       timeoutMs: Math.ceil(remaining),
       maxOutputBytes: 32 * 1024 * 1024,
       killProcessTree: true,
@@ -84,7 +90,7 @@ async function repairWorktreeObjects(
       env: { GIT_NO_LAZY_FETCH: "1" },
     };
   };
-  const worktrees = (await listGitWorktrees(repoRoot, options())).toSorted((a, b) =>
+  const worktrees = (await git.listGitWorktrees(repoRoot, options())).toSorted((a, b) =>
     a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
   );
   const cursorKey = `worktrees.objectRepair:${repoRoot}`;
@@ -98,7 +104,7 @@ async function repairWorktreeObjects(
     for (;;) {
       // Include this index's resolve-undo objects, but not every linked index.
       // Quiet suppresses healthy OIDs while preserving Git's missing-object output.
-      const inventory = await requireGit(
+      const inventory = await git.requireGit(
         worktree.path,
         [
           "rev-list",
@@ -140,7 +146,7 @@ async function repairWorktreeObjects(
           offset + Math.min(OBJECT_REPAIR_BATCH_SIZE, OBJECT_REPAIR_MAX_OBJECTS - fetched.size),
         );
         try {
-          await requireGit(
+          await git.requireGit(
             repoRoot,
             [
               "fetch",
@@ -182,9 +188,11 @@ async function repairWorktreeObjects(
 async function maintainWorktreePacks(
   repoRoot: string,
   env: NodeJS.ProcessEnv,
+  context: OpenClawStateWorkerContext,
   params: Pick<MaintenanceParams, "signal" | "commitGuard">,
   report: (before: number, after?: number) => Promise<void>,
   onlyIfBacklogged: boolean,
+  startRun: GitOperationStarter,
 ): Promise<boolean> {
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
@@ -195,13 +203,14 @@ async function maintainWorktreePacks(
     executionIntent: "agent-tool" as const,
     signal: params.signal,
     beforeRun: assertCurrent,
+    startRun,
     timeoutMs: WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS,
     killProcessTree: true,
     lowerPriority: true,
     env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
   };
   const packDirectory = await withContentGitSlot(
-    () => resolveGitMetadataPath(repoRoot, "objects/pack", options),
+    () => git.resolveGitMetadataPath(repoRoot, "objects/pack", options),
     params.signal,
   );
   // Git rejects an empty pack directory; inspect only this shallow metadata directory.
@@ -218,7 +227,7 @@ async function maintainWorktreePacks(
     await report(0, 0);
     return false;
   }
-  const commonDir = await requireGit(repoRoot, ["rev-parse", "--git-common-dir"], options);
+  const commonDir = await git.requireGitPath(repoRoot, ["rev-parse", "--git-common-dir"], options);
   // Content writers acquire their slot before publishing refs; keep that order
   // so maintenance cannot hold the ref queue while waiting for those writers.
   return await withContentGitSlot(async () => {
@@ -227,11 +236,12 @@ async function maintainWorktreePacks(
     const before = packs.filter((name) => name.endsWith(".pack")).length;
     await report(before);
     if (!onlyIfBacklogged) {
-      await cleanTemporaryPacks(packDirectory, packs, params.signal, assertCurrent);
+      await startRun(() => cleanTemporaryPacks(packDirectory, packs, params.signal, assertCurrent));
     }
     const after = await consolidatePacks(
       repoRoot,
       env,
+      context,
       commonDir,
       packDirectory,
       packs,
@@ -304,102 +314,25 @@ async function cleanTemporaryPacks(
 async function consolidatePacks(
   repoRoot: string,
   env: NodeJS.ProcessEnv,
+  context: OpenClawStateWorkerContext,
   commonDir: string,
   directory: string,
   names: string[],
-  options: NonNullable<Parameters<typeof requireGit>[2]>,
+  options: NonNullable<Parameters<typeof git.requireGit>[2]> & { startRun: GitOperationStarter },
   onlyIfBacklogged: boolean,
 ) {
-  const present = new Set(names);
-  const packs: Array<{ name: string; size: number; indexBytes: number; promisor: boolean }> = [];
-  for (const name of names) {
-    // Git also publishes indexed loose-* packs; dot-temporary packs stay excluded.
-    if (!/^(?:pack|loose)-[a-f0-9]+\.pack$/.test(name)) {
-      continue;
-    }
-    const stem = name.slice(0, -5);
-    if (
-      !present.has(`${stem}.idx`) ||
-      present.has(`${stem}.keep`) ||
-      present.has(`${stem}.mtimes`)
-    ) {
-      continue;
-    }
-    options.beforeRun?.();
-    const stat = await fs.stat(path.join(directory, name));
-    const index = await fs.stat(path.join(directory, `${stem}.idx`));
-    packs.push({
-      name,
-      size: stat.size,
-      indexBytes: index.size,
-      promisor: present.has(`${stem}.promisor`),
+  const remove = async (pathname: string, lease: OpenClawStateAsyncLeaseContext) => {
+    await lease.assertOwned();
+    await options.startRun(() => {
+      lease.assertCurrent();
+      return fs.rm(pathname, { force: true });
     });
-  }
-  // Half a batch of individually small inputs fits the existing byte/index
-  // budgets. Count each pack class separately; they must never be combined.
-  if (
-    onlyIfBacklogged &&
-    ![true, false].some(
-      (promisor) =>
-        packs.filter(
-          (pack) =>
-            pack.promisor === promisor &&
-            pack.size <= PACK_BATCH_BYTES / PACK_BATCH_COUNT &&
-            pack.indexBytes <= PACK_BATCH_INDEX_BYTES / PACK_BATCH_COUNT,
-        ).length >=
-        PACK_BATCH_COUNT / 2,
-    )
-  ) {
-    return null;
-  }
-  // MIDX is optional lookup metadata. Invalidate both entry points without
-  // enumerating every object to rebuild the whole repo.
-  await withProjectCheckoutLifecycle(
-    repoRoot,
-    { env, signal: options.signal, waitMs: 0, operation: "worktree.maintenance.index" },
-    async (lease) => {
-      for (const name of ["multi-pack-index", "multi-pack-index.d/multi-pack-index-chain"]) {
-        options.beforeRun?.();
-        lease.assertCurrent();
-        await fs.rm(path.join(directory, name), { force: true });
-      }
-    },
-  );
-  packs.sort((a, b) => a.size - b.size || a.name.localeCompare(b.name));
-  let retirementPending = false;
+  };
+  type PackRetirement = { hash: string; selected: string[] };
+  const retirementKey = `worktrees.packRetirement:${repoRoot}`;
   let objectFormat: string | undefined;
-  for (const promisor of [true, false]) {
-    const candidates = packs.filter((pack) => pack.promisor === promisor);
-    const batch = [];
-    let bytes = 0;
-    let indexBytes = 0;
-    for (const pack of candidates) {
-      if (pack.indexBytes > PACK_BATCH_INDEX_BYTES) {
-        continue;
-      }
-      if (
-        bytes + pack.size > PACK_BATCH_BYTES ||
-        indexBytes + pack.indexBytes > PACK_BATCH_INDEX_BYTES ||
-        batch.length >= PACK_BATCH_COUNT
-      ) {
-        break;
-      }
-      batch.push(pack);
-      bytes += pack.size;
-      indexBytes += pack.indexBytes;
-    }
-    // Leave a dominant pack alone until the smaller inputs together reach its
-    // size; bounded batches can still make progress below a fixed pack count.
-    while (batch.length > 1 && bytes < 2 * batch.at(-1)!.size) {
-      bytes -= batch.pop()!.size;
-    }
-    if (batch.length < 2) {
-      continue;
-    }
-    const selected = batch.map((pack) => pack.name);
-    // Validate only the packs this pass may retire, without walking refs or
-    // missing partial-clone objects. The streaming writer does not check source CRCs.
-    objectFormat ??= await requireGit(repoRoot, ["rev-parse", "--show-object-format"], options);
+  const verify = async (selected: string[]) => {
+    objectFormat ??= await git.requireGit(repoRoot, ["rev-parse", "--show-object-format"], options);
     const verifyDeadline = performance.now() + PACK_BATCH_TIMEOUT_MS;
     for (let offset = 0; offset < selected.length; offset += 128) {
       const timeoutMs = Math.ceil(verifyDeadline - performance.now());
@@ -407,7 +340,7 @@ async function consolidatePacks(
         throw new Error("Git pack verification exceeded its thirty-minute budget");
       }
       // Relative names and bounded argv also fit Windows' command-line limit.
-      await requireGit(
+      await git.requireGit(
         directory,
         [
           "-c",
@@ -425,24 +358,9 @@ async function consolidatePacks(
         },
       );
     }
-    // Copy every object, including unreachable ones, and compress separately fetched revisions.
-    // index-pack publishes the promisor marker and verified index before returning the hash.
-    const alias =
-      "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --window=10 --window-memory=8m --threads=1 | git index-pack --stdin --threads=1" +
-      (promisor ? " --promisor" : "");
-    const result = await requireGit(
-      repoRoot,
-      ["-c", `alias.openclaw-consolidate=${alias}`, "openclaw-consolidate"],
-      {
-        ...options,
-        timeoutMs: PACK_BATCH_TIMEOUT_MS,
-        input: `${selected.join("\n")}\n`,
-      },
-    );
-    const hash = /^pack\s+([a-f0-9]{40}|[a-f0-9]{64})$/.exec(result)?.[1];
-    if (!hash) {
-      throw new Error("Git pack consolidation returned an invalid pack identity");
-    }
+  };
+  const retire = async ({ hash, selected }: PackRetirement) => {
+    let remaining: string[] = [];
     // Copying every input object ignores refs, so verification and rewriting run
     // beside fetch. Only retirement joins the ref queue: OpenClaw fetches read these
     // packs, and Windows cannot unlink a pack another process has open.
@@ -452,14 +370,15 @@ async function consolidatePacks(
       () =>
         withProjectCheckoutLifecycle(
           repoRoot,
-          { env, signal: options.signal, waitMs: 0, operation: "worktree.maintenance.retire" },
+          { context, signal: options.signal, waitMs: 0, operation: "worktree.maintenance.retire" },
           async (lease) => {
             // Leave valid duplicate packs for a later sweep rather than queue foreground
             // preparation behind a large retirement. Finish each pack's sidecars together.
             const deadline = performance.now() + PACK_RETIREMENT_BUDGET_MS;
-            for (const name of selected) {
+            for (let offset = 0; offset < selected.length; offset++) {
+              const name = selected[offset]!;
               if (performance.now() >= deadline) {
-                retirementPending = true;
+                remaining = selected.slice(offset);
                 break;
               }
               const stem = path.join(directory, name.slice(0, -5));
@@ -473,15 +392,155 @@ async function consolidatePacks(
                 continue;
               }
               for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
-                options.beforeRun?.();
-                lease.assertCurrent();
-                await fs.rm(`${stem}.${extension}`, { force: true });
+                await remove(`${stem}.${extension}`, lease);
               }
             }
           },
         ),
       options.signal,
     );
+    options.beforeRun?.();
+    await writeConfigMachineStateAsync(
+      retirementKey,
+      remaining.length > 0 ? { hash, selected: remaining } : null,
+      { env },
+    );
+    return remaining.length > 0;
+  };
+  let pending = await readConfigMachineStateAsync<PackRetirement | null>(retirementKey, { env });
+  const present = new Set(names);
+  if (
+    pending &&
+    (!present.has(`pack-${pending.hash}.pack`) || !present.has(`pack-${pending.hash}.idx`))
+  ) {
+    // Another Git compactor replaced this output. Its old input list no longer
+    // proves retirement safe; abandon it and select from the current inventory.
+    options.beforeRun?.();
+    await writeConfigMachineStateAsync(retirementKey, null, { env });
+    pending = null;
+  }
+  const packs: Array<{ name: string; size: number; indexBytes: number; promisor: boolean }> = [];
+  if (!pending) {
+    for (const name of names) {
+      // Git also publishes indexed loose-* packs; dot-temporary packs stay excluded.
+      if (!/^(?:pack|loose)-[a-f0-9]+\.pack$/.test(name)) {
+        continue;
+      }
+      const stem = name.slice(0, -5);
+      if (
+        !present.has(`${stem}.idx`) ||
+        present.has(`${stem}.keep`) ||
+        present.has(`${stem}.mtimes`)
+      ) {
+        continue;
+      }
+      options.beforeRun?.();
+      const stat = await fs.stat(path.join(directory, name));
+      const index = await fs.stat(path.join(directory, `${stem}.idx`));
+      packs.push({
+        name,
+        size: stat.size,
+        indexBytes: index.size,
+        promisor: present.has(`${stem}.promisor`),
+      });
+    }
+    // Half a batch of individually small inputs fits the existing byte/index
+    // budgets. Count each pack class separately; they must never be combined.
+    if (
+      onlyIfBacklogged &&
+      ![true, false].some(
+        (promisor) =>
+          packs.filter(
+            (pack) =>
+              pack.promisor === promisor &&
+              pack.size <= PACK_BATCH_BYTES / PACK_BATCH_COUNT &&
+              pack.indexBytes <= PACK_BATCH_INDEX_BYTES / PACK_BATCH_COUNT,
+          ).length >=
+          PACK_BATCH_COUNT / 2,
+      )
+    ) {
+      return null;
+    }
+  }
+  // Invalidate optional MIDX lookup metadata without rebuilding the whole repo.
+  await withProjectCheckoutLifecycle(
+    repoRoot,
+    { context, signal: options.signal, waitMs: 0, operation: "worktree.maintenance.index" },
+    async (lease) => {
+      for (const name of ["multi-pack-index", "multi-pack-index.d/multi-pack-index-chain"]) {
+        await remove(path.join(directory, name), lease);
+      }
+    },
+  );
+  let retirementPending = false;
+  if (pending) {
+    // Resume the admitted retirement, not geometric selection: its verified union
+    // can dominate the remaining inputs or put them over the next batch's limits.
+    await verify([`pack-${pending.hash}.pack`]);
+    retirementPending = await retire(pending);
+  } else {
+    packs.sort((a, b) => a.size - b.size || a.name.localeCompare(b.name));
+    for (const promisor of [true, false]) {
+      const candidates = packs.filter(
+        (pack) => pack.promisor === promisor && pack.indexBytes <= PACK_BATCH_INDEX_BYTES,
+      );
+      // Find the largest affordable progression break; overlapping bytes cannot predict the union.
+      const end = candidates.findLastIndex(
+        (pack, i) =>
+          i > 0 &&
+          pack.size < 2 * candidates[i - 1]!.size &&
+          pack.size + candidates[i - 1]!.size <= PACK_BATCH_BYTES &&
+          pack.indexBytes + candidates[i - 1]!.indexBytes <= PACK_BATCH_INDEX_BYTES,
+      );
+      const batch = [];
+      let bytes = 0;
+      let indexBytes = 0;
+      // Start at the break so small arrivals cannot starve history peers; later passes use the output size.
+      for (let i = end; i >= 0; i--) {
+        const pack = candidates[i]!;
+        if (
+          bytes + pack.size > PACK_BATCH_BYTES ||
+          indexBytes + pack.indexBytes > PACK_BATCH_INDEX_BYTES ||
+          batch.length >= PACK_BATCH_COUNT
+        ) {
+          break;
+        }
+        batch.push(pack);
+        bytes += pack.size;
+        indexBytes += pack.indexBytes;
+      }
+      if (batch.length < 2) {
+        continue;
+      }
+      const selected = batch.map((pack) => pack.name);
+      // Validate only selected inputs. The streaming writer does not check source CRCs.
+      await verify(selected);
+      // Copy every object, including unreachable ones, and compress separately fetched revisions.
+      // index-pack publishes the promisor marker and verified index before returning the hash.
+      const alias =
+        "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --window=10 --window-memory=8m --threads=1 | git index-pack --stdin --threads=1" +
+        (promisor ? " --promisor" : "");
+      const result = await git.requireGit(
+        repoRoot,
+        ["-c", `alias.openclaw-consolidate=${alias}`, "openclaw-consolidate"],
+        {
+          ...options,
+          timeoutMs: PACK_BATCH_TIMEOUT_MS,
+          input: `${selected.join("\n")}\n`,
+        },
+      );
+      const hash = /^pack\s+([a-f0-9]{40}|[a-f0-9]{64})$/.exec(result)?.[1];
+      if (!hash) {
+        throw new Error("Git pack consolidation returned an invalid pack identity");
+      }
+      // Record the verified replacement before retirement can yield, defer, or restart.
+      options.beforeRun?.();
+      await writeConfigMachineStateAsync(retirementKey, { hash, selected }, { env });
+      retirementPending = await retire({ hash, selected });
+      if (retirementPending) {
+        break;
+      }
+    }
   }
   const remainingNames = await fs.readdir(directory);
   return {
@@ -490,7 +549,7 @@ async function consolidatePacks(
   };
 }
 
-export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
+export function createWorktreeGitMaintenance(env?: NodeJS.ProcessEnv) {
   // Suspend failed tasks without letting graph failures stop bounded pack convergence.
   const failed = new Map<string, "objects" | "packs" | "maintenance">();
   const nextRunAt = new Map<string, { at: number; retirementPending: boolean }>();
@@ -504,7 +563,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
     if (params.retryDeferred) {
       failed.clear();
     }
-    const records = await readRegistryWorktrees(env).catch((error: unknown) => {
+    const records = await readRegistryWorktrees(env ?? process.env).catch((error: unknown) => {
       assertCurrent();
       progress.error("git-maintenance", error);
       log.warn(`worktree Git maintenance inventory failed: ${String(error)}`);
@@ -543,19 +602,20 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
         continue;
       }
       const state: { stage: "objects" | "packs" | "maintenance" } = { stage: "packs" };
+      const context = captureOpenClawStateWorkerContext({ env });
       try {
         // Serialize pack writers across processes without excluding project preparation.
-        await withOpenClawStateLease(
+        await withOpenClawStateLeaseAsync(
           {
             scope: "projects.git-maintenance",
             key: repoRoot,
-            database: { scope: "shared", options: { env } },
             signal: params.signal,
             leaseMs: 30_000,
             waitMs: 0,
             operationLabel: "worktree.maintenance",
             leaseLabel: "project Git maintenance lease",
           },
+          context,
           async (lease) => {
             const ownedParams = {
               ...params,
@@ -564,6 +624,11 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
                 assertCurrent();
                 lease.assertCurrent();
               },
+            };
+            const startRun: GitOperationStarter = async <T>(run: () => T): Promise<Awaited<T>> => {
+              await lease.assertOwned();
+              ownedParams.commitGuard();
+              return await run();
             };
             // A busy checkout leaves its hourly slot available for the next sweep.
             const scheduled = nextRunAt.get(repoRoot) ?? { at: 0, retirementPending: false };
@@ -576,7 +641,8 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
             // Verify bounded pack inputs before expiry; never gate them on full fsck.
             scheduled.retirementPending = await maintainWorktreePacks(
               repoRoot,
-              env,
+              env ?? process.env,
+              context,
               ownedParams,
               async (before, after) => {
                 if (after !== undefined) {
@@ -586,6 +652,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
                 await report(state.stage, { packsBefore: before, packsAfter: after });
               },
               onlyIfBacklogged && !scheduled.retirementPending,
+              startRun,
             );
             if (onlyIfBacklogged) {
               await report("completed");
@@ -596,6 +663,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
               executionIntent: "agent-tool" as const,
               signal: lease.signal,
               beforeRun: ownedParams.commitGuard,
+              startRun,
               timeoutMs: WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS,
               killProcessTree: true,
               lowerPriority: true,
@@ -605,7 +673,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
             if (params.retryDeferred) {
               state.stage = "objects";
               await report(state.stage);
-              const config = await runGit(
+              const config = await git.runGit(
                 repoRoot,
                 ["config", "--bool", "--get-regexp", "^remote\\..*\\.promisor$"],
                 options,
@@ -619,7 +687,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
             // Only an explicit repair pass may fetch. Pack progress is already published.
             if (params.retryDeferred && remote) {
               await withContentGitSlot(
-                () => repairWorktreeObjects(repoRoot, remote, env, ownedParams),
+                () => repairWorktreeObjects(repoRoot, remote, ownedParams, startRun, env),
                 params.signal,
               );
             }
@@ -637,7 +705,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
             await report(state.stage);
             await withContentGitSlot(
               () =>
-                requireGit(
+                git.requireGit(
                   repoRoot,
                   ["maintenance", "run", "--auto", "--task=commit-graph", "--task=loose-objects"],
                   options,

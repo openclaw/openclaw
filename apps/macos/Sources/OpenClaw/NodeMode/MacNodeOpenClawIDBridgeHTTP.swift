@@ -108,9 +108,15 @@ enum MacNodeOpenClawIDBridgeHTTP {
         request: MacNodeOpenClawIDBridgeRequest,
         reader: MacNodeOpenClawIDBridgeReader,
         io: MacNodeOpenClawIDBridgeIO,
-        tunnel: OpenClawIDNodeTunnel) async throws
+        tunnel: OpenClawIDNodeTunnel,
+        dashboard: Bool = false) async throws
     {
-        guard request.isWorkerHTTP, ["GET", "POST", "HEAD"].contains(request.method) else {
+        // The worker bridge exposes only worker resources; the operator dashboard proxy serves
+        // the Control UI over a human key's tunnel rather than the node key's.
+        let allowed = dashboard
+            ? ["GET", "POST", "HEAD", "PUT", "PATCH", "DELETE", "OPTIONS"].contains(request.method)
+            : request.isWorkerHTTP && ["GET", "POST", "HEAD"].contains(request.method)
+        guard allowed else {
             try await io.write(Data("HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".utf8))
             return
         }

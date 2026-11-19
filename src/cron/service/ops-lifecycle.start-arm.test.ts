@@ -113,6 +113,7 @@ it("joins a disabled scheduler borrow when stopped during its native command", a
   signal,
 }) => {
   vi.useRealTimers();
+  using clock = vi.spyOn(performance, "now").mockReturnValue(0);
   const { storePath } = fixtures.makeStorePath();
   const scheduler = createTestGatewayScheduler();
   const { cron, state } = createCronServiceWithStateForTest({
@@ -166,6 +167,7 @@ it("joins a disabled scheduler borrow when stopped during its native command", a
     expect(state.schedulerStarted).toBe(false);
     expect(state.stopped).toBe(true);
     const exited = once(worker, "exit");
+    clock.mockReturnValue(1_000);
     channel("openclaw.memory.critical").publish(undefined);
     await withinTest(exited, signal);
     expect(worker.threadId).toBe(-1);

@@ -1,13 +1,16 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { getRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { listLiveAgentRunIds } from "../../../infra/agent-run-registry.js";
-import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { listSwarmRunReservationIds } from "../swarm/swarm-scheduler.js";
 import {
   matchesSubagentChildSessionIdentity,
   resolveRecordedRequester,
+  resolveSubagentChildAgentId,
 } from "./subagent-child-owner-match.js";
 import {
   getRecordedSubagentChildAuthority,
@@ -69,13 +72,13 @@ export type SubagentRootRequester = {
 };
 
 /** Shutdown follows subagent ancestry; ordinary conversations own their own resume. */
-export function resolveRootSubagentRequester(
+export async function resolveRootSubagentRequester(
   sessionKey: string,
   agentId?: string,
-): SubagentRootRequester {
+): Promise<SubagentRootRequester> {
   let root: SubagentRootRequester = { sessionKey, agentId };
   const visited = new Set<string>();
-  while (isSubagentSessionKey(root.sessionKey)) {
+  for (;;) {
     const identity = JSON.stringify([root.agentId, root.sessionKey]);
     if (visited.has(identity)) {
       return root;
@@ -85,23 +88,63 @@ export function resolveRootSubagentRequester(
     if (!entry) {
       return root;
     }
+    const authority = getRecordedSubagentChildAuthority(entry);
+    if (authority.status === "mismatch") {
+      return root;
+    }
+    const session = await readSessionEntryReadOnlyInWorker({
+      ...root,
+      storePath:
+        root.storePath ??
+        resolveSessionStorePathCore(getRuntimeConfigSnapshot()?.session?.store, {
+          agentId: authority.childAgentId,
+        }),
+      projection: "list",
+    });
+    if (!matchesSubagentChildSessionIdentity(entry, session ?? null)) {
+      return root;
+    }
+    // sessions_send also registers requester edges, but does not create a child.
+    const spawnedBy = normalizeOptionalString(session?.spawnedBy);
+    if (!spawnedBy && session?.createdVia !== "spawn") {
+      return root;
+    }
+    const parent =
+      spawnedBy ??
+      normalizeOptionalString(session?.parentSessionKey) ??
+      entry.controllerSessionKey ??
+      entry.requesterSessionKey;
+    const parentAgentId =
+      parent === entry.requesterSessionKey
+        ? resolveRecordedRequester(entry)
+        : resolveSubagentChildAgentId({ childSessionKey: parent });
+    if (!parentAgentId) {
+      return root;
+    }
     root = {
-      sessionKey: entry.requesterSessionKey,
-      agentId: resolveRecordedRequester(entry),
-      storePath: entry.requesterStorePath,
+      sessionKey: parent,
+      agentId: parentAgentId,
+      storePath:
+        parent === entry.requesterSessionKey
+          ? entry.requesterStorePath
+          : parent === entry.controllerSessionKey
+            ? entry.controllerStorePath
+            : undefined,
     };
   }
-  return root;
 }
 
-export function listLiveSubagentRootSessions(): SubagentRootRequester[] {
-  const roots = new Map<string, SubagentRootRequester>();
+export async function listLiveSubagentRootSessions(): Promise<SubagentRootRequester[]> {
+  const requests: Promise<SubagentRootRequester>[] = [];
   for (const runId of listLiveAgentRunIds()) {
     const entry = subagentRuns.get(runId);
     if (!entry || !isSubagentRunLive(entry)) {
       continue;
     }
-    const root = resolveRootSubagentRequester(entry.childSessionKey, entry.childAgentId);
+    requests.push(resolveRootSubagentRequester(entry.childSessionKey, entry.childAgentId));
+  }
+  const roots = new Map<string, SubagentRootRequester>();
+  for (const root of await Promise.all(requests)) {
     roots.set(JSON.stringify([root.agentId, root.storePath, root.sessionKey]), root);
   }
   return [...roots.values()];
@@ -116,7 +159,6 @@ type YieldWaitSource = "waiting" | "resume" | undefined;
 function resolveYieldWaitingChild(
   sessionKey: string,
   agentId: string,
-  session: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision">,
   runId: string,
   visited: Set<string>,
 ): YieldWaitSource {
@@ -124,24 +166,22 @@ function resolveYieldWaitingChild(
   for (const child of getSubagentRunsForRequesterSession(sessionKey)) {
     if (
       resolveRecordedRequester(child) !== agentId ||
-      child.completionRequesterSessionId !== session.sessionId ||
-      child.completionRequesterLifecycleRevision !== session.lifecycleRevision ||
       child.requesterSettleWake?.requesterYieldBatch !== true ||
       (child.requesterSettleWake.requesterRunId &&
         child.requesterSettleWake.requesterRunId !== runId)
     ) {
       continue;
     }
-    const childSource = isYieldedSubagentRun(child)
-      ? owesRequesterCompletion(child)
-        ? resolveSubagentYieldWaitSource(child, visited)
-        : undefined
-      : owesRequesterCompletion(child) &&
-          (isSubagentRunLive(child) ||
-            (child.execution.status === "terminal" &&
-              !subagentRuns.isCompletionAuthorityRetired(child)))
-        ? "waiting"
-        : "resume";
+    const childSource = subagentRuns.isCompletionAuthorityRetired(child)
+      ? "resume"
+      : isYieldedSubagentRun(child)
+        ? owesRequesterCompletion(child)
+          ? resolveSubagentYieldWaitSource(child, visited)
+          : undefined
+        : owesRequesterCompletion(child) &&
+            (isSubagentRunLive(child) || child.execution.status === "terminal")
+          ? "waiting"
+          : "resume";
     // Stopped descendants need root reconciliation, even beside a surviving wait.
     if (childSource === "resume") {
       return childSource;
@@ -165,13 +205,7 @@ export function resolveSubagentYieldWaitSource(
   }
   const authority = getRecordedSubagentChildAuthority(entry);
   return authority.status === "verified"
-    ? resolveYieldWaitingChild(
-        entry.childSessionKey,
-        authority.childAgentId,
-        authority.sessionIdentity,
-        entry.runId,
-        visited,
-      )
+    ? resolveYieldWaitingChild(entry.childSessionKey, authority.childAgentId, entry.runId, visited)
     : undefined;
 }
 
@@ -205,6 +239,7 @@ export function resolveSessionYieldWait(
     | "sessionId"
     | "lifecycleRevision"
     | "lifecycleRunId"
+    | "lastRunId"
     | "activeWriterRunId"
     | "archivedAt"
     | "incognito"
@@ -216,6 +251,19 @@ export function resolveSessionYieldWait(
 ): YieldWaitSource | "unreachable" {
   if (session.archivedAt !== undefined || session.incognito) {
     return undefined;
+  }
+  const interruptedRunId = session.lifecycleRunId ?? session.lastRunId;
+  if (interruptedRunId?.startsWith("announce:requester-settle:")) {
+    for (const child of getSubagentRunsForRequesterSession(sessionKey)) {
+      if (
+        !subagentRuns.isCompletionAuthorityRetired(child) &&
+        resolveRecordedRequester(child) === agentId &&
+        child.requesterSettleWake !== undefined
+      ) {
+        // The registry owns this continuation even if recovery changed its cohort or retry ID.
+        return "waiting";
+      }
+    }
   }
   const ownWait = getLatestLiveSubagentRunByChildSessionKey(
     sessionKey,
@@ -242,7 +290,7 @@ export function resolveSessionYieldWait(
     return undefined;
   }
   return (
-    resolveYieldWaitingChild(sessionKey, agentId, session, session.lifecycleRunId, new Set()) ??
+    resolveYieldWaitingChild(sessionKey, agentId, session.lifecycleRunId, new Set()) ??
     "unreachable"
   );
 }

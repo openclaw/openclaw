@@ -1,8 +1,9 @@
 ---
-summary: "Where personal GitHub connections, personal model accounts, and Apple companion journals live"
+summary: "Where personal GitHub connections, personal model accounts, Apple companion journals, and native chat drafts live"
 read_when:
   - "Checking where per-person credentials and selections are stored"
   - "Understanding Apple companion delivery journals and their migration behaviour"
+  - "Changing how the iOS or macOS chat composer keeps unsent drafts"
 title: "Per-person and companion storage"
 ---
 
@@ -106,6 +107,46 @@ client state.
 
 The [accepted design](https://github.com/openclaw/openclaw/issues/136617) records
 the schema, migration, ownership, retention and validation boundaries.
+
+## Native chat composer drafts
+
+The iOS and macOS chat composer keeps each session's unsent text and
+attachments in the same `client-state.sqlite`, so a draft survives app restart,
+termination and crash. The additive GRDB migration
+`client-state-composer-drafts-v11` creates two STRICT tables:
+
+- `composer_drafts`: one row per `(gateway_id, draft_key)` with `text`, the
+  composer `revision` at the last save, and `updated_at`.
+- `composer_draft_attachments`: `(gateway_id, draft_key, position)` rows with
+  `type`, `mime_type`, `file_name`, the `payload` bytes and an optional
+  `duration_seconds`, deleted with their draft.
+
+The draft key is the agent-qualified session key. A draft is not read or
+written until the agent, and for `main`/`global` the Gateway routing contract,
+is known; text typed earlier is appended to the stored draft when it loads, and
+until then it stays in memory, including across session switches.
+Text saves wait for a short typing pause and never rewrite attachment blobs;
+iOS saves immediately when the app moves to the background and macOS before it
+quits. Attachments are written as they are added or removed. If a save fails,
+the text stays in memory, including across session switches, and the next save
+retries it; an attachment that could not be saved keeps the chat from switching
+until it is saved, sent or removed. Sending clears the draft:
+a queued send clears it in the same transaction that queues the message, and
+a live send clears it immediately. Two windows editing one session's draft
+keep the last write.
+
+A draft holds at most 40 MB of attachments, the same limit as one queued
+message. Drafts on one Gateway share 50 MB: adding an attachment over that
+budget first removes the attachments, never the text, of the least recently
+updated other drafts. Drafts have no timed expiry. A draft whose key becomes
+unreachable, for example after its agent is removed, stays until Gateway
+Forget.
+
+Forget deletes the Gateway's drafts in its existing irreversible removal
+transaction. The `composer_drafts_forget` trigger deletes them when an older
+app build runs Forget, since that build does not know these tables. Older
+builds otherwise ignore the tables. The Share extension and the Watch do not
+use composer drafts.
 
 ## Apple OpenClaw ID node enrollment
 

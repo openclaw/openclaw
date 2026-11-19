@@ -6,6 +6,7 @@ import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generati
 import { resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveDefaultAgentDir } from "../agent-scope.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
+import { assertModelSupportsChat } from "../failover/error.js";
 import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import { resolveModelWorkspaceDir } from "../model-discovery-context.js";
@@ -57,6 +58,8 @@ type AsyncModelResolutionOptions = {
   agentRuntimeId?: string;
   skipAgentDiscovery?: boolean;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  /** Core simple completions need one row; SDK resolvers and agent sessions need full stores. */
+  selectedModelStores?: boolean;
   /** Resolve local provider facts without starting asynchronous catalog discovery. */
   deferProviderDynamicModelPreparation?: boolean;
 };
@@ -167,7 +170,13 @@ export async function resolveModelAsync(
     const logicalRef = { provider: normalizedRef.provider, model: normalizedRef.model };
     let { authStorage, modelRegistry } = options ?? {};
     if (!authStorage || !modelRegistry) {
-      const stores = preparedModelRuntime?.createStores() ?? createEmptyAgentDiscoveryStores();
+      const stores =
+        preparedModelRuntime?.createStores(
+          undefined,
+          options?.selectedModelStores
+            ? { provider: normalizedRef.provider, modelId: normalizedRef.model }
+            : undefined,
+        ) ?? createEmptyAgentDiscoveryStores();
       authStorage ??= stores.authStorage;
       modelRegistry ??= options?.authStorage
         ? stores.modelRegistry.fork(authStorage)
@@ -182,13 +191,9 @@ export async function resolveModelAsync(
       readCapturedPreparedModelRuntimeCatalog(preparedModelRuntime)?.entries.find(
         (entry) => matchesSelectedModel(entry) && modelTransportRoutesMatch(entry, declared ?? {}),
       );
-    if ((captured?.inference?.chat ?? declared?.inference?.chat) === false) {
-      return {
-        error: `Model ${normalizedRef.provider}/${normalizedRef.model} does not support chat inference`,
-        authStorage,
-        modelRegistry,
-      };
-    }
+    // Typed-only veto (#184996). Accepted edge: a main/nightly catalog saved under #198288 can refuse a
+    // listed model until the first restart after upgrading; releases never saved that value.
+    assertModelSupportsChat(captured?.inference?.chat ?? declared?.inference?.chat, normalizedRef);
     const runtimeHooks = resolveRuntimeHooks(options);
     let staticCatalogResolved = false;
     let staticCatalogModel: ProviderRuntimeModel | undefined;

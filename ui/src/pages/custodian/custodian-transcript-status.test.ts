@@ -146,9 +146,9 @@ it("shows only a labeled spinner while the socket is down", async () => {
   await waitForFast(() => expect(page.querySelector(".custodian__catch-up")).not.toBeNull());
   const status = page.querySelector(".custodian__catch-up");
   expect(status?.getAttribute("role")).toBe("status");
-  expect(status?.querySelector(".sr-only")?.textContent).toBe("Reconnecting…");
+  expect(status?.querySelector(".sr-only")?.textContent).toBe("Reconnecting");
   expect(status?.querySelector('[aria-hidden="true"]')).not.toBeNull();
-  expect(status?.textContent).toBe("Reconnecting…");
+  expect(status?.textContent).toBe("Reconnecting");
   expect(page.querySelector('[role="alert"]')).toBeNull();
 
   setGatewaySnapshot({ phase: "connected" });

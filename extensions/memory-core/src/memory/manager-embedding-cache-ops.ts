@@ -1,12 +1,15 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   hasNonTextEmbeddingParts,
   type EmbeddingInput,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
+import type { MemoryEmbeddingCacheRetireFence } from "./manager-embedding-cache-retire.js";
 import {
   collectMemoryCachedEmbeddings,
   isValidMemoryEmbedding,
@@ -20,6 +23,7 @@ import type { MemoryIndexWorkItem, MemorySemanticProviderGeneration } from "./ma
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
 type MemoryIndexEntry = MemoryIndexWorkItem["entry"];
+const log = createSubsystemLogger("memory");
 
 const CACHE_READ_PAGE_BYTES = 8 * 1024 * 1024;
 const CACHE_READ_DEFAULT_DIMENSIONS = 4096;
@@ -70,6 +74,39 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     }
   }
 
+  /**
+   * After a successful publication, drop fenced cache rows whose exact vector the
+   * published memory index now serves. Optional cleanup: a failure is logged and never
+   * reaches publication or retry state.
+   */
+  protected async retirePublishedEmbeddingCacheRows(
+    fence: MemoryEmbeddingCacheRetireFence,
+  ): Promise<void> {
+    const identity = (this.syncProviderGeneration?.identities ??
+      this.resolveProviderIndexIdentities())[0];
+    if (!this.cache.enabled || !identity) {
+      return;
+    }
+    const database = this.database;
+    const assertCurrent = () => {
+      if (this.closed || !database.isOpen || this.database !== database) {
+        throw new Error("Memory database owner closed or changed before write admission");
+      }
+    };
+    try {
+      let after: Awaited<ReturnType<typeof database.retireEmbeddingCache>> = null;
+      do {
+        after = await database.retireEmbeddingCache(
+          { ...fence, identity, ...(after ? { after } : {}) },
+          assertCurrent,
+        );
+        await yieldToEventLoop();
+      } while (after && !this.closing);
+    } catch (err) {
+      log.warn(`memory embedding cache duplicate cleanup skipped: ${formatErrorMessage(err)}`);
+    }
+  }
+
   protected async collectCachedEmbeddings(
     candidates: MemoryEmbeddingCacheCandidate[],
     generation: MemorySemanticProviderGeneration,
@@ -97,13 +134,14 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
         published.set(chunk.hash, [ref]);
       }
     }
-    // The read worker decodes each vector into 8 bytes per dimension under a bounded heap,
-    // so a rebuild reads whole hashes in pages instead of every published vector at once.
+    // Reserve 16 bytes per coordinate for the binary64 value and serialized array
+    // overhead: Bun encodes these arrays more widely than V8. Keep rebuild reads
+    // paged within the same budget instead of materializing every vector at once.
     const pageHashes = Math.max(
       1,
       Math.floor(
         CACHE_READ_PAGE_BYTES /
-          (8 *
+          (16 *
             (generation.embeddingDimensions ?? meta?.vectorDims ?? CACHE_READ_DEFAULT_DIMENSIONS)),
       ),
     );

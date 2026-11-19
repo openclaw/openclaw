@@ -2,6 +2,9 @@
 // --runtime-root <compiled legacy-finalizer/src> --root <new synthetic directory> --serve
 // Send {"mode":"counts"|"timing"|"allocation","rotate":false|true} on stdin.
 // Add "target":"default-report" for 2,300 path reports (100 windows), with no default writes.
+// "target":"default-root" measures 100 cold root qualifications directly at the I/O owner.
+// --team-shape adds 62k workspace files (1.1 GB), 3k session placeholders and a
+// sparse 35-GiB opaque database placeholder; none are valid session/database data.
 // One window is 23 independently settled batches, matching the observed Gateway minute.
 // Keep baseline/candidate in separate processes: logger ownership is a process singleton.
 import assert from "node:assert/strict";
@@ -18,6 +21,8 @@ const { values } = parseArgs({
     "runtime-root": { type: "string" },
     root: { type: "string" },
     serve: { type: "boolean" },
+    "team-shape": { type: "boolean" },
+    "owner-module": { type: "string" },
   },
 });
 assert(values["runtime-root"] && values.root && global.gc);
@@ -30,12 +35,31 @@ fs.mkdirSync(root);
 process.env.TMPDIR = path.join(root, "tmp");
 process.env.OPENCLAW_STATE_DIR = path.join(root, "state");
 fs.mkdirSync(process.env.TMPDIR, { mode: 0o700 });
+if (values["team-shape"]) {
+  const state = process.env.OPENCLAW_STATE_DIR;
+  const workspace = path.join(state, "workspace");
+  const sessions = path.join(state, "agents", "synthetic", "sessions");
+  fs.mkdirSync(workspace, { recursive: true });
+  fs.mkdirSync(sessions, { recursive: true });
+  for (let index = 0; index < 62_000; index++) {
+    fs.writeFileSync(path.join(workspace, `${index}.txt`), Buffer.alloc(17_742));
+  }
+  for (let index = 0; index < 3_000; index++) {
+    fs.writeFileSync(path.join(sessions, `${index}.fixture`), "synthetic session placeholder\n");
+  }
+  const fd = fs.openSync(path.join(state, "opaque-database.fixture"), "wx");
+  fs.ftruncateSync(fd, 35 * 1024 ** 3);
+  fs.closeSync(fd);
+}
 const runtimeRoot = path.resolve(values["runtime-root"]);
 const load = (relative) => import(pathToFileURL(path.join(runtimeRoot, relative)).href);
 const { getLogger, getResolvedLoggerSettings, applyLoggingConfig, flushLogger } =
   await load("logging/logger.js");
 const { drainGlobalSingletonLifecycleState } = await load("shared/global-singleton.js");
 const { runWithWorkerStartObserver } = await load("infra/worker-request-diagnostics.js");
+const { resolveDefaultFileLogTarget } = values["owner-module"]
+  ? await import(pathToFileURL(path.resolve(values["owner-module"])).href)
+  : await load("logging/logger-file-io.js");
 const starts = [];
 const file = path.join(root, "warm.log");
 const coldStart = performance.now();
@@ -75,6 +99,7 @@ try {
     }
     const rotating = Boolean(command.rotate);
     const reporting = command.target === "default-report";
+    const qualifying = command.target === "default-root";
     const preparationStart = performance.now();
     const preparationCpu = process.cpuUsage();
     const preparationThread = process.threadCpuUsage();
@@ -85,7 +110,15 @@ try {
       maxFileBytes: rotating ? 1024 : 100 * 1024 * 1024,
     });
     logger = getLogger();
-    const operation = reporting ? () => getResolvedLoggerSettings() : append;
+    const operation = qualifying
+      ? () =>
+          resolveDefaultFileLogTarget("openclaw-2000-01-01.log", {
+            stateDir: process.env.OPENCLAW_STATE_DIR,
+            tmpDir: process.env.TMPDIR,
+          })
+      : reporting
+        ? () => getResolvedLoggerSettings()
+        : append;
     await operation();
     const preparation = {
       wallMs: performance.now() - preparationStart,
@@ -97,7 +130,7 @@ try {
     const counts = {};
     const restore = [];
     let result;
-    const operations = reporting ? 2_300 : 23;
+    const operations = qualifying ? 100 : reporting ? 2_300 : 23;
     try {
       if (command.mode === "counts") {
         // Linux exposes unsupported methods such as lchmodSync as undefined.
@@ -161,6 +194,7 @@ try {
         phase: command.mode,
         rotating,
         reporting,
+        qualifying,
         batches: operations,
         preparation,
         ...result,

@@ -34,7 +34,8 @@ import { git } from "./git-fixture.test-support.js";
 import { readPendingWorktrees } from "./pending-slots.js";
 import * as preparationTiming from "./preparation-timing.js";
 import { updateRegistryWorktree } from "./registry.js";
-import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
+import { IDLE_GC_MS } from "./retention.js";
+import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import {
   ageManagedWorktreeTemplates,
   useManagedWorktreeTestRepository,
@@ -184,6 +185,29 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       }),
       expect.objectContaining({ status: "ready", id: expect.not.stringMatching(template.id) }),
     ]);
+  });
+
+  it("reuses the retained managed generation when the base alternates A to B to A", async () => {
+    const base = await git(repo, "rev-parse", "HEAD");
+    await service.create({ repoRoot: repo, name: "first-a", baseRef: base });
+    const original = (await listTemplatesAsync(env))[0]!;
+    await fs.writeFile(path.join(repo, "README.md"), "next\n");
+    await git(repo, "commit", "-am", "next base");
+    await service.create({ repoRoot: repo, name: "first-b", baseRef: "HEAD" });
+    vi.mocked(backend.createTemplate).mockClear();
+    vi.mocked(backend.cloneTemplate).mockClear();
+
+    const returned = await service.create({ repoRoot: repo, name: "again-a", baseRef: base });
+
+    expect(await git(returned.path, "rev-parse", "HEAD")).toBe(base);
+    expect(await fs.readFile(path.join(returned.path, "README.md"), "utf8")).toBe("base\n");
+    expect(backend.createTemplate).not.toHaveBeenCalled();
+    // Only the private checkout is cloned; no template refresh occurs on the flip back.
+    expect(backend.cloneTemplate).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(backend.cloneTemplate).mock.calls[0]?.[0]).toBe(original.path);
+    expect((await listTemplatesAsync(env)).filter((entry) => entry.status === "ready")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: original.id })]),
+    );
   });
 
   it("creates an empty workspace without retaining or cloning an empty template", async () => {
@@ -613,7 +637,7 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
       const replacement = await readTemplateAsync(env, original.cacheKey);
       assert(replacement);
       expect(replacement.id).not.toBe(original.id);
-      await expect(fs.access(original.path)).resolves.toBeUndefined();
+      await fs.access(original.path);
       expect((await fs.readdir(created.path)).toSorted()).toEqual([
         ".git",
         ".gitignore",

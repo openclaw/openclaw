@@ -342,6 +342,65 @@ it("retains the complete full-check stripe inventory", async () => {
 });
 
 it.each([
+  ["hybrid", false],
+  ["github", false],
+  ["hybrid", true],
+  ["github", true],
+] as const)(
+  "sizes serial extension and script type checks on %s with full checks %s",
+  async (runnerProfile, preserveFullChecks) => {
+    typeSelection.graphs = resolveCiTsgoGraphs(["extensions-test", "scripts"]);
+    const plan = await createPlan({
+      runnerProfile,
+      preserveFullChecks,
+      extensionLintMode: "affected",
+      checkMatrix: {
+        include: [
+          { ...checks("test-types").include[0]!, runner_label: "blacksmith-4vcpu-ubuntu-2404" },
+        ],
+      },
+    });
+    expect(plan.check_matrix.include[0]).toMatchObject({
+      runner: "unused",
+      runner_label: "blacksmith-2vcpu-ubuntu-2404",
+      ...(preserveFullChecks
+        ? {}
+        : {
+            core_type_graph_names_json: "[]",
+            core_type_concurrency: 1,
+            type_graph_names_json: JSON.stringify(["extensions-test", "scripts"]),
+          }),
+    });
+    if (preserveFullChecks) {
+      expect(plan.core_type_matrix).toEqual(stripeMatrix(5));
+      expect(plan.check_matrix.include[0]).not.toHaveProperty("type_graph_names_json");
+    }
+  },
+);
+
+it.each([
+  { extensionLintMode: undefined },
+  { preserveFullChecks: true, extensionLintMode: undefined },
+  { preserveFullChecks: true, coreTypeMatrix: stripeMatrix(4) },
+  { runnerProfile: "blacksmith" },
+  { runnerProfile: "boat" },
+  { graphs: ["scripts", "test-root-tooling"] },
+  { runnerLabel: "blacksmith-8vcpu-ubuntu-2404" },
+])(
+  "retains unqualified central type capacity: %j",
+  async ({ graphs, runnerLabel, ...overrides }) => {
+    typeSelection.graphs = resolveCiTsgoGraphs(graphs ?? ["extensions-test", "scripts"]);
+    const label = runnerLabel ?? "blacksmith-4vcpu-ubuntu-2404";
+    const plan = await createPlan({
+      extensionLintMode: "affected",
+      checkMatrix: { include: [{ ...checks("test-types").include[0]!, runner_label: label }] },
+      ...overrides,
+    });
+    expect(plan.check_matrix.include[0]!.runner_label).toBe(label);
+  },
+);
+
+it.each([
   [undefined, "scripts/ci-sdk-declarations.mts"],
   ["affected", "scripts/ci-sdk-declarations.mts"],
   ["full", "scripts/ci-sdk-declarations.mts"],

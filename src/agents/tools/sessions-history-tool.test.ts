@@ -205,7 +205,7 @@ it("declares complete success and closed error contracts", async () => {
         message: { role: "user", content: "Stopped before execution" },
         acceptedAt: 2,
         state: "cancelled",
-        cancelledByUser: true,
+        endCause: "user-stop",
       },
     ],
     total: 2,
@@ -215,8 +215,18 @@ it("declares complete success and closed error contracts", async () => {
   expect(Value.Check(tool.outputSchema!, { ...readHistoryDetails(result), pendingInputs })).toBe(
     true,
   );
+  expect(
+    Value.Check(tool.outputSchema!, {
+      ...readHistoryDetails(result),
+      pendingInputs: {
+        ...pendingInputs,
+        items: [{ ...pendingInputs.items[1], endCause: "unrecognized" }],
+      },
+    }),
+  ).toBe(false);
+  // Compact hints cap literal text; validation still enforces the closed end-cause enum.
   expect(compactToolOutputHint(tool.outputSchema)).toBe(
-    '{ bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; sessionKey: string; truncated: boolean; hasMore?: boolean; nextOffset?: number; offset?: number; pendingInputs?: { items: Array<{ acceptedAt: number; id: string; message: unknown; state: "queued" | "cancelled" | "interrupted"; cancelledByUser?: true; queued?: true; runId?: string }>; total: number; nextBefore?: number; queuedCount?: number }; sessionLinkRule?: string; totalMessages?: number; windowReset?: boolean } | { error: string; status: "error" | "forbidden" }',
+    '{ bytes: number; contentRedacted: boolean; contentTruncated: boolean; droppedMessages: boolean; messages: Array<unknown>; sessionKey: string; truncated: boolean; hasMore?: boolean; nextOffset?: number; offset?: number; pendingInputs?: { items: Array<{ acceptedAt: number; id: string; message: unknown; state: "queued" | "cancelled" | "interrupted"; endCause?: string; queued?: true; runId?: string }>; total: number; nextBefore?: number; queuedCount?: number }; sessionLinkRule?: string; totalMessages?: number; windowReset?: boolean } | { error: string; status: "error" | "forbidden" }',
   );
 });
 
