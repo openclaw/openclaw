@@ -34,6 +34,7 @@ import {
 } from "./device-revocation.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
+  onOpenClawIdTunnelPrincipalsChanged,
   openclawIdSubjectRolePolicy,
   prepareOpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
@@ -346,6 +347,9 @@ async function restoreGatewayOperatorSnapshot(params: {
         }
       }
     };
+    if (principal?.kind === "owner") {
+      subscriptions.push(onOpenClawIdTunnelPrincipalsChanged(recheckPolicy));
+    }
     subscriptions.push(
       onOperatorRolePolicyChanged((change) => {
         if (change.kind !== "assignment" || change.profileId !== snapshot.profileId) {

@@ -88,6 +88,9 @@ it.for<Change>([
           setUserProfileRole(profile.id, null);
         } else if (change === "openclaw-id-remove") {
           listed = false;
+          setOpenClawIdTunnelPrincipalLookup(() => undefined);
+          expect(previouslyRestored.authority.signal?.aborted).toBe(false);
+          expect(previouslyRestored.authority.assertCurrent).not.toThrow();
         } else {
           const next = structuredClone(config);
           if (change === "definition-edited") {
