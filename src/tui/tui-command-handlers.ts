@@ -513,7 +513,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       try {
         const result = await runAuthFlow({ provider });
         await refreshSessionInfo();
-        if (result.exitCode === 0 && !result.signal) {
+        if (result === undefined || (result.exitCode === 0 && !result.signal)) {
           chatLog.addSystem(provider ? `auth flow finished for ${provider}` : "auth flow finished");
           setActivityStatus("idle");
         } else {
