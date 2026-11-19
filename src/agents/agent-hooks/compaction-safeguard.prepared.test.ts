@@ -105,7 +105,11 @@ it.each([undefined, "unregistered-provider"])(
       {
         ...event,
         type: "session_before_compact",
-        preparation: { ...metadata, fileOps: createFileOps() },
+        preparation: {
+          ...metadata,
+          settings: { ...metadata.settings, enabled: true, keepRecentTokens: 20_000 },
+          fileOps: createFileOps(),
+        },
       },
       {
         identity: createQualityGuardSessionManager({ provider }),
@@ -152,7 +156,11 @@ it("rejects registered custom providers in prepared execution before summarizing
     {
       ...event,
       type: "session_before_compact",
-      preparation: { ...preparation, fileOps: createFileOps() },
+      preparation: {
+        ...preparation,
+        settings: { ...preparation.settings, enabled: true, keepRecentTokens: 20_000 },
+        fileOps: createFileOps(),
+      },
     },
     {
       identity,
