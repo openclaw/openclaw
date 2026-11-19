@@ -19,6 +19,8 @@ const context = { now: WORLD_NOW, host: WORLD_HOST };
 async function setup() {
   const world = await buildWorld();
   const newRoot = await worldKey("root-2");
+  // The reset replaces K_gw; K_srv stays.
+  const newGateway = await worldKey("gateway-2");
   const descriptor = (
     root_pub: ClawDescriptor["root_pub"],
     binding: SignedStatement<"ServerBinding">,
@@ -51,7 +53,13 @@ async function setup() {
     }
     const binding = await signStatement(
       "ServerBinding",
-      { ...world.binding.body, binding_seq: 2, issued_at: WORLD_NOW, ...change.binding },
+      {
+        ...world.binding.body,
+        k_gw: change.keepGateway ? world.binding.body.k_gw : newGateway.pub,
+        binding_seq: 2,
+        issued_at: WORLD_NOW,
+        ...change.binding,
+      },
       change.bindingSigner ?? newRoot.signer,
     );
     return descriptor(newRoot.pub, binding, {
@@ -67,7 +75,7 @@ async function setup() {
     binding_seq: 1,
     k_gw: world.gateway.pub,
   };
-  return { world, newRoot, stored, resetDescriptor, pin };
+  return { world, newRoot, newGateway, stored, resetDescriptor, pin };
 }
 
 type Forgery = {
@@ -76,6 +84,8 @@ type Forgery = {
   /** Changes the reset body after signing. */
   tamperReset?: boolean;
   binding?: Partial<ServerBindingBody>;
+  /** The new binding names the old K_gw instead of a new one. */
+  keepGateway?: boolean;
   bindingSigner?: StatementSigner;
 };
 
@@ -92,14 +102,16 @@ const FORGERIES: [string, string, (mallory: WorldKey) => Forgery][] = [
   ["reset names another root", "root_mismatch", (m) => ({ reset: { new_root_pub: m.pub } })],
   ["new binding not signed by the new root", "wrong_signer", (m) => ({ bindingSigner: m.signer })],
   ["new binding changes K_srv", "reset_mismatch", (m) => ({ binding: { k_srv: m.peer } })],
-  ["new binding changes K_gw", "reset_mismatch", (m) => ({ binding: { k_gw: m.pub } })],
+  ["new binding keeps K_gw", "reset_mismatch", () => ({ keepGateway: true })],
   ["new binding is not the reset's", "reset_mismatch", () => ({ binding: { binding_seq: 3 } })],
 ];
 
 describe("owner reset", () => {
-  it("Discovery accepts a K_gw-vouched root change; an old pin gets owner_reset and dials nothing", async () => {
-    const { newRoot, stored, resetDescriptor, pin } = await setup();
+  it("Discovery accepts a K_gw-vouched root change to a new K_gw; an old pin gets owner_reset and dials nothing", async () => {
+    const { world, newRoot, newGateway, stored, resetDescriptor, pin } = await setup();
     const next = await resetDescriptor();
+    expect(next.binding.body.k_gw).toBe(newGateway.pub);
+    expect(next.binding.body.k_srv).toBe(world.binding.body.k_srv);
     expect(parseClawDescriptor(next)).toEqual({ ok: true, descriptor: next });
     await expect(checkDescriptorConsistency(next, context)).resolves.toMatchObject({ ok: true });
     await expect(checkDescriptorRootReset(stored, next, context)).resolves.toMatchObject({
@@ -139,7 +151,7 @@ describe("owner reset", () => {
   );
 
   it("a leaked old kit cannot fake a reset: its predecessor binding must name the pinned K_gw", async () => {
-    const { world, newRoot, stored, pin } = await setup();
+    const { world, newRoot, newGateway, stored, pin } = await setup();
     // R (the leaked kit) signs a predecessor naming Mallory's K_gw; Mallory signs the reset.
     const previous = await signStatement(
       "ServerBinding",
@@ -158,7 +170,7 @@ describe("owner reset", () => {
     );
     const binding = await signStatement(
       "ServerBinding",
-      { ...previous.body, binding_seq: 2 },
+      { ...previous.body, k_gw: newGateway.pub, binding_seq: 2 },
       newRoot.signer,
     );
     const forged: ClawDescriptor = {

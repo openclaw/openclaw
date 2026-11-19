@@ -212,7 +212,9 @@ export async function checkDescriptorConsistency(
  * accepted only as an owner reset from the stored descriptor: the reset evidence names the stored
  * root and binding (else `reset_mismatch`; none at all is `root_mismatch`), and
  * `verifyRootReset` passes with the stored binding as the current one, so the RootReset is signed
- * by the K_gw Discovery already holds for this claw.
+ * by the K_gw Discovery already holds for this claw. The reset names a new K_gw, so the publish
+ * request also needs that new key's signature and the owner account's one-time code
+ * (docs/discovery.md, "Owner reset"); this check covers only the signed statements.
  */
 export async function checkDescriptorRootReset(
   stored: ClawDescriptor,
