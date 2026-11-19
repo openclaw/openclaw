@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -29,6 +30,30 @@ function step(job: string, name: string) {
   assert(match, `missing workflow step: ${job}/${name}`);
   return match;
 }
+
+it("pins both hosted callers to the Q-ledger-aware watcher definition", () => {
+  const revision = "8ddb0bb7784a3cde6475e7e436b077af15c8df54";
+  for (const name of ["release_decision", "diagnostic_drain"]) {
+    expect((workflowJob(name) as { uses?: string }).uses).toBe(
+      "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@" + revision,
+    );
+  }
+  // Independently verified against the immutable selected revision; no Git-history
+  // dependency in shallow CI checkouts. A changed watcher needs a new verified pin.
+  const selectedSource = readFileSync(".github/workflows/full-release-state-watcher.yml", "utf8");
+  expect(createHash("sha256").update(selectedSource).digest("hex")).toBe(
+    "5de8f27a05bdd63e5e2dc7068ee62bf6bc5c3a6c49292000f7720296af89008a",
+  );
+  const selected = parse(selectedSource);
+  expect(selected.jobs.watch.env.OPENCLAW_RELEASE_WAIVERS_PATH).toBe(
+    "${{ github.workspace }}/scripts/lib/release-validation-waivers.json",
+  );
+  expect(
+    selected.jobs.watch.steps.find(
+      (entry: { name: string }) => entry.name === "Checkout release state tooling",
+    ).if,
+  ).toBeUndefined();
+});
 
 it("runs release tooling only from the trusted revision without persisted credentials", () => {
   const tooling = allSteps.filter((entry) =>

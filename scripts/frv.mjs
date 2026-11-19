@@ -42,6 +42,7 @@ import {
   validateReleaseChildRunProvenance,
   validateReleaseExecutionPlanArtifact,
   validateReleaseStateArtifact,
+  validateReleaseManifestAdvisoryJobs,
 } from "./full-release-validation-policy.mjs";
 import {
   inspectActionsArtifactZipWithPolicy,
@@ -62,6 +63,7 @@ import {
   decodeReleaseValidationSource,
   evaluateReleaseChildPolicy,
   readReleaseValidationWaiversAsync,
+  RELEASE_VALIDATION_WAIVERS_PATH,
 } from "./lib/release-validation-waivers.mjs";
 import { sleep } from "./lib/sleep.mjs";
 import { sameJobExecution } from "./npm-prepared-bundle.mjs";
@@ -2700,7 +2702,7 @@ async function createPublicationReader(repository) {
     requirePublication(value > 0, "deadline");
     return value;
   };
-  function bytes(path, maxBytes = limits.jsonBytes) {
+  function bytes(path, maxBytes = limits.jsonBytes, allowMissingLedger = false) {
     const timeout = Math.min(limits.requestMs, remaining());
     requirePublication(++requests <= limits.requests, "limits");
     let result;
@@ -2727,6 +2729,10 @@ async function createPublicationReader(repository) {
         },
       );
     } catch (error) {
+      if (allowMissingLedger && /\bHTTP 404\b/u.test(String(error?.stderr))) {
+        // Only the immutable ledger's absence admits the authenticated pre-ledger path.
+        throw new Error("Q waiver ledger missing (HTTP 404)", { cause: error });
+      }
       throw new PublicationStatusError(
         error?.code === "ENOBUFS"
           ? "limits"
@@ -2744,8 +2750,12 @@ async function createPublicationReader(repository) {
     remaining();
     return result;
   }
-  function json(path) {
-    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes(path)));
+  function json(path, allowMissingLedger = false) {
+    return JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(
+        bytes(path, limits.jsonBytes, allowMissingLedger),
+      ),
+    );
   }
   function collection(path, key) {
     const entries = [];
@@ -2897,9 +2907,15 @@ async function createPublicationReader(repository) {
     getRunAttempt,
     getWorkflowSource(sha, sourcePath) {
       requirePublication(
-        /^[a-f0-9]{40}$/u.test(sha) && sourcePath === RELEASE_VALIDATION_WAIVERS_PATH,
+        /^[a-f0-9]{40}$/u.test(sha) &&
+          [RELEASE_VALIDATION_WAIVERS_PATH, "scripts/lib/release-validation-waivers.mjs"].includes(
+            sourcePath,
+          ),
       );
-      return json("contents/" + sourcePath + "?ref=" + sha);
+      return json(
+        "contents/" + sourcePath + "?ref=" + sha,
+        sourcePath === RELEASE_VALIDATION_WAIVERS_PATH,
+      );
     },
     authenticate,
     readArtifact,
@@ -3072,6 +3088,10 @@ async function inspectPublicationStatus(options) {
               workflowRef: root.head_branch,
               workflowSha: root.head_sha,
               candidateBinding: plan.candidate,
+              deferWaiverPolicy: true,
+            });
+            validateReleaseManifestAdvisoryJobs(manifestArtifact.value, {
+              waiverPolicy: await readReleaseWaiverPolicy(plan, reader),
             });
             joinPublicationValidation(
               publication,
