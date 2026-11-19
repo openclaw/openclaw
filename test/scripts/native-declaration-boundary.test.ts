@@ -207,8 +207,8 @@ it.each([
   );
 });
 
-// The emitting process's heap limit is the build memory owner's admission fact: only its
-// uncapped default admits the parallel pass, whose native memory the heap does not bound.
+// The build memory owner's frozen budget decides: only its uncapped default admits the
+// parallel pass, whose native memory the heap does not bound. Node heap flags do not.
 it("emits identical declarations in fresh processes and goes parallel only on the uncapped build heap", () => {
   const root = tempRoot("determinism");
   const fixture = createNativeFixture(root);

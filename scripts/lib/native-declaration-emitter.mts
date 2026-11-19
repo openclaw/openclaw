@@ -15,6 +15,10 @@ import {
 import { nativeTypeScriptToolchainFiles } from "./native-typescript-toolchain.mts";
 import { resolveInstalledNativeTypeScriptCompiler } from "./native-typescript.mts";
 import { isRecord } from "./record-shared.mjs";
+import {
+  TSDOWN_MAX_OLD_SPACE_MB_ENV,
+  tsdownBudgetAdmitsParallelNativeWork,
+} from "./tsdown-heap-budget.mts";
 
 export type NativeDeclaration = {
   code: string;
@@ -291,11 +295,9 @@ export async function compileNativeProject({
  * runtime builds at once. Its Windows default and a run without that budget (a bare tsdown)
  * emit single-threaded; an operator's explicit budget at or above it asserts ample memory.
  */
-const PARALLEL_EMIT_MIN_OLD_SPACE_MB = 12_288;
-
 function hostAdmitsParallelEmit() {
-  const budgetMb = Number(process.env.OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB);
-  return Number.isSafeInteger(budgetMb) && budgetMb >= PARALLEL_EMIT_MIN_OLD_SPACE_MB;
+  const budgetMb = Number(process.env[TSDOWN_MAX_OLD_SPACE_MB_ENV]);
+  return Number.isSafeInteger(budgetMb) && tsdownBudgetAdmitsParallelNativeWork(budgetMb);
 }
 
 /**
