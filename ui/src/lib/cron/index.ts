@@ -15,6 +15,7 @@ import {
   normalizeCronFormState,
   validateCronForm,
 } from "./form.ts";
+import { patchCronJobDefinition } from "./job-definition.ts";
 import { loadCronJobsPage } from "./jobs-full.ts";
 import { retireCronJobsRequest } from "./jobs.ts";
 import { buildCronPayload } from "./payload.ts";
@@ -80,13 +81,6 @@ async function withCronBusy(
     }
   }
   return undefined;
-}
-
-function requireCronConfigRevision(revision: string | null | undefined): string {
-  if (revision) {
-    return revision;
-  }
-  throw new Error(t("cron.missingConfigRevision"));
 }
 
 function clearCronEditState(state: CronState) {
@@ -351,11 +345,7 @@ async function updateCronJobDefinition(
   const selectedJob = state.cronEditingJob;
   const ownsEditor = () => state.cronEditingJob === job && state.cronForm === form;
   try {
-    const updatedJob = await client.request<CronJob>("cron.update", {
-      id: job.id,
-      expectedConfigRevision: requireCronConfigRevision(job.configRevision),
-      patch,
-    });
+    const updatedJob = await patchCronJobDefinition(client, job, patch);
     if (!isCurrent()) {
       return false;
     }
