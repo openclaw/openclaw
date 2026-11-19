@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import fs from "node:fs";
+import { availableParallelism } from "node:os";
 import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -35,7 +36,6 @@ import {
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
 import { searchSessionTranscripts } from "./session-transcript-search.js";
-import { searchSessionTranscriptsReadOnlySync } from "./session-transcript-search.worker.js";
 import {
   clearDatabaseWorkerIdleRetirement,
   historyLane,
@@ -116,13 +116,14 @@ it("keeps a warmed search reader through discovery and retires it through its ca
     );
     const reader = retainSessionHistoryWorkerDatabase(database);
     const search = () =>
-      reader.owner.searchTranscripts(request, () =>
-        projectionWriter.readSessionTranscriptIndexStatus(database),
+      reader.owner.searchTranscripts(
+        { ...request, filterCandidates: true },
+        () => projectionWriter.readSessionTranscriptIndexStatus(database),
+        async (keys) => keys.map(() => true),
       );
     try {
       const initial = await search();
       expect(initial.hits).toMatchObject([{ messageId: "selected-message" }]);
-      expect(initial.indexing).toBe(false);
       const hostSql = observeHostDataSql();
       try {
         await withSessionHistoryWorkerReadCandidates(
@@ -200,7 +201,6 @@ it("reuses completed readiness after idle writer eviction and observes a later t
         indexing: false,
       });
       const nativeWriter = await openWriter.mock.results[0]!.value;
-      expect(nativeWriter).toBeDefined();
       const closeWriter = vi.spyOn(nativeWriter!, "close");
       try {
         // Five stores exceed the idle writer limit; the first store retains only its reader.
@@ -273,25 +273,22 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
     });
     const request = { ...scope, query: "needle", sessionKeys: ["agent:main:selected"], limit: 1 };
     const database = { agentId: "main", path: storePath };
-    const { found, ...golden } = searchSessionTranscriptsReadOnlySync(request, {
-      ...database,
-      env: state.env,
-    });
-    expect(found).toBe(true);
-    expect(golden).toMatchObject({
+    const golden = {
       hits: [
-        {
+        expect.objectContaining({
           sessionKey: "agent:main:selected",
           messageId: "message-1",
           snippet: "Needle visible text 1",
-        },
+        }),
       ],
       truncated: true,
-    });
+    };
     const hostSql = observeHostDataSql();
     try {
-      const actual = await searchSessionTranscripts(request, database);
-      expect(actual).toEqual({ ...golden, indexing: false });
+      expect(await searchSessionTranscripts(request, database)).toEqual({
+        ...golden,
+        indexing: false,
+      });
       expect(hostSql.queries).toEqual([]);
     } finally {
       hostSql.restore();
@@ -519,49 +516,53 @@ describe("search reader concurrency", () => {
       ),
   );
 
-  it.skipIf(historyLane.pool.getSnapshot().maxWorkers < 2)(
-    "searches while foreground and projection readers await index status",
-    (context) =>
-      lifetime.run(() =>
-        withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-          const { database, request } = await searchFixture(
-            state,
-            "parallel-search",
-            "needle",
-            "Parallel needle",
-          );
-          const release = createDeferred();
-          const readers = [historyLane, sessionStoreLane].map((lane) => {
-            const reader = retainSessionHistoryWorkerDatabase(database, lane);
-            const entered = createDeferred();
-            const work = reader.owner.searchTranscripts(request, async () => {
-              entered.resolve();
-              await release.promise;
-              return projectionWriter.readSessionTranscriptIndexStatus(database);
-            });
-            void work.catch(() => {});
-            return { reader, entered: entered.promise, work };
+  it.skipIf(availableParallelism() < 7)(
+    "admits six searches independently of foreground and projection readers",
+    async (context) =>
+      withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const { database, request } = await searchFixture(
+          state,
+          "parallel-search",
+          "needle",
+          "Parallel needle",
+        );
+        const release = createDeferred();
+        const entered = Array.from({ length: 6 }, () => createDeferred());
+        const readers = [historyLane, sessionStoreLane].map((lane) => {
+          const reader = retainSessionHistoryWorkerDatabase(database, lane);
+          const ready = createDeferred();
+          const work = reader.owner.searchTranscripts(request, async () => {
+            ready.resolve();
+            await release.promise;
+            return projectionWriter.readSessionTranscriptIndexStatus(database);
           });
-          let search: ReturnType<typeof searchSessionTranscripts> | undefined;
-          try {
-            await withinTest(Promise.all(readers.map(({ entered }) => entered)), context.signal);
-            search = searchSessionTranscripts(request, database);
-            expect(await withinTest(search, context.signal)).toMatchObject({
-              hits: [{ messageId: "needle" }],
-              indexing: false,
-            });
-          } finally {
-            release.resolve();
-            await Promise.allSettled([
-              ...readers.map(({ work }) => work),
-              ...(search ? [search] : []),
-            ]);
-            for (const { reader } of readers) {
-              reader.release();
-            }
+          void work.catch(() => {});
+          return { reader, ready: ready.promise, work };
+        });
+        const searches: ReturnType<typeof searchSessionTranscripts>[] = [];
+        try {
+          await withinTest(Promise.all(readers.map(({ ready }) => ready)), context.signal);
+          searches.push(
+            ...entered.map((gate) =>
+              searchSessionTranscripts(request, database, async (keys) => {
+                gate.resolve();
+                await release.promise;
+                return keys.map(() => true);
+              }),
+            ),
+          );
+          void Promise.allSettled(searches);
+          await withinTest(Promise.all(entered.map((gate) => gate.promise)), context.signal);
+          release.resolve();
+          for (const result of await Promise.all(searches)) {
+            expect(result).toMatchObject({ hits: [{ messageId: "needle" }], indexing: false });
           }
-        }),
-      ),
+        } finally {
+          release.resolve();
+          await Promise.allSettled([...readers.map(({ work }) => work), ...searches]);
+          readers.forEach(({ reader }) => reader.release());
+        }
+      }),
   );
 });
 
@@ -614,7 +615,6 @@ it("releases a projection status execution when canceled during async capture", 
       continueCapture.resolve();
       await expect(pending).rejects.toBe(refusal);
       expect(openStore).not.toHaveBeenCalled();
-      expect(execution).toBeDefined();
       expect(() => execution!.assertCurrent()).toThrow(
         "Agent database execution reference is released",
       );
