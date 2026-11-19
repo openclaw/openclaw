@@ -9,11 +9,7 @@ import { writeGitReleaseLauncher, type GitReleaseTrial } from "./git-release-lau
 import { GIT_RELEASE_TRIAL, gitReleaseSlot } from "./git-release-paths.js";
 import { readPackageVersion } from "./package-json.js";
 import { collectPackageReleases } from "./package-release-retention.js";
-import {
-  PACKAGE_RELEASES_DIR,
-  packageReleaseGlobalRoot,
-  readPackageReleaseSlotSync,
-} from "./package-release-slot-path.js";
+import { PACKAGE_RELEASES_DIR, readPackageReleaseSlotSync } from "./package-release-slot-path.js";
 import {
   capturePackageReleaseSlot,
   createPackageReleasePrefix,
@@ -23,19 +19,10 @@ import {
 } from "./package-release-slot.js";
 import { readBuiltGatewayBuildId } from "./update-git-runtime.js";
 
-/**
- * A new release directory. The worktree is built at `buildDir`, outside
- * `node_modules` (Node refuses to strip types there), then moved to `releaseRoot`.
- */
+/** A new release directory; its worktree is built at `releaseRoot`, where it serves. */
 export async function createGitReleaseDirs(prefix: string) {
   const releasePrefix = await createPackageReleasePrefix(prefix, "git");
-  const globalRoot = packageReleaseGlobalRoot(releasePrefix);
-  await fs.mkdir(globalRoot, { recursive: true });
-  return {
-    releasePrefix,
-    buildDir: path.join(releasePrefix, "build"),
-    releaseRoot: path.join(globalRoot, "openclaw"),
-  };
+  return { releasePrefix, releaseRoot: path.join(releasePrefix, "openclaw") };
 }
 
 /**

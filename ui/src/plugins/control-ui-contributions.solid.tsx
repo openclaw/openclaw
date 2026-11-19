@@ -45,7 +45,6 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
     AbortSignal,
     { entry: ControlUiRegistration<ControlUiAction>; abort: AbortController }
   >();
-  host.style.display = "contents";
   const currentSession = () =>
     context ? findUiSessionRow(context, host.sessionKey, host.agentId) : undefined;
   const retireAction = (signal: AbortSignal) => {
@@ -60,6 +59,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
         sessionKey: host.sessionKey,
         agentId: host.agentId ?? session?.agentId,
         session: session ? structuredClone(session) : undefined,
+        draft: host.composer?.draft,
       });
     } catch (error) {
       retireAction(entry.signal);

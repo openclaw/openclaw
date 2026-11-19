@@ -242,4 +242,32 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
 
     expect(target.conversionTargets).toEqual([serving]);
   });
+
+  it("moves a release under node_modules out of it on its next update (#201874)", async () => {
+    const { dir, checkout, serving } = await checkoutWithTwoCommits();
+    const prefix = path.join(dir, "state", "git-install");
+    // Main builds since #199706 kept the link and its releases under lib/node_modules.
+    const legacy = path.join(prefix, "lib", "node_modules", "openclaw");
+    const legacyRelease = path.join(
+      prefix,
+      "releases",
+      "git-old",
+      "lib",
+      "node_modules",
+      "openclaw",
+    );
+    await fs.mkdir(path.dirname(legacyRelease), { recursive: true });
+    await git(checkout, "worktree", "add", "-q", "--detach", legacyRelease, serving);
+    await fs.mkdir(path.dirname(legacy), { recursive: true });
+    await fs.symlink(path.relative(path.dirname(legacy), legacyRelease), legacy);
+
+    const result = await convert(legacy);
+
+    expect(result.status, JSON.stringify(result.steps)).toBe("ok");
+    // The serving commit is rebuilt where it stays, and the old link no longer serves.
+    expect(target.conversionTargets).toEqual([serving]);
+    const served = await fs.realpath(gitReleaseSlot(prefix));
+    expect(served.split(path.sep)).not.toContain("node_modules");
+    await expect(fs.lstat(legacy)).rejects.toMatchObject({ code: "ENOENT" });
+  });
 });
