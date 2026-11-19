@@ -80,6 +80,21 @@ beforeEach(() => {
   harness.mockRunCronFallbackPassthrough();
 });
 
+it("discovers agent skills while executing in the bound worktree", async () => {
+  harness.clearFastTestEnv();
+  const workspaceDir = tempDirs.make("cron-skill-execution-");
+  bindSession(true, workspaceDir);
+
+  expect(await run()).toMatchObject({ status: "ok" });
+  expect(harness.buildWorkspaceSkillSnapshotMock).toHaveBeenCalledWith(
+    "/tmp/workspace",
+    expect.any(Object),
+  );
+  expect(harness.runEmbeddedAgentMock).toHaveBeenCalledWith(
+    expect.objectContaining({ workspaceDir }),
+  );
+});
+
 it("rejects a mismatched target before workspace preparation", async () => {
   bindSession(false);
   expect(await run("session:agent:default:another-dashboard")).toMatchObject({ status: "error" });
