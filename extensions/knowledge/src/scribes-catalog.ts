@@ -205,22 +205,44 @@ function scheduleLine(expr: string, timezone: string) {
 const listWords = (items: string[]) =>
   items.length > 1 ? `${items.slice(0, -1).join(", ")} and ${items.at(-1)}` : (items[0] ?? "none");
 
-// The settings a scribe's work reads: conversations, Granola meetings and Memory files.
-// Schedules are separate.
-function workSettings(setup: ScribeSetup) {
+/**
+ * Timelines and pages one Knowledge Consolidation run takes on. A weekly run does more, within
+ * the scheduler's 60-minute ceiling for an agent turn without its own timeout.
+ */
+const CONSOLIDATION_AMOUNTS: Record<ReviewSchedule, { timelines: number; pages: number }> = {
+  [REVIEW_WEEKLY_SCHEDULE]: { timelines: 15, pages: 6 },
+  [REVIEW_NIGHTLY_SCHEDULE]: { timelines: 10, pages: 5 },
+};
+/** Meetings one scheduled Learn from Granola run ingests, within the same 60-minute ceiling. */
+const GRANOLA_MEETINGS_PER_RUN = 4;
+/** How a settings line naming a scheduled run's amount begins. */
+const EACH_RUN = "Each run:";
+
+// The settings a scribe's work reads: conversations, Granola meetings, Memory files and how much
+// a scheduled run takes on. Schedules are separate.
+// `amounts: false` leaves them out, as for a consolidation automation on a custom schedule.
+function workSettings(setup: ScribeSetup, wording = CURRENT_WORDING, amounts = true) {
   const { options } = setup;
+  const scheduled = amounts && wording.amounts && setup.mode === "ongoing";
   if ("scope" in options) {
     const which = options.scope === "all" ? "active and archived" : "active only";
     return [`Conversations: ${which}, ${SINCE_WORDS[options.since] ?? options.since}.`];
   }
   if ("meetings" in options) {
     const since = GRANOLA_SINCE_WORDS[options.since] ?? options.since;
-    return [`Granola meetings: ${GRANOLA_MEETING_WORDS[options.meetings]}, ${since}.`];
+    return [
+      `Granola meetings: ${GRANOLA_MEETING_WORDS[options.meetings]}, ${since}.`,
+      ...(scheduled ? [`${EACH_RUN} ingest ${GRANOLA_MEETINGS_PER_RUN} meetings.`] : []),
+    ];
   }
   if ("sources" in options) {
     return [`Memory files: ${listWords(options.sources.map((source) => MEMORY_WORDS[source]))}.`];
   }
-  return [];
+  // A once run carries no schedule, and a custom schedule has no amounts.
+  const amount = scheduled ? CONSOLIDATION_AMOUNTS[options.schedule] : undefined;
+  return amount
+    ? [`${EACH_RUN} retire ${amount.timelines} written Timelines and review ${amount.pages} pages.`]
+    : [];
 }
 
 // What the scribe does, and the skill that does the work.
@@ -262,13 +284,15 @@ const UNATTENDED = "Don't ask questions: nobody is watching this turn.";
 /**
  * Wording a run message is generated from; earlier releases generated some of it differently.
  * `work` and `counts` replace a scribe's current work step and closing counts; `rules` are a
- * scribe's extra closing rules after the failure rule.
+ * scribe's extra closing rules after the failure rule; `amounts` adds how much a scheduled
+ * consolidation or Granola run takes on to its settings.
  */
 type RunWording = {
   access: string;
   work?: Partial<Record<ScribeId, string>>;
   counts?: Partial<Record<ScribeId, string>>;
   rules?: Partial<Record<ScribeId, string>>;
+  amounts?: true;
 };
 
 const ACCESS_UNPROVISIONED =
@@ -302,6 +326,7 @@ const RUN_WORDINGS: readonly RunWording[] = [
   { access: ACCESS_NEVER_WRITTEN, ...CLAIMS_ONLY },
   { access: ACCESS_NEVER_WRITTEN },
   { access: ACCESS_NEVER_WRITTEN, ...GRANOLA_ATTENTION },
+  { access: ACCESS_NEVER_WRITTEN, ...GRANOLA_ATTENTION, amounts: true },
 ];
 
 // The access step, work step, closing counts and extra rules a wording generates for one scribe.
@@ -369,9 +394,9 @@ const runMessageBlock = (message: string) => ["Run message:", "", "```text", mes
  * The message an ongoing scribe's automation sends each run: the work settings, the work step
  * and the closing line. Editing it on the automation changes what later runs do.
  */
-function runPrompt(setup: ScribeSetup, wording = CURRENT_WORDING) {
+function runPrompt(setup: ScribeSetup, wording = CURRENT_WORDING, amounts = true) {
   const scribe = scribeById(setup.scribe)!;
-  const settings = workSettings(setup);
+  const settings = workSettings(setup, wording, amounts);
   return [
     `Scheduled run of the Knowledge scribe "${scribe.title}". ${UNATTENDED}`,
     ...(settings.length ? ["", "Settings:", ...settings.map((line) => `- ${line}`)] : []),
@@ -453,10 +478,10 @@ export function setupPrompt(setup: ScribeSetup) {
   ].join("\n");
 }
 
-// The keys of a settings word table, typed: each table is a `Record` over exactly its choices.
-const choicesOf = <K extends string>(words: Record<K, string>) =>
-  // SAFETY: `words` is a Record<K, string> literal, so its own keys are exactly K.
-  Object.keys(words) as K[];
+// The keys of a settings table, typed: each table is a `Record` over exactly its choices.
+const choicesOf = <K extends string>(table: Record<K, unknown>) =>
+  // SAFETY: `table` is a Record<K, …> literal, so its own keys are exactly K.
+  Object.keys(table) as K[];
 
 // Every choice of the settings a run message spells out; a scribe without settings has one.
 function settingsChoices(id: ScribeId): ScribeOptions[ScribeId][] {
@@ -470,6 +495,9 @@ function settingsChoices(id: ScribeId): ScribeOptions[ScribeId][] {
       choicesOf(GRANOLA_SINCE_WORDS).map((since) => ({ meetings, since })),
     );
   }
+  if (id === "claim-consolidation") {
+    return choicesOf(CONSOLIDATION_AMOUNTS).map((schedule) => ({ schedule }));
+  }
   return [defaultOptions(id)];
 }
 
@@ -480,7 +508,7 @@ function settingsChoices(id: ScribeId): ScribeOptions[ScribeId][] {
  *   since replaced.
  * - outdated: an earlier version generated it unchanged; `current` replaces it.
  * - differs: it differs from every generated message and still carries wording Knowledge has since
- *   replaced, so new run instructions are available (the plugin can't tell who changed it). An update
+ *   replaced, or keeps the current work step without a run amount the current wording adds, so new run instructions are available (the plugin can't tell who changed it). An update
  *   is available); `current` is what resetting it applies, for the settings the message names
  *   (the defaults when it names none Knowledge generates).
  */
@@ -488,11 +516,33 @@ export type RunMessageCheck =
   | { state: "current" | "custom" }
   | { state: "outdated" | "differs"; current: string };
 
+/** The part of an automation's schedule a run message check reads. */
+export type RunSchedule = { kind: string; expr?: string };
+
 /** Compare a scribe automation's run message with every message each version generated. */
-export function checkRunMessage(id: ScribeId, message: string): RunMessageCheck {
-  const choices = settingsChoices(id);
+export function checkRunMessage(
+  id: ScribeId,
+  message: string,
+  schedule?: RunSchedule,
+): RunMessageCheck {
+  // The automation's own schedule comes first, so an earlier message that names no amounts is
+  // brought up to the amounts of the schedule it runs on.
+  const all = settingsChoices(id);
+  const expr = schedule?.kind === "cron" ? schedule.expr : undefined;
+  const scheduled =
+    expr === undefined
+      ? undefined
+      : all.find((options) => "schedule" in options && options.schedule === expr);
+  const choices = scheduled ? [scheduled, ...all.filter((options) => options !== scheduled)] : all;
+  // A consolidation automation on a schedule the dialog doesn't offer gets no amounts, so the
+  // skill's defaults stay in force instead of another schedule's.
+  // Interval and one-time schedules count as such too; a schedule that isn't read stays unknown.
+  const custom =
+    schedule !== undefined &&
+    (schedule.kind !== "cron" || (schedule.expr !== undefined && !scheduled));
+  const amounts = !(id === "claim-consolidation" && custom);
   const generate = (options: ScribeOptions[ScribeId], wording?: RunWording) =>
-    runPrompt({ scribe: id, mode: "ongoing", options, timezone: "UTC" }, wording);
+    runPrompt({ scribe: id, mode: "ongoing", options, timezone: "UTC" }, wording, amounts);
   for (const options of choices) {
     if (message === generate(options)) {
       return { state: "current" };
@@ -512,16 +562,26 @@ export function checkRunMessage(id: ScribeId, message: string): RunMessageCheck 
         !message.includes(current[part]!),
     ),
   );
-  if (!replaced) {
-    return { state: "custom" };
-  }
   // A differing message keeps its settings when it still names a generated settings line.
+  // Matched by its source settings alone, so a message from before run amounts keeps them.
   const named = choices.find((options) =>
-    workSettings(scribeSetup(id, "ongoing", options)).every((line) =>
-      message.includes(`- ${line}`),
+    workSettings(scribeSetup(id, "ongoing", options), { access: CURRENT_WORDING.access }).every(
+      (line) => message.includes(`- ${line}`),
     ),
   );
-  return { state: "differs", current: generate(named ?? defaultOptions(id)) };
+  const target = named ?? scheduled ?? defaultOptions(id);
+  // An edited message that keeps the current work step but names no run amount, where the current
+  // wording adds one, is offered the amount; one that names its own amount keeps it.
+  const missingAmount =
+    message.includes(current[1]!) &&
+    !message.includes(`- ${EACH_RUN}`) &&
+    workSettings(scribeSetup(id, "ongoing", target), CURRENT_WORDING, amounts).some((line) =>
+      line.startsWith(EACH_RUN),
+    );
+  if (!replaced && !missingAmount) {
+    return { state: "custom" };
+  }
+  return { state: "differs", current: generate(target) };
 }
 
 /** First words of every repair prompt; the page never forces a first run after one. */
@@ -563,7 +623,9 @@ export function repairPrompt(
       ? scheduleLine(schedule.expr, timezone)
       : "Keeps the schedule of its current automation.";
   const check =
-    current.runMessage === undefined ? undefined : checkRunMessage(id, current.runMessage);
+    current.runMessage === undefined
+      ? undefined
+      : checkRunMessage(id, current.runMessage, current.schedule);
   const runMessage =
     check?.state === "outdated"
       ? check.current
