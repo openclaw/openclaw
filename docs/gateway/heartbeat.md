@@ -230,8 +230,10 @@ The checklist is the job's scratch. Use one workflow for everyday requests:
   ```
 
 A disabled job keeps its scratch. `openclaw automations enable <job-id>` resumes
-scheduled runs with the saved checklist; `disable` only stops new runs.
-`--unset` removes the checklist entirely.
+scheduled runs with the saved checklist; `disable` stops new scheduled runs.
+Removing the job requests cancellation of an occurrence already in progress and
+reports `activeRunCancellationRequested` in its JSON response. `--unset` removes
+the checklist entirely.
 
 Deleting every item is not the same as removing scratch: with
 `payload.skipIfScratchEmpty: true`, an explicitly empty checklist skips the run,
