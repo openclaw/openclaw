@@ -49,11 +49,7 @@ import {
   getActiveAgentRingZeroTools,
   mergeAgentRingZeroTools,
 } from "./agent-tools.ring-zero-context.js";
-import {
-  formatRunToolRefusal,
-  isHostSystemTurn,
-  resolveTurnToolSurface,
-} from "./agent-tools.turn-authority.js";
+import { isHostSystemTurn, resolveTurnToolSurface } from "./agent-tools.turn-authority.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { resolveAutomationsRunScope } from "./automations-run-scope.js";
 import { registerOneShotExecScopeCleanup } from "./bash-process-control.js";
@@ -626,7 +622,7 @@ export function* assembleOpenClawCodingTools(
       : (name) =>
           name === "message"
             ? "message cannot send on this turn: its reply delivery or tool policy does not allow the message tool. Do not retry message."
-            : formatRunToolRefusal(name),
+            : `${name} is outside the tools this run allows. Do not retry ${name}.`,
     ownerOnlyDenied: new Set(ownerOnlyCoreToolDenylist),
     ownerToolCurrentAssertion: sessionToolAccess.ownerToolCurrentAssertion,
     hostSystemTurn: isHostSystemTurn(options ?? {}),

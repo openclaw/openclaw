@@ -23,22 +23,6 @@ export function isHostSystemTurn(params: {
   return params.trigger === "event" && params.inputProvenance?.kind === "internal_system";
 }
 
-/** A run's tool policy (allowlist, sender or group policy) refuses a listed tool. */
-export function formatRunToolRefusal(toolName: string): string {
-  return `${toolName} is outside the tools this run allows. Do not retry ${toolName}.`;
-}
-
-/**
- * Keeps a tool listed but refuses its calls under a run allowlist. The refusal is also an
- * execution wrapper, so a catalog rewrap of the hook layer (dispatch_action) cannot restore
- * the source executor; plugin and MCP provenance is kept for catalog classification.
- */
-export function refuseRunAllowlistTool(tool: AnyAgentTool): AnyAgentTool {
-  const refuse = (target: AnyAgentTool) =>
-    gateAgentToolExecution(target, formatRunToolRefusal(target.name));
-  return markAgentToolExecutionUnavailable(copyAgentToolMetadata(tool, refuse(tool), refuse), true);
-}
-
 /**
  * Offers the session's tool surface on every turn, so the provider prompt prefix
  * stays cacheable, and gates the calls this turn's authority does not cover.
