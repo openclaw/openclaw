@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { formatErrorMessage, isErrno } from "./errors.js";
 import { PackageIntegrityMismatchError } from "./package-update-integrity.js";
 import type {
@@ -7,22 +6,8 @@ import type {
 } from "./package-update-swap-contract.js";
 import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
 import type { NpmGlobalPrefixLayout } from "./update-npm-prefix.js";
-import {
-  resolveRuntimeLauncherTargets,
-  verifyRuntimeLauncher,
-} from "./update-runtime-relocation.js";
+import { verifyRuntimeLauncher } from "./update-runtime-relocation.js";
 import type { UpdateStepResult } from "./update-step-result.js";
-
-async function isLauncherFormatUnknown(file: string): Promise<boolean> {
-  try {
-    if ((await fs.lstat(file)).isSymbolicLink()) {
-      return false;
-    }
-    return (await resolveRuntimeLauncherTargets(file, "openclaw.mjs")).length === 0;
-  } catch {
-    return false;
-  }
-}
 
 /** Result reporting shares warnings with the swap owner but never performs recovery effects. */
 export function createPackageSwapResults(
@@ -82,18 +67,13 @@ export function createPackageSwapResults(
       // A published launcher that cannot start the new package leaves no CLI. Fail so the
       // transaction restores the previous launchers instead of reporting success.
       for (const { destination } of launchers) {
-        const unreadable = await isLauncherFormatUnknown(destination);
         try {
-          await verifyRuntimeLauncher(destination, "openclaw.mjs");
-          continue;
-        } catch (error) {
-          if (unreadable) {
-            // A format this updater cannot read proves nothing either way.
+          if ((await verifyRuntimeLauncher(destination, "openclaw.mjs")) === "unknown-format") {
             warnings.push(
-              `Published launcher ${destination} could not be verified: ${formatErrorMessage(error)}. Reinstall the current ${params.packageName} version with ${params.installTarget.manager} to recreate the launcher.`,
+              `Published launcher ${destination} could not be verified: Cannot resolve the launcher's executable target. Reinstall the current ${params.packageName} version with ${params.installTarget.manager} to recreate the launcher.`,
             );
-            continue;
           }
+        } catch (error) {
           throw new Error(
             `Published launcher ${destination} cannot start ${params.packageName}: ${formatErrorMessage(error)}`,
             { cause: error },
