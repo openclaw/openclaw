@@ -35,7 +35,7 @@ import type {
   Usage,
 } from "../../llm/types.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { estimateAggregateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import type { WorkerInferenceExecutor } from "./connection-identity.js";
 import type { PreparedWorkerInference } from "./inference-model.js";
@@ -321,12 +321,7 @@ export const executePreparedWorkerInference = async (
       if (!hasObservedModelUsage(usage)) {
         return;
       }
-      const costUsd =
-        usage.cost?.total ??
-        estimateUsageCost({
-          usage,
-          cost: costConfig,
-        });
+      const costUsd = estimateAggregateUsageCost({ usage, cost: costConfig });
       emitTrustedDiagnosticEvent({
         type: "model.usage",
         trace: freezeDiagnosticTraceContext(trace),

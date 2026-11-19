@@ -444,12 +444,10 @@ function resolveAggregateUsageCost<T>(
   return estimate(usage);
 }
 
+/** An all-zero transport cost is a placeholder; the resolved price owns it, authored zero included. */
 function estimateUnpricedAggregateUsageCost(
   usage: NormalizedUsage,
   cost: ModelCostConfig | undefined,
 ): number | undefined {
-  if (usage.cost && cost) {
-    return usage.cost.total;
-  }
   return cost?.tieredPricing?.length ? undefined : estimateUsageCost({ usage, cost });
 }
