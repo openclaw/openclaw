@@ -120,7 +120,10 @@ type TalkLink = "voice-call" | "voice-model";
  * How Talk listens, in user terms, plus the one place a user changes it.
  * `preferredProviderId` is the provider of the picked voice-notes model.
  */
-function talkRowState(catalog: CatalogState, preferredProviderId: string | undefined) {
+function talkRowState(
+  catalog: CatalogState,
+  preferredProviderId: string | undefined,
+): { kind: "muted" | "ok" | "warn"; label: string; description: string; link?: TalkLink } {
   if (catalog === "loading" || catalog === "unavailable") {
     return {
       kind: "muted" as const,
@@ -167,7 +170,7 @@ function talkRowState(catalog: CatalogState, preferredProviderId: string | undef
       : {
           ...status,
           description: t("talkPage.transcription.talkNotSetUp"),
-          link: "voice-call" as TalkLink,
+          link: "voice-call",
         };
   }
   if (!loaded.source) {
@@ -182,20 +185,20 @@ function talkRowState(catalog: CatalogState, preferredProviderId: string | undef
     return {
       ...status,
       description: t("talkPage.transcription.talkVoiceModel", { provider }),
-      link: "voice-model" as TalkLink,
+      link: "voice-model",
     };
   }
   if (loaded.source === "streaming") {
     return {
       ...status,
       description: t("talkPage.transcription.talkVoiceCall", { provider }),
-      link: "voice-call" as TalkLink,
+      link: "voice-call",
     };
   }
   return {
     ...status,
     description: t("talkPage.transcription.talkAutomatic", { provider }),
-    link: "voice-call" as TalkLink,
+    link: "voice-call",
   };
 }
 
