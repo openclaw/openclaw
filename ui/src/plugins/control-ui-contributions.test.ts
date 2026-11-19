@@ -415,7 +415,10 @@ describe("native plugin session actions", () => {
     const setDraft = vi.fn((text: string) => {
       draft = text;
     });
-    const tasks = createComposerTasks(() => true);
+    const tasks = createComposerTasks(
+      () => true,
+      () => null,
+    );
     element.composer = {
       draft: "stale render",
       getDraft: () => draft,

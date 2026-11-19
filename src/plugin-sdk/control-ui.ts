@@ -205,6 +205,12 @@ export type ControlUiPanel = {
 export type ControlUiDraftProposal = {
   /** Short heading for the proposal card. */
   title: string;
+  /**
+   * Replace the draft at once instead of waiting for Use: one editor change with an Undo
+   * receipt, never sent. While dictation or a pending goal locks the editor, the proposal waits
+   * for Use as usual. Resolves `"accepted"` once the draft is replaced.
+   */
+  insert?: boolean;
 };
 
 /** The user's choice; `"dismissed"` also covers the pane, chat, or action retiring first. */
@@ -263,7 +269,13 @@ export type ControlUiAction = {
    * toolbar button beside the attachment menu, named and tooltipped by its label.
    */
   icon?: string;
-  resolve?: (context: BoardGetParams & { session?: ControlUiSession }) => {
+  resolve?: (
+    context: BoardGetParams & {
+      session?: ControlUiSession;
+      /** Composer placement only: the pane's current draft, so an action can need text. */
+      draft?: string;
+    },
+  ) => {
     label?: string;
     disabled?: boolean;
     hidden?: boolean;

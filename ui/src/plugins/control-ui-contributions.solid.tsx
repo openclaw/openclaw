@@ -60,6 +60,9 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
         sessionKey: host.sessionKey,
         agentId: host.agentId ?? session?.agentId,
         session: session ? structuredClone(session) : undefined,
+        ...(entry.value.placement === "composer" && host.composer
+          ? { draft: host.composer.draft }
+          : {}),
       });
     } catch (error) {
       retireAction(entry.signal);
