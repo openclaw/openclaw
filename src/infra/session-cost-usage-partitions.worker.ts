@@ -31,9 +31,11 @@ function assertUsagePartitionWorker(): void {
 
 function indexedUsageCacheEntries(db: EngineConnection) {
   // Keep range probes indexed even when statistics still describe a one-row cache.
-  /* kysely-allow-raw: SQLite's table index hint follows the alias; PostgreSQL omits it. */
-  return sql<DB["cache_entries"]>`"cache_entries"`.as<"cache_entries">(
-    sql`"cache_entries" ${engineIndexHint(db, "sqlite_autoindex_cache_entries_1")}`,
+  return (
+    /* kysely-allow-raw: SQLite's table index hint follows the alias; PostgreSQL omits it. */
+    sql<DB["cache_entries"]>`"cache_entries"`.as<"cache_entries">(
+      sql`"cache_entries" ${engineIndexHint(db, "sqlite_autoindex_cache_entries_1")}`,
+    )
   );
 }
 
