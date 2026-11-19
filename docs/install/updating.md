@@ -103,6 +103,18 @@ invalid upgraded config still refuses publication. No live file is replaced or
 removed unless the upgrade copied it. If Doctor creates a template over an
 uncopied workspace file, startup leaves the original alone and reports a warning.
 
+During copy-and-swap upgrades, Doctor records carried-over scheduled jobs against
+credential databases at their eventual live paths. Reads and repairs remain on
+the private copy. The updater passes this destination directly to Doctor; no
+additional environment variable or operator configuration is needed.
+
+If an earlier upgrade already broke a scheduled job, run `openclaw doctor --fix`.
+While the applied upgrade receipt remains, Doctor can verify the saved account at
+its old path and restore it without changing the schedule, enabling the job, or
+replaying a missed run. If the receipt is gone or the account changed, Doctor
+leaves the job alone. To explicitly choose its account, use
+`openclaw automations edit <id> --model <provider/model>@<profileId>`.
+
 The copy excludes managed worktrees, configured agent workspaces, nested mounts
 and btrfs subvolumes, Knowledge stores, browser profiles, backups, and caches.
 Completed agent deletions whose journal retains files are excluded from startup
@@ -2134,8 +2146,8 @@ which is a separate check. The next `openclaw update` settles that as well when
 no operator is needed: on a package install, or a source checkout that still
 holds exactly the build the killed update installed, the killed update was a
 command-line `openclaw update` whose process has exited, and the update lease
-store still holds its lease. On Linux and macOS hosts a restart that cleared
-that store does not block it: the killed update recorded the boot it ran in,
+store still holds its lease. On Linux and macOS hosts, outside containers, a
+restart that cleared that store does not block it: the killed update recorded the boot it ran in,
 which shows its processes gone. It reports an `interrupted-update-recovery` warning.
 If the killed update had replaced the installed version without confirming it,
 had begun rolling back on it, or left the Gateway stopped, the update first
@@ -2143,8 +2155,9 @@ finishes that version as `openclaw update repair` does (Doctor, plugin
 convergence, Gateway restart). That work is recorded on its own repair run,
 named by an `interrupted-update-finalization` warning. Then the update
 continues. A stopped Gateway is restarted only when the update would restart it
-anyway. With `--no-restart`, or when finishing fails, the update stops and
-names `openclaw update repair`.
+anyway. When that Gateway is still stopped and the update runs with
+`--no-restart`, or when finishing fails, the update stops and names
+`openclaw update repair`.
 Otherwise it stops with `Update <id> has unfinished recovery` and, when repair
 can settle it, the reason and the command to run; see
 [how a killed update is settled](/cli/update/how-updates-run#replacing-the-package-directory).
