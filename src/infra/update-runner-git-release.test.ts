@@ -129,6 +129,13 @@ async function initCheckout(dir: string) {
   return checkout;
 }
 
+const writePackage = (checkout: string, version: string) =>
+  fs.writeFile(path.join(checkout, "package.json"), JSON.stringify({ name: "openclaw", version }));
+const writeBuildInfo = async (checkout: string, commit: string) => {
+  await fs.mkdir(path.join(checkout, "dist"));
+  await fs.writeFile(path.join(checkout, "dist", "build-info.json"), JSON.stringify({ commit }));
+};
+
 const roots: string[] = [];
 afterEach(async () => {
   vi.unstubAllEnvs();
@@ -156,10 +163,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     roots.push(dir);
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(dir, "state"));
     const checkout = await initCheckout(dir);
-    await fs.writeFile(
-      path.join(checkout, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-    );
+    await writePackage(checkout, "1.0.0");
     await git(checkout, "add", ".");
     await git(checkout, "commit", "-qm", "base");
     const prefix = path.join(dir, "state", "git-install");
@@ -219,10 +223,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(dir, "state"));
     const checkout = await initCheckout(dir);
     const commit = async (version: string) => {
-      await fs.writeFile(
-        path.join(checkout, "package.json"),
-        JSON.stringify({ name: "openclaw", version }),
-      );
+      await writePackage(checkout, version);
       await git(checkout, "commit", "-qam", version);
       return await git(checkout, "rev-parse", "HEAD");
     };
@@ -248,11 +249,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   it("builds the first release from the commit the checkout's dist was built from", async () => {
     const { checkout, serving, pulled } = await checkoutWithTwoCommits();
     // Built at 1.0.0, then pulled without rebuilding: the Gateway still serves 1.0.0.
-    await fs.mkdir(path.join(checkout, "dist"));
-    await fs.writeFile(
-      path.join(checkout, "dist", "build-info.json"),
-      JSON.stringify({ commit: serving }),
-    );
+    await writeBuildInfo(checkout, serving);
     await pulled();
 
     await convert(checkout);
@@ -279,20 +276,13 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     const checkout = await initCheckout(dir);
     const commits: Record<string, string> = {};
     for (const version of ["1.0.0", "2.0.0", "3.0.0"]) {
-      await fs.writeFile(
-        path.join(checkout, "package.json"),
-        JSON.stringify({ name: "openclaw", version }),
-      );
+      await writePackage(checkout, version);
       await git(checkout, "add", ".");
       await git(checkout, "commit", "-qm", version);
       commits[version] = await git(checkout, "rev-parse", "HEAD");
     }
     await git(checkout, "checkout", "-q", "--detach", commits["1.0.0"]!);
-    await fs.mkdir(path.join(checkout, "dist"));
-    await fs.writeFile(
-      path.join(checkout, "dist", "build-info.json"),
-      JSON.stringify({ commit: commits["1.0.0"] }),
-    );
+    await writeBuildInfo(checkout, commits["1.0.0"]!);
     const prefix = path.join(dir, "state", "git-install");
     const slot = gitReleaseSlot(prefix);
     const place = async (version: string) => {
@@ -541,20 +531,17 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   );
 
   it.each([
-    ["a newer target", "3.0.0", (install: HalfSwitchedInstall) => fs.realpath(install.slot)],
-    ["the placed target", "2.0.0", async (install: HalfSwitchedInstall) => install.unserved],
-    ["the serving target", "1.0.0", async (install: HalfSwitchedInstall) => install.serving],
-  ])(
-    "writes a link that resolves under a linked state directory for %s",
-    async (_label, version, intended) => {
-      const install = await halfSwitchedInstall({ linkedState: true });
+    ["a newer target", "3.0.0"],
+    ["the placed target", "2.0.0"],
+    ["the serving target", "1.0.0"],
+  ])("writes a link that resolves under a linked state directory for %s", async (_l, version) => {
+    const install = await halfSwitchedInstall({ linkedState: true });
 
-      const result = await install.update(install.commits[version]!);
+    const result = await install.update(install.commits[version]!);
 
-      expect(result.status, JSON.stringify(result.steps)).not.toBe("error");
-      expect(await fs.realpath(install.slot)).toBe(await intended(install));
-    },
-  );
+    expect(result.status, JSON.stringify(result.steps)).not.toBe("error");
+    expect(await git(install.slot, "rev-parse", "HEAD")).toBe(install.commits[version]);
+  });
 
   it("keeps the link and trial, and one rebuild, while the target keeps failing", async () => {
     const install = await halfSwitchedInstall();
@@ -573,17 +560,17 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   });
 
   it.each([
-    ["is gone", "serving", "../../..", false],
-    ["lost its Git metadata", "serving", ".git", false],
+    ["is gone", "serving", ["../../.."], false],
+    ["lost its Git metadata", "serving", [".git"], false],
     // Only the checkout's build reporting its commit shows that the fallback serves.
-    ["has no evidence that it serves", "checkout", "dist", false],
-    // A lease is taken before the Gateway is ready, so a boot that died proves nothing.
-    ["is incomplete and only took a lease", "checkout", "dist", true],
+    ["has no evidence that it serves", "checkout", ["dist"], false],
+    // After any Gateway's release lease, even from a failed boot, the checkout proves nothing.
+    ["is incomplete and a Gateway took a release lease", "serving", [], true],
   ] as const)("changes nothing and refuses when the fallback %s", async (_l, root, gone, lease) => {
     const install = await halfSwitchedInstall();
     const trial = await fs.readFile(install.trialFile, "utf8");
     const release = path.resolve(install.serving, "../../..");
-    await fs.rm(path.resolve(install[root], gone), { recursive: true });
+    await Promise.all(gone.map((p) => fs.rm(path.resolve(install[root], p), { recursive: true })));
     if (lease) {
       target.broken.push(install.serving);
       await fs.mkdir(path.join(release, "../.leases", path.basename(release)), { recursive: true });
@@ -640,5 +627,15 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     expect(await fs.realpath(install.slot)).toBe(install.serving);
     await expect(fs.access(install.trialFile)).rejects.toThrow();
     await expect(fs.access(install.unserved)).rejects.toThrow();
+  });
+
+  it("does not report the serving target current once the placed release ends its trial", async () => {
+    const install = await halfSwitchedInstall();
+    target.duringValidation = () => fs.rm(install.trialFile);
+
+    const result = await install.update(install.commits["1.0.0"]!);
+
+    expect(result).toMatchObject({ status: "error", reason: "git-release-selection-changed" });
+    expect(await fs.realpath(install.slot)).toBe(install.unserved);
   });
 });

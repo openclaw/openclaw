@@ -1613,7 +1613,8 @@ serve (see below), the next plain `openclaw update` builds on it:
   removed.
 - If the serving release is the target, the update runs the candidate checks on it and the
   caller's mutation check, puts the link back on the serving release, and reports that the
-  installation is current.
+  installation is current. If the placed release started or ended its trial meanwhile, the
+  link stays on it and the update fails with `git-release-selection-changed` instead.
 
 Only a release the launcher never started and no process holds counts as never started.
 A trial that started stays under the launcher, which owns its state rollback. If the
@@ -1626,10 +1627,13 @@ the link already names keeps that release's existing trial.
 
 The trial's previous release is used as the fallback, or its commit rebuilt, only on
 evidence that this commit is what the Gateway serves. The only such evidence on disk is
-the checkout's own build reporting that commit, as it does while the first releases of a
-converted checkout are placed. Nothing on disk records that a release's trial passed,
-and a Gateway takes its release lease before it is ready, so a lease does not show that
-a release served. With that evidence, a fallback must be present and its build must
+the state a conversion leaves before its first restart: no Gateway has ever run from a
+release, so the service still runs the checkout, and the checkout's own build reports
+that commit. Every Gateway that runs from a release first takes a lease under
+`releases/.leases/`, and that directory stays, so any lease directory there means the
+checkout's build no longer shows what serves. Nothing on disk records that a release's
+trial passed, and a lease is taken before the Gateway is ready, so neither shows which
+release served. With that evidence, a fallback must be present and its build must
 verify against its commit. If it is incomplete, the update rebuilds that commit as a new
 release. It switches to the rebuilt release only at the normal switch point, after the
 target passed its checks. A later attempt reuses that rebuild instead of building another

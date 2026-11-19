@@ -192,14 +192,25 @@ async function readReleaseHead(root: string): Promise<string | null> {
 }
 
 /**
- * The only evidence on disk that a fallback's commit is what the Gateway serves: the
- * checkout's own build reports that commit, as it does for the first release of a
- * conversion while the service still runs the checkout. Nothing on disk records that a
- * release's trial passed (settling deletes the record), and a release lease is taken
- * before the Gateway is ready, so neither counts. A publisher before this change recorded
- * whatever the link named, which can be a release that never started.
+ * The only evidence on disk that a fallback's commit is what the Gateway serves: no
+ * Gateway has ever run from a release, so the service still runs the checkout, and the
+ * checkout's own build reports that commit. That is the state a conversion leaves before
+ * its first restart. Every Gateway that runs from a release takes a lease there first, and
+ * its lease directory stays, so any lease directory means the checkout may not serve.
+ * Nothing on disk records that a release's trial passed (settling deletes the record),
+ * and a lease is taken before the Gateway is ready, so neither shows what serves. A
+ * publisher before this change recorded whatever the link named, which can be a release
+ * that never started.
  */
-async function isCheckoutServingCommit(root: string, commit: string): Promise<boolean> {
+async function isCheckoutServingCommit(
+  prefix: string,
+  root: string,
+  commit: string,
+): Promise<boolean> {
+  const leases = path.join(prefix, PACKAGE_RELEASES_DIR, ".leases");
+  if ((await fs.readdir(leases).catch((): string[] => [])).length > 0) {
+    return false;
+  }
   const dotGit = await fs.readFile(path.join(root, ".git"), "utf8").catch(() => "");
   const gitDir = /^gitdir: (.+)$/mu.exec(dotGit)?.[1]?.trim();
   const commonDir = gitDir
@@ -248,9 +259,8 @@ export async function findVerifiedGitRelease(params: {
  * What the trial record says about the link. The link alone is not evidence of what
  * serves: an update that fails after the switch but before any Gateway starts the new
  * release leaves the link on a release that never served, with its trial still armed.
- * That trial's `previous` is the release that last served, and the next update builds on it.
- * A fallback is safe only while it is present and its build verifies; the trial's
- * `previous` matches what serves because a switch records the release the link left.
+ * That trial's `previous` is used only when its commit is shown to serve (see
+ * `isCheckoutServingCommit`) and its build verifies; otherwise `unsafeFallback` says why.
  */
 export async function readGitReleasePlacement(
   slot: PackageReleaseSlot,
@@ -284,7 +294,9 @@ export async function readGitReleasePlacement(
   const unserved = { root: slot.releaseRoot, selected: true };
   const commit = previous ? await readReleaseHead(previous) : null;
   // A fallback is used, or its commit rebuilt, only on evidence that the commit serves.
-  const served = Boolean(previous && commit && (await isCheckoutServingCommit(previous, commit)));
+  const served = Boolean(
+    previous && commit && (await isCheckoutServingCommit(slot.prefix, previous, commit)),
+  );
   if (served && (await verifiesAsGitRelease(previous!))) {
     return { serving: previous!, fallback: previous!, unserved };
   }

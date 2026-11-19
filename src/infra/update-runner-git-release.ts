@@ -280,7 +280,7 @@ export async function updateGitRelease(params: {
   };
   const supersedeUnserved = async () => {
     if (!unserved || !placement) {
-      return;
+      return true;
     }
     const superseded = await supersedeUnservedGitRelease({ prefix, placement, prune });
     await reportPlacement(
@@ -292,6 +292,7 @@ export async function updateGitRelease(params: {
             ? `Removing it failed; release collection retries later: ${formatErrorMessage(superseded.error)}`
             : "A process started from it during this update, so release collection keeps it for now.",
     );
+    return superseded.superseded;
   };
   if (deferredLeftover) {
     await reportPlacement(
@@ -458,7 +459,11 @@ export async function updateGitRelease(params: {
       timeoutMs,
       beforeGitMutation: opts.beforeGitMutation,
     });
-    await supersedeUnserved();
+    // The placed release started or passed its trial meanwhile: the target is no longer
+    // what is selected, so this update is not current.
+    if (!(await supersedeUnserved())) {
+      return result("error", "git-release-selection-changed");
+    }
   }
   if (target.status !== "ok" && (!previousRelease || target.reason !== "already-current")) {
     return result(target.status, target.reason);
