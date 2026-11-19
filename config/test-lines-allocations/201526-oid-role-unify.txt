@@ -18,5 +18,6 @@
 # Retained question producers cancel ordinary, secret and sessionless waiters, including
 # role loss during preparation and independent owner cleanup; admitted requests settle.
 # Explicit source revocation also cancels non-runtime producers and their native waiters.
-# Measured against the merged PR base: 2456 net test lines; 400 ordinary + 2056 allocated.
-2056
+# Retained Goal role-loss coverage waits for actual provider cancellation before settlement.
+# Measured against the merged PR base: 2460 net test lines; 400 ordinary + 2060 allocated.
+2060
