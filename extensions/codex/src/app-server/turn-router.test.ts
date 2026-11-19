@@ -484,6 +484,48 @@ describe("CodexAppServerTurnRouter", () => {
 });
 
 describe("CodexAppServerTurnRouter lifecycle", () => {
+  it.each([
+    { version: 1, mode: "show", trustedContacts: "skip" },
+    { version: 1, mode: "hide", replacement: { kind: "wellbeingPromptHelpline" } },
+    { version: 1, mode: "block", reason: { kind: "cyber", trustedAccess: true } },
+  ])("settles a valid native $mode receipt after a malformed receipt", async (display) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const harness = createHarness();
+    const route = await bindRoute(harness, "turn-1");
+    const watch = harness.watch("turn-1");
+    const settled = vi.fn();
+    void watch.completion.then(settled);
+    const send = (moderated: boolean | string) =>
+      harness.notify("turn/completed", {
+        threadId: route.threadId,
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [
+            { type: "agentMessage", id: "sibling", text: "Another answer." },
+            {
+              type: "agentMessage",
+              id: "answer",
+              text: "Display fixture",
+              moderation: { moderated, display: { ...display, futureField: true } },
+            },
+          ],
+        },
+      });
+
+    send("invalid");
+    await settleInput();
+    expect(watch.state).toBe("pending");
+    expect(route.completed).toBe(false);
+    send(true);
+    await settleInput();
+    expect(watch.state).toBe("confirmed");
+    expect(route.completed).toBe(true);
+    send(true);
+    await settleInput();
+    expect(settled.mock.calls).toEqual([[true]]);
+  });
+
   it.each<[boolean, JsonObject]>([
     [
       true,
