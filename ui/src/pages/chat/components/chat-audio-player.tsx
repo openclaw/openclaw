@@ -359,7 +359,15 @@ function ChatAudioPlayerContent(
       const requestedSource = resolveWaveformCacheKey();
       // Invoke play in the click task so strict browser media policies retain user activation.
       const playback = media.play();
-      const failed = () => {
+      const failed = (error: unknown) => {
+        // Replacing src aborts the previous play request while the renewed seek owns the resume.
+        if (
+          error instanceof DOMException &&
+          error.name === "AbortError" &&
+          sourceController.willResumePlayback
+        ) {
+          return;
+        }
         releaseChatAudioPlayback(media);
         setState((draft) => Object.assign(draft, { playing: false }));
       };
