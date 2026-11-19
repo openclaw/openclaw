@@ -10,17 +10,23 @@ import {
 } from "../../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { readArchiveEntry } from "../../infra/archive.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireFileLock } from "../../infra/file-lock.js";
+import { resolveOsHomeRelativePath } from "../../infra/home-dir.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { pathEntryExists } from "../../infra/path-existence.js";
 import { inspectSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
-import { listActivePnpmIsolatedGlobalPackages } from "../../infra/update-global.js";
+import {
+  canResolveRegistryVersionForPackageTarget,
+  listActivePnpmIsolatedGlobalPackages,
+  resolveExpectedInstalledVersionFromSpec,
+} from "../../infra/update-global.js";
 import { resolveSystemdScopeLauncher } from "../../infra/update-managed-service-handoff-launcher.js";
 import { recordedUpdateRunDrivers } from "../../infra/update-run-activity.js";
 import { inspectUpdateRunDriver, type UpdateRunDriver } from "../../infra/update-run-driver.js";
@@ -194,6 +200,40 @@ function isLiveDriverAncestor(driver: UpdateRunDriver): boolean {
   return ancestry.pids.has(driver.pid) && inspectUpdateRunDriver(driver) === "alive";
 }
 
+/**
+ * Repeat the source the user updated from when it is pinned to the installed version: an exact
+ * version, or a local tarball (absolute or `~/`) whose manifest names that version. A dist-tag,
+ * range, URL, Git ref or relative path can resolve elsewhere, so it falls back to the version.
+ */
+export async function resolveHandOffTag(
+  recorded: string | undefined,
+  installedVersion: string,
+): Promise<string> {
+  const tag = recorded?.trim();
+  if (!tag) {
+    return installedVersion;
+  }
+  if (canResolveRegistryVersionForPackageTarget(tag)) {
+    const exact = resolveExpectedInstalledVersionFromSpec(
+      "openclaw",
+      tag.startsWith("openclaw@") ? tag : `openclaw@${tag}`,
+    );
+    return exact === installedVersion ? tag : installedVersion;
+  }
+  const file = tag.replace(/^file:/u, "");
+  if (!/\.(?:tgz|tar\.gz)$/iu.test(file) || !(path.isAbsolute(file) || file.startsWith("~/"))) {
+    return installedVersion;
+  }
+  const manifest = await readArchiveEntry(resolveOsHomeRelativePath(file), "package/package.json", {
+    maxBytes: 1024 * 1024,
+  })
+    .then((bytes): unknown => JSON.parse(bytes.toString("utf8")))
+    .catch(() => undefined);
+  return isRecord(manifest) && manifest.name === "openclaw" && manifest.version === installedVersion
+    ? tag
+    : installedVersion;
+}
+
 /** Until each is provably gone, a driver or handoff helper may still restore or triage. */
 function updateProcessesMayRun(run: UpdateRunRecord): boolean {
   const helper = run.origin.managedHandoff?.helper;
@@ -279,7 +319,13 @@ export async function runShippedRestartFinisher(params: {
     }
     // From here the update owns admission: it refuses a concurrent update and revalidates the
     // service itself, so the short gap after the lock release cannot double-apply anything.
-    await deps.runUpdate(["update", "--tag", version, "--yes", "--json"]);
+    await deps.runUpdate([
+      "update",
+      "--tag",
+      await resolveHandOffTag(run.target.tag, version),
+      "--yes",
+      "--json",
+    ]);
     return "handed-off";
   } finally {
     await lock.release();

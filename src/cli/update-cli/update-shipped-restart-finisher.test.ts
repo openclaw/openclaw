@@ -74,11 +74,26 @@ const { driver: liveDriver, dead: deadDriver } = deadDriverFixture();
 function startShippedRun(
   fixture: Fixture,
   origin: Parameters<typeof ledger.createUpdateRun>[0]["origin"] = { driver: deadDriver },
+  tag?: string,
 ) {
   return ledger.createUpdateRun(
-    { trigger: "cli", origin, before: { version: "2026.11.5" } },
+    {
+      trigger: "cli",
+      origin,
+      before: { version: "2026.11.5" },
+      ...(tag ? { target: { tag } } : {}),
+    },
     fixture.options,
   ).runId;
+}
+
+/** An npm-packed tarball: its manifest at `package/package.json`. */
+function packTarball(fixture: Fixture, version: string) {
+  const source = path.join(fixture.base, `pack-${version}`);
+  writePackage(path.join(source, "package"), version);
+  const tarball = path.join(fixture.base, `openclaw-${version}.tgz`);
+  execFileSync("tar", ["-czf", tarball, "-C", source, "package"]);
+  return tarball;
 }
 
 function failRevalidation(fixture: Fixture, runId: string, dataAtRisk = false) {
@@ -254,6 +269,29 @@ describe("shipped-updater Gateway restart waiter", () => {
     await expect(finish(fixture, runId, deps)).resolves.toBe("handed-off");
     expect(updates).toEqual(["update --tag 2026.11.6 --yes --json"]);
   });
+
+  it.each([
+    { name: "a tarball of the installed version", target: "tarball:2026.11.6", reused: true },
+    { name: "an exact installed version spec", target: "openclaw@2026.11.6", reused: true },
+    { name: "a dist-tag", target: "latest", reused: false },
+    { name: "a tarball of another version", target: "tarball:2026.11.7", reused: false },
+  ])(
+    "repeats the recorded target only when it pins the installed version: $name",
+    async (variant) => {
+      const fixture = pnpmSwitch();
+      const target = variant.target.startsWith("tarball:")
+        ? packTarball(fixture, variant.target.slice("tarball:".length))
+        : variant.target;
+      const runId = startShippedRun(fixture, { driver: deadDriver }, target);
+      failRevalidation(fixture, runId);
+      const { deps, updates } = harness(fixture);
+
+      await expect(finish(fixture, runId, deps)).resolves.toBe("handed-off");
+      expect(updates).toEqual([
+        `update --tag ${variant.reused ? target : "2026.11.6"} --yes --json`,
+      ]);
+    },
+  );
 
   it.each([
     { name: "a previous driver", origin: { driver: deadDriver, previousDrivers: [liveDriver] } },
