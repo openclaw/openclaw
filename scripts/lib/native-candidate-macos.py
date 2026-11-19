@@ -328,7 +328,8 @@ def environment(candidate, home, proxy_port=None):
             "OPENCLAW_SKIP_GMAIL_WATCHER": "1"}
     if proxy_port is not None:
         proxy = f"http://127.0.0.1:{proxy_port}"
-        env.update({"HTTPS_PROXY": proxy, "HTTP_PROXY": proxy,
+        # Node global fetch does not honor these URLs without its explicit opt-in.
+        env.update({"NODE_USE_ENV_PROXY": "1", "HTTPS_PROXY": proxy, "HTTP_PROXY": proxy,
                     "https_proxy": proxy, "http_proxy": proxy,
                     "npm_config_https_proxy": proxy, "npm_config_proxy": proxy})
     return env

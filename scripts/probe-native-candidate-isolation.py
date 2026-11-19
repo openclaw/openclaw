@@ -90,6 +90,7 @@ async function request(port, host = "127.0.0.1") {
 }
 (async () => {
   if (phase === "probe") {
+    assert.equal(process.env.NODE_USE_ENV_PROXY, undefined);
     const config = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8"));
     const endpoint = new URL(config.models.providers.fixture.baseUrl);
     const result = await new Promise((resolve, reject) => {
@@ -105,6 +106,11 @@ async function request(port, host = "127.0.0.1") {
   } else {
     await assert.rejects(request(details.unrelated, details.host));
     if (process.env.HTTPS_PROXY) {
+      assert.equal(process.env.NODE_USE_ENV_PROXY, "1");
+      // Exercise the same Node fetch path used by candidate worker-deploy builds.
+      const registry = await fetch("https://registry.npmjs.org/pnpm/latest", { signal: AbortSignal.timeout(30000) });
+      assert.equal(registry.status, 200);
+      await registry.arrayBuffer();
       const proxy = new URL(process.env.HTTPS_PROXY);
       const response = await new Promise((resolve, reject) => {
         const socket = net.connect(Number(proxy.port), proxy.hostname);
