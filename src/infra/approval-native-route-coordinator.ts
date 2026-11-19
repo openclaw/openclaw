@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -19,7 +20,6 @@ import type {
   ApprovalRequestChannelRouteClass,
   ChannelApprovalKind,
 } from "./approval-types.js";
-import { formatErrorMessage } from "./errors.js";
 
 const log = createSubsystemLogger("gateway/approval-route");
 
