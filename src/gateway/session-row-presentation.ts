@@ -28,7 +28,7 @@ import {
   tryResolveSessionCompatibilityOwnerAgentId,
 } from "./session-request-agent.js";
 import {
-  reuseSessionRowFields,
+  freezeSessionRow,
   sessionRowId,
   sessionRowsRevision,
   type SessionRowGeneration,
@@ -601,7 +601,7 @@ export function prepareProjectedSessionPresentation(
     }
     if (signature !== undefined) {
       // Shared-fact replies never send this raw row; encode only at the wire boundary.
-      const snapshot = freezeTrustedJsonSnapshot(reuseSessionRowFields(row, previous?.row));
+      const snapshot = freezeSessionRow(row, previous?.row);
       const view = { facts: recipientFacts, row: snapshot };
       if (variants) {
         variants.push(view);

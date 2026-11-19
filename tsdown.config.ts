@@ -1086,7 +1086,8 @@ const configs: UserConfig[] = [
           ? Object.fromEntries(
               Object.entries(runtimeProcessWorkerDependencies).map(([key, source]) => [
                 "worker/" + key,
-                source,
+                // Bare node_modules paths can resolve against an enclosing checkout.
+                path.resolve(repoRoot, source),
               ]),
             )
           : {}),
