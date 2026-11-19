@@ -770,7 +770,9 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
       return index < 0 ? undefined : args[index + 1];
     };
     const apiEndpoint = args[0] === 'api' ? args.find(arg => arg.startsWith('repos/')) : undefined;
-    const endpoint = String(apiEndpoint ?? '').replace('repos/${REPOSITORY}/', '').split('?')[0];
+    const responseEndpoint = String(apiEndpoint ?? '').replace('repos/${REPOSITORY}/', '');
+    const endpoint = responseEndpoint.split('?')[0];
+    const responseKey = Object.hasOwn(state.frv?.responses ?? {}, responseEndpoint) ? responseEndpoint : endpoint;
     const method = option('--method') ?? 'GET';
     const release = () => ({
       id: state.releaseId, tag_name: process.env.FIXTURE_RELEASE_TAG,
@@ -782,8 +784,8 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
       process.stdout.write(readFileSync(state.frv.archives[endpoint]));
     } else if (state.frv && !state.unavailableFrv && args[0] === 'api' && Object.hasOwn(state.frv.logs, endpoint)) {
       process.stdout.write(state.frv.logs[endpoint]);
-    } else if (state.frv && !state.unavailableFrv && args[0] === 'api' && Object.hasOwn(state.frv.responses, endpoint)) {
-      console.log(JSON.stringify(state.frv.responses[endpoint]));
+    } else if (state.frv && !state.unavailableFrv && args[0] === 'api' && Object.hasOwn(state.frv.responses, responseKey)) {
+      console.log(JSON.stringify(state.frv.responses[responseKey]));
     } else if (args[0] === 'api' && args[1].startsWith('repos/${REPOSITORY}/commits/')) {
       const sha = decodeURIComponent(args[1]).includes('/release-publish/') ? state.toolingSha : state.sourceSha;
       console.log(args[args.indexOf('--jq') + 1].startsWith('.sha') ? sha : JSON.stringify({ sha }));
@@ -1298,19 +1300,28 @@ async function preparationEvidence(
   };
   const workflow =
     'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n';
+  const sourceResponse = (path: string, source: string) => ({
+    type: "file",
+    encoding: "base64",
+    path,
+    content: Buffer.from(source).toString("base64"),
+    size: Buffer.byteLength(source),
+    sha: createHash("sha1")
+      .update(`blob ${Buffer.byteLength(source)}\0${source}`)
+      .digest("hex"),
+  });
+  const waiverPath = "scripts/lib/release-validation-waivers.json";
   const responses: Record<string, unknown> = {
     "actions/runs/200": parent,
     "actions/runs/200/attempts/1": parent,
-    "contents/.github/workflows/full-release-validation.yml": {
-      type: "file",
-      encoding: "base64",
-      path: ".github/workflows/full-release-validation.yml",
-      content: Buffer.from(workflow).toString("base64"),
-      size: Buffer.byteLength(workflow),
-      sha: createHash("sha1")
-        .update(`blob ${Buffer.byteLength(workflow)}\0${workflow}`)
-        .digest("hex"),
-    },
+    "contents/.github/workflows/full-release-validation.yml": sourceResponse(
+      ".github/workflows/full-release-validation.yml",
+      workflow,
+    ),
+    [`contents/${waiverPath}?ref=${TOOLING_SHA}`]: sourceResponse(
+      waiverPath,
+      JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: [] }),
+    ),
   };
   const jobs = [
     {
