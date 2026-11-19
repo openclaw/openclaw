@@ -360,6 +360,10 @@ it("exposes request/status CLI without token disclosure or a machine approval ve
     digest: fastTrackRequestDigest(value),
     expiresAt: value.expiresAt,
     state: "pending",
+    delivery: {
+      delivered: 1,
+      failed: [{ approverEmail: "vincent@openclaw.org", recovery: "reenroll" }],
+    },
   };
   vi.stubEnv("FAST_TRACK_APPROVAL_SERVICE_ORIGIN", "https://approval.example");
   vi.stubEnv("FAST_TRACK_APPROVAL_ID_TOKEN", "synthetic-secret-never-printed");
@@ -373,7 +377,11 @@ it("exposes request/status CLI without token disclosure or a machine approval ve
       await runReleasePublishPreflightCommand(["approval", operation, "--request", file]);
     }
     const text = String(output.mock.calls.at(-1)?.[0]);
-    expect(JSON.parse(text)).toMatchObject({ state: "pending", publicationAuthorized: false });
+    expect(JSON.parse(text)).toMatchObject({
+      state: "pending",
+      publicationAuthorized: false,
+      delivery: result.delivery,
+    });
     expect(text).not.toContain("synthetic-secret-never-printed");
   } finally {
     output.mockRestore();
@@ -519,4 +527,34 @@ it("binds a separate partial-FRV approval to retained results without relaxing s
   expect(() =>
     parseFastTrackRequest({ ...partial, policy: original.policy, action: original.action }),
   ).toThrow();
+});
+
+it("preserves permanent refusal recovery without echoing service text", async () => {
+  const value = { ...request(), expiresAt: new Date(Date.now() + 3600000).toISOString() };
+  try {
+    for (const [code, status, guidance] of [
+      ["REQUEST_EXPIRED", 410, /new request ID.*fresh expiry/u],
+      ["REQUEST_ID_CONFLICT", 409, /new request ID/u],
+      ["DELIVERY_FAILED", 503, /same still-valid immutable request/u],
+      ["NO_APPROVERS", 409, /private Google Chat DM/u],
+    ] as const) {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(JSON.stringify({ code, error: "synthetic-provider-secret" }), { status }),
+        ),
+      );
+      const result = exchangeFastTrackApproval({
+        request: value,
+        operation: "request",
+        serviceOrigin: "https://approval.example",
+        identityToken: "synthetic.token",
+      });
+      await expect(result).rejects.toThrow(guidance);
+      await expect(result).rejects.not.toThrow(/synthetic-provider-secret/u);
+    }
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { readBoundedResponseBytes } from "./bounded-response.mjs";
 import {
   collectFastTrackEligibility,
   fastTrackRequestDigest,
@@ -17,6 +18,19 @@ const approvalStatusSchema = z.object({
   approver: z.string().optional(),
   approverEmail: z.string().optional(),
   decidedAt: z.string().optional(),
+  delivery: z
+    .object({
+      delivered: z.number().int().nonnegative(),
+      failed: z
+        .array(
+          z.object({
+            approverEmail: z.enum(["vincent@openclaw.org", "dallin@openclaw.org"]),
+            recovery: z.enum(["reenroll", "retry"]),
+          }),
+        )
+        .max(2),
+    })
+    .optional(),
 });
 
 /** Request/read transport only. Neither operation can record a human decision. */
@@ -43,6 +57,7 @@ export async function exchangeFastTrackApproval(input: {
   if (input.operation === "request" && Date.parse(request.expiresAt) <= Date.now()) {
     throw new Error("Cannot submit an expired approval request. Create a new immutable request.");
   }
+  const signal = AbortSignal.timeout(15_000);
   let response: Response;
   try {
     response = await fetch(
@@ -55,7 +70,7 @@ export async function exchangeFastTrackApproval(input: {
         },
         ...(input.operation === "request" ? { body: JSON.stringify({ payload }) } : {}),
         redirect: "error",
-        signal: AbortSignal.timeout(15_000),
+        signal,
       },
     );
   } catch {
@@ -64,14 +79,52 @@ export async function exchangeFastTrackApproval(input: {
       "Approval service transport failed. Check connectivity and identity-token formatting.",
     );
   }
-  if (!response.ok) {
+  let body: string;
+  try {
+    body = (await readBoundedResponseBytes(response, "Approval", 64 * 1024, { signal })).toString(
+      "utf8",
+    );
+  } catch {
     throw new Error(
-      `Approval service refused ${input.operation} (HTTP ${response.status}). Retry only the same immutable request after resolving authentication or delivery.`,
+      "Approval response could not be read within its size or time limit. Inspect request status before retrying.",
     );
   }
-  const body = await response.text();
-  if (Buffer.byteLength(body) > 64 * 1024) {
-    throw new Error("Approval response exceeds size limit.");
+  if (!response.ok) {
+    // Interpret only closed error codes. Provider text may contain credentials or payloads.
+    const parsed = z.object({ code: z.string() }).safeParse(
+      (() => {
+        try {
+          return JSON.parse(body);
+        } catch {
+          return null;
+        }
+      })(),
+    );
+    const guidance = new Map([
+      ["REQUEST_EXPIRED", "Create a new request ID with a fresh expiry."],
+      ["REQUEST_ID_CONFLICT", "Create a new request ID for changed contents."],
+      ["INVALID_EXPIRY", "Use a new request ID with an expiry within 24 hours."],
+      ["INVALID_REQUEST", "Correct the request and use a new request ID if contents change."],
+      ["REQUEST_TOO_LARGE", "Shorten request details and create a new request ID."],
+      [
+        "NO_APPROVERS",
+        "Add the app in an approver's private Google Chat DM, then retry the same still-valid immutable request.",
+      ],
+      [
+        "DELIVERY_FAILED",
+        "Restore approver DM membership or service access, inspect status, then retry the same still-valid immutable request.",
+      ],
+      [
+        "TEMPORARY_FAILURE",
+        "Inspect status and repair service access before retrying the same still-valid immutable request.",
+      ],
+    ]);
+    throw new Error(
+      `Approval service refused ${input.operation} (HTTP ${response.status}). ${
+        (parsed.success ? guidance.get(parsed.data.code) : undefined) ??
+        "Inspect authentication and request status. Correct invalid contents with a new request ID; retry unchanged requests only while still valid."
+      }`,
+    );
   }
   const approval = approvalStatusSchema.parse(JSON.parse(body));
   if (

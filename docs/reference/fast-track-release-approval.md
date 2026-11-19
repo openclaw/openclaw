@@ -154,3 +154,25 @@ The existing verifier helper checks exact request/response binding, expiry and
 allowlisted stable approver identity, then recomputes Git eligibility. It is a
 building block, not an independently authenticated reference selector or a wired
 publication gate. No workflow consumes its result yet.
+
+### Delivery and request recovery
+
+A request succeeds when at least one enrolled approver receives its card. The POST
+response and CLI output include `delivery.delivered` and `delivery.failed` entries
+(`approverEmail`, `recovery: reenroll | retry`). These describe only that delivery
+attempt, not stored approval evidence; GET status remains the authoritative stored
+decision. For `reenroll`, the named approver should re-add the app in their private
+Google Chat DM and check app access. Enrollment retains the pinned Google user ID.
+Retry the same still-valid immutable request after repairing delivery; deterministic
+message IDs prevent duplicate cards. Already-decided requests are not resent.
+
+The service returns closed error codes. `REQUEST_EXPIRED` (410) requires a new
+request ID and fresh expiry; `REQUEST_ID_CONFLICT` (409) requires a new request ID
+for changed contents. `INVALID_REQUEST`, `INVALID_EXPIRY`, and `REQUEST_TOO_LARGE`
+require correcting the request and using a new ID for changed contents.
+`NO_APPROVERS` (409) requires private-DM enrollment. `DELIVERY_FAILED` (503) means
+the request was saved but no card was delivered. Repair DM membership/service
+access, inspect status, then retry the same still-valid bytes. `TEMPORARY_FAILURE`
+(503) similarly requires inspection/repair before retrying. The client translates
+only these codes, never arbitrary provider error text. No delivery result grants
+publication authority or changes the first human decision.

@@ -697,6 +697,7 @@ export async function runReleasePublishPreflightCommand(args = process.argv.slic
         expiresAt: approval.expiresAt,
         approver: approval.approver,
         decidedAt: approval.decidedAt,
+        delivery: approval.delivery,
         publicationAuthorized: false,
       })}\n`,
     );
