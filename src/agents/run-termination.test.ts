@@ -10,6 +10,7 @@ import { FailoverError } from "./failover/error.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
+  isGatewayShutdownAbortReason,
   resolveAgentRunAbortLifecycleFields,
   resolveAgentRunErrorLifecycleFields,
   resolveCliToolTerminalReason,
@@ -84,6 +85,17 @@ it("only turns live restart refusals into recovery and preserves explicit stop o
     resetGatewayWorkAdmission();
   }
   expectLifecycle(error, {});
+});
+it("treats a restart abort as a Gateway shutdown only while admission drains", () => {
+  expect(isGatewayShutdownAbortReason(createAgentRunRestartAbortError())).toBe(false);
+  markGatewayRestartDraining();
+  try {
+    expect(isGatewayShutdownAbortReason(createAgentRunRestartAbortError())).toBe(true);
+    expect(isGatewayShutdownAbortReason(createAgentRunDirectAbortError(true))).toBe(false);
+    expect(isGatewayShutdownAbortReason(new GatewayDrainingError())).toBe(false);
+  } finally {
+    resetGatewayWorkAdmission();
+  }
 });
 it("keeps a retryable connection reset as a failure for run and tool terminals", () => {
   const failure = coerceToFailoverError(new Error("fetch failed: ECONNRESET"));

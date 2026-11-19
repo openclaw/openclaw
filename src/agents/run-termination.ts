@@ -10,7 +10,10 @@ import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAbortError } from "../infra/abort-signal.js";
 import { hasLifecycleErrorCode as hasAgentRunAbortCode } from "../infra/agent-lifecycle-error.js";
-import { isGatewayRestartDrainError } from "../process/gateway-work-admission.js";
+import {
+  isGatewayRestartDrainError,
+  isGatewayRestartDraining,
+} from "../process/gateway-work-admission.js";
 import { findAgentRunTerminalOutcome } from "./agent-run-terminal-error.js";
 import {
   type FailoverError,
@@ -81,6 +84,11 @@ export function createAgentRunSupersededAbortError(): Error {
 
 export function isAgentRunRestartAbortReason(value: unknown): boolean {
   return hasAgentRunAbortCode(value, AGENT_RUN_RESTART_ABORT_ERROR_CODE);
+}
+
+/** A restart abort from this Gateway's stop or restart; session resets reuse the code without draining. */
+export function isGatewayShutdownAbortReason(value: unknown): boolean {
+  return isAgentRunRestartAbortReason(value) && isGatewayRestartDraining();
 }
 
 export function isAgentRunSupersededAbortReason(value: unknown): boolean {

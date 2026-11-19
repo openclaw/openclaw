@@ -3,6 +3,7 @@ import {
   detectAndLoadAgentHarnessPromptImages,
   embeddedAgentLog,
   formatErrorMessage,
+  isGatewayShutdownAbortReason,
   resolveAttemptFsWorkspaceOnly,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -243,6 +244,17 @@ export function activateCodexAttemptTurn(
   const activeProjector = projectorRef.current;
   let activationFailed = false;
   const abortListener = () => {
+    // A Gateway stop leaves a turn in an app-server it did not start running, as a crash
+    // does; the next Gateway's restart input waits for it. Open requests to this Gateway end.
+    if (
+      isGatewayShutdownAbortReason(runAbortController.signal.reason) &&
+      connection.appServer.start.transport !== "stdio" &&
+      !connection.workerHostedCloud &&
+      state.activeAppServerTurnRequests === 0
+    ) {
+      completeTurn();
+      return;
+    }
     state.abortCleanup = interruptTurn(activeTurnId).then(async (confirmed) => {
       if (
         !activationFailed &&
