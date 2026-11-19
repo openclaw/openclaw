@@ -94,8 +94,9 @@ for privileged PR actions when called. Listing an action does not grant it.
 
 Personal skill library listing follows the session's recorded prompt listing, not
 whether the current turn has a human requester. Announce, settle, and steer keep
-the same `skill_library` definition and deferred directory while that listing is
-unchanged. Calls without a human requester are refused at execution. A later
+the same `skill_library` definition and turn-local deferred listing while that
+listing is unchanged; grant-specific descriptions stay outside the cached system
+directory. Calls without a human requester are refused at execution. A later
 attributed human turn refreshes the listing when presentation changes.
 
 The `message` description and schema use the session's channel, bound account,

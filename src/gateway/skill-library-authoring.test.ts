@@ -7,7 +7,10 @@ import { bindAgentToolExecutionLocation } from "../agents/agent-tool-metadata.js
 import { buildSystemPromptToolingSection } from "../agents/system-prompt-tool-list.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import { registerHeadlessToolSearchCatalog } from "../agents/tool-search-catalog.js";
-import { buildToolSchemaDirectoryPrompt } from "../agents/tool-search-directory.js";
+import {
+  buildRunGrantedToolDirectory,
+  buildToolSchemaDirectoryPrompt,
+} from "../agents/tool-search-directory.js";
 import type { ToolSearchCatalogRef } from "../agents/tool-search-types.js";
 import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -33,6 +36,7 @@ import {
   libraryAuthority,
   type SkillLibraryRequestOwner,
 } from "./server-methods/skills-library.js";
+import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 import {
   invalidateSkillAuthoringForOtherRequester,
   prepareGatewaySkillAuthoring,
@@ -40,7 +44,6 @@ import {
   resolveGatewaySkillLibraryPromptGrant,
 } from "./skill-library-authoring.js";
 import { prepareSkillLibrarySessionCreation } from "./skill-library-session.js";
-import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 import { createWorkerConnectionIdentity } from "./worker-environments/connection-identity.test-support.js";
 
 // mock-isolation: ordinary authoring must not load archive or ClawHub import machinery.
@@ -497,6 +500,7 @@ it("keeps the skill_library prompt across settle and refuses that turn at execut
     const directory = buildToolSchemaDirectoryPrompt({ catalogRef });
     return {
       directory,
+      turnDirectory: buildRunGrantedToolDirectory(catalogRef),
       section: buildSystemPromptToolingSection({
         includeToolGuidance: true,
         toolLines: ["- tool_search", "- skill_library"],
@@ -514,8 +518,10 @@ it("keeps the skill_library prompt across settle and refuses that turn at execut
   expect(toolFor(nextHuman).description).toBe(humanTool.description);
   expect(surface(settleTool)).toEqual(humanSurface);
   expect(surface(toolFor(nextHuman))).toEqual(humanSurface);
-  expect(humanSurface.directory).toContain("- skill_library (core)");
-  expect(humanSurface.section).toContain(
+  // Run-granted descriptions belong beside the turn input, outside the cached system directory.
+  expect(humanSurface.directory).not.toContain("skill_library");
+  expect(humanSurface.turnDirectory).toContain("- skill_library (core)");
+  expect(humanSurface.turnDirectory).toContain(
     "Author skills in the requesting person's personal library",
   );
   const refused = await settleTool.execute("settle-list", { action: "list" });
