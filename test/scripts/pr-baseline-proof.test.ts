@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   createBaselineFixture,
   reuseBaselineFixture,
@@ -281,6 +281,10 @@ const boundFixture = reuseBaselineFixture((root) => {
 });
 
 describePosix("proof baseline with retained predecessor authority", () => {
+  beforeAll(() => {
+    // Build the reusable signed repository before timing baseline admission.
+    boundFixture();
+  });
   it("admits a published incoming-source baseline without approving its pending proof", () => {
     const f = boundFixture();
     const receipt = f.readLocal("prepare-push-result.env");
