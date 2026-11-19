@@ -738,8 +738,6 @@ export class SpawnBrokerHost {
   }
 }
 
-export function createSpawnBrokerHost(
+export const createSpawnBrokerHost = (
   options?: ConstructorParameters<typeof SpawnBrokerHost>[0],
-): SpawnBrokerHost {
-  return new SpawnBrokerHost(options);
-}
+): SpawnBrokerHost => new SpawnBrokerHost(options);
