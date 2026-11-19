@@ -11,6 +11,7 @@ import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { CronJob } from "../cron/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
+import { createChatRunState } from "./server-chat-state.js";
 import { bindInProcessRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import {
@@ -107,6 +108,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const directContext = {
+    chatRunState: createChatRunState(),
     broadcastToConnIds: vi.fn(),
     dedupe: new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
