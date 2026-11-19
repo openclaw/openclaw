@@ -122,6 +122,8 @@ def main():
   (subpath "/Library/Developer") (subpath "/Applications")
   (literal "/dev/null") (literal "/dev/random") (literal "/dev/urandom")
   (literal "/private/etc/passwd") (literal "/private/etc/localtime"))
+; The system Python loader reads the root directory itself, not its descendants.
+(allow file-read-data (literal "/"))
 (allow file-read-metadata (literal "/") (literal "/private") (literal "/private/tmp"))
 (allow file-read* file-write* (subpath CANDIDATE))
 (allow file-write-data (literal "/dev/null"))
