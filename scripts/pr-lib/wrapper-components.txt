@@ -1220,6 +1220,7 @@ src/infra/package-update-filesystem.ts
 src/infra/package-update-integrity-hasher.ts
 src/infra/package-update-integrity-hasher.worker.ts
 src/infra/package-update-integrity.ts
+src/infra/package-update-launcher-names.ts
 src/infra/package-update-publication-tree.ts
 src/infra/package-update-recovery-contract.ts
 src/infra/package-update-refusal.ts
