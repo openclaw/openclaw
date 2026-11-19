@@ -19,6 +19,22 @@ import {
 } from "../schema/typebox.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 
+export const CRON_CREATION_PLAN_MAX_SLOTS = 24;
+export const CronCreationSlotsSchema = Type.Array(
+  Type.Object(
+    {
+      slotId: Type.String({ minLength: 1, maxLength: 64 }),
+      name: Type.String({ minLength: 1, maxLength: 200 }),
+    },
+    { additionalProperties: false },
+  ),
+  {
+    minItems: 1,
+    maxItems: CRON_CREATION_PLAN_MAX_SLOTS,
+    description: "Plan: ordered slots, with distinct IDs and user-facing names.",
+  },
+);
+
 export const REMINDER_CONTEXT_MESSAGES_MAX = 10;
 export const CRON_TOOL_LIST_MAX_LIMIT = 200;
 
@@ -31,6 +47,7 @@ const CRON_ACTIONS = [
   "status",
   "list",
   "get",
+  "plan",
   "add",
   "update",
   "remove",
@@ -499,6 +516,15 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
           : actions,
       ),
       ...gatewayCallOptionSchemaProperties(),
+      ...(!managementOnly && !options?.selfRemoveOnly
+        ? {
+            slots: Type.Optional(CronCreationSlotsSchema),
+            planId: Type.Optional(Type.String({ description: "Add: plan ID returned by plan." })),
+            slotId: Type.Optional(
+              Type.String({ description: "Add: the declared slot for this job." }),
+            ),
+          }
+        : {}),
       includeDisabled: Type.Optional(
         Type.Boolean({ description: "List: false by default; true includes disabled saved jobs." }),
       ),

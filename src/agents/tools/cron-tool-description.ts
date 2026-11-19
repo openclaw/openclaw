@@ -38,8 +38,8 @@ export function buildCronToolDescription(params: {
     : "";
   const watcherSetup = params.triggersEnabled
     ? `
-WATCH OUTPUT: for continuous log monitoring and future alerts, add one saved stream directly. Example (replace the path with the requested log):
-{action:"add",job:{name:"Application errors",schedule:{kind:"stream",command:["tail","-n","0","-F","<log path>"],mode:"match",match:"ERROR"},sessionTarget:"current",payload:{kind:"agentTurn",message:"Report the matching application errors."}}}
+WATCH OUTPUT: for continuous log monitoring and future alerts, plan and add one saved stream. Example (replace the path with the requested log):
+{action:"add",planId:"<returned planId>",slotId:"errors",job:{name:"Application errors",schedule:{kind:"stream",command:["tail","-n","0","-F","<log path>"],mode:"match",match:"ERROR"},sessionTarget:"current",payload:{kind:"agentTurn",message:"Report the matching application errors."}}}
 Use built-in match mode for a simple condition; no custom trigger script or separate background exec watcher is needed. Inspect finitely if needed before proposing it.
 
 STREAM CONSENT: creation, source changes and reactivation require current creator exec authority. When exec asks, add/update waits for user approval through the native client before saving the persistent watcher and its automatic restarts. A saved add/update result means any required approval has already completed. Say "Approved by an operator" when streamExecutionApproval is present; it records human approval but does not identify the person. Do not ask again or disable the saved stream solely because no user approval reply is visible in chat. A saved:false result ends that proposal: clean up temporary monitoring, explain the recorded outcome, and wait for a new user instruction before retrying or starting a substitute.
@@ -60,13 +60,13 @@ STREAM CONSENT: creation, source changes and reactivation require current creato
     : "";
   return `Schedule saved reminders, recurring work, cross-session follow-ups${params.triggersEnabled ? ", event watchers" : ""}. A one-time wait inside this conversation (CI, a deploy, a short delay) is not an automation: run one background exec that exits when the condition holds. When its running result says the exit wakes this conversation, end the turn; otherwise collect it with process poll. Never model-poll.
 
-ACTIONS: status | list (enabled-only summaries by default; includeDisabled:true includes paused records; follow nextOffset) | get jobId (full details) | add job | update jobId job (partial; null clears) | remove jobId (operator removal requests active-run cancellation) | run jobId (runMode:"force"=now; waits up to timeoutMs, default 60s; unfinished runs return runId) | runs jobId [runId,limit,offset] (recorded outcomes and delivery receipts) | wake text (caller-owned session; mode defaults to next-heartbeat) | bind jobId (owner turn in the automation's parent conversation; links a key-only automation to this conversation). Check unfinished runs later with runs, never a scheduled verification job. wake has no delay; for a later resume use an at job below.
+ACTIONS: status | list (enabled-only summaries by default; includeDisabled:true includes paused records; follow nextOffset) | get jobId (full details) | plan slots | add planId slotId job | update jobId job (partial; null clears) | remove jobId (operator removal requests active-run cancellation) | run jobId (runMode:"force"=now; waits up to timeoutMs, default 60s; unfinished runs return runId) | runs jobId [runId,limit,offset] (recorded outcomes and delivery receipts) | wake text (caller-owned session; mode defaults to next-heartbeat) | bind jobId (owner turn in the automation's parent conversation; links a key-only automation to this conversation). Check unfinished runs later with runs, never a scheduled verification job. wake has no delay; for a later resume use an at job below.
 
 To pause a saved watcher without deleting its record, update job:{enabled:false}, or turn off its Active switch on the Automations page. The enabled flag and list absence do not prove source termination; use get jobId to inspect state.streamStatus.
 
 SCOPE: ${scopeDescription}: an empty list or failed list/get/update/remove (including not-found) does not establish global absence, even for IDs from your history. Never recreate or replace a known automation for update/remove/reconciliation based on these results; report the visibility limit and ${adminRecovery}. New requested automations may still be created.
 
-ADD: job requires name+schedule+payload.
+ADD: Before any add (even one job), call plan once with the full ordered slots [{slotId,name}]. Await its planId, then add each job using that planId and its slotId. A plan does not schedule anything. Each job requires name+schedule+payload.
 ${watcherSetup}
 
 SCHEDULE:

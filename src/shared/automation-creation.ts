@@ -22,16 +22,22 @@ function identity(value: unknown): value is string {
 /** The plan fixes cardinality and order. Only a persisted scheduler ID can resolve a slot as created. */
 export function readAutomationCreationEvent(value: unknown): AutomationCreationEvent | undefined {
   const raw = asOptionalRecord(value);
-  if (!raw || !identity(raw.planId)) return undefined;
+  if (!raw || !identity(raw.planId)) {
+    return undefined;
+  }
   const { type, planId } = raw;
   if (type === "automation_creation_result" && identity(raw.slotId)) {
     const { slotId, status } = raw;
-    if (status === "failed") return { type, planId, slotId, status };
-    if (status === "created" && identity(raw.jobId))
+    if (status === "failed") {
+      return { type, planId, slotId, status };
+    }
+    if (status === "created" && identity(raw.jobId)) {
       return { type, planId, slotId, status, jobId: raw.jobId };
+    }
   }
-  if (type !== "automation_creation_plan" || !Array.isArray(raw.slots) || raw.slots.length === 0)
+  if (type !== "automation_creation_plan" || !Array.isArray(raw.slots) || raw.slots.length === 0) {
     return undefined;
+  }
   const slots: AutomationCreationSlot[] = [];
   const ids = new Set<string>();
   for (const entry of raw.slots) {
@@ -42,8 +48,9 @@ export function readAutomationCreationEvent(value: unknown): AutomationCreationE
       ids.has(slot.slotId) ||
       typeof slot.name !== "string" ||
       !slot.name.trim()
-    )
+    ) {
       return undefined;
+    }
     ids.add(slot.slotId);
     slots.push({ slotId: slot.slotId, name: slot.name });
   }
