@@ -484,7 +484,7 @@ describe("CodexAppServerTurnRouter", () => {
 });
 
 describe("CodexAppServerTurnRouter lifecycle", () => {
-  it.each([
+  it.each<JsonObject>([
     { version: 1, mode: "show", trustedContacts: "skip" },
     { version: 1, mode: "hide", replacement: { kind: "wellbeingPromptHelpline" } },
     { version: 1, mode: "block", reason: { kind: "cyber", trustedAccess: true } },
@@ -493,8 +493,6 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
     const harness = createHarness();
     const route = await bindRoute(harness, "turn-1");
     const watch = harness.watch("turn-1");
-    const settled = vi.fn();
-    void watch.completion.then(settled);
     const send = (moderated: boolean | string) =>
       harness.notify("turn/completed", {
         threadId: route.threadId,
@@ -521,9 +519,7 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
     await settleInput();
     expect(watch.state).toBe("confirmed");
     expect(route.completed).toBe(true);
-    send(true);
-    await settleInput();
-    expect(settled.mock.calls).toEqual([[true]]);
+    await expect(watch.completion).resolves.toBe(true);
   });
 
   it.each<{ label: string; fields: JsonObject; restricted?: boolean }>([
