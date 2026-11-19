@@ -107,7 +107,8 @@ async function runPredecessorStop(
     const ownPid = vi.spyOn(process, "pid", "get").mockReturnValue(pid);
     try {
       return expectDefined(
-        gatewayBootOperations["gatewayBoot.begin"](Date.now(), lifecycle).id,
+        gatewayBootOperations["gatewayBoot.begin"]({ nowMs: Date.now(), metadata: {} }, lifecycle)
+          .id,
         "Gateway boot was not recorded",
       );
     } finally {

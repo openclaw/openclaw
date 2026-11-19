@@ -141,7 +141,7 @@ function fixture(scenario: Scenario, withDatabase = true) {
 }
 
 it("keeps a disabled heartbeat in included config and asks to consolidate instead of delete", async () => {
-  const f = fixture({ scratch: source });
+  const f = fixture({ name: "disabled included heartbeat", scratch: source });
   const workspace = path.join(path.dirname(path.dirname(f.configPath)), "workspace");
   writeFixtureJsonSync(path.join(path.dirname(f.configPath), "agents.json"), {
     defaults: { heartbeat: { agentId: "main", every: "" } },
