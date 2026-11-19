@@ -11,7 +11,6 @@ import {
   discoverReusableReleaseChild,
   validateReusableReleaseChild,
 } from "../../scripts/lib/full-release-child-reuse.mjs";
-import { RELEASE_VALIDATION_WAIVERS } from "../../scripts/lib/release-validation-waivers.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const REPOSITORY = "openclaw/openclaw";
