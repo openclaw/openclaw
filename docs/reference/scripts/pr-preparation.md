@@ -145,14 +145,17 @@ regular JSON file at `.local/pending-proof-acceptance.json` in the PR worktree:
 }
 ```
 
-Include exactly the proof publication's pending IMPORTANT IDs, with the
-maintainer's reason for each. The file records acceptance, not new review or
-completed proof. It cannot cover a BLOCKER, an unvalidated issue, a different
-head, tree or review, or any failed CI, security or enforced GitHub review gate.
-Use a trusted workflow that includes this capability; for a retained older
-workflow, use the exact-identity `prepare-workflow-successor --for-proof` route
-and reconcile the proof publication at the unchanged head under that workflow
-before adding the acceptance.
+This route is meant for findings whose remaining requirement is proof. Include
+exactly the proof publication's pending IMPORTANT IDs, with the maintainer's
+nonblank, single-line reason for each. The file records acceptance, not new
+review or completed proof. It cannot cover a BLOCKER, an unvalidated issue, a
+different head, tree or review, or any failed CI, security or enforced GitHub
+review gate.
+
+The candidate must have been published for proof under a trusted workflow that
+already includes this capability. Its retained workflow binding stays in use
+when canonical `main` advances. Corrections published for proof under an older
+workflow cannot use this route.
 
 For the default GitHub-pending route, run the ordinary commands:
 
@@ -163,10 +166,12 @@ scripts/pr merge-run <PR> --auto-merge
 ```
 
 The exact hosted head needs no second push. The retained merge outcome records
-`pendingProofAcceptance` separately from the actual gate results.
-Moving the head or changing the review invalidates the record; retire it before
-qualifying a fresh review. Repeated `merge-run` still reconciles rather than
-replaying an accepted or uncertain request.
+the accepted IDs and reasons in `pendingProofAcceptance`, separately from the
+actual gate results. Moving the head or changing the review invalidates the
+record. Native correction continuation and baseline refresh archive it with the
+old review and remove it from active preparation. If qualifying a fresh review
+without either transition, set the old record aside first. Repeated `merge-run`
+still reconciles rather than replaying an accepted or uncertain request.
 
 ## Refresh a retained candidate for pending proof
 

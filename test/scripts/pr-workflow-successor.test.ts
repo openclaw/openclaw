@@ -534,6 +534,8 @@ describePosix("maintainer acceptance of pending proof", () => {
   it("admits an exact published correction without recording pending proof as passed", () => {
     const f = proofFixture();
     expectExit(f.run("prepare-publish-for-proof"), 0);
+    f.git(f.repo, "commit", "--allow-empty", "-qm", "test: newer canonical workflow");
+    expect(f.git(f.repo, "rev-parse", "main")).not.toBe(f.source);
     const original = f.snapshot(["correction-review.json", "prepare-push-result.env"]);
     const acceptance = {
       version: 1,
@@ -555,6 +557,7 @@ describePosix("maintainer acceptance of pending proof", () => {
     expect(stamp).toContain(`HOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`);
     expect(stamp).not.toMatch(/VERIFIED|PASSED|FULL_GATES|REMOTE_GATES/u);
     expectExit(f.run("prepare-push"), 0);
+    expect(f.git(f.repo, "rev-parse", bindingRef)).toBe(f.binding);
     expect(f.readLocal("prep.env").toString()).toContain(`PREP_HEAD_SHA=${f.head}\n`);
     const failedCi = verifyPublishedMerge(f, f.head, "fail");
     expectExit(failedCi, 1);

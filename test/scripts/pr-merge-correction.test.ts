@@ -28,7 +28,7 @@ function publish(f: Fixture, head: string) {
 }
 
 const incomingHead = (f: Fixture) => expectDefined(f.sourceCommits[0], "incoming fixture commit");
-function configureCorrection(f: Fixture) {
+function configureCorrection(f: Fixture, finding: "product" | "proof" = "product") {
   const incoming = incomingHead(f);
   const candidate = f.git(["rev-parse", "HEAD"], undefined, f.worktree);
   const review = validReview(incoming);
@@ -37,9 +37,9 @@ function configureCorrection(f: Fixture) {
   review.findings.push({
     id: "I1",
     severity: "IMPORTANT",
-    title: "Wrong behavior",
+    title: finding === "proof" ? "Run exact-head native package proof" : "Wrong behavior",
     area: "owner.txt",
-    fix: "Correct behavior",
+    fix: finding === "proof" ? "Exercise the published package on macOS" : "Correct behavior",
   });
   writeReviewArtifacts(f.worktree, review, {
     headSha: incoming,
@@ -225,8 +225,23 @@ describePosix("correction authority through native merge admission", () => {
     expect(f.state().mutations).toBe(1);
   });
 
-  it("retains the pending proof reasons in the native intent and does not replay the merge", () => {
-    const f = correctionFixture();
+  it.each([
+    {
+      label: "valid Unicode reason survives reconciliation",
+      reason: "検証環境が利用できないため、リスクを承認した 🚀",
+      valid: true,
+    },
+    { label: "NEL-only reason is refused at admission", reason: "\u0085", valid: false },
+    {
+      label: "lone surrogate is refused at admission",
+      reason: "Runner unavailable \ud800",
+      valid: false,
+    },
+  ])("pending proof: $label", ({ reason, valid }) => {
+    const f = configureCorrection(
+      fixture(undefined, [["incoming package\n"], ["corrected package\n"]]),
+      "proof",
+    );
     f.bindWorkflow();
     const incoming = incomingHead(f);
     const tree = f.git(["rev-parse", `${f.head}^{tree}`]);
@@ -280,7 +295,7 @@ describePosix("correction authority through native merge admission", () => {
       headSha: f.head,
       treeOid: tree,
       reviewOid,
-      findings: [{ id: "I1", reason: "The maintainer accepted the unavailable runner risk." }],
+      findings: [{ id: "I1", reason }],
     };
     writeLocal(f, "pending-proof-acceptance.json", `${JSON.stringify(acceptance, null, 2)}\n`);
     pendingGates(f, f.head);
@@ -292,7 +307,15 @@ describePosix("correction authority through native merge admission", () => {
     });
     state.pr.mergeStateStatus = "BLOCKED";
     f.save(state);
-    expectExit(f.run(true));
+    const result = f.run(true);
+    if (!valid) {
+      expect(result.output).toContain("Pending proof acceptance must bind");
+      expect(result.status).toBe(1);
+      expect(f.state().mutations).toBe(0);
+      expect(() => f.record()).toThrow();
+      return;
+    }
+    expectExit(result);
     expect(f.record()).toMatchObject({
       phase: "intent",
       accepted: true,

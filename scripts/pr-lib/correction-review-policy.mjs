@@ -159,12 +159,16 @@ export function validateCorrectionReview({
           JSON.stringify(Object.keys(item).toSorted()) === '["id","reason"]' &&
           typeof item.id === "string" &&
           typeof item.reason === "string" &&
-          item.reason.trim().length > 0,
+          item.reason.isWellFormed() &&
+          // Match the retained outcome reader's character rules. jq rejects
+          // lone surrogate escapes before it can apply those same rules.
+          !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(item.reason) &&
+          /[^\p{Zs}\p{Cf}]/u.test(item.reason),
       ) ||
       JSON.stringify(record.findings.map(({ id }) => id).toSorted()) !== JSON.stringify(pending)
     ) {
       throw new Error(
-        "Pending proof acceptance must bind the exact published head, tree and review, with a reason for every pending IMPORTANT finding and no others.",
+        "Pending proof acceptance must bind the exact published head, tree and review, with a nonblank, single-line Unicode reason for every pending IMPORTANT finding and no others.",
       );
     }
     // Check the other READY requirements without changing or rendering the

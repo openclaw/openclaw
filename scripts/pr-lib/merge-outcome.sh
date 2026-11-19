@@ -198,7 +198,8 @@ merge_outcome_load_local() {
             (.reviewOid | oid) and (.treeOid | oid) and
             (.findings | type == "array" and length > 0 and
               all(.[]; keys == ["id","reason"] and (.id | test("^[A-Za-z0-9_.-]+$")) and
-                (.reason | type == "string" and test("\\S"))) and
+                (.reason | type == "string" and (test("[\\p{Cc}\\p{Zl}\\p{Zp}]") | not) and
+                  test("[^\\p{Zs}\\p{Cf}]"))) and
               (map(.id) | length == (unique | length))))
          else true end) and
         (if has("workflowAdmission") then
