@@ -24,6 +24,7 @@ import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-
 import {
   digestGitHubPublicationRequest as digestRequest,
   projectGitHubPublicationResult,
+  projectWorktreePublicationTranscriptReport,
 } from "./github-publication-receipt.js";
 import {
   readGitHubPublicationRequestInWorker,
@@ -551,15 +552,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       const personal = await listUnreportedPersonalGitHubPublicationsAsync();
       const shared = await listSharedGitHubPublicationsAsync({ pending: false, unreported: true });
       params.assertCurrent();
-      return [
-        ...personal,
-        ...shared.map((row) => ({
-          sessionId: row.session_id,
-          sessionKey: row.session_key,
-          agentId: row.agent_id,
-          result: publicationResult(row),
-        })),
-      ];
+      return [...personal, ...shared.map(projectWorktreePublicationTranscriptReport)];
     },
 
     async sharedStatus(

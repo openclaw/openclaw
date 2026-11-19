@@ -174,3 +174,25 @@ export function projectGitHubPublicationResult(
           : "Publication was accepted. Finish the turn so the Gateway can reconcile and publish the workspace.",
   };
 }
+
+export function projectWorktreePublicationTranscriptReport(
+  row: Parameters<typeof projectGitHubPublicationResult>[0] &
+    Pick<
+      GitHubPublicationExecutionRow,
+      "session_id" | "session_key" | "agent_id" | "source_head_commit"
+    >,
+) {
+  // A personal receipt can record a PR lookup even when it only reused the original head.
+  const reusedExistingPullRequest =
+    row.status === "published" &&
+    row.source_head_commit &&
+    row.head_commit === row.source_head_commit &&
+    (!row.last_effect || (row.last_effect === "pull_request" && row.effect_state === "observed"));
+  return {
+    sessionId: row.session_id,
+    sessionKey: row.session_key,
+    agentId: row.agent_id,
+    result: projectGitHubPublicationResult(row),
+    ...(reusedExistingPullRequest ? { reusedExistingPullRequest: true as const } : {}),
+  };
+}
