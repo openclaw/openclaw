@@ -1822,6 +1822,36 @@ the retention phase already running in an older updater.
 
 Post-activation schema inspection preserves captured SQLite database, WAL, and shared-memory
 artifacts so the final Doctor can verify the same migration source.
+A Git checkout update that switches the release link captures no databases and runs no
+Doctor: the previous Gateway keeps serving, and the Gateway that starts from the new
+release migrates state. Its inspection reads each agent and local store's schema version
+directly, in milliseconds and without a copy, even while the serving Gateway writes; the
+shared state database keeps its consistent online-backup read.
+
+The inspection reports data at risk only on evidence: a schema that moved, or a store it
+cannot read after a new-version Doctor or boot check may have written it. When no
+new-version process has opened state yet, an unreadable store is a recorded warning
+(`state-schema-verification`), not data at risk, and the update continues or fails for its
+own recorded reason. On a Git release the new release migrates state when it starts, and its
+trial switches back if it fails to start. The Git release inspection also does not
+require the new schema before that start: "migration did not finish" applies only to
+installs whose updater runs Doctor before restarting. Installed updaters that run Git
+releases without this change (main builds since the release layout landed) fail
+every Git update that changes a schema in their own process, before the new release runs;
+rebuild the checkout once to get an updater with the fix.
+
+When the new release's Gateway starts, its state upgrade can replace
+`state/openclaw.sqlite` and keep the previous file as `openclaw.sqlite.pre-<buildId>`.
+The updater closes its own shared-state handles before it restarts the Gateway and
+reopens the database by path once the new Gateway is verified serving, so plugin
+convergence, the post-plugin Doctor, owed steps and the final run record use the
+current file. Run history written before the restart is carried into the new file.
+Installed updaters that have the inspection fix above but not this change report
+`post-update-failed` ("SQLite database pathname changed while its worker owner is
+active") after such an upgrade even though the new release is serving and nothing needs
+restoring. When the update output says the Gateway is serving the target version, the
+next plain `openclaw update` reports `already-current` and converges plugins. Updaters
+without the inspection fix fail before the new release starts, as described above.
 
 Database rehearsal also avoids a second full backup of each private snapshot.
 Candidate inventory reads database registrations and the installed plugin index

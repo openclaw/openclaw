@@ -18,16 +18,6 @@ import { registerOpenAIServiceTierCatalogTests } from "./test-support/model-serv
 import { registerOpenAIFailoverTests } from "./test-support/provider-failover.test-support.js";
 import { createOpenAIResponsesTestModel } from "./test-support/responses-model.test-support.js";
 
-// mock-isolation: these tests spy on global fetch for the model list; the npm Codex
-// version read is covered by openai-codex-discovery.test.ts.
-vi.mock("./codex-client-version.js", async (importOriginal) => {
-  const { BUNDLED_CODEX_VERSION } = await import("./test-support/codex-version.test-support.js");
-  return {
-    ...(await importOriginal<typeof import("./codex-client-version.js")>()),
-    resolveOpenAICodexClientVersion: async () => BUNDLED_CODEX_VERSION,
-  };
-});
-
 async function runWrappedPayloadCase(params: {
   model?:
     | Model<"openai-responses">
