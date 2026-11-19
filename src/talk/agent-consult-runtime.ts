@@ -629,12 +629,9 @@ async function consultRealtimeVoiceAgentInternal(
           prompt: buildRealtimeVoiceAgentConsultPrompt(params),
           provider: params.provider,
           model: params.model,
-          // Gateway session-runtime consults let the command owner apply the chat's persisted
-          // thinking. Plugin bridges run the embedded owner, which ignores session thinking, so
-          // they keep the high voice default.
-          thinkLevel:
-            params.thinkLevel ??
-            (dispatchesInSessionRuntime && sessionEntry.thinkingLevel ? undefined : "high"),
+          // Same voice thinking as main for every runtime: Talk config, else high. The command
+          // owner only normalizes it to what the selected runtime supports.
+          thinkLevel: params.thinkLevel ?? "high",
           fastMode: params.fastMode,
           verboseLevel: "off",
           reasoningLevel: "off",

@@ -264,11 +264,12 @@ it("runs a Claude CLI chat's voice consult through the typed-turn CLI dispatch a
 });
 
 it.each([
-  { persisted: "low" as const, voice: undefined, expected: "low" },
+  // Same as main for every provider: chat thinking does not change the voice consult level.
+  { persisted: "low" as const, voice: undefined, expected: "high" },
   { persisted: undefined, voice: undefined, expected: "high" },
   { persisted: "low" as const, voice: "medium" as const, expected: "medium" },
 ])(
-  "uses owner-decided thinking precedence through the command owner (%j)",
+  "keeps main's voice thinking (Talk config, else high) through the command owner (%j)",
   async ({ persisted, voice, expected }) => {
     await prepare({ thinkingLevel: persisted });
     if (voice) {
