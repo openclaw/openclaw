@@ -146,6 +146,7 @@ async function inspectRequest(request: InspectionRequest): Promise<void> {
     } else {
       inspection = tryInspectSqliteReadOnlyInProcess(input.pathname, inspect, {
         allowClosedWal: input.allowClosedWal || readVerification() !== undefined,
+        preserveSourceArtifacts: input.preserveSourceArtifacts,
       })?.value;
     }
     send({
