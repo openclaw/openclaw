@@ -37,26 +37,11 @@
   flex-shrink: 0;
 }
 
-.skill-reader-dialog__body {
-  flex: 0 1 auto;
-  min-height: 0;
-  align-content: start;
-  overflow: auto;
-  overscroll-behavior: contain;
-  padding: var(--skill-reader-inset);
-}
-
-.skill-reader-dialog__actions {
-  flex-shrink: 0;
-  margin-top: 0;
-  padding: var(--space-3) var(--skill-reader-inset);
-}
-
+/* Install feedback sits between the body and footer, on the shared dialog inset. */
 .skill-reader-dialog__notice {
-  flex: 0 1 auto;
   min-height: 0;
   overflow: auto;
-  margin: 0 var(--skill-reader-inset) var(--space-3);
+  margin: 0 var(--overlay-modal-padding);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
@@ -94,14 +79,6 @@
   box-sizing: border-box;
   font-family: var(--mono);
   resize: vertical;
-}
-
-.oc-dialog.skill-reader-dialog > .oc-dialog__body {
-  padding: var(--space-3) var(--overlay-modal-padding) var(--space-2);
-}
-
-.oc-dialog.skill-reader-dialog > .oc-dialog__body:last-child {
-  padding-block-end: var(--overlay-modal-padding);
 }
 
 .oc-dialog.skill-reader-dialog .exec-approval-title {

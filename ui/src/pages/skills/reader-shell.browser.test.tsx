@@ -111,6 +111,23 @@ describe.runIf(browserMode)("skill reader shell", () => {
       const button = actions.querySelector<HTMLButtonElement>("button")!;
       expect(notice.getAttribute("role")).toBe(kind === "error" ? "alert" : "status");
       expect(button.disabled).toBe(kind === "success");
+      // Body content, install feedback and actions share the dialog's inline inset.
+      const contentEdges = (element: HTMLElement, padded: boolean) => {
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return padded
+          ? [
+              rect.left + Number.parseFloat(style.paddingLeft),
+              rect.right - Number.parseFloat(style.paddingRight),
+            ]
+          : [rect.left, rect.right];
+      };
+      const panelRect = panel.getBoundingClientRect();
+      const inset = contentEdges(query(".skill-reader-dialog__body", panel), true);
+      expect(inset[0]).toBeGreaterThan(panelRect.left);
+      expect(inset[1]).toBeLessThan(panelRect.right);
+      expect(contentEdges(notice, false)).toEqual(inset);
+      expect(contentEdges(actions, true)).toEqual(inset);
       const bounds = actions.getBoundingClientRect();
       expect(bounds.bottom).toBeLessThanOrEqual(panel.getBoundingClientRect().bottom + 1);
       expect(bounds.bottom).toBeLessThanOrEqual(dialog.getBoundingClientRect().bottom + 1);
