@@ -61,9 +61,11 @@ export function readWindowsListeningPidsResultSync(
 ): WindowsListeningPidsResult {
   assertAppContainerSpawnSupported();
   const powershellPids = readListeningPidsViaPowerShell(port, timeoutMs);
-  if (powershellPids != null) {
+  if (powershellPids != null && powershellPids.length > 0) {
     return { ok: true, pids: powershellPids };
   }
+  // A successful empty PowerShell census is not proof the port is free; the
+  // listener can be missing from CIM. Ask netstat before reporting empty.
   const netstat = spawnSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano"], {
     env: resolveDiagnosticProcessEnv(),
     encoding: "utf8",
@@ -71,13 +73,23 @@ export function readWindowsListeningPidsResultSync(
     windowsHide: true,
   });
   if (netstat.error) {
+    if (powershellPids != null) {
+      return { ok: true, pids: powershellPids };
+    }
     const code = (netstat.error as NodeJS.ErrnoException).code;
     return { ok: false, permanent: code === "ENOENT" || code === "EACCES" || code === "EPERM" };
   }
   if (netstat.status !== 0) {
+    if (powershellPids != null) {
+      return { ok: true, pids: powershellPids };
+    }
     return { ok: false, permanent: false };
   }
-  return { ok: true, pids: parseListeningPidsFromNetstat(netstat.stdout, port) };
+  const netstatPids = parseListeningPidsFromNetstat(netstat.stdout, port);
+  return {
+    ok: true,
+    pids: powershellPids != null ? [...new Set([...powershellPids, ...netstatPids])] : netstatPids,
+  };
 }
 
 /** Read-only bounded listener observation, without PID enrichment or a second budget. */
