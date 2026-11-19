@@ -29,7 +29,9 @@ function sizeOf(bytes: number): string {
   return `${formatDiskSpaceBytes(bytes)}, ${bytes} bytes`;
 }
 
-/** The run record keeps the summary plus 31 lines, so longer lists end with a pointer. */
+/** Each line is a run-record step, so long lists end with a pointer to the full preview. */
+const LISTED_LINES = 15;
+
 export function describeAutomaticCleanup(artifacts: readonly RecoveryCleanupArtifact[]): {
   diagnostics: string[];
   warning?: string;
@@ -77,8 +79,11 @@ export function describeAutomaticCleanup(artifacts: readonly RecoveryCleanupArti
     ),
   ];
   const listed =
-    lines.length > 31
-      ? [...lines.slice(0, 30), `${lines.length - 30} more; see openclaw update cleanup --dry-run.`]
+    lines.length > LISTED_LINES
+      ? [
+          ...lines.slice(0, LISTED_LINES - 1),
+          `${lines.length - LISTED_LINES + 1} more; see openclaw update cleanup --dry-run.`,
+        ]
       : lines;
   const problems = [
     failed.length

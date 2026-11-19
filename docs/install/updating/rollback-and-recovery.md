@@ -173,11 +173,10 @@ openclaw update cleanup --dry-run
 ### Full-state recovery requires a backup
 
 Package updates keep pre-migration SQLite snapshots alongside the package
-backup until verified successful activation removes them with that backup.
-This includes snapshots whose source write generations could not be sealed and
-snapshots whose automatic restoration Doctor revoked: they are available for
-manual recovery only until the update is verified successful. Rollback and failed
-or unverified completion retain snapshots.
+backup until verified successful activation removes restorable snapshots with that backup.
+Snapshots whose source write generations could not be sealed remain available
+for manual recovery even after successful activation. Rollback, failed or
+unverified completion, and refused restoration also retain snapshots.
 If cleanup cannot finish, the update reports a maintenance warning with the
 retained path. Older snapshot directories are not automatically removed: their
 ownership and successful outcome cannot be proven from existing receipts.

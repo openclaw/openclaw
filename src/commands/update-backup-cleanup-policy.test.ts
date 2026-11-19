@@ -36,15 +36,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const VERIFIED = {
-  serviceRunning: true,
-  versionMatch: true,
-  settled: true,
-  readyz: true,
-  channelsReady: true,
-  coreReady: true,
-  pluginErrors: [],
-};
+const READY = { serviceRunning: true, versionMatch: true, settled: true, readyz: true };
+const VERIFIED = { ...READY, channelsReady: true, coreReady: true, pluginErrors: [] };
 
 function withState(run: (state: OpenClawTestState) => Promise<void>) {
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
@@ -240,18 +233,28 @@ it("removes a rolled-back update's backups after a later verified update and kee
   });
 });
 
-it("keeps a failed update's newest backup set and releases an older failed set", async () => {
+it("keeps the newest intact backup set after a failure and releases older failed sets", async () => {
   await withState(async (state) => {
     const now = Date.now();
-    const older = startRun(state, now);
-    const olderBackup = await doctorBackup(state, agentPath(state), older);
-    finishUpdateRun(older, { status: "failed" }, { env: state.env });
+    const failedRunWithBackup = async (at: number) => {
+      const runId = startRun(state, at);
+      const backup = await doctorBackup(state, agentPath(state), runId);
+      finishUpdateRun(runId, { status: "failed" }, { env: state.env });
+      return { runId, backup };
+    };
+    const oldest = await failedRunWithBackup(now);
+    const older = await failedRunWithBackup(now + 30_000);
+    // The newest set changed after it was recorded, so it cannot stand in for older sets.
     const newest = startRun(state, now + 60_000);
     const newestBackup = await doctorBackup(state, agentPath(state), newest);
+    fs.appendFileSync(newestBackup, Buffer.alloc(4096));
     const cleanup = await finish(state, newest, now + 61_000, "failed");
-    expect(fs.existsSync(olderBackup)).toBe(false);
-    expect(fs.existsSync(newestBackup)).toBe(true);
-    expect(cleanup?.diagnostics).toContainEqual(expect.stringContaining(`Kept ${newestBackup} (`));
+    expect([oldest.backup, older.backup, newestBackup].map((file) => fs.existsSync(file))).toEqual([
+      false,
+      true,
+      true,
+    ]);
+    expect(cleanup?.diagnostics).toContainEqual(expect.stringContaining(`Kept ${older.backup} (`));
   });
 });
 

@@ -113,10 +113,13 @@ export async function writeDisplacedDatabaseReceipts(
     byDatabase.set(databasePath, receipt);
   }
   for (const receipt of byDatabase.values()) {
+    // Keep the database directory's own mode: the writer would otherwise reset it to the
+    // umask default, and private stores (client credentials) refuse a widened directory.
+    const directory = path.dirname(receipt.databasePath);
     await writeTextAtomic(
       displacedDatabaseReceiptPath(receipt.databasePath, runId),
       `${JSON.stringify(receipt, null, 2)}\n`,
-      { mode: 0o600, durable: true },
+      { mode: 0o600, dirMode: fs.statSync(directory).mode & 0o777, durable: true },
     );
   }
 }

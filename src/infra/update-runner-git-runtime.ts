@@ -532,8 +532,7 @@ export function createGitRuntimeTransaction({
           );
         }
         // Verified activation ends automatic database restoration, as for package
-        // updates, also when restoration was unavailable. A skipped image's retained
-        // scratch clears this root so the warning that names it stays true.
+        // updates. Capture and late refusals clear this root to keep manual recovery.
         if (!outcome.activationVerified || !transaction.databaseBackupRoot) {
           return retired;
         }

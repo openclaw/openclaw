@@ -1182,15 +1182,24 @@ check passed), cleanup deletes at once:
   `session-sqlite-migration-runs/` records the update's run id (`updateRunId`), and
   that run's outcome releases them. The live database keeping its inode is not
   required: the updater's own rollback and the startup swap replace that file.
-- the pre-migration database snapshots that update took
+- the restorable pre-migration database snapshots that update took
   (`<package-backup>.databases`, or `.artifacts/<name>.databases` for Git
-  checkouts), also when automatic restoration was unavailable.
-- the same Doctor backups and `<database>.migrated-<runId>` files of every earlier
-  finished update. A database rollback writes
+  checkouts), as before.
+- an already-current run's own original-state capture, when that run ends.
+- the same Doctor backups, `<database>.migrated-<runId>` files, and failed or
+  rolled-back original-state captures of every earlier update that finished
+  before the verified one started. A database rollback writes
   `<database>.migrated-<runId>.receipt.json` before it moves the migrated files
   aside; cleanup deletes only the files that receipt lists, with the recorded
   device, inode, size, and modification time, then the receipt.
 - superseded original-state captures, by the rules above.
+
+Doctor backups whose manifest predates `updateRunId` keep their previous rules: they
+are removed only after Doctor marked them complete and a later successful update
+superseded them; otherwise they stay and are listed.
+
+A cleanup that ran before the update's health verification was recorded runs again
+at the next cleanup point once verification lands.
 
 When the newest update failed or was not verified, cleanup keeps that update's
 backups, because repair may need them, and deletes older sets only while no update
@@ -1200,12 +1209,12 @@ Cleanup never deletes:
 
 - Doctor cron repair backups (`openclaw.sqlite.doctor-cron-*.bak`).
 - backups without a manifest or receipt, including Doctor backups written before
-  manifests existed and manifests written before `updateRunId` existed. Those older
-  manifests keep their previous completion rules.
+  manifests existed and `.migrated-*` files from before receipts existed.
 - a backup whose manifest names an update run with no record.
 - anything a pending recovery or an unfinished update run references.
-- `.databases` snapshot directories left by earlier updates; no receipt links them
-  to their run. Doctor reports older npm snapshot directories with their size.
+- `.databases` snapshot directories left by earlier updates, and snapshots whose
+  automatic restoration was unavailable; no receipt links them to a verified run.
+  Doctor reports older npm snapshot directories with their size.
 - files outside the state directory, the install root, and the release prefix, or
   any name the updater does not write, such as your own `openclaw.sqlite.bak`.
 

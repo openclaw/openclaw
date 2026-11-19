@@ -637,9 +637,11 @@ export async function recordUpdatePackageCompletion(
   if (!params.opts.json) {
     defaultRuntime.log("Finishing update: checking package backup retention and cleanup.");
   }
-  // Both local and migrated finalization retire the retained parent's transaction here.
-  // A verified success removes its pre-migration images even after Doctor revoked
-  // automatic restoration (owner policy); an unverified outcome keeps them.
+  // Doctor can revoke restoration after capture. Both local and migrated
+  // finalization retire the retained parent's transaction through this boundary.
+  if (params.databaseBackup?.restoreRefusal) {
+    transaction.databaseBackupRoot = undefined;
+  }
   // Retirement deletes the previous package before exit; time it even on success.
   const retirementStartedAt = performance.now();
   const retained: UpdateStepResult | void = await transaction

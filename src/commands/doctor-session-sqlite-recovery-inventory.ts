@@ -41,6 +41,7 @@ import {
 import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
 import {
   classifyDisplacedDatabases,
+  isIntactDisplacedFamily,
   scanDisplacedDatabases,
 } from "./update-displaced-database-cleanup.js";
 import {
@@ -196,7 +197,21 @@ export function collectRecoveryInventory(params: {
     ownership = createUpdateRunArtifactOwnership(
       history,
       [
-        ...[...references.values()].flatMap((refs) => refs.map(updateRunIdOf)),
+        // Only an intact set can stand in for older ones; a changed or missing backup
+        // never makes an older set "superseded".
+        ...[...references.entries()]
+          .filter(([archivePath, refs]) => {
+            const current = statMigrationPath(archivePath, { bigint: true });
+            const identity = refs[0]?.move.artifact?.identity;
+            return (
+              current?.isFile() === true &&
+              identity !== undefined &&
+              (["ino", "mtimeNs", "size"] as const).every(
+                (key) => String(current[key]) === String(identity[key]),
+              )
+            );
+          })
+          .flatMap(([, refs]) => refs.map(updateRunIdOf)),
         ...(params.ownerRunIds ?? []),
       ].filter((runId): runId is string => runId !== undefined),
       params.env,
@@ -429,7 +444,7 @@ export function collectRecoveryInventory(params: {
     artifacts,
     references,
     manifestPaths,
-    ownership,
+    ...(ownership ? { ownership } : {}),
     report: summarizeRecoveryCleanup(
       root,
       artifacts.filter((item) => !missingOriginals.has(item.path)),
@@ -561,7 +576,9 @@ function readUpdateCleanupInventory(params: {
   const families = scanDisplacedDatabases(stateDir, params.scan);
   const inventory = collectRecoveryInventory({
     ...params,
-    ownerRunIds: families.flatMap((family) => (family.receipt ? [family.runId] : [])),
+    ownerRunIds: families.flatMap((family) =>
+      isIntactDisplacedFamily(family) ? [family.runId] : [],
+    ),
   });
   const captures = collectUpdateCaptureInventory({
     stateDir: inventory.report.stateDir,

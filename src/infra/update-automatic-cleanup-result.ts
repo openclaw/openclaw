@@ -29,10 +29,10 @@ export function hasSettledAutomaticRecoveryCleanup(run: UpdateRunRecord): boolea
   );
   return (
     step !== undefined &&
+    // Older receipts carry no time, so they cannot prove they ran after verification.
     !(
-      step.endedAtMs !== undefined &&
       run.confirmedAtMs !== null &&
-      run.confirmedAtMs > step.endedAtMs
+      (step.endedAtMs === undefined || run.confirmedAtMs > step.endedAtMs)
     )
   );
 }

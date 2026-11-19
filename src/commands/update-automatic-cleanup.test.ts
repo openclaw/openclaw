@@ -141,6 +141,14 @@ async function fail(runId: string, at: number) {
   expect(getUpdateRun(runId, { env })?.status).toBe("failed");
   return result;
 }
+function verifyHealthy(runId: string) {
+  const ready = { serviceRunning: true, versionMatch: true, settled: true, readyz: true };
+  recordUpdateRunVerification(
+    runId,
+    { ...ready, channelsReady: true, coreReady: true, pluginErrors: [] },
+    { env },
+  );
+}
 async function recoveryFixture() {
   const fixture = await createVerifiedRecoveryStore();
   env = fixture.store.env;
@@ -778,19 +786,7 @@ it.each([true, false])(
     // Activation's Doctor migration completes inside the run.
     const { backup } = await migrationOriginal();
     if (verified) {
-      recordUpdateRunVerification(
-        runId,
-        {
-          serviceRunning: true,
-          versionMatch: true,
-          settled: true,
-          readyz: true,
-          channelsReady: true,
-          coreReady: true,
-          pluginErrors: [],
-        },
-        { env },
-      );
+      verifyHealthy(runId);
     }
     const result = await complete(runId, now + 60_000);
     expect([directory, backup].map(fs.existsSync)).toEqual([!verified, !verified]);
@@ -943,19 +939,7 @@ it("retires a failed run's capture after a later verified update, and reruns cle
   {
     using clock = vi.spyOn(Date, "now");
     clock.mockReturnValue(now + 30_000);
-    recordUpdateRunVerification(
-      runId,
-      {
-        serviceRunning: true,
-        versionMatch: true,
-        settled: true,
-        readyz: true,
-        channelsReady: true,
-        coreReady: true,
-        pluginErrors: [],
-      },
-      { env },
-    );
+    verifyHealthy(runId);
   }
   const cleanup = await automaticallyCleanUpdateRecovery(runId, env);
   expect(cleanup?.advisory).toBeUndefined();

@@ -134,6 +134,16 @@ function matchesReceipt(
   );
 }
 
+/** A receipted family whose every present file is still the one the rollback recorded. */
+export function isIntactDisplacedFamily(family: Family): boolean {
+  const listed = new Map(family.receipt?.files.map((file) => [file.path, file]) ?? []);
+  return (
+    family.receipt !== undefined &&
+    family.files.size > 0 &&
+    [...family.files].every(([filePath, stat]) => matchesReceipt(stat, listed.get(filePath)))
+  );
+}
+
 export function classifyDisplacedDatabases(
   families: readonly Family[],
   ownership: UpdateRunArtifactOwnership | undefined,

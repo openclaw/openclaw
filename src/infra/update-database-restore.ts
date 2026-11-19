@@ -317,7 +317,8 @@ export async function restoreUpdateDatabaseBackup(params: {
           assertOwned();
         }
         // Cleanup may remove these files only after a later verified update, by this receipt.
-        await writeDisplacedDatabaseReceipts(params.runId, moves);
+        // Bookkeeping never blocks a rollback: without a receipt the files stay protected.
+        await writeDisplacedDatabaseReceipts(params.runId, moves).catch(() => undefined);
         assertOwned();
         params.onLiveMutation?.();
         for (const move of moves) {

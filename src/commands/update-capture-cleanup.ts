@@ -98,8 +98,11 @@ function classifyCapture(
     fs.existsSync(path.join(directory, "manifest.json")) &&
     !fs.existsSync(path.join(directory, "manifest.json.partial"));
   const capture = run.origin.updateRecoveryCapture;
-  // A verified successful update that started after this run finished supersedes it.
+  // A verified successful update that started after this failed run finished supersedes
+  // its sealed recovery source; other captures keep their existing rules below.
   if (
+    sealed &&
+    (run.status === "failed" || run.status === "rolled-back") &&
     latestVerifiedSuccessStartedAt > run.createdAtMs &&
     latestVerifiedSuccessStartedAt >= run.finishedAtMs
   ) {
