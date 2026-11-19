@@ -107,6 +107,7 @@ export type SubagentAnnounceDirectParams = {
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   onDeliveryError?: (error: unknown) => void;
   signal?: AbortSignal;
+  onAccepted?: () => void;
   onExecutionStarted?: () => void;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 };
@@ -574,6 +575,7 @@ async function sendSubagentAnnounceDirectlyBound(
                     : undefined,
                 expectFinal: true,
                 signal: params.signal,
+                onAccepted: params.onAccepted,
                 onExecutionStarted: params.onExecutionStarted,
                 // Individual private delivery uses the lifecycle window for admission;
                 // settle batches can observe and replay admission.

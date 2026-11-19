@@ -511,6 +511,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       readCurrent: readRequesterCurrent,
       isStoreCurrent,
     });
+    let dispatchAccepted = false;
     const isRequesterCurrent = () => {
       if (!sourceReceiptAdmission.isRequesterCurrent()) {
         return false;
@@ -523,7 +524,8 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
           return false;
         }
       }
-      return isRequesterRunCurrent(getRequesterRun(), directIdempotencyKey);
+      // An accepted turn owns delivery despite normal requester-run turnover.
+      return dispatchAccepted || isRequesterRunCurrent(getRequesterRun(), directIdempotencyKey);
     };
     const isSourceSessionEffectsAllowed = () =>
       !params.signal?.aborted &&
@@ -538,20 +540,18 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       if (isGatewayClosed() || !isBatchCurrent() || (await retireReplacedStore())) {
         return true;
       }
-      if (isBatchDeliveryClosed() || !isRequesterCurrent()) {
-        if (
-          pauseNotice &&
-          !isBatchDeliveryClosed() &&
-          sourceReceiptAdmission.isRequesterCurrent()
-        ) {
-          // Requester turnover revokes this attempt, not the child's need for direction.
-          await deferBatch(knownUndelivered ? { status: "pending" } : {}, false);
-          return true;
-        }
-        await completeBatch(settledBatch, state);
+      const deliveryClosed = isBatchDeliveryClosed();
+      if (!deliveryClosed && isRequesterCurrent()) {
+        return false;
+      }
+      if (!deliveryClosed && !followup && sourceReceiptAdmission.isRequesterCurrent()) {
+        // Same-session turnover leaves the findings owed. An ambiguous dispatch
+        // retains its key for replay; only known non-admission resets the attempt.
+        await deferBatch(knownUndelivered ? { status: "pending" } : {}, false);
         return true;
       }
-      return false;
+      await completeBatch(settledBatch, state);
+      return true;
     };
     if (
       isSourceSessionEffectsAllowed() &&
@@ -608,6 +608,9 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
                 resolveGatewayContext,
                 isSourceSessionEffectsAllowed,
                 sourceReceiptAdmission,
+                onAccepted: () => {
+                  dispatchAccepted = true;
+                },
                 onExecutionStarted: () => {
                   executionStarted = true;
                 },

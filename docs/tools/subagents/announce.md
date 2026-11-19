@@ -15,6 +15,7 @@ Sub-agents report back through completion delivery:
 - Runs spawned with `expectsCompletionMessage: false` skip completion delivery entirely; the run registry records their delivery as not required.
 - Subagents must return a meaningful result or a concrete blocker. An exact child `NO_REPLY` response or no output cannot satisfy a missing child result and triggers normal missing-answer recovery. A retained completion without a visible result is handed to the requester as `(no output)`, including when several child results are collected together.
 - Duplicate delivery is suppressed through recorded completion and source-message delivery facts. Subagents and internal parent review turns do not use silent tokens for deduplication.
+- A requester run ending or an ordinary follow-up taking over does not discard waiting results. An accepted completion turn keeps its delivery; results not yet accepted remain pending for the same requester session.
 
 By default, delivery depends on requester depth:
 

@@ -316,9 +316,10 @@ it.each([
   "admitted",
   "failed kill",
   "requester reset",
-  "requester replacement",
+  "requester replacement before acceptance",
+  "requester replacement after acceptance",
 ] as const)(
-  "settles a yielded requester's child after %s cancellation without reviving cancelled work",
+  "preserves a yielded requester's child completion across %s without reviving cancelled work",
   async (phase) => {
     const owner = "agent:main:main";
     const requesterKey = "agent:main:subagent:yielded-requester";
@@ -378,8 +379,10 @@ it.each([
     const admitted = createDeferredCore<string>();
     const execute = createDeferredCore();
     const startedTurns: string[] = [];
+    const requesterReplaced = phase.startsWith("requester replacement");
+    const accepted = phase !== "requester replacement before acceptance";
     const waitBeforeExecution =
-      phase === "admitted" || phase === "requester reset" || phase === "requester replacement";
+      phase === "admitted" || phase === "requester reset" || requesterReplaced;
     type Dispatch = SubagentAnnounceDeliveryTestDeps["dispatchGatewayMethodInProcess"];
     const completion = { dispatch: dispatchGatewayMethodInProcess };
     vi.spyOn(completion, "dispatch").mockResolvedValue({
@@ -408,6 +411,9 @@ it.each([
       });
       expect(adopted?.generation).toBeGreaterThan(originalRequester.generation ?? 0);
       expect(subagentRuns.has(originalRequester.runId)).toBe(false);
+      if (accepted) {
+        options?.onAccepted?.({ status: "accepted", runId });
+      }
       admitted.resolve(runId);
       if (waitBeforeExecution) {
         await execute.promise;
@@ -444,7 +450,7 @@ it.each([
         lifecycleRevision: "replacement-incarnation",
       }));
     }
-    if (phase === "requester replacement") {
+    if (requesterReplaced) {
       await registerSubagentRun({
         runId: "replacement",
         childSessionKey: requesterKey,
@@ -472,7 +478,7 @@ it.each([
         await registryTesting.sweepOnceForTests();
       }
       await fixture.settle();
-      if (phase === "failed kill") {
+      if (phase === "failed kill" || phase === "requester replacement after acceptance") {
         expect(startedTurns).toEqual([requesterKey]);
       } else {
         expect(startedTurns).toEqual([]);
@@ -505,7 +511,13 @@ it.each([
           expect(resolveSubagentSessionStatus(subagentRuns.get("nested"))).toBe("killed");
         }
       }
-      expect(subagentRuns.get("nested")?.requesterSettleWake).toBeUndefined();
+      if (phase === "requester replacement before acceptance") {
+        expect(subagentRuns.get("nested")?.requesterSettleWake).toMatchObject({
+          status: "pending",
+        });
+      } else {
+        expect(subagentRuns.get("nested")?.requesterSettleWake).toBeUndefined();
+      }
       if (completedNestedOutcome) {
         expect(subagentRuns.get("nested")?.execution.outcome).toEqual(completedNestedOutcome);
       }
