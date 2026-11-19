@@ -34,6 +34,11 @@ visibility, or remote session-link titles. Side Chat is hidden, and session link
 keep their locally available labels. MCP Apps discovery requires general write
 access. The Gateway continues to authorize every request.
 
+**Settings → Devices** displays the current device inventory while refreshing
+configuration separately. Binding controls keep their own loading and error
+state until configuration is available; a slow configuration read does not
+hold the inventory page open.
+
 When the Gateway starts with `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`,
 its Control UI shows **Gateway configuration is read-only.** You can inspect the
 configuration there. OpenClaw refuses changes to `openclaw.json` through the Gateway.

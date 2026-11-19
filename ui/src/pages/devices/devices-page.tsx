@@ -77,6 +77,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   }
   let systemInfoUnavailable = false;
   let dataState = createInitialDevicesState();
+  const refreshDeviceInventory = (quiet = false) => readInventory("devices", quiet);
   const [nodesRead, setNodesRead] = createSignal<InventoryReadReceipt | null>(null);
   const [devicesRead, setDevicesRead] = createSignal<InventoryReadReceipt | null>(null);
   let canManagePairing = false;
@@ -259,15 +260,6 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       canAdmin = false;
     };
   });
-
-  function setRouteData(data: DevicesRouteData | undefined) {
-    applyRouteData(data);
-    if (data && gatewayBinding.connected && gatewayBinding.isRouteDataCurrent(data)) {
-      void context.runtimeConfig.refresh({ background: true }).catch(() => undefined);
-    }
-    ensureInitialData();
-    publishData();
-  }
 
   function syncConfigCustody() {
     if (currentConfigObject(context.runtimeConfig.state)) {
@@ -546,10 +538,6 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     return result;
   }
 
-  function refreshDeviceInventory(quiet = false) {
-    return readInventory("devices", quiet);
-  }
-
   function refreshNodeInventory(quiet = false) {
     if (!canRead) {
       return;
@@ -708,7 +696,14 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   createEffect(
     createMemo(() => props.routeData),
     // Receipt adoption samples live admission; useGatewayPage owns Gateway observation.
-    setRouteData,
+    (data) => {
+      applyRouteData(data);
+      if (data && gatewayBinding.connected && gatewayBinding.isRouteDataCurrent(data)) {
+        void context.runtimeConfig.refresh({ background: true }).catch(() => undefined);
+      }
+      ensureInitialData();
+      publishData();
+    },
   );
   return (
     <openclaw-devices-page>

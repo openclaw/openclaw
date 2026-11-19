@@ -64,7 +64,15 @@ describe("DevicesPage policy saves", () => {
     let configReads = 0;
     const { client } = clientFor(
       vi.fn(async (method: string) =>
-        method === "config.get" && ++configReads > 1 ? refresh.promise : responseFor(method),
+        method === "config.get" && ++configReads > 1
+          ? refresh.promise
+          : method === "node.list"
+            ? {
+                nodes: [
+                  { nodeId: "available", displayName: "Available node", commands: ["system.run"] },
+                ],
+              }
+            : responseFor(method),
       ),
     );
     const fixture = gatewayFixture(gatewaySnapshot(client, true, [], ["operator.admin"]));
@@ -73,12 +81,12 @@ describe("DevicesPage policy saves", () => {
     await runtimeConfig.ensureLoaded();
     const page = mountPage(
       fixture,
-      { nodes: [{ nodeId: "available", displayName: "Available node" }] },
+      { nodes: [{ nodeId: "available", displayName: "Available node", commands: ["system.run"] }] },
       undefined,
       runtimeConfig,
     );
     await waitForSolid(() => expect(configReads).toBe(2));
-    expect(page.container.textContent).toContain("Available node");
+    await waitForSolid(() => expect(page.container.textContent).toContain("Available node"));
     refresh.resolve(responseFor("config.get"));
   });
 
