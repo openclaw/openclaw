@@ -701,8 +701,8 @@
 
 /* Metadata shrinks before the actions do, so Undo, Dismiss and Use stay inside the card. */
 .agent-chat__composer-task-meta {
+  flex: 1;
   min-inline-size: 0;
-  margin-inline-end: auto;
   overflow: hidden;
   text-overflow: ellipsis;
 }
