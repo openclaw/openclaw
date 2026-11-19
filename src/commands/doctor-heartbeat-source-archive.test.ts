@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -223,4 +224,22 @@ it("retries the migration after a failed archive write", async () => {
   expect((await f.migrate()).warnings).toEqual([]);
   expect(await f.archivedContents()).toContain(checklist);
   await expect(fs.access(f.sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it.each([
+  ["repairs a partial archive left by an earlier release", "Checklis", false],
+  ["keeps a different existing archive", "Different notes", true],
+])("%s", async (_name, existing, collides) => {
+  const f = await fixture();
+  const checklist = "Checklist written before the disk filled";
+  await fs.writeFile(f.sourcePath, checklist);
+  const archiveDir = path.join(f.root, "backups", "heartbeat-migration");
+  const sha256 = createHash("sha256").update(checklist).digest("hex");
+  await fs.mkdir(archiveDir, { recursive: true });
+  await fs.writeFile(path.join(archiveDir, `main-${sha256}.md`), existing);
+  const warnings = (await f.migrate()).warnings.join("\n");
+  expect(warnings).toEqual(collides ? expect.stringContaining("archive collision") : "");
+  const archived = await f.archivedContents();
+  expect(archived).toContain(collides ? existing : checklist);
+  expect(archived).not.toContain(collides ? checklist : existing);
 });

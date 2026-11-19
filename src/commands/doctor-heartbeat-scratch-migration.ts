@@ -404,8 +404,14 @@ async function archiveSource(params: {
       await fs.rm(archivePath, { force: true });
       throw error;
     }
-    const existing = await fs.readFile(archivePath, "utf8");
-    if (hashCronScratchSource(existing) !== params.source.sha256) {
+    const existing = await fs.readFile(archivePath);
+    const content = Buffer.from(params.source.content, "utf8");
+    // Releases before this cleanup left a partial copy of this same source; replace only that.
+    if (existing.length < content.length && existing.equals(content.subarray(0, existing.length))) {
+      await fs.rm(archivePath);
+      return await archiveSource(params);
+    }
+    if (!existing.equals(content)) {
       throw new Error(`heartbeat migration archive collision at ${archivePath}`, { cause: error });
     }
   }
