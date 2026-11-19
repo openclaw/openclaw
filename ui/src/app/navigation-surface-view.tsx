@@ -50,7 +50,33 @@ export function FloatingUpdateCard(props: FloatingUpdateCardProps) {
         </ShellComponentBoundary>
       </Show>
       <Show when={!props.compact && props.refreshRequired}>
-        <Errored fallback={null}>
+        {/* Old builds can lose the lazy card and its CSS, so recovery uses entry styles only. */}
+        <Errored
+          fallback={
+            <section
+              class="callout info callout--action"
+              role="status"
+              style={{
+                position: "fixed",
+                "z-index": 45,
+                top: "calc(var(--safe-area-top, 0px) + 56px)",
+                left: "50%",
+                translate: "-50% 0",
+                "max-width": "min(520px, calc(100vw - 24px))",
+                background: "var(--popover)",
+                "box-shadow": "var(--shadow-md)",
+              }}
+            >
+              <div class="callout__content">
+                <strong>{t("connection.reload-required")}</strong>
+                <div>{t("lazyView.staleSubtitle")}</div>
+              </div>
+              <button type="button" class="btn btn--sm" onClick={() => void props.onRefresh()}>
+                {t("common.reload")}
+              </button>
+            </section>
+          }
+        >
           <Loading>
             <UpdateCard
               class="sidebar-update-card--floating"

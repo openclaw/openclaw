@@ -49,7 +49,9 @@ suite.define(() => {
         await page.locator(".new-session-page__message").fill(retainedText);
         await page.locator(".agent-chat__file-input").setInputFiles(file);
         await page.getByText(file.name, { exact: true }).first().waitFor();
-        const oldAssets = /\/assets\/private-composer-recovery-content-[^/]+\.js(?:\?.*)?$/u;
+        // Drop the unrequested notice chunks along with the old recovery content.
+        const oldAssets =
+          /\/assets\/(?:private-composer-recovery-content|sidebar-update-card|sidebar-update-runtime|sidebar-notification-card|en-update-actions)-[^/]+\.(?:js|css)(?:\?.*)?$/u;
         expect(
           await page.evaluate(() =>
             performance
@@ -110,7 +112,16 @@ suite.define(() => {
           },
           retryable: false,
         });
-        const refresh = page.getByRole("button", { name: /Server updated/u });
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          const frame = await takeControlUiScreenshotFrame(page, pending, [pending], {
+            animations: "disabled",
+          });
+          await writeFile(path.join(suite.artifactDir, "stale-notice.png"), frame.png);
+        }
+        const refresh = page
+          .getByRole("status")
+          .filter({ hasText: "Refresh required" })
+          .getByRole("button", { name: "Reload", exact: true });
         const blocked = page.getByText(
           "A pending message is only saved in this tab. Keep this tab open until it is sent, or copy it before discarding it and reloading.",
           { exact: true },
