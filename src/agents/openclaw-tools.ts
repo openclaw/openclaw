@@ -364,9 +364,6 @@ function* createOpenClawToolsSteps(
         agentDir: searchContext.agentDir,
         authStore: options?.authProfileStore,
         runtimeWebSearch: runtimeWebTools?.search,
-        ...(options?.authProfileStoreSource !== undefined
-          ? { resolveAuthProfileStoreSource: () => options.authProfileStoreSource === true }
-          : {}),
       });
     options?.onWebSearchConfiguration?.(configured);
     if (!configured) {
