@@ -15,24 +15,6 @@ import { failedToolResult } from "./dynamic-tool-response-state.js";
 import { invalidInlineImageText } from "./image-payload-sanitizer.js";
 import type { CodexDynamicToolCallOutputContentItem } from "./protocol.js";
 
-/**
- * Skill Library pins live in the Gateway state directory, which a remote app-server's
- * own file tools cannot open; copies already delivered under its workspace root stay.
- */
-export function resolveGatewayOnlySkillDirs(
-  skills: readonly { name: string; source: string; filePath: string }[],
-  remoteWorkspaceRoot: string | undefined,
-): Map<string, string> {
-  const root = `${remoteWorkspaceRoot?.replace(/\/+$/u, "")}/`;
-  const remote = skills.filter(
-    (skill) =>
-      remoteWorkspaceRoot &&
-      skill.source === "openclaw-library" &&
-      !skill.filePath.startsWith(root),
-  );
-  return new Map(remote.map((skill) => [skill.name, path.dirname(skill.filePath)]));
-}
-
 /** One bridge's weighted output budget and its skill-result presentation. */
 export function createCodexToolResultPresentation(
   context:

@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { renderCodexSkillsInstructions } from "./attempt-context.js";
-import { resolveGatewayOnlySkillDirs } from "./dynamic-tool-content.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { resolveGatewayOnlySkillDirs } from "./gateway-only-skills.js";
 
 const {
   bindProductionCodexHostCapabilities,

@@ -19,7 +19,6 @@ import {
   resolveCodexMessageToolProvider,
   shouldWarnCodexDynamicToolBuildStageSummary,
 } from "./dynamic-tool-build.js";
-import { resolveGatewayOnlySkillDirs } from "./dynamic-tool-content.js";
 import {
   filterCodexDynamicTools,
   resolveCodexDynamicToolsLoadingForRuntime,
@@ -28,6 +27,7 @@ import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
+import { resolveGatewayOnlySkillDirs } from "./gateway-only-skills.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
 import type { NativePendingChild } from "./native-subagent-monitor-types.js";
 import {
