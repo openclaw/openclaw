@@ -25,7 +25,7 @@ import type { FailoverReason } from "../failover/signal.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
 import type { AgentHarnessAttemptParams } from "../harness/types.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
-import type { ModelCatalogSnapshot } from "../model-catalog.types.js";
+import { createModelRuntimeChoiceOwnerFixture } from "../model-runtime-choice.test-support.js";
 import { preparedModelRuntimeConfigsMatch } from "../prepared-model-runtime.owner.js";
 import type {
   PreparedModelRuntimeInput,
@@ -169,21 +169,21 @@ export const mockedAcquireAgentRunPreparedModelRuntime = vi.fn(
     const metadataSnapshot = admitted
       ? admitted.pluginMetadataSnapshot
       : { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir };
-    const snapshot = {
+    const snapshot: ReturnType<typeof createModelRuntimeChoiceOwnerFixture> = {
+      ...createModelRuntimeChoiceOwnerFixture(input.config, () => true, {
+        agentDir: input.agentDir,
+        workspaceDir: input.workspaceDir,
+        pluginRegistry: pluginRegistry
+          ? { ...pluginRegistry, agentHarnesses: [...pluginRegistry.agentHarnesses] }
+          : undefined,
+        metadataSnapshot,
+        modelCatalog: { entries: [], routeVariants: [], providerOutcomes: [] },
+      }),
       agentId: input.agentId,
-      agentDir: input.agentDir,
-      config: input.config,
-      workspaceDir: input.workspaceDir,
-      pluginRegistry: pluginRegistry
-        ? { ...pluginRegistry, agentHarnesses: [...pluginRegistry.agentHarnesses] }
-        : undefined,
-      metadataSnapshot,
-      modelCatalog: {
-        entries: [],
-        routeVariants: [],
-        providerOutcomes: [],
-      } satisfies ModelCatalogSnapshot,
-      createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+      catalogOwner:
+        input.agentId && input.workspaceDir
+          ? { agentId: input.agentId, workspaceDir: input.workspaceDir }
+          : undefined,
     };
     return {
       snapshot,

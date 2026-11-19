@@ -354,11 +354,8 @@ it("reacquires generations while preserving run authority, committed work, and o
     await import("../../plugins/runtime/gateway-request-scope.js");
   const { getPluginRuntimeGenerationRegistry, withPluginRuntimeGenerationScope } =
     await import("../../plugins/runtime/generation-scope.js");
-  const {
-    getPreparedModelRuntimeBorrowedSnapshot,
-    getPreparedModelRuntimePluginGeneration,
-    withPreparedModelRuntimePluginGenerationScope,
-  } = await import("../prepared-model-runtime-generation-scope.js");
+  const { getPreparedModelRuntimePluginGeneration, withPreparedModelRuntimePluginGenerationScope } =
+    await import("../prepared-model-runtime-generation-scope.js");
   const { getAgentRunContext } = await import("../../infra/agent-run-registry.js");
   const runParams = fixtureRunParams();
   const originalPrompt = "edit and reload twice";
@@ -470,7 +467,7 @@ it("reacquires generations while preserving run authority, committed work, and o
             onAgentEvent,
           }),
         ),
-      () => first as NonNullable<ReturnType<typeof getPreparedModelRuntimeBorrowedSnapshot>>,
+      () => first,
     ),
   );
   expect(result.payloads).toEqual([{ text: "new behavior verified" }]);
