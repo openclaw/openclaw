@@ -38,7 +38,7 @@ vi.mock("./reply-agent-turn-preparation.js", () => ({
   },
 }));
 
-// mock-isolation: No result accounting or worker initialization is needed for an aborted stub turn.
+// mock-isolation: Observer ownership does not need result accounting or worker initialization.
 vi.mock("./agent-runner-result-accounting.js", () => ({
   accountFollowupTurn: async () => undefined,
 }));
@@ -49,7 +49,7 @@ vi.mock("./followup-delivery.js", () => ({
     opts,
   }: Parameters<typeof resolveFollowupDeliveryDecision>[0]) => {
     await opts?.resolveReplyDelivery?.(2);
-    return { kind: "suppress", reason: "aborted" };
+    return { kind: "suppress", reason: "silent" };
   },
   deliverFollowupDecision: async () => ({ kind: "completed", payloads: [] }),
 }));
@@ -134,14 +134,22 @@ it.for(["before drain", "enqueue during drain", "deferred restart"] as const)(
         expect(actual).toBe(expected);
       }
       opts?.internalEventExecution?.onStarted(runId);
-      await opts?.internalEventExecution?.onTerminal(runId, "completed");
       opts?.onDeliberateSilentTerminalReply?.();
       opts?.onPreparedAgentRunStart?.({ runId, transcriptStart: null });
       opts?.onModelSelected?.({ provider: "test", model: item, thinkLevel: undefined });
       opts?.prepareAssistantTranscriptMessage?.(message, item);
       await opts?.resolveReplyDelivery?.(1);
-      opts?.onAgentRunTerminalOutcome?.("completed");
-      return { runId, outcome: { kind: "aborted", reason: "user" } };
+      return {
+        runId,
+        outcome: {
+          kind: "settled",
+          status: "ok",
+          result: { payloads: [], meta: { durationMs: 1 } },
+          resolved: { provider: "test", model: item },
+          fallback: { exhausted: false, attempts: [] },
+          autoCompactionCount: 0,
+        },
+      };
     });
     const createEventExecution = () => ({
       deliver: false as const,
@@ -217,7 +225,11 @@ it.for(["before drain", "enqueue during drain", "deferred restart"] as const)(
       }
       expectCallCounts(0, ownedEvent.onFailed, decoyEvent.onFailed);
       expect(ownedEvent.onStarted).toHaveBeenCalledExactlyOnceWith("execution-B");
-      expect(ownedEvent.onTerminal).toHaveBeenCalledExactlyOnceWith("execution-B", "completed");
+      expect(ownedEvent.onTerminal).toHaveBeenCalledExactlyOnceWith(
+        "execution-B",
+        "completed",
+        expect.objectContaining({ payloads: [] }),
+      );
       expectCallCounts(0, decoyEvent.onStarted, decoyEvent.onTerminal);
       for (const decoy of decoys) {
         expectCallCounts(0, ...Object.values(decoy));
