@@ -4,16 +4,13 @@
 //   K_srv and K_gw and returns the binding the owner root signs, with Discovery's published
 //   descriptor when `code` (the owner account's link code) reads it; commit takes that R-signed
 //   binding and the code that publishes it; cancel deletes uncommitted staged keys;
-// - reset_prepare / reset_commit: "Reset owner access" (owner reset, OCF-319). prepare returns
-//   what the new root R' signs; commit takes rootPub, the R'-signed binding and, from a browser,
-//   its R'-signed owner device, then removes everyone. `openclaw id reset` routes here with
-//   expectedOwnerId, which binds the write to this Gateway's state owner.
+// - reset_prepare / reset_commit: "Reset owner access" (owner reset, OCF-319). Both take `code`,
+//   a link code from the account that owns the claw, checked with Discovery first. prepare stages
+//   the next K_gw and returns what the new root R' signs; commit takes rootPub, the R'-signed
+//   binding and, from a browser, its R'-signed owner device, then removes everyone and publishes
+//   with the code.
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawIdService } from "../openclaw-id/service.js";
-import {
-  captureLocalStateMutationGuard,
-  localStateOwnerChangedError,
-} from "./local-state-owner.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const WHAT = { rebind: "Move to new keys", reset: "Reset owner access" } as const;
@@ -44,29 +41,20 @@ export async function handleOpenClawIdMachineAction(
     return;
   }
   let result;
+  const code =
+    typeof params.code === "string" && params.code.trim() ? params.code.trim() : undefined;
   if (kind === "rebind") {
-    const code =
-      typeof params.code === "string" && params.code.trim() ? params.code.trim() : undefined;
     result = await service.rebind(step as "prepare" | "commit" | "cancel", channel, {
       binding: params.binding,
       code,
     });
   } else {
-    let guard: (() => void) | undefined;
-    if (params.expectedOwnerId !== undefined) {
-      try {
-        guard = captureLocalStateMutationGuard(String(params.expectedOwnerId), opts);
-      } catch (error) {
-        opts.respond(false, undefined, localStateOwnerChangedError(error));
-        return;
-      }
-    }
-    result = await service.resetOwner(
-      step as "prepare" | "commit",
-      channel,
-      { root_pub: params.rootPub, binding: params.binding, owner_device: params.ownerDevice },
-      guard,
-    );
+    result = await service.resetOwner(step as "prepare" | "commit", channel, {
+      root_pub: params.rootPub,
+      binding: params.binding,
+      owner_device: params.ownerDevice,
+      code,
+    });
   }
   if ("ok" in result && !result.ok) {
     refuse(result);

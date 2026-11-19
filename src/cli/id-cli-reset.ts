@@ -1,8 +1,9 @@
 // `openclaw id reset`: Reset owner access on this machine (OpenClaw ID owner reset,
-// enrollment.md "Owner reset"). It routes to the Gateway when one runs; with the Gateway
-// stopped it edits the local claw record under the Gateway lock, which is why it uses the
-// local state owner instead of a Gateway URL. The new recovery kit is made here, signs the
-// new binding and is printed once; it never reaches the Gateway, argv, JSON output or logs.
+// enrollment.md "Owner reset"). It needs this machine's running Gateway over a direct
+// connection and a link code from the OpenClaw ID account that owns the claw; the Gateway
+// checks the code with Discovery before anything changes. The new recovery kit is made here,
+// signs the new binding and is printed once; it never reaches the Gateway, argv, JSON output
+// or logs.
 import {
   deriveRootSigner,
   displayFingerprint,
@@ -14,27 +15,18 @@ import {
   signStatement,
 } from "../../packages/openclaw-id-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import type { OpenClawConfig } from "../config/types.js";
-import type { AuthorityRefusal } from "../gateway/openclaw-id/authority-result.js";
-import type {
-  ResetCommit,
-  ResetPreparation,
-  ResetRemoved,
-} from "../gateway/openclaw-id/reset-operations.js";
-import { isOpenClawIdEnabled } from "../shared/openclaw-id-policy.js";
+import type { ResetPreparation, ResetRemoved } from "../gateway/openclaw-id/reset-operations.js";
 import { throwExpectedCliError } from "./expected-cli-error.js";
-import { runWithLocalStateOwner } from "./local-state-owner.js";
+import { callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 import { promptText } from "./prompt.js";
 
 /** What a committed reset reports, from the Gateway or the offline path. */
 type ResetResult = {
   bindingSeq: number;
   removed: ResetRemoved;
-  /** Discovery's answer when the Gateway published right away; absent offline. */
-  publication?: { state?: string; code?: string } | null;
+  /** Discovery's answer to the Gateway's publication; null when it couldn't be read. */
+  publication: { state?: string; code?: string } | null;
 };
-
-const TARGET = "OpenClaw ID owner access";
 
 /** The name the owner picked when linking: the hostname's first label without the account tag. */
 export function clawShortName(hostname: string): string {
@@ -53,81 +45,31 @@ export function describeReset(prep: ResetPreparation): string {
   ].join("\n");
 }
 
-// The local path needs the Lab on, like the Gateway's.
-function requireEnabled(config: OpenClawConfig) {
-  if (!isOpenClawIdEnabled(config.gateway?.openclawId)) {
-    throwExpectedCliError("OpenClaw ID is off on this computer (Settings → Labs).");
-  }
-}
+export type ResetOpts = GatewayRpcOpts & { code?: string };
 
-function unwrap<T extends object>(result: T | AuthorityRefusal): T {
-  if ("ok" in result && result.ok === false) {
-    return throwExpectedCliError(`Owner access was not reset: ${result.detail} (${result.code}).`);
-  }
-  return result as T;
-}
-
-async function offlineAuthority(config: OpenClawConfig) {
-  requireEnabled(config);
-  const { createOpenClawIdAuthority } = await import("../gateway/openclaw-id/authority.js");
-  return createOpenClawIdAuthority();
-}
-
-async function prepare(): Promise<ResetPreparation> {
-  return unwrap(
-    await runWithLocalStateOwner<ResetPreparation | AuthorityRefusal>({
-      method: "openclawId.authority",
-      params: { action: "reset_prepare" },
-      target: TARGET,
-      runLocal: async ({ config }) => await (await offlineAuthority(config)).prepareReset(),
-    }),
-  );
-}
-
-async function commit(input: ResetCommit): Promise<ResetResult> {
-  return unwrap(
-    await runWithLocalStateOwner<ResetResult | AuthorityRefusal>({
-      method: "openclawId.authority",
-      params: { action: "reset_commit", rootPub: input.root_pub, binding: input.binding },
-      target: TARGET,
-      recoveryCommand: "openclaw id status",
-      runLocal: async ({ config, env, assertCurrent }) => {
-        const authority = await offlineAuthority(config);
-        const bound = (await authority.load())?.binding?.body.k_gw;
-        if (!bound) {
-          return { ok: false, code: "not_linked", detail: "this claw is not linked" };
-        }
-        const [{ loadGatewaySigner }, { resolveStateDir }] = await Promise.all([
-          import("../gateway/openclaw-id/gateway-key.js"),
-          import("../config/paths.js"),
-        ]);
-        // The key rule: only the K_gw the binding names signs the RootReset; nothing is created.
-        const { signer } = await loadGatewaySigner(resolveStateDir(env), bound);
-        // Token revocation, node pairings and publication follow at the Gateway's next start.
-        return await authority.commitReset(input, "local_operator", signer, assertCurrent);
-      },
-    }),
-  );
-}
+const authority = (opts: ResetOpts, params: Record<string, unknown>) =>
+  callGatewayFromCli("openclawId.authority", opts, params, { scopes: ["operator.admin"] });
 
 function publicationLine(result: ResetResult): string {
-  if (result.publication === undefined) {
-    return "The Gateway publishes the new owner key to Discovery when it starts.";
-  }
   if (result.publication?.state === "published") {
     return "Discovery has the new owner key.";
   }
   return `Discovery doesn't have the new owner key yet${result.publication?.code ? ` (${result.publication.code})` : ""}; the Gateway keeps publishing it (openclaw id status).`;
 }
 
-/** Runs the reset: confirm by name, make the kit, commit, then show the kit once. */
-export async function runReset(): Promise<void> {
+/**
+ * Runs the reset: check the owner account's code and confirm by name, make the kit, commit,
+ * then show the kit once.
+ */
+export async function runReset(opts: ResetOpts, readCode: () => Promise<string>): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     throwExpectedCliError(
       "openclaw id reset shows a new recovery kit once, so it runs only in an interactive terminal.",
     );
   }
-  const prep = await prepare();
+  const code = await readCode();
+  // SAFETY: reset_prepare answers with ResetPreparation (reset-operations.ts).
+  const prep = (await authority(opts, { action: "reset_prepare", code })) as ResetPreparation;
   const name = clawShortName(prep.hostname);
   process.stdout.write(`${describeReset(prep)}\n`);
   const typed = (
@@ -164,10 +106,18 @@ export async function runReset(): Promise<void> {
   ];
   let result: ResetResult;
   try {
-    result = await commit({ root_pub: rootPub, binding });
+    // SAFETY: reset_commit answers with ResetCommitResult (service-reset.ts).
+    result = (await authority(opts, {
+      action: "reset_commit",
+      rootPub,
+      binding,
+      code,
+    })) as ResetResult;
   } catch (error) {
-    // The reset may have been stored: this kit is then the only way back in for owners.
-    if ((error as { code?: unknown }).code === "OUTCOME_UNKNOWN") {
+    // A Gateway refusal changed nothing. Any other failure (a dropped connection, a timeout)
+    // may follow a stored reset, and this kit is then the only way back in for owners.
+    const { isGatewayClientRequestError } = await import("../gateway/call.js");
+    if (!isGatewayClientRequestError(error)) {
       process.stdout.write(
         `${["The reset may have been applied. Keep this kit until openclaw id status shows which owner key the claw has.", ...kitLines].join("\n")}\n`,
       );

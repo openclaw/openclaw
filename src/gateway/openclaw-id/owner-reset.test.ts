@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   checkDescriptorRootReset,
   deriveRootSigner,
@@ -28,8 +28,43 @@ import {
 } from "./openclaw-id.test-support.js";
 import { publishClaw } from "./publisher.js";
 import type { ResetPreparation } from "./reset-operations.js";
+import * as tunnelRuntime from "./tunnel-runtime.js";
 
 const peer = () => formatIrohEndpointKey(randomBytes(32)) as IrohEndpointKey;
+
+const CODE = "LINK-CODE-1";
+const config = {
+  enabled: true,
+  discoveryUrl: "https://discovery.example.test",
+  relayUrl: "https://relay.example.test/",
+};
+
+type DiscoveryCall = { method: string; path: string; body: Record<string, unknown> };
+
+// A Discovery that knows CODE as the owner account's code and accepts every publication. The
+// tunnel never starts here: remote access restarts after a reset and fails, which is reported.
+let discovery: DiscoveryCall[];
+beforeEach(() => {
+  discovery = [];
+  vi.spyOn(tunnelRuntime, "startTunnelRuntime").mockRejectedValue(new Error("no tunnel in tests"));
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = new URL(String(input));
+    const text = init?.body ? new TextDecoder().decode(init.body as Uint8Array) : "";
+    const body = (text ? JSON.parse(text) : {}) as Record<string, unknown>;
+    discovery.push({ method: init?.method ?? "GET", path: url.pathname, body });
+    if (url.pathname.endsWith("/published-descriptor")) {
+      return body.code === CODE
+        ? Response.json({ descriptor: {} })
+        : Response.json({ error: { code: "not_found", message: "not found" } }, { status: 404 });
+    }
+    return new Response(null, { status: 204 });
+  });
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+const published = () => discovery.filter((call) => call.path.endsWith("/descriptor"));
 
 // A linked claw with a member, a node, an open invite and tunnel-bound tokens, published at
 // Discovery under its first binding.
@@ -122,10 +157,12 @@ async function signReset(
   };
 }
 
+const nothing = { root_pub: undefined, binding: undefined };
+
 async function prepared(service: ReturnType<typeof serviceFor>["service"]) {
-  const prep = await service.resetOwner("prepare", "local_operator");
+  const prep = await service.resetOwner("prepare", "local_operator", { ...nothing, code: CODE });
   if ("ok" in prep) {
-    throw new Error(`prepare refused: ${prep.code}`);
+    throw new Error(`prepare refused: ${JSON.stringify(prep)}`);
   }
   return prep as ResetPreparation;
 }
@@ -133,39 +170,44 @@ async function prepared(service: ReturnType<typeof serviceFor>["service"]) {
 describe("owner reset", () => {
   it("is refused over the tunnel and without an OpenClaw ID channel", async () => {
     const claw = await populatedClaw();
-    const { service } = serviceFor(claw.authority, { enabled: true }, claw.stateDir);
+    const { service } = serviceFor(claw.authority, config, claw.stateDir);
     const prep = await prepared(service);
     const { input } = await signReset(prep);
     for (const channel of ["tunnel", undefined] as const) {
-      expect(await service.resetOwner("prepare", channel)).toMatchObject({
+      expect(
+        await service.resetOwner("prepare", channel, { ...nothing, code: CODE }),
+      ).toMatchObject({
         ok: false,
         code: "not_local_operator",
       });
-      expect(await service.resetOwner("commit", channel, input)).toMatchObject({
+      expect(await service.resetOwner("commit", channel, { ...input, code: CODE })).toMatchObject({
         ok: false,
         code: "not_local_operator",
       });
     }
     // The authority refuses a tunnel commit too, whoever calls it.
     const gateway = await generateEd25519Signer();
-    expect(await claw.authority.commitReset(input, "tunnel", gateway)).toMatchObject({
+    const staged = { kGw: prep.k_gw };
+    expect(await claw.authority.commitReset(input, "tunnel", gateway, staged)).toMatchObject({
       ok: false,
       code: "not_local_operator",
     });
     expect((await claw.store.read())?.authority).toEqual(claw.before.authority);
   });
 
-  it("removes everyone, keeps the claw's keys and data, and continues the seqs", async () => {
+  it("removes everyone, keeps K_srv and the data, moves to a new K_gw and continues the seqs", async () => {
     const claw = await populatedClaw();
-    const { service, effects } = serviceFor(claw.authority, { enabled: true }, claw.stateDir);
+    const { service, effects } = serviceFor(claw.authority, config, claw.stateDir);
     const prep = await prepared(service);
+    expect(prep.k_gw).not.toBe(claw.before.binding!.body.k_gw);
     expect(prep).toMatchObject({
+      k_srv: claw.before.binding!.body.k_srv,
       binding_seq: 2,
       owner_device_seq: claw.before.authority!.seq + 2,
       removes: { ownerDevices: 1, members: 1, nodes: 1, invites: 1 },
     });
     const { input } = await signReset(prep);
-    const result = await service.resetOwner("commit", "local_operator", input);
+    const result = await service.resetOwner("commit", "local_operator", { ...input, code: CODE });
     expect(result).toMatchObject({
       ok: true,
       reset: true,
@@ -191,10 +233,16 @@ describe("owner reset", () => {
     expect(after.binding).toEqual(input.binding);
     expect(after.binding?.body).toMatchObject({
       k_srv: before.binding!.body.k_srv,
-      k_gw: before.binding!.body.k_gw,
+      k_gw: prep.k_gw,
       hostname: before.hostname,
       binding_seq: 2,
     });
+    // The Gateway now signs with K_gw' from gateway.key; the old key is gone from this computer.
+    const { loadGatewaySigner } = await import("./gateway-key.js");
+    expect((await loadGatewaySigner(claw.stateDir, prep.k_gw)).pub).toBe(prep.k_gw);
+    await expect(loadGatewaySigner(claw.stateDir, before.binding!.body.k_gw)).rejects.toMatchObject(
+      { reason: "key_mismatch" },
+    );
     expect(after.discovery.owner_account_id).toBe("acct-owner");
     expect(after.invite_reports).toEqual({});
     expect(after.member_approved_at).toEqual({});
@@ -220,11 +268,14 @@ describe("owner reset", () => {
     expect(await claw.authority.resolvePeer(claw.w1)).toBeUndefined();
   });
 
-  it("publishes a RootReset from the current K_gw that the protocol and Discovery's check accept", async () => {
+  it("publishes, with the owner's code and K_gw', a RootReset from the old K_gw that the protocol and Discovery's check accept", async () => {
     const claw = await populatedClaw();
-    const { service } = serviceFor(claw.authority, { enabled: true }, claw.stateDir);
-    const { input } = await signReset(await prepared(service));
-    await service.resetOwner("commit", "local_operator", input);
+    const { service } = serviceFor(claw.authority, config, claw.stateDir);
+    const prep = await prepared(service);
+    const { input } = await signReset(prep);
+    expect(
+      await service.resetOwner("commit", "local_operator", { ...input, code: CODE }),
+    ).toMatchObject({ ok: true, publication: { state: "published" } });
     const after = (await claw.store.read())!;
     const previous = {
       root_pub: claw.before.authority!.anchor.root_pub,
@@ -246,29 +297,39 @@ describe("owner reset", () => {
       ok: true,
     });
 
-    // The descriptor carries the evidence, signed requests need no link code (same K_gw), and
-    // Discovery's stored-descriptor check accepts the new root.
+    // The Gateway checked the code before committing (prepare and commit), then published the
+    // new descriptor with its snapshot and the code in one write, as for any new K_gw.
+    expect(discovery.filter((call) => call.path.endsWith("/published-descriptor"))).toHaveLength(2);
+    const [publication] = published();
+    expect(publication?.method).toBe("PUT");
+    expect(publication?.body).toMatchObject({
+      code: CODE,
+      snapshot: { type: "MembershipSnapshot" },
+    });
+    const descriptor = publication!.body.descriptor as ClawDescriptor;
+    expect(descriptor.reset).toEqual(after.reset);
+    expect(descriptor.binding.body.k_gw).toBe(prep.k_gw);
+    const stored: ClawDescriptor = { ...descriptor, ...previous, reset: undefined };
+    delete stored.reset;
+    expect(await checkDescriptorRootReset(stored, descriptor, { now })).toMatchObject({ ok: true });
+
+    // publishClaw treats a reset like any new K_gw: without a code it asks for one.
     const client = {
       registerClaw: vi.fn(),
       publishDescriptor: vi.fn(async () => {}),
       publishSnapshot: vi.fn(async () => {}),
     };
-    const outcome = await publishClaw({
-      record: after,
-      relayUrl: "https://relay.example.test/",
-      // SAFETY: the test client implements only the calls publishClaw makes for a registered claw.
-      client: client as never,
-      signer: await generateEd25519Signer(),
-    });
-    expect(outcome.state).toBe("published");
-    const [[descriptor, options]] = client.publishDescriptor.mock.calls as unknown as [
-      [ClawDescriptor, unknown],
-    ];
-    expect(options).toBeUndefined();
-    expect(descriptor.reset).toEqual(after.reset);
-    const stored: ClawDescriptor = { ...descriptor, ...previous, reset: undefined };
-    delete stored.reset;
-    expect(await checkDescriptorRootReset(stored, descriptor, { now })).toMatchObject({ ok: true });
+    const unconfirmed = { ...after, discovery: { ...after.discovery, published_binding_seq: 1 } };
+    expect(
+      await publishClaw({
+        record: unconfirmed,
+        relayUrl: config.relayUrl,
+        // SAFETY: the test client implements only the calls publishClaw makes for a registered claw.
+        client: client as never,
+        signer: await generateEd25519Signer(),
+      }),
+    ).toMatchObject({ state: "failed", code: "needs_link_code" });
+    expect(client.publishDescriptor).not.toHaveBeenCalled();
 
     // A browser pinned to the old root and K_gw sees the reset; one without the pinned K_gw,
     // or a reset signed by another key, sees the substitution warning.
@@ -308,12 +369,53 @@ describe("owner reset", () => {
     ).toMatchObject({ ok: false });
   });
 
+  it("needs a valid code from the owner account before anything changes", async () => {
+    const claw = await populatedClaw();
+    const { service } = serviceFor(claw.authority, config, claw.stateDir);
+    const { input } = await signReset(await prepared(service));
+    for (const step of ["prepare", "commit"] as const) {
+      expect(await service.resetOwner(step, "local_operator", input)).toMatchObject({
+        ok: false,
+        code: "needs_link_code",
+      });
+      expect(
+        await service.resetOwner(step, "local_operator", { ...input, code: "SOMEONE-ELSES" }),
+      ).toMatchObject({ ok: false, code: "code_invalid" });
+    }
+    const after = (await claw.store.read())!;
+    expect(after.authority).toEqual(claw.before.authority);
+    expect(after.binding).toEqual(claw.before.binding);
+    expect(after.reset).toBeUndefined();
+    expect(published()).toEqual([]);
+  });
+
+  it("is refused for a claw Discovery doesn't have yet, and when Discovery can't check the code", async () => {
+    const claw = await populatedClaw();
+    const { service } = serviceFor(claw.authority, config, claw.stateDir);
+    vi.mocked(fetch).mockResolvedValue(new Response("", { status: 503 }));
+    expect(
+      await service.resetOwner("prepare", "local_operator", { ...nothing, code: CODE }),
+    ).toMatchObject({ ok: false, code: "discovery_unavailable" });
+    const record = structuredClone((await claw.store.read())!);
+    await claw.store.write({
+      ...record,
+      discovery: { ...record.discovery, owner_account_id: null },
+    });
+    const unpublished = createOpenClawIdAuthority(claw.store);
+    const fresh = serviceFor(unpublished, config, claw.stateDir).service;
+    expect(
+      await fresh.resetOwner("prepare", "local_operator", { ...nothing, code: CODE }),
+    ).toMatchObject({ ok: false, code: "not_published" });
+  });
+
   it("enrolls the resetting browser as the first owner device under the new root", async () => {
     const claw = await populatedClaw();
-    const { service } = serviceFor(claw.authority, { enabled: true }, claw.stateDir);
+    const { service } = serviceFor(claw.authority, config, claw.stateDir);
     const device = await generateEd25519Signer();
     const { input } = await signReset(await prepared(service), { device });
-    expect(await service.resetOwner("commit", "local_operator", input)).toMatchObject({ ok: true });
+    expect(
+      await service.resetOwner("commit", "local_operator", { ...input, code: CODE }),
+    ).toMatchObject({ ok: true });
     const state = (await claw.store.read())!.authority!;
     expect(state.seq).toBe(claw.before.authority!.seq + 2);
     expect(Object.values(state.owner_devices).map((owner) => owner.cert.body.device_pub)).toEqual([
@@ -324,20 +426,27 @@ describe("owner reset", () => {
 
   it("refuses the old kit's root, a stale binding and other keys, changing nothing", async () => {
     const claw = await populatedClaw();
-    const { service } = serviceFor(claw.authority, { enabled: true }, claw.stateDir);
+    const { service } = serviceFor(claw.authority, config, claw.stateDir);
     const prep = await prepared(service);
+    const commit = (input: Awaited<ReturnType<typeof signReset>>["input"]) =>
+      service.resetOwner("commit", "local_operator", { ...input, code: CODE });
     const same = await signReset(prep, { root: claw.root });
-    expect(await service.resetOwner("commit", "local_operator", same.input)).toMatchObject({
+    expect(await commit(same.input)).toMatchObject({
       ok: false,
       code: "reset_mismatch",
     });
     const stale = await signReset({ ...prep, binding_seq: 1 });
-    expect(await service.resetOwner("commit", "local_operator", stale.input)).toMatchObject({
+    expect(await commit(stale.input)).toMatchObject({
       ok: false,
       code: "target_mismatch",
     });
     const otherKeys = await signReset({ ...prep, k_srv: peer() });
-    expect(await service.resetOwner("commit", "local_operator", otherKeys.input)).toMatchObject({
+    expect(await commit(otherKeys.input)).toMatchObject({
+      ok: false,
+      code: "target_mismatch",
+    });
+    const sameGateway = await signReset({ ...prep, k_gw: claw.before.binding!.body.k_gw });
+    expect(await commit(sameGateway.input)).toMatchObject({
       ok: false,
       code: "target_mismatch",
     });
@@ -346,7 +455,7 @@ describe("owner reset", () => {
       ...unsigned.input,
       root_pub: formatEd25519PublicKey((await generateEd25519Signer()).publicKey),
     };
-    expect(await service.resetOwner("commit", "local_operator", wrongSigner)).toMatchObject({
+    expect(await commit(wrongSigner)).toMatchObject({
       ok: false,
     });
     const after = (await claw.store.read())!;
@@ -355,30 +464,30 @@ describe("owner reset", () => {
     expect(after.reset).toBeUndefined();
   });
 
-  it("refuses a second reset until Discovery confirmed the first, even after a partial publish", async () => {
+  it("refuses a second reset until Discovery confirmed the first", async () => {
     const claw = await populatedClaw();
-    const { service } = serviceFor(claw.authority, { enabled: true }, claw.stateDir);
-    await service.resetOwner(
-      "commit",
-      "local_operator",
-      (await signReset(await prepared(service))).input,
+    const { service } = serviceFor(claw.authority, config, claw.stateDir);
+    // The descriptor write's answer is lost (it may have landed): binding 2 stays unconfirmed.
+    vi.mocked(fetch).mockImplementation(async (input) =>
+      String(input).endsWith("/published-descriptor")
+        ? Response.json({ descriptor: {} })
+        : new Response("", { status: 503 }),
     );
-    // The descriptor may have landed without its snapshot: binding 2 stays unconfirmed here.
-    expect(await claw.authority.prepareReset()).toMatchObject({
+    const first = await signReset(await prepared(service));
+    await service.resetOwner("commit", "local_operator", { ...first.input, code: CODE });
+    const staged = { kGw: formatEd25519PublicKey((await generateEd25519Signer()).publicKey) };
+    expect(await claw.authority.prepareReset(staged)).toMatchObject({
       ok: false,
       code: "reset_unpublished",
     });
     expect(
-      await service.resetOwner("commit", "local_operator", {
-        root_pub: undefined,
-        binding: undefined,
-      }),
+      await service.resetOwner("commit", "local_operator", { ...nothing, code: CODE }),
     ).toMatchObject({
       ok: false,
       code: "reset_unpublished",
     });
     await claw.authority.recordDiscovery({ published_binding_seq: 2 });
-    expect(await claw.authority.prepareReset()).toMatchObject({ binding_seq: 3 });
+    expect(await claw.authority.prepareReset(staged)).toMatchObject({ binding_seq: 3 });
   });
 
   it("is refused while a move to new keys is unpublished, and a move waits for the reset", async () => {
@@ -392,15 +501,21 @@ describe("owner reset", () => {
     );
     await claw.store.write(moved);
     const authority = createOpenClawIdAuthority(claw.store);
-    expect(await authority.prepareReset()).toMatchObject({ ok: false, code: "rebind_unpublished" });
+    const staged = { kGw: formatEd25519PublicKey((await generateEd25519Signer()).publicKey) };
+    expect(await authority.prepareReset(staged)).toMatchObject({
+      ok: false,
+      code: "rebind_unpublished",
+    });
 
     const fresh = await populatedClaw();
-    const { service } = serviceFor(fresh.authority, { enabled: true }, fresh.stateDir);
-    await service.resetOwner(
-      "commit",
-      "local_operator",
-      (await signReset(await prepared(service))).input,
+    const { service } = serviceFor(fresh.authority, config, fresh.stateDir);
+    vi.mocked(fetch).mockImplementation(async (input) =>
+      String(input).endsWith("/published-descriptor")
+        ? Response.json({ descriptor: {} })
+        : new Response("", { status: 503 }),
     );
+    const { input } = await signReset(await prepared(service));
+    await service.resetOwner("commit", "local_operator", { ...input, code: CODE });
     expect(
       await fresh.authority.prepareRebind({
         kSrv: peer(),

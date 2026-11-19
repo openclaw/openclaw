@@ -1,13 +1,20 @@
 import "../../styles/exec-approval-card.css";
 // "Reset owner access" (owner reset, enrollment.md "Owner reset") from Settings → OpenClaw ID,
-// only on the computer that runs the claw. The owner types the claw's name, a new recovery kit
-// (S', R') is made in this browser and shown once, and only after it is saved does R' sign the
-// new binding and this browser's owner device. The Gateway gets public keys and signed
-// statements; it removes everyone else and publishes the new root with its RootReset.
+// only on the computer that runs the claw and only signed in with the account that owns it:
+// each step sends a fresh link code from that account, which the Gateway checks with Discovery
+// before anything changes. The owner reads what the reset removes and types the claw's name, a
+// new recovery kit (S', R') is made in this browser and shown once, and only after it is saved
+// does R' sign the new binding and this browser's owner device. The Gateway gets public keys and
+// signed statements; it removes everyone else and publishes the new root, its new Gateway key
+// and the RootReset.
 import { createSignal, Match, Switch } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerOpenClawIdDialogsEnglish } from "../../i18n/locales/en-openclaw-id-dialogs.ts";
 import { registerOpenClawIdEnglish } from "../../i18n/locales/en-openclaw-id.ts";
+import {
+  guardOpenClawIdAccount,
+  requestOpenClawIdLinkCode,
+} from "../../lib/openclaw-id/account.ts";
 import {
   announceOwnerDeviceKey,
   ensureOwnerDeviceSigner,
@@ -17,7 +24,7 @@ import {
   createOpenClawIdCeremony,
   type OpenClawIdResetPreparation,
 } from "../../lib/openclaw-id/link.ts";
-import type { OpenClawIdPublication } from "../../lib/openclaw-id/types.ts";
+import type { OpenClawIdPublication, OpenClawIdSignedIn } from "../../lib/openclaw-id/types.ts";
 import { openClawIdUiError, type OpenClawIdUiError } from "../../lib/openclaw-id/ui-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -39,13 +46,17 @@ type Step =
 /** Resolves true once the Gateway confirmed the reset, false when closed before it. */
 export function showResetOwnerDialog(params: {
   client: GatewayBrowserClient;
-  accountEmail?: string | null;
+  signedIn: OpenClawIdSignedIn;
 }): Promise<boolean> {
   const ceremony = createOpenClawIdCeremony();
+  const accountEmail = params.signedIn.email;
+  const assertSignedIn = guardOpenClawIdAccount(params.signedIn);
   return withPromiseModalHost<boolean>(undefined, async (modal) => {
-    // What R' signs; refused (for example over the tunnel) before anything is shown.
+    // What R' signs; refused over the tunnel, or without a code from the owner account, before
+    // anything is shown.
     const prep = await params.client.request<OpenClawIdResetPreparation>("openclawId.authority", {
       action: "reset_prepare",
+      code: await requestOpenClawIdLinkCode(params.client, params.signedIn),
     });
     const name = clawNameFromHostname(prep.hostname);
     modal.render(() => {
@@ -65,7 +76,7 @@ export function showResetOwnerDialog(params: {
             details: {
               kit,
               hostname: prep.hostname,
-              owner: params.accountEmail ?? null,
+              owner: accountEmail ?? null,
               createdAt: new Date(),
             },
           });
@@ -82,9 +93,12 @@ export function showResetOwnerDialog(params: {
           const device = await ensureOwnerDeviceSigner(prep.claw_id);
           const signed = await ceremony.signReset(prep, device, t("openclawId.thisBrowser"));
           ceremony.discard();
+          // A fresh code: saving the kit can outlast the first one.
+          const code = await requestOpenClawIdLinkCode(params.client, params.signedIn);
+          assertSignedIn();
           const result = await params.client.request<{ publication: OpenClawIdPublication | null }>(
             "openclawId.authority",
-            { action: "reset_commit", ...signed },
+            { action: "reset_commit", ...signed, code },
           );
           announceOwnerDeviceKey();
           showToast({
@@ -138,15 +152,19 @@ export function showResetOwnerDialog(params: {
             <h2>{t("openclawId.resetOwnerAccess")}</h2>
             <Switch>
               <Match when={step().kind === "confirm"}>
-                <p>
-                  {t("openclawId.resetBody", {
-                    devices: String(prep.removes.ownerDevices),
-                    members: String(prep.removes.members),
-                    nodes: String(prep.removes.nodes),
-                    invites: String(prep.removes.invites),
-                    host: prep.hostname,
-                  })}
-                </p>
+                <div class="callout danger" role="alert">
+                  <strong>{t("openclawId.resetWarningTitle")}</strong>
+                  <p>
+                    {t("openclawId.resetBody", {
+                      devices: String(prep.removes.ownerDevices),
+                      members: String(prep.removes.members),
+                      nodes: String(prep.removes.nodes),
+                      invites: String(prep.removes.invites),
+                      host: prep.hostname,
+                    })}
+                  </p>
+                </div>
+                <p>{t("openclawId.resetKeeps")}</p>
                 <form
                   id="openclaw-id-reset-form"
                   onSubmit={(event) => {
@@ -188,13 +206,13 @@ export function showResetOwnerDialog(params: {
                     <p>{t("openclawId.resetKitBody")}</p>
                     <RecoveryKitForm
                       details={current().details}
-                      accountEmail={params.accountEmail}
+                      accountEmail={accountEmail}
                       saved={saved()}
                       onContinue={() => void reset()}
                     >
                       <RecoveryKitPanel
                         details={current().details}
-                        accountEmail={params.accountEmail}
+                        accountEmail={accountEmail}
                         saved={saved()}
                         onSaved={setSaved}
                       />

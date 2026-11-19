@@ -19,7 +19,6 @@ import {
   bytesToHex,
   submitRedemption,
   submitStatement,
-  type AuthorityState,
   type Channel,
   type Ed25519PublicKey,
   type InactivityWindows,

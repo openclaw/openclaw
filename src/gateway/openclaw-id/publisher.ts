@@ -214,12 +214,10 @@ export async function publishClaw(params: {
     snapshotBody(state, bindingSeq, now),
     params.signer,
   );
-  // A binding after the first comes from a re-bind (new K_gw): until Discovery confirmed it,
-  // it goes out with its snapshot in one write. An owner reset keeps K_gw, which signs it.
+  // A binding after the first comes from a re-bind or an owner reset, both of which name a new
+  // K_gw: until Discovery confirmed it, it goes out with its snapshot in one write.
   const rebindPending =
-    bindingSeq > 1 &&
-    params.record.discovery.published_binding_seq < bindingSeq &&
-    descriptor.reset === undefined;
+    bindingSeq > 1 && params.record.discovery.published_binding_seq < bindingSeq;
   try {
     if (!ownerAccountId) {
       if (!params.enrollmentCode) {

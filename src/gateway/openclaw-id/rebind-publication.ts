@@ -22,7 +22,7 @@ export function createRebindPublication() {
     /**
      * Records a confirmed publication of `record`'s binding (Discovery had its published binding
      * before) and returns whether this is a re-bind's first one, whose owners get the notice. An
-     * owner reset's binding keeps the keys and gets none.
+     * owner reset's binding removed every owner, so it gets none.
      */
     published(record: StoredClaw): boolean {
       code = undefined;

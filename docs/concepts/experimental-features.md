@@ -521,9 +521,11 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
   the account menu. Nodes and other devices are managed as before.
 - If the recovery kit is lost or leaked, use **Reset owner access** in
   **Settings → OpenClaw ID** on the computer that runs the claw, or
-  `openclaw id reset` there (also with the Gateway stopped). It makes a new kit
-  and removes every owner device, person and invite; the claw's address, keys
-  and data stay ([CLI](/cli/id#reset-owner-access)).
+  `openclaw id reset` there. It needs a direct connection on that computer and
+  a link code from the OpenClaw ID account that owns the claw. It makes a new
+  kit and a new Gateway key and removes every owner device, person and invite;
+  the claw's address, connection key and data stay
+  ([CLI](/cli/id#reset-owner-access)).
 - To move a claw to new connection keys (a lost or leaked key file, a new computer
   without the key files, or routine rotation), run `openclaw id rebind` on the
   computer that runs it, with its recovery kit. Devices, people, nodes and invites

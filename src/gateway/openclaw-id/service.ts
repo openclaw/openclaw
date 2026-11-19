@@ -764,10 +764,14 @@ export function createOpenClawIdService(params: {
     rebind: rebindOwner.run,
 
     resetOwner: createServiceReset({
+      getStateDir: params.getStateDir,
+      getConfig: params.getConfig,
       getAuthority,
       gatewayKey,
       applyEvents,
       publish: publishReported,
+      restartRemoteAccess: () =>
+        (queue = queue.then(restartForRebind, restartForRebind)).then(() => status),
       log: params.log,
     }),
 

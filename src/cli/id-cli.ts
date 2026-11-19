@@ -326,13 +326,21 @@ export function registerIdCli(program: Command) {
       .option("--cancel", "Delete keys staged by an unfinished move", false),
   ).action(async (opts: RebindOpts) => await runRebind(opts));
 
+  // No --json: the new recovery kit is shown once and never written as JSON.
   id.command("reset")
     .description(
-      "Reset owner access with a new recovery kit, removing every owner device, person and invite (on this machine only; works with the Gateway stopped)",
+      "Reset owner access with a new recovery kit, removing every owner device, person and invite (on this machine's running Gateway only; needs a link code from the owner account)",
     )
-    .action(async () => {
+    .option("--url <url>", "Gateway WebSocket URL (must be this machine's Gateway)")
+    .option("--token <token>", "Gateway token (if required)")
+    .option("--timeout <ms>", "Timeout in ms", String(DEFAULT_TIMEOUT_MS))
+    .option(
+      "--code <link-code>",
+      "One-time link code from the OpenClaw ID account that owns this claw",
+    )
+    .action(async (opts: IdCliOpts & { code?: string }) => {
       const { runReset } = await import("./id-cli-reset.js");
-      await runReset();
+      await runReset(opts, () => readLinkCode(opts));
     });
 
   addIdGatewayOptions(

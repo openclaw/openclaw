@@ -167,11 +167,25 @@ const enOpenClawId = {
       "Moving to new keys is only available on the computer that runs this claw.",
     resetOwnerAccess: "Reset owner access",
     resetDescription:
-      "If your recovery kit is lost or leaked: make a new kit and remove every owner device, person and invite. Access on this computer, the claw's address and its data stay.",
-    resetLocalOnly: "Reset owner access is only available on the computer that runs this claw.",
+      "If your recovery kit is lost or leaked: make a new kit and remove every owner device, person, node and invite. Access on this computer, the claw's address and its data stay.",
+    resetRequirements:
+      "Reset owner access needs both of these, so only the owner, at this claw's computer, can do it:",
+    resetNeedsLocal: "On the computer that runs this claw",
+    resetNeedsLocalDetail:
+      "Open the Control UI on that computer itself. Remote, tunneled and proxied connections can't reset: a reset ends every remote session, including the one it would start from.",
+    resetNeedsOwnerAccount: "Signed in with the account that owns this claw",
+    resetNeedsOwnerAccountDetail:
+      "Discovery accepts the new owner key only with a link code from the OpenClaw ID account that owns this claw. Sign in from the account menu.",
+    resetRequirementMet: "Yes",
+    resetRequirementMissing: "No",
+    resetSignedInAs: "Signed in as {account}",
+    resetNotSignedIn: "Not signed in",
     resetAction: "Reset…",
+    resetWarningTitle: "This can't be undone",
     resetBody:
-      "This removes {devices} owner device(s), {members} person(s), {nodes} node(s) and {invites} invite(s) from {host}. Their remote sessions close and their sign-ins stop working. Your old recovery kit stops working.",
+      "This removes {devices} owner device(s), {members} person(s), {nodes} node(s) and {invites} invite(s) from {host}. Their remote sessions close and their sign-ins stop working. Your old recovery kit stops working, and this claw gets a new Gateway key.",
+    resetKeeps:
+      "Access on this computer, the claw's address and all of its data stay. Set up your other browsers again afterwards with the new kit.",
     resetConfirmLabel: "Type {name} to confirm",
     resetMakeKit: "Make a new recovery kit",
     resetKitBody:

@@ -1,8 +1,10 @@
 // Settings → OpenClaw ID: this claw's address and publication, links to Your devices and
-// People, Move to new keys and, set apart at the bottom, Reset owner access. Moving keys and
-// resetting are offered only on the computer that runs the claw (direct loopback); elsewhere
-// the page says so in one line, and the Gateway refuses both remotely whatever the UI shows.
-import { createMemo, createSignal, Errored, Loading, Match, Show, Switch } from "solid-js";
+// People, Move to new keys and, set apart at the bottom, Reset owner access. Moving keys is
+// offered only on the computer that runs the claw (direct loopback). Reset owner access lists
+// its two requirements, a direct connection on that computer and a sign-in with the account
+// that owns the claw, and is offered only when both hold. The Gateway refuses either remotely,
+// and Discovery refuses a reset without the owner account's code, whatever the UI shows.
+import { createMemo, createSignal, Errored, Loading, Show } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { clawNameFromHostname } from "../../components/openclaw-id/claw-name.ts";
@@ -139,12 +141,14 @@ function ClawSections(props: { state: PageState; peopleHref: string; onChanged: 
       }
     });
   };
+  const signedIn = () => openClawIdAccount();
   const reset = () => {
     const client = context.gateway.snapshot.client;
+    const account = signedIn();
     const changed = props.onChanged;
-    if (client) {
+    if (client && account) {
       openDialog(async () => {
-        if (await showResetOwnerDialog({ client, accountEmail: openClawIdAccount()?.email })) {
+        if (await showResetOwnerDialog({ client, signedIn: account })) {
           changed();
         }
       });
@@ -226,30 +230,66 @@ function ClawSections(props: { state: PageState; peopleHref: string; onChanged: 
                 }
               />
             </SettingsSection>
-            <SettingsSection title={t("openclawId.resetOwnerAccess")} danger>
-              <Switch>
-                <Match when={local()}>
-                  <SettingsRow
-                    title={t("openclawId.resetOwnerAccess")}
-                    description={t("openclawId.resetDescription")}
-                    control={
-                      <button type="button" class="btn btn--sm danger" onClick={reset}>
-                        {t("openclawId.resetAction")}
-                      </button>
-                    }
-                  />
-                </Match>
-                <Match when={!local()}>
-                  <SettingsRow
-                    title={t("openclawId.resetOwnerAccess")}
-                    description={t("openclawId.resetLocalOnly")}
-                  />
-                </Match>
-              </Switch>
+            <SettingsSection
+              title={t("openclawId.resetOwnerAccess")}
+              description={t("openclawId.resetRequirements")}
+              danger
+            >
+              <ResetRequirement
+                title={t("openclawId.resetNeedsLocal")}
+                description={t("openclawId.resetNeedsLocalDetail")}
+                met={local()}
+                label={t(
+                  local() ? "openclawId.resetRequirementMet" : "openclawId.resetRequirementMissing",
+                )}
+              />
+              {/* The browser knows only that someone is signed in; Discovery checks it's the owner. */}
+              <ResetRequirement
+                title={t("openclawId.resetNeedsOwnerAccount")}
+                description={t("openclawId.resetNeedsOwnerAccountDetail")}
+                met={signedIn() !== null}
+                label={
+                  signedIn()
+                    ? t("openclawId.resetSignedInAs", {
+                        account: signedIn()?.email ?? signedIn()?.name ?? "",
+                      })
+                    : t("openclawId.resetNotSignedIn")
+                }
+              />
+              <SettingsRow
+                title={t("openclawId.resetOwnerAccess")}
+                description={t("openclawId.resetDescription")}
+                control={
+                  <button
+                    type="button"
+                    class="btn btn--sm danger"
+                    disabled={!local() || signedIn() === null}
+                    onClick={reset}
+                  >
+                    {t("openclawId.resetAction")}
+                  </button>
+                }
+              />
             </SettingsSection>
           </>
         )}
       </Show>
     </>
+  );
+}
+
+// One requirement of Reset owner access and whether this connection meets it.
+function ResetRequirement(props: {
+  title: string;
+  description: string;
+  met: boolean;
+  label: string;
+}) {
+  return (
+    <SettingsRow
+      title={props.title}
+      description={props.description}
+      control={<SettingsStatus kind={props.met ? "ok" : "muted"} label={props.label} />}
+    />
   );
 }

@@ -1,13 +1,13 @@
 // Owner reset (enrollment.md, "Owner reset"; OCF-319): the person at the machine replaces the
 // claw's root R with a new root R' from a new recovery kit. These operations run in the
 // authority owner's serialized load/commit lane, so a reset never interleaves with a link,
-// re-bind or membership write. They are shared by the running Gateway and by
-// `openclaw id reset` with the Gateway stopped, which runs them under the Gateway lock.
+// re-bind or membership write.
 //
-// A reset keeps the claw id, hostname, K_srv and K_gw and the membership seq (which keeps
-// counting up). It removes every owner device, member, node and invite. R' signs the new
-// binding at binding_seq + 1 and K_gw vouches for the root change with a RootReset; both are
-// published together in the descriptor's `reset` evidence.
+// A reset keeps the claw id, hostname, K_srv and the membership seq (which keeps counting up)
+// and moves to the staged K_gw'. It removes every owner device, member, node and invite. R'
+// signs the new binding at binding_seq + 1 naming K_gw', and the current K_gw vouches for the
+// root change with a RootReset; both are published together in the descriptor's `reset`
+// evidence, with the owner account's code (Discovery's rule for a new K_gw).
 import {
   isEd25519PublicKey,
   isIrohEndpointKey,
@@ -35,6 +35,7 @@ export type ResetPreparation = {
   /** The root being replaced. */
   root_pub: Ed25519PublicKey;
   k_srv: IrohEndpointKey;
+  /** The staged K_gw' the new binding names. */
   k_gw: Ed25519PublicKey;
   binding_seq: number;
   root_epoch: typeof ROOT_EPOCH;
@@ -140,6 +141,15 @@ function resetEvents(record: LinkedRecord): AuthorityEvent[] {
   ];
 }
 
+/** The staged next Gateway key; a reset always moves to it. */
+export type ResetStagedKey = { kGw: Ed25519PublicKey };
+
+// The staged key must differ from the bound one: a reset always replaces K_gw.
+const replacesGatewayKey = (record: LinkedRecord, staged: ResetStagedKey) =>
+  record.binding.body.k_gw !== staged.kGw;
+
+const keepsGatewayKey = () => refusal("target_mismatch", "a reset replaces the Gateway key");
+
 export function createResetOperations(owner: {
   serialize: <T>(work: () => Promise<T>) => Promise<T>;
   load: () => Promise<StoredClaw | undefined>;
@@ -147,12 +157,15 @@ export function createResetOperations(owner: {
 }) {
   const { serialize, load, commit } = owner;
   return {
-    /** What R' signs to reset this claw. Commits nothing. */
-    prepareReset(): Promise<ResetPreparation | AuthorityRefusal> {
+    /** What R' signs to reset this claw onto the staged K_gw'. Commits nothing. */
+    prepareReset(staged: ResetStagedKey): Promise<ResetPreparation | AuthorityRefusal> {
       return serialize(async () => {
         const record = linkedRecord(await load());
         if ("ok" in record) {
           return record;
+        }
+        if (!replacesGatewayKey(record, staged)) {
+          return keepsGatewayKey();
         }
         const binding = record.binding.body;
         return {
@@ -160,7 +173,7 @@ export function createResetOperations(owner: {
           hostname: record.hostname,
           root_pub: record.authority.anchor.root_pub,
           k_srv: binding.k_srv,
-          k_gw: binding.k_gw,
+          k_gw: staged.kGw,
           binding_seq: binding.binding_seq + 1,
           root_epoch: ROOT_EPOCH,
           owner_device_seq: record.authority.seq + 2,
@@ -171,8 +184,9 @@ export function createResetOperations(owner: {
 
     /**
      * Replaces the root with `input.root_pub` and removes everyone, only over direct loopback.
-     * The binding must be signed by the new root for the same claw, hostname and keys at
-     * binding_seq + 1; `gateway` (K_gw of the current binding) signs the RootReset. An
+     * The binding must be signed by the new root for the same claw, hostname and K_srv and the
+     * staged K_gw' at binding_seq + 1; `gateway` (K_gw of the current binding) signs the
+     * RootReset. An
      * `owner_device` (R'-signed add_owner_device at the reset's seq + 1) enrolls the browser
      * that reset the claw. A reset or re-bind committed since prepare fails here (`target_mismatch`).
      */
@@ -180,6 +194,7 @@ export function createResetOperations(owner: {
       input: ResetCommit,
       channel: Channel | undefined,
       gateway: StatementSigner,
+      staged: ResetStagedKey,
       assertCurrent?: () => void,
     ): Promise<
       (AuthorityAccepted & { bindingSeq: number; removed: ResetRemoved }) | AuthorityRefusal
@@ -198,6 +213,9 @@ export function createResetOperations(owner: {
         if (input.root_pub === record.authority.anchor.root_pub) {
           return refusal("reset_mismatch", "a reset needs a new recovery kit");
         }
+        if (!replacesGatewayKey(record, staged)) {
+          return keepsGatewayKey();
+        }
         const current = record.binding.body;
         const now = nowSeconds();
         const reset: AuthorityState = {
@@ -215,7 +233,7 @@ export function createResetOperations(owner: {
           reset,
           input.binding,
           record,
-          { kSrv: current.k_srv, kGw: current.k_gw, bindingSeq },
+          { kSrv: current.k_srv, kGw: staged.kGw, bindingSeq },
           now,
         );
         if (!binding.ok) {

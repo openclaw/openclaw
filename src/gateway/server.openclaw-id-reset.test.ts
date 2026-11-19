@@ -1,6 +1,6 @@
 // "Reset owner access" (OpenClaw ID owner reset) through a real Gateway and a recording
-// stand-in for Discovery, and `openclaw id reset` with the Gateway stopped: over loopback only,
-// everyone removed, the machine keys kept, the new root published with K_gw's RootReset.
+// stand-in for Discovery: over loopback only, with the owner account's code, everyone removed,
+// K_srv kept, and the new root published under K_gw' with the old K_gw's RootReset.
 import { once } from "node:events";
 import fs from "node:fs";
 import http from "node:http";
@@ -35,6 +35,8 @@ try {
   hasBinding = false;
 }
 
+const CODE = "LINK-CODE-1";
+
 type Recorded = { method: string; url: string; keyid: string | undefined; body: any };
 const recorded: Recorded[] = [];
 let discovery: http.Server;
@@ -54,6 +56,16 @@ beforeAll(async () => {
         )?.[1],
         body: text ? JSON.parse(text) : undefined,
       });
+      if (req.url?.endsWith("/published-descriptor")) {
+        const known = JSON.parse(text || "{}").code === CODE;
+        res.statusCode = known ? 200 : 404;
+        res.end(
+          JSON.stringify(
+            known ? { descriptor: {} } : { error: { code: "not_found", message: "not found" } },
+          ),
+        );
+        return;
+      }
       if (req.url?.includes("/mailbox") && req.method === "GET") {
         setTimeout(() => res.end(JSON.stringify({ messages: [], cursor: "c0" })), 500);
         return;
@@ -151,25 +163,33 @@ describe("OpenClaw ID owner reset", () => {
               ? res.payload
               : { refused: (res.error?.details as { code?: string })?.code };
           };
-          const prep = (await call({ action: "reset_prepare" })) as ResetPreparation;
+          expect(await call({ action: "reset_prepare" })).toEqual({ refused: "needs_link_code" });
+          expect(await call({ action: "reset_prepare", code: "OTHER" })).toEqual({
+            refused: "code_invalid",
+          });
+          const prep = (await call({ action: "reset_prepare", code: CODE })) as ResetPreparation;
           expect(prep).toMatchObject({ binding_seq: 2, removes: { ownerDevices: 1 } });
+          expect(prep.k_gw).not.toBe(before.binding!.body.k_gw);
           const signed = await signBinding(prep);
           recorded.length = 0;
-          expect(await call({ action: "reset_commit", ...signed })).toMatchObject({
+          expect(await call({ action: "reset_commit", ...signed, code: CODE })).toMatchObject({
             ok: true,
             reset: true,
             bindingSeq: 2,
             removed: { ownerDevices: 1 },
             publication: { state: "published" },
           });
-          // One descriptor write signed by the unchanged K_gw, with the reset evidence and no
-          // link code, then the snapshot for the new binding.
+          // One descriptor write signed by K_gw', with the reset evidence, the owner account's
+          // code and the snapshot for the new binding, as Discovery requires for a new K_gw.
           const put = recorded.find((r) => r.method === "PUT" && r.url.endsWith("/descriptor"));
           expect(put).toMatchObject({
-            keyid: before.binding!.body.k_gw,
-            body: { descriptor: { root_pub: signed.rootPub, binding: signed.binding } },
+            keyid: prep.k_gw,
+            body: {
+              descriptor: { root_pub: signed.rootPub, binding: signed.binding },
+              code: CODE,
+              snapshot: { body: { binding_seq: 2, seq: before.authority!.seq + 1 } },
+            },
           });
-          expect(put?.body.code).toBeUndefined();
           const { reset } = put!.body.descriptor;
           expect(
             await verifyRootReset(
@@ -179,9 +199,6 @@ describe("OpenClaw ID owner reset", () => {
               { now: Math.floor(Date.now() / 1000) },
             ),
           ).toMatchObject({ ok: true });
-          expect(recorded.find((r) => r.url.endsWith("/snapshot"))).toMatchObject({
-            body: { snapshot: { body: { binding_seq: 2, seq: before.authority!.seq + 1 } } },
-          });
         } finally {
           ws.close();
         }
@@ -192,53 +209,4 @@ describe("OpenClaw ID owner reset", () => {
     },
     60_000,
   );
-
-  test("openclaw id reset with the Gateway stopped edits local state and shows the kit once", async () => {
-    const { before } = await storeLinkedClaw();
-    await configure();
-    const prompt = await import("../cli/prompt.js");
-    vi.spyOn(prompt, "promptText").mockResolvedValue("studio");
-    const stdin = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-    const stdout = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-    Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
-    Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
-    const output: string[] = [];
-    const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-      output.push(String(chunk));
-      return true;
-    });
-    try {
-      const { runReset } = await import("../cli/id-cli-reset.js");
-      await runReset();
-    } finally {
-      write.mockRestore();
-      vi.restoreAllMocks();
-      for (const [stream, descriptor] of [
-        [process.stdin, stdin],
-        [process.stdout, stdout],
-      ] as const) {
-        if (descriptor) {
-          Object.defineProperty(stream, "isTTY", descriptor);
-        } else {
-          delete (stream as { isTTY?: boolean }).isTTY;
-        }
-      }
-    }
-    const text = output.join("");
-    expect(text).toContain("Owner access reset.");
-    expect(text).toContain("The Gateway publishes the new owner key to Discovery when it starts.");
-    expect(text.match(/OCK1-[A-Z0-9-]+/g)).toHaveLength(1);
-    const stored = (await readStoredClaw())!;
-    expect(stored.authority?.anchor.root_pub).not.toBe(before.authority!.anchor.root_pub);
-    expect(stored.authority?.owner_devices).toEqual({});
-    expect(stored.authority?.seq).toBe(before.authority!.seq + 1);
-    expect(stored.binding?.body).toMatchObject({
-      binding_seq: 2,
-      k_gw: before.binding!.body.k_gw,
-      k_srv: before.binding!.body.k_srv,
-    });
-    expect(stored.reset?.statement.signer).toBe(before.binding!.body.k_gw);
-    // Nothing reached Discovery: the Gateway publishes at its next start.
-    expect(stored.discovery.published_binding_seq).toBe(1);
-  });
 });

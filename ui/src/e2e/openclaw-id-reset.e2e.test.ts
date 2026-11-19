@@ -22,8 +22,10 @@ const suite = createControlUiE2eSuite({ name: "OpenClaw ID Reset owner access" }
 const hostname = "studio-e61zr.crabd.xyz";
 const evidence = process.env.OCID_MENU_EVIDENCE;
 
-// One object answers every openclawId.authority action: the reset preparation and its commit.
+// One object answers every openclawId.authority action: the owner account's link code, the
+// reset preparation and its commit.
 const authority = {
+  code: "LINK-CODE-1",
   claw_id: "c".repeat(32),
   hostname,
   root_pub: formatEd25519PublicKey(randomBytes(32)),
@@ -114,6 +116,7 @@ suite.define(() => {
       await dialog.waitFor();
       const makeKit = dialog.getByRole("button", { name: "Make a new recovery kit" });
       expect(await makeKit.isDisabled()).toBe(true);
+      await dialog.getByRole("alert").getByText("This can't be undone").waitFor();
       await dialog.getByLabel("Type studio to confirm").fill("studio");
       await capture(page, "dialog-confirm");
       await makeKit.click();
@@ -123,18 +126,24 @@ suite.define(() => {
       await capture(page, "dialog-kit");
       await dialog.getByText("I've saved my recovery kit", { exact: false }).click();
       await commit.click();
-      await gateway.waitForRequest("openclawId.authority", { match: { action: "reset_commit" } });
+      // Both steps carry a link code from the signed-in account, which the Gateway checks.
+      await gateway.waitForRequest("openclawId.authority", {
+        match: { action: "reset_prepare", code: "LINK-CODE-1" },
+      });
+      await gateway.waitForRequest("openclawId.authority", {
+        match: { action: "reset_commit", code: "LINK-CODE-1" },
+      });
       await dialog.waitFor({ state: "detached" });
     });
   });
 
-  it("shows one line instead of the Reset button over the tunnel", async () => {
+  it("explains the requirements and keeps Reset off over the tunnel", async () => {
     await suite.withPage(viewport, async ({ page }) => {
       await openPage(page, "tunnel");
       await page
-        .getByText("Reset owner access is only available on the computer that runs this claw.")
+        .getByText("Remote, tunneled and proxied connections can't reset", { exact: false })
         .waitFor();
-      expect(await page.getByRole("button", { name: "Reset…" }).count()).toBe(0);
+      expect(await page.getByRole("button", { name: "Reset…" }).isDisabled()).toBe(true);
       await capture(page, "page-tunnel");
     });
   });
