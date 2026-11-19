@@ -145,9 +145,11 @@ it("leaves a listed tool the turn refuses out of the callable guidance", () => {
 
 it("leaves a cataloged tool the turn refuses out of the callable guidance", () => {
   const tools = [markAgentToolExecutionUnavailable(createStubTool("exec")), createStubTool("read")];
-  const result = createPolicyFixture(["tool_search"], tools, catalog(tools)).policy.apply(
-    undefined,
-  );
+  const { session, policy } = createPolicyFixture(["tool_search"], tools, catalog(tools));
+  // Cataloged tools have no direct session definition.
+  session.getToolDefinition = (name: string) =>
+    name === "tool_search" ? createStubTool(name) : undefined;
+  const result = policy.apply(undefined);
   expect(result.callableToolNames).toContain("read");
   expect(result.callableToolNames).not.toContain("exec");
 });
