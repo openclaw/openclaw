@@ -288,12 +288,13 @@ export async function handleChatHistoryRequest({
         historyPage.encodedMessagesDeflate,
       );
     }
-    const responsePage = historyPage.encodedResponse
+    const { encodedResponse, messageModelIndex } = historyPage;
+    const responsePage = encodedResponse
       ? {
-          ...historyPage.encodedResponse,
-          messages: new SerializedJsonArray(historyPage.encodedResponse.messages),
-          activity: historyPage.encodedResponse.activity
-            ? new SerializedJsonArray(historyPage.encodedResponse.activity)
+          ...encodedResponse,
+          messages: new SerializedJsonArray(encodedResponse.messages, messageModelIndex),
+          activity: encodedResponse.activity
+            ? new SerializedJsonArray(encodedResponse.activity)
             : undefined,
         }
       : prepareChatHistoryResponsePage(historyPage, {

@@ -8,6 +8,7 @@ import type {
   ChatHistoryResponsePage,
 } from "../config/sessions/session-history-types.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import { isNormalizedMessageChannel } from "../utils/message-channel-core.js";
 import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
 import {
@@ -394,7 +395,8 @@ export function encodeChatHistoryResponsePage(
     }
   });
   const encoder = new TextEncoder();
-  const encodeArray = (values: unknown[]) => {
+  let modelRangeCount = 0;
+  const encodeArray = (values: unknown[], modelRanges?: number[]) => {
     const parts = values.map((value) => serialize(value) ?? "null");
     const bytes = new Uint8Array(
       2 +
@@ -407,12 +409,26 @@ export function encodeChatHistoryResponsePage(
       if (index > 0) {
         bytes[offset++] = 0x2c;
       }
+      const start = offset;
       offset += encoder.encodeInto(part, bytes.subarray(offset)).written;
+      const row = modelRanges && asOptionalRecord(values[index]);
+      if (
+        modelRanges &&
+        row?.role === "assistant" &&
+        (row.provider != null || row.model != null) &&
+        !isTranscriptOnlyOpenClawAssistantModel(row.provider, row.model)
+      ) {
+        modelRanges[modelRangeCount++] = start;
+        modelRanges[modelRangeCount++] = offset;
+      }
     }
     bytes[offset] = 0x5d;
     return bytes;
   };
-  const messages = encodeArray(response.messages);
+  const ranges: number[] = [];
+  ranges.length = response.messages.length * 2;
+  const messages = encodeArray(response.messages, ranges);
+  ranges.length = modelRangeCount;
   const activity = response.activity ? encodeArray(response.activity) : undefined;
   return {
     ...page,
@@ -428,6 +444,11 @@ export function encodeChatHistoryResponsePage(
             deflateRawSync(messages, { level: 1, finishFlush: zlibConstants.Z_SYNC_FLUSH }),
           )
         : undefined,
+    messageModelIndex: {
+      byteLength: messages.byteLength,
+      rowCount: response.messages.length,
+      ranges,
+    },
     encodedResponse: {
       ...response,
       messages,
