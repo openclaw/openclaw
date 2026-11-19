@@ -7,30 +7,39 @@ export type UpdateRunServingIdentity = {
   buildId?: string | null;
 };
 
+export function resolveUpdateRunServingChange(
+  verification: UpdateRunRecord["verification"],
+  serving?: UpdateRunServingIdentity,
+) {
+  if (!serving || verification.serviceRunning !== true) {
+    return null;
+  }
+  // The installed package can already be ahead of the process serving requests.
+  const version = normalizeOptionalString(serving.version);
+  const recordedVersion = normalizeOptionalString(verification.runningVersion);
+  const build = normalizeOptionalString(serving.buildId);
+  const recordedBuild = normalizeOptionalString(verification.runningBuildId);
+  const label = (value: string) => sanitizeTerminalText(value).slice(0, 240);
+  if (version && recordedVersion && version !== recordedVersion) {
+    return { kind: "version", current: label(version), recorded: label(recordedVersion) } as const;
+  }
+  if (build && recordedBuild && build !== recordedBuild) {
+    return { kind: "build", current: label(build), recorded: label(recordedBuild) } as const;
+  }
+  return null;
+}
+
 /** Project saved failures against the serving process, without rewriting history. */
 export function projectUpdateRunHistory(
   run: Pick<UpdateRunRecord, "status" | "reason" | "verification">,
   serving?: UpdateRunServingIdentity,
 ): string | null {
-  if (run.status !== "failed" || !serving || run.verification.serviceRunning !== true) {
+  const change =
+    run.status === "failed" ? resolveUpdateRunServingChange(run.verification, serving) : null;
+  if (!change) {
     return null;
   }
-  // The installed package can already be ahead of the process serving requests.
-  const version = normalizeOptionalString(serving.version);
-  const recordedVersion = normalizeOptionalString(run.verification.runningVersion);
-  const build = normalizeOptionalString(serving.buildId);
-  const recordedBuild = normalizeOptionalString(run.verification.runningBuildId);
-  const label = (value: string) => sanitizeTerminalText(value).slice(0, 240);
-  let current: string;
-  let recorded: string;
-  if (version && recordedVersion && version !== recordedVersion) {
-    current = label(version);
-    recorded = `version was ${label(recordedVersion)}`;
-  } else if (build && recordedBuild && build !== recordedBuild) {
-    current = `build ${label(build)}`;
-    recorded = `build was ${label(recordedBuild)}`;
-  } else {
-    return null;
-  }
-  return `Last update run failed (${label(run.reason?.trim() || "unknown reason")}) — Gateway is serving ${current}; recorded serving ${recorded}.`;
+  const reason = sanitizeTerminalText(run.reason?.trim() || "unknown reason").slice(0, 240);
+  const current = change.kind === "build" ? `build ${change.current}` : change.current;
+  return `Last update run failed (${reason}) — Gateway is serving ${current}; recorded serving ${change.kind} was ${change.recorded}.`;
 }
