@@ -7,6 +7,7 @@ import {
   getSessionControllerOperation,
   resolveReplyRunForCurrentSessionId,
   getSessionControllerEntryForOperation,
+  hasReplyOperationExecutionStarted,
 } from "./session-controller.state.js";
 import { rpcSourcesByRunId } from "./session-controller.storage.js";
 import type { SessionTarget } from "./session-controller.target.js";
@@ -28,8 +29,13 @@ export function listActiveSessionRunIds(): string[] {
 export function resolveActiveSessionRunId(
   sessionKey: string,
   target?: SessionTarget,
+  options?: { executionStartedOnly?: boolean },
 ): string | undefined {
-  return getSessionControllerOperation(sessionKey.trim(), target)?.sessionId;
+  const operation = getSessionControllerOperation(sessionKey.trim(), target);
+  return operation &&
+    (!options?.executionStartedOnly || hasReplyOperationExecutionStarted(operation))
+    ? operation.sessionId
+    : undefined;
 }
 
 /** A logical key is busy even when it selects multiple physical owners. */
@@ -39,10 +45,6 @@ export function isSessionRunActiveForKey(sessionKey: string): boolean {
     normalizedSessionKey &&
     findSessionControllerEntries(normalizedSessionKey).some((entry) => entry.active),
   );
-}
-
-export function listActiveReplyRunSessionKeys(): string[] {
-  return [...activeSessionOperations()].map((operation) => operation.key);
 }
 
 /** Resolves a single active physical owner, rejecting ambiguous current identities. */

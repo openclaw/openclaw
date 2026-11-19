@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { setImmediate as flushDiagnosticEvents } from "node:timers/promises";
 import { Type } from "typebox";
 import { expect, it } from "vitest";
 import {
   onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
   type DiagnosticSkillUsedEvent,
 } from "../../infra/diagnostic-events.js";
 import { registerDiagnosticTracePropagationBridge } from "../../infra/diagnostic-trace-propagation.js";
@@ -45,7 +45,6 @@ it("records successful discovered skill reads with the original sandbox provenan
       discoverySkills: [skill],
     },
     skillUsagePaths: [{ skillName: "guide", skillSource: "workspace", skillFile, readPath }],
-    loopDetection: { enabled: false },
   });
   await expect(tool.execute("invalid", { name: "unknown" })).rejects.toThrow();
   expect(consumeRunSkillUsage(runId)).toEqual([]);
@@ -106,7 +105,6 @@ it.each(["read", "skills_read"])(
     const tool = wrapToolWithBeforeToolCallHook(raw, {
       workspaceDir: root,
       skillsSnapshot: { prompt: "", skills: [{ name: skill.name }], resolvedSkills: [skill] },
-      loopDetection: { enabled: false },
     });
     const events: DiagnosticSkillUsedEvent[] = [];
     const stopEvents = onInternalDiagnosticEvent((event) => {
@@ -129,7 +127,7 @@ it.each(["read", "skills_read"])(
       await tool.execute("changed-source", args);
       cache.clear();
       await tool.execute("fresh-delivery", args);
-      await flushDiagnosticEvents();
+      await waitForDiagnosticEventsDrained();
       expect(events.map((event) => event.skillFingerprint)).toEqual([
         firstHash,
         firstHash,
@@ -140,7 +138,7 @@ it.each(["read", "skills_read"])(
       expect(JSON.stringify(events)).not.toContain(filePath);
       stopTracing();
       await tool.execute("tracing-disabled", args);
-      await flushDiagnosticEvents();
+      await waitForDiagnosticEventsDrained();
       expect(events).toHaveLength(5);
       expect(events[4]).not.toHaveProperty("skillFingerprint");
     } finally {

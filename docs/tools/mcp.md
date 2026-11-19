@@ -103,7 +103,7 @@ openclaw mcp add docs \
 openclaw mcp doctor docs --probe
 ```
 
-Useful companions: `openclaw mcp status --verbose` for a config-only summary, `openclaw mcp probe <name>` for live capabilities, and `openclaw mcp login <name>` when an HTTP server uses OAuth. The [MCP CLI reference](/cli/mcp) documents every command, flag, and output shape, plus the separate `mcp serve` bridge.
+Useful companions: `openclaw mcp status --verbose` for a config-only summary, `openclaw mcp probe <name>` for live capabilities, and `openclaw mcp login <name>` when an HTTP server uses OAuth. Login works while the Gateway runs. You can also ask the agent to connect in a direct chat; it returns a sign-in link in the same turn. After approval, send another message to use the server. The [MCP CLI reference](/cli/mcp) documents every command, flag, and output shape, plus the separate `mcp serve` bridge.
 
 ## Configure a server directly
 
@@ -128,7 +128,7 @@ The same `docs` server, written straight into config:
 }
 ```
 
-An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). The exact server name `__proto__` is reserved; choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
+An enabled server needs either a command (stdio) or a URL (SSE or Streamable HTTP). Config validation rejects definitions containing both, and writes reject new or edited mixed definitions. Existing mixed definitions keep their prior runtime behavior with a warning so upgrades can start. Doctor can normalize aliases but leaves the transport choice and authentication settings unchanged. For HTTP, remove the command, arguments, environment, and working directory; for stdio, remove the URL and HTTP transport, headers, OAuth, and TLS options. Updates can still record their channel before this explicit repair. The exact server name `__proto__` is reserved; choose a different name. Setting `enabled: false` keeps the definition around without connecting it. Keep credentials out of config literals — store sensitive headers and environment values through the supported secret mechanisms.
 
 Local `claude-cli` turns receive configured server tools through the Gateway's
 MCP bridge as `<server>__<tool>`, including when `tools.exec.host` is `"node"`.
@@ -205,16 +205,17 @@ Browser sign-in requires Settings on the Gateway's own HTTPS address (including 
 
 An unfinished CLI attempt can leave a client registration for the CLI callback. When no credentials have been saved, browser sign-in registers its own callback automatically. Registrations associated with saved credentials are retained so refresh tokens remain usable.
 
-If **Sign in** is unavailable, or existing credentials require the CLI callback, sign in from the terminal of the installation that owns the server. `openclaw mcp login` runs offline only, so stop the Gateway first and start it again afterward:
+You can also sign in from the terminal of the installation that owns the server. The running Gateway owns the shared sign-in; no stop or restart is needed:
 
 ```bash
-openclaw gateway stop
 openclaw mcp login <name>
 ```
 
-Follow the printed authorization URL. OpenClaw normally captures the loopback redirect and saves the credentials automatically; use the printed `--code` command when the browser cannot reach the callback listener.
+Follow the printed authorization URL. With a running Gateway, the provider redirects to `<gateway.publicOrigin>/oauth/mcp/callback`, or the Gateway's own loopback address without a public origin. If a browser on another device cannot load that address, paste the complete failed redirect URL into the direct chat that started sign-in, or run `openclaw mcp login <name> --callback-url '<url>'`. Keep `state` and any `iss` value intact.
 
-The CLI signs in only to servers defined under `mcp.servers`. A server that a plugin declares signs in from the plugin's page (**Sign in**, or **Accounts** → **Sign in**); a failed browser sign-in for it points back to the plugin settings instead of a CLI command.
+Online CLI login supports both configured and plugin-declared shared OAuth servers. With the Gateway stopped, the CLI keeps its local loopback flow for `mcp.servers` entries; use its printed `--code` instructions if that callback cannot reach the terminal.
+
+To sign out of a plugin-declared server, open the plugin's page and select **Accounts** → **Sign out**. OpenClaw removes the saved credentials on the Gateway; the plugin's tools need a new sign-in before their next call. Uninstalling the plugin also removes the saved sign-ins for its servers, so a reinstall starts signed out. A server under `mcp.servers` with the same name and URL keeps its credentials.
 
 ### Changes do not reach an active agent
 

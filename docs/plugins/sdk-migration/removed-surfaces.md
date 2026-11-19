@@ -235,7 +235,7 @@ handler never runs.
 `openclaw/plugin-sdk/testing` was repo-local and excluded from shipped package
 artifacts, so it was removed before its 2026-07-28 `removeAfter` date. Repository
 tests use focused subpaths such as `plugin-sdk/plugin-test-runtime`,
-`plugin-sdk/channel-test-helpers`, `plugin-sdk/channel-target-testing`,
+`plugin-sdk/channel-test-helpers`,
 `plugin-sdk/test-env`, and `plugin-sdk/test-fixtures`.
 
 ### Credential prompt builder

@@ -21,7 +21,7 @@ beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
 describe("mounted pane run settlement", () => {
-  it("retains the watched recap while a terminal descriptor outlives the status mask", async () => {
+  it("settles the answer without a duration line when a terminal descriptor outlives the status mask", async () => {
     const startedAt = Date.now();
     const runId = "managed-media-run";
     const running: GatewaySessionRow = {
@@ -138,9 +138,8 @@ describe("mounted pane run settlement", () => {
     draw();
     expect(container.querySelector('[data-entry-id="managed-media-answer"]')).toBe(bubble);
     expect(container.querySelector(".chat-working-indicator")).toBeNull();
-    expect(
-      requireElement(container, ".chat-group.assistant .chat-turn-recap").textContent,
-    ).toContain("Done in 1 second");
+    // Run duration belongs to the Worked summary; an answer without work shows none.
+    expect(container.querySelector(".chat-turn-recap")).toBeNull();
   });
 
   it.each(["session.message", "sessions.changed"] as const)(

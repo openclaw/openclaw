@@ -74,6 +74,7 @@ import { resolveSubagentKillTargetState } from "./subagent-registry-completion.j
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
 import { registerRequesterDatabaseAdmissionTests } from "./subagent-registry-lifecycle-admission.test-support.js";
 import {
+  registerCleanupBurstAuthorityTest,
   registerDetachedCleanupAuthorityTest,
   registerDeliveryRetryOwnerTests,
   registerDirectSessionCleanupAuthorityTests,
@@ -1925,6 +1926,7 @@ describe("subagent registry lifecycle hardening", () => {
 
   it("abandons a killed callback tail after success becomes canonical", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true });
+    const joinCleanup = observeRootWork();
     let releaseKilledTiming: (() => void) | undefined;
     helperMocks.persistSubagentSessionTiming
       .mockImplementationOnce(
@@ -1961,6 +1963,7 @@ describe("subagent registry lifecycle hardening", () => {
     );
     releaseKilledTiming?.();
     await Promise.all([killed, success]);
+    await joinCleanup();
 
     expect(readLifecycleRun(entry)).toMatchObject({
       endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
@@ -3244,7 +3247,7 @@ describe("subagent registry lifecycle hardening", () => {
       expect(readLifecycleRun(entry).requesterSettleWake).toEqual(batch);
       expect(readLifecycleRun(entry).delivery).toMatchObject({
         status: "pending",
-        disposition: "intentional_non_delivery",
+        disposition: undefined,
       });
       expect(readLifecycleRun(entry).delivery?.lastError).toBeUndefined();
       expect(readLifecycleRun(entry).delivery?.nextAttemptAt).toBeUndefined();
@@ -4077,9 +4080,8 @@ describe("requester settle wake trigger", () => {
             path: "none",
             reason: "completion_handoff_pending",
             terminal: true,
-            disposition: "intentional_non_delivery",
           });
-          return "intentional_non_delivery" as const;
+          return "requester_waiting" as const;
         },
       );
       onTestFinished(seedResidentLifecycleRun(entry));
@@ -4099,8 +4101,8 @@ describe("requester settle wake trigger", () => {
       );
       expect(readLifecycleRun(entry).delivery).toMatchObject({
         status: "pending",
-        disposition: "intentional_non_delivery",
-        lastError: "completion_handoff_pending",
+        disposition: undefined,
+        lastError: undefined,
       });
       expect(readLifecycleRun(entry).delivery?.deliveredAt).toBeUndefined();
 
@@ -4267,9 +4269,8 @@ describe("requester settle wake trigger", () => {
           path: "none",
           reason: "completion_handoff_pending",
           terminal: true,
-          disposition: "intentional_non_delivery",
         });
-        return "intentional_non_delivery" as const;
+        return "requester_waiting" as const;
       },
     );
     let pendingDescendantRuns = 0;
@@ -4295,7 +4296,7 @@ describe("requester settle wake trigger", () => {
 
     expect(readLifecycleRun(entry).delivery).toMatchObject({
       status: "failed",
-      disposition: "intentional_non_delivery",
+      disposition: "permanent_failure",
       lastError: "requester settle wake attempts exhausted",
     });
     expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();
@@ -4836,54 +4837,10 @@ describe("requester settle wake trigger", () => {
     }
   });
 
-  it("bounds a cleanup burst while retaining admitted work when admission closes", async () => {
-    resetGatewayWorkAdmission();
-    const entries = Array.from({ length: 130 }, (_, index) =>
-      createRunEntry({
-        runId: `bounded-cleanup-${index}`,
-        childSessionKey: `agent:main:subagent:bounded-cleanup-${index}`,
-        endedAt: 4_000,
-        expectsCompletionMessage: true,
-      }),
-    );
-    const runs = new Map(entries.map((entry) => [entry.runId, entry]));
-    const gate = createDeferredCore();
-    const started: string[] = [];
-    const announce = vi.fn(
-      async (params: Parameters<SubagentLifecycleOptions["runSubagentAnnounceFlow"]>[0]) => {
-        started.push(params.childSessionKey);
-        await gate.promise;
-        return "delivered" as const;
-      },
-    );
-    const controller = createLifecycleController({
-      entry: entries[0]!,
-      runs,
-      runSubagentAnnounceFlow: announce,
-    });
-    try {
-      for (const entry of entries) {
-        expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
-      }
-      await waitForLifecycleState(() => expect(announce).toHaveBeenCalledTimes(2));
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(started).toEqual(entries.slice(0, 2).map((entry) => entry.childSessionKey));
-      expect(getActiveGatewayRootWorkCount()).toBe(entries.length);
-      markGatewayRestartDraining();
-      gate.resolve();
-      await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      expect(started).toEqual(entries.map((entry) => entry.childSessionKey));
-      expect([...runs.values()].every((entry) => entry.cleanupCompletedAt !== undefined)).toBe(
-        true,
-      );
-    } finally {
-      gate.resolve();
-      await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      controller.clearRuntimeState();
-      resetGatewayWorkAdmission();
-    }
+  registerCleanupBurstAuthorityTest({
+    createRunEntry,
+    createLifecycleController,
+    waitForLifecycleState,
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -106,6 +106,7 @@ import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowApplication
 import org.robolectric.shadows.ShadowBroadcastPendingResult
 import org.robolectric.shadows.ShadowBroadcastReceiver
+import org.robolectric.shadows.ShadowSpeechRecognizer
 import org.robolectric.shadows.ShadowToast
 import org.robolectric.util.ReflectionHelpers
 import java.net.InetAddress
@@ -130,6 +131,47 @@ import kotlin.coroutines.CoroutineContext
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class NodeForegroundServiceTest {
+  @Test
+  @Config(shadows = [ServiceRuntimePrefsShadow::class])
+  fun enabledWakeWordsKeepMicrophoneServiceAccessAfterBackgrounding() {
+    val app = RuntimeEnvironment.getApplication() as NodeApp
+    Shadows.shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(true)
+    val runtime = app.ensureRuntime()
+    val endpoint = GatewayEndpoint.manual("127.0.0.1", 18789)
+    ReflectionHelpers.setField(runtime, "connectedEndpoint", endpoint)
+    runtime.applyNodeVoiceWakeWords(endpoint.stableId, """{"triggers":["openclaw"]}""") { true }
+    runtime.setVoiceWakeEnabled(true)
+    val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
+    try {
+      controller.get().onStartCommand(null, 0, 1)
+      drainWithMainLooper {
+        withTimeout(5_000) {
+          while (controller.get().foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE == 0) yield()
+        }
+      }
+      val recognizer = Shadows.shadowOf(checkNotNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer()))
+      val source =
+        checkNotNull(
+          recognizer.lastRecognizerIntent.getParcelableExtra(
+            android.speech.RecognizerIntent.EXTRA_AUDIO_SOURCE,
+            android.os.ParcelFileDescriptor::class.java,
+          ),
+        )
+      recognizer.triggerOnReadyForSpeech(Bundle())
+      assertTrue(runtime.voiceWakeIsListening.value)
+      runtime.setForeground(false)
+      Shadows.shadowOf(Looper.getMainLooper()).idle()
+      assertTrue(runtime.voiceWakeIsListening.value)
+      controller.destroy()
+      assertEquals("Paused", runtime.voiceWakeStatusText.value)
+      assertFalse(source.fileDescriptor.valid())
+      assertTrue(recognizer.isDestroyed)
+    } finally {
+      closeNodeServiceTestFixture(controller, app)
+    }
+  }
+
   @After
   fun resetNodeServiceStartSuppression() {
     NodeForegroundService.resume(RuntimeEnvironment.getApplication(), startNow = false)
@@ -170,6 +212,9 @@ class NodeForegroundServiceTest {
   @Config(shadows = [ServiceRuntimePrefsShadow::class])
   fun coldStickyStartRestoresSavedGatewayWithoutForegroundCapabilities() {
     val app = RuntimeEnvironment.getApplication() as NodeApp
+    Shadows.shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(true)
+    app.prefs.setVoiceWakeEnabled(true)
     val gateway = lifetimeGateway(hello = ::bootstrapHello)
     val controller = Robolectric.buildService(NodeForegroundService::class.java).create()
     val endpoint = GatewayEndpoint.manual("127.0.0.1", gateway.port)
@@ -188,6 +233,12 @@ class NodeForegroundServiceTest {
         }
       }
       assertFalse(requireNotNull(app.peekRuntime()).isForeground.value)
+      val recognizerBeforeWords = ShadowSpeechRecognizer.getLatestSpeechRecognizer()
+      requireNotNull(app.peekRuntime()).applyNodeVoiceWakeWords(endpoint.stableId, """{"triggers":["openclaw"]}""") { true }
+      Shadows.shadowOf(Looper.getMainLooper()).idle()
+      assertEquals(0, controller.get().foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+      assertEquals(listOf("openclaw"), requireNotNull(app.peekRuntime()).voiceWakeWords.value)
+      assertEquals(recognizerBeforeWords, ShadowSpeechRecognizer.getLatestSpeechRecognizer())
     } finally {
       closeNodeServiceTestFixture(controller, app)
       gateway.shutdown()

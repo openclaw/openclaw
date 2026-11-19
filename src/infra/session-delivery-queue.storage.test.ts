@@ -7,7 +7,6 @@ import {
   completeSessionDelivery as complete,
   deferSessionDelivery as defer,
   enqueueClaimedSessionDelivery as enqueueClaimed,
-  enqueueSessionDelivery as enqueue,
   failSessionDelivery as fail,
   loadPendingSessionDelivery as loadPending,
   loadPendingSessionDeliveries as listPending,
@@ -16,7 +15,10 @@ import {
   moveSessionDeliveryToFailed as moveToFailed,
   releaseSessionDeliveryClaim as releaseClaim,
 } from "./session-delivery-queue-storage.js";
-import { withSessionDeliveryQueue } from "./session-delivery-queue.test-helpers.js";
+import {
+  enqueueUnclaimedSessionDeliveryFixture as enqueue,
+  withSessionDeliveryQueue,
+} from "./session-delivery-queue.test-helpers.js";
 
 type Delivery = Parameters<typeof enqueue>[0];
 function agentTurn(

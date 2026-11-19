@@ -10,6 +10,7 @@ import { beginGatewayBootLifecycle } from "../infra/gateway-boot-lifecycle.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -429,4 +430,18 @@ it("does not turn an environment-only Teams pin into authored activation on a la
   const first = update({});
   expect(first.config.channels?.msteams).toEqual({ legacyWebhook: { port: 3978 } });
   expectUnchanged(update(first.config), first.config);
+});
+
+it("keeps a Teams decision startup recorded after Doctor left it pending", async () => {
+  const { configPath, env, update } = await fixture([undefined], { channelId: "msteams" });
+  const doctorRecord = { telegram: [], feishu: [], "nextcloud-talk": [] };
+  // A startup without Teams credentials completes Teams in machine state only.
+  writeConfigMachineState(
+    `webhookListeners:${configPath}`,
+    { ...doctorRecord, msteams: [] },
+    { env },
+  );
+  const config: OpenClawConfig = { meta: { migrations: { webhookListeners: doctorRecord } } };
+  // Adding Teams later must not reopen its historical port.
+  expectUnchanged(update(config), config);
 });

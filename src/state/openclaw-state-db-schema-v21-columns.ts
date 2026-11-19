@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import { ensureColumn, tableExists } from "./openclaw-state-db-schema-helpers.js";
+import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 
 export const statePredicateColumnMigration = {
   version: 21,
@@ -25,7 +25,15 @@ export const statePredicateColumnMigration = {
 
 /** Complete the derived projection before any writer or column-only reader runs. */
 export function migratePredicateColumnsV21(db: DatabaseSync, previousVersion: number): boolean {
-  if (previousVersion >= 21) {
+  // The historical v21 branch published its marker before these JSON projections.
+  const missing =
+    previousVersion === 21 &&
+    statePredicateColumnMigration.columns.some((name) => {
+      const separator = name.indexOf(".");
+      const table = name.slice(0, separator);
+      return tableExists(db, table) && !tableHasColumn(db, table, name.slice(separator + 1));
+    });
+  if (previousVersion >= 21 && !missing) {
     return false;
   }
   let changed = false;

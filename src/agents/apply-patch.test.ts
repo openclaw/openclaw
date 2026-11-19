@@ -10,6 +10,7 @@ import {
 } from "../test-utils/symlink-rebind-race.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import { applyPatch, createMemoryPatchSandbox } from "./apply-patch.test-support.js";
+import { isHostRootEscapeError } from "./sandbox-paths.js";
 import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-identity.js";
 import { createSandboxFsBridgeFromResolver } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { isTrustedToolInputError } from "./tool-input-error.js";
@@ -463,9 +464,7 @@ describe("applyPatch", () => {
         run: async () => {
           const pending = applyPatch(patch, { cwd: dir, workspaceOnly: true });
           if (operation === "remove") {
-            await expect(pending).rejects.toThrow(
-              /symlink escapes sandbox root|under root|not found/i,
-            );
+            await expect(pending).rejects.toSatisfy(isHostRootEscapeError);
           } else {
             await expect(pending).rejects.toMatchObject({ name: "FsSafeError", code: "symlink" });
           }

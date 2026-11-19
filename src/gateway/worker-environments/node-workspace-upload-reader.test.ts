@@ -50,10 +50,16 @@ function fixture(
   const currentRaw = manifest(entries);
   const headers = [baseRaw, currentRaw].flatMap((raw) => frame(Buffer.from(raw)));
   const payload = Buffer.concat([...headers, ...frame(file, 8)]);
-  const upload = (chunks: Iterable<Buffer>, contentLength = payload.length, resultVersion?: 2) => {
+  const upload = (
+    chunks: Iterable<Buffer>,
+    contentLength: number | null = payload.length,
+    resultVersion?: 2,
+  ) => {
     const request = Readable.from(chunks) as unknown as IncomingMessage;
     request.headers = {
-      "content-length": String(contentLength),
+      ...(contentLength === null
+        ? { "transfer-encoding": "chunked" }
+        : { "content-length": String(contentLength) }),
       ...(resultVersion
         ? { "content-type": "application/vnd.openclaw.worker-workspace-reconcile-v2" }
         : {}),
@@ -105,6 +111,12 @@ function observeUploadFile(onOpen: (handle: FileHandle) => void) {
 }
 
 describe("workspace upload byte stream", () => {
+  it("accepts a framed upload without a declared content length", async () => {
+    const f = fixture();
+    const result = await f.upload([f.payload], null);
+    expect(await fs.readFile(path.join(result.stagingRoot, "result.bin"))).toEqual(f.file);
+  });
+
   it("bounds the declared v2 pack before reading its bytes", async () => {
     const f = fixture();
     const trailer = Buffer.concat([

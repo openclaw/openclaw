@@ -71,7 +71,7 @@ async function readPairing<Command extends DevicePairingReadCommand>(
       throw new Error("Device pairing read publication was replaced");
     }
     return refreshed;
-  });
+  }, command.type);
 }
 
 /** Current paired rows and prepared node bindings share the publication's revision and lifetime. */

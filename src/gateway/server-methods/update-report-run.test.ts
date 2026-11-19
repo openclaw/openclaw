@@ -328,6 +328,33 @@ afterEach(async () => {
 afterAll(closeStateDatabaseForTest);
 
 describe("Report action from the authoritative update ledger", () => {
+  it("keeps ledger diagnostics when a matching requested sentinel has no facts", async () => {
+    createUpdateRun({ runId, trigger: "control-ui", target: { kind: "git", tag: "main" } });
+    recordUpdateRunStep(runId, {
+      step: "requested",
+      status: "failed",
+      exitCode: 23,
+      detail: "EACCES: permission denied at /private/customer token=synthetic-private-token",
+      failureFacts: [{ check: "readyz", code: "readyz-unhealthy" }],
+    });
+    finishUpdateRun(runId, { status: "failed", reason: "update-failed" });
+    mocks.sentinel.mockResolvedValue({
+      ...matchingSentinel(),
+      stats: {
+        runId,
+        mode: "unknown",
+        reason: "update-failed",
+        steps: [{ name: "requested", command: "", log: { exitCode: null } }],
+      },
+    });
+    const { body } = await preview();
+    expect(body).toContain("Update mode: git");
+    expect(body).toContain("Update target: main");
+    expect(body).toContain("Failed phase requested: exit 23 (EACCES; Permission denied)");
+    expect(body).toContain("Failing check readyz (readyz-unhealthy)");
+    expect(body).not.toMatch(/exit unknown|\/private\/customer|synthetic-private-token/u);
+  });
+
   it.each(["identity", "attempt", "digest"] as const)(
     "retires named administrator consent when %s changes during final validation",
     async (change) => {
@@ -633,6 +660,10 @@ describe("Report action from the authoritative update ledger", () => {
   it.each([
     { reason: "not-git-install", reportable: true },
     { reason: "already-current", reportable: false },
+    { reason: "managed-service-handoff-unavailable", reportable: false },
+    { reason: "immutable-native-updater-required", reportable: false },
+    { reason: "restart-disabled", reportable: false },
+    { reason: "downgrade-confirmation-required", reportable: false },
     { reason: "dry-run", reportable: false },
     { reason: "cancelled", reportable: false },
   ])(

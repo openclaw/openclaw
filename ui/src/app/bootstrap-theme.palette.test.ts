@@ -43,6 +43,26 @@ beforeEach(({ onTestFinished }) => {
 
 const pendingPalette = () => document.getElementById("openclaw-theme-palette-tide")!;
 
+it("publishes authored selection without reapplying the previous document appearance", () => {
+  const root = document.documentElement;
+  const mutations = new MutationObserver(() => {});
+  mutations.observe(root, { attributes: true });
+  const palette = theme.appliedPalette;
+  try {
+    theme.recordServerSelection("claw", theme.settings.gatewayUrl);
+    expect(snapshots).toHaveBeenCalledOnce();
+    expect(mutations.takeRecords()).toEqual([]);
+    expect(theme.appliedPalette).toBe(palette);
+    patchSettings({ themeMode: "dark" });
+    expect(root.dataset.themeMode).toBe("dark");
+    expect(
+      mutations.takeRecords().filter((record) => record.attributeName === "data-theme-mode"),
+    ).toHaveLength(1);
+  } finally {
+    mutations.disconnect();
+  }
+});
+
 function observe(read: () => string | undefined) {
   const values: string[] = [];
   createEffect(read, (value) => void values.push(value ?? "none"));
@@ -107,3 +127,37 @@ it.each(["superseded", "disposed"])("ignores a %s palette completion", (state) =
   expect(snapshots).not.toHaveBeenCalled();
   expect(document.documentElement.dataset.themeMode).toBe("light");
 });
+
+it.each([
+  ["Board", false],
+  ["Board", true],
+  ["readiness", false],
+  ["readiness", true],
+] as const)(
+  "publishes %s without reapplying or retiring the palette (pending: %s)",
+  (source, pending) => {
+    if (pending) {
+      patchSettings({ theme: "tide", themeMode: "dark" });
+    }
+    snapshots.mockClear();
+    const palette = theme.appliedPalette;
+    const rootWrites = vi.spyOn(document.documentElement, "setAttribute");
+    const styleWrites = vi.spyOn(document.documentElement.style, "setProperty");
+    if (source === "Board") {
+      patchSettings({ boardSessionViews: { example: { activeTabId: "reports" } } });
+      expect(theme.settings.boardSessionViews?.example?.activeTabId).toBe("reports");
+    } else {
+      theme.refresh({ notify: true });
+    }
+    expect(snapshots).toHaveBeenCalledOnce();
+    expect(theme.appliedPalette).toBe(palette);
+    expect(rootWrites).not.toHaveBeenCalled();
+    expect(styleWrites).not.toHaveBeenCalled();
+    if (pending) {
+      pendingPalette().dispatchEvent(new Event("load"));
+      expect(theme.appliedPalette?.theme).toBe("tide");
+      expect(document.documentElement.dataset.themeMode).toBe("dark");
+      expect(snapshots).toHaveBeenCalledTimes(2);
+    }
+  },
+);

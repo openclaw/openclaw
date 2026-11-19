@@ -2,6 +2,7 @@ import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-co
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ExternalPluginCompatibility } from "../../packages/plugin-package-contract/src/index.js";
 import {
+  ClawHubRequestError,
   fetchClawHubJson,
   readClawHubStringField,
   readRequiredClawHubBooleanField,
@@ -171,6 +172,7 @@ export type ClawHubPackageListItem = {
   icon?: string | null;
   ownerHandle?: string | null;
   ownerOfficial?: boolean;
+  categories?: string[] | null;
   createdAt: number;
   updatedAt: number;
   latestVersion?: string | null;
@@ -375,7 +377,26 @@ export async function fetchClawHubPackageDetail(
     path: `/api/v1/packages/${encodeURIComponent(params.name)}`,
     token: params.token,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
   });
+}
+
+/** An older registry can decline the bounded overview without hiding upstream failures. */
+export async function fetchClawHubTemplatesOverview(
+  params: ClawHubFetchOptions & { limit?: number },
+): Promise<unknown> {
+  try {
+    return await fetchClawHubJson<unknown>({
+      ...params,
+      path: "/api/v1/templates/overview",
+      search: { limit: String(params.limit ?? 8) },
+    });
+  } catch (error) {
+    if (error instanceof ClawHubRequestError && error.status === 404) {
+      return { complete: false };
+    }
+    throw error;
+  }
 }
 
 export async function listClawHubPackages(
@@ -393,6 +414,7 @@ export async function listClawHubPackages(
     path: "/api/v1/packages",
     token: params.token,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
     search: {
       family: params.family,
       isOfficial: params.isOfficial === undefined ? undefined : String(params.isOfficial),
@@ -426,6 +448,7 @@ export async function fetchClawHubPackageVersion(
     )}`,
     token: params.token,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
   });
 }
 
@@ -442,6 +465,7 @@ export async function fetchClawHubPackageArtifact(
     )}/artifact`,
     token: params.token,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
   });
 }
 
@@ -458,6 +482,7 @@ export async function fetchClawHubPackageSecurity(
     )}/security`,
     token: params.token,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
   });
   return parseClawHubPackageSecurityResponse(response);
 }
@@ -476,6 +501,7 @@ export async function searchClawHubPackages(
     path: "/api/v1/packages/search",
     token: params.token,
     timeoutMs: params.timeoutMs,
+    signal: params.signal,
     search: {
       q: params.query.trim(),
       family: params.family,

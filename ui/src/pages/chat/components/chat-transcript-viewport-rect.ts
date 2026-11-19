@@ -1,4 +1,4 @@
-import { observeElementRect, type Rect, type Virtualizer } from "@tanstack/virtual-core";
+import type { Rect, Virtualizer } from "@tanstack/virtual-core";
 import {
   resolveTranscriptScrollMargin,
   syncScrollMargin,
@@ -113,9 +113,26 @@ export class TranscriptViewportRect {
       }
     };
     this.syncRect = syncRect;
-    const cleanup = observeElementRect(instance, deliverRect);
+    syncRect();
+    const element = instance.scrollElement;
+    const ResizeObserver = instance.targetWindow?.ResizeObserver;
+    // Composer compensation must see the viewport before deferred row measurements.
+    const observer =
+      element && ResizeObserver
+        ? new ResizeObserver(([entry]) => {
+            const box = entry?.borderBoxSize?.[0];
+            if (box) {
+              deliverRect({ width: Math.round(box.inlineSize), height: Math.round(box.blockSize) });
+            } else {
+              syncRect();
+            }
+          })
+        : null;
+    if (element) {
+      observer?.observe(element, { box: "border-box" });
+    }
     return () => {
-      cleanup?.();
+      observer?.disconnect();
       if (this.syncRect === syncRect) {
         this.syncRect = null;
       }

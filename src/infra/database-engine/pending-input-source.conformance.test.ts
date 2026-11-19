@@ -9,7 +9,7 @@ import { DebugProxyCaptureKernel } from "../../proxy-capture/store.kernel.js";
 import {
   readSkillUsageInDatabase as readUsage,
   recordSkillUsageInDatabase as recordUsage,
-} from "../../skills/workshop/skill-usage.kernel.js";
+} from "../../skills/runtime/skill-usage.kernel.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
@@ -269,7 +269,7 @@ for (const engine of ["sqlite", "postgres"] as const) {
               expect(read()).toEqual({ kind: "source", current: false });
             }
           } finally {
-            receipt?.finish("interrupted");
+            receipt?.finish("interrupted", "failed");
             await receipt?.settled?.();
           }
         },

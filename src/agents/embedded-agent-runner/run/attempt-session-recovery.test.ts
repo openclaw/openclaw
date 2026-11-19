@@ -119,7 +119,7 @@ it.each(["window-changed", "other-session", "read-failure"])(
           sessionKey: "agent:main:current-session",
           storePath: "/synthetic/sessions.sqlite",
         },
-        timeoutMs: 1_000,
+        attempt: { timeoutMs: 1_000 },
         signal: new AbortController().signal,
         assertCurrent() {},
       }),

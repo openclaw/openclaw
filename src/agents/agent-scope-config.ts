@@ -77,7 +77,10 @@ export class AgentSelectionRequiredError extends Error {
 /** Per-agent config after applying agent defaults and normalizing scalar fields. */
 export type ResolvedAgentConfig = {
   name?: string;
+  description?: string;
+  recommendedPrompts?: AgentEntry["recommendedPrompts"];
   workspace?: string;
+  workspaceFileMode?: AgentEntry["workspaceFileMode"];
   agentDir?: string;
   model?: AgentEntry["model"];
   models?: AgentEntry["models"];
@@ -91,6 +94,7 @@ export type ResolvedAgentConfig = {
   toolProgressDetail?: AgentDefaultsConfig["toolProgressDetail"];
   reasoningDefault?: AgentEntry["reasoningDefault"];
   fastModeDefault?: AgentEntry["fastModeDefault"];
+  newSessionPermissionMode?: AgentEntry["newSessionPermissionMode"];
   contextInjection?: AgentEntry["contextInjection"];
   bootstrapMaxChars?: AgentEntry["bootstrapMaxChars"];
   bootstrapTotalMaxChars?: AgentEntry["bootstrapTotalMaxChars"];
@@ -100,6 +104,7 @@ export type ResolvedAgentConfig = {
   humanDelay?: AgentEntry["humanDelay"];
   typingMode?: AgentEntry["typingMode"];
   tts?: AgentEntry["tts"];
+  compaction?: AgentEntry["compaction"];
   contextLimits?: AgentContextLimitsConfig;
   heartbeat?: AgentEntry["heartbeat"];
   identity?: AgentEntry["identity"];
@@ -450,7 +455,10 @@ export function resolveAgentConfig(
   const agentDefaults = cfg.agents?.defaults;
   return {
     name: entry.name,
+    description: entry.description,
+    recommendedPrompts: entry.recommendedPrompts,
     workspace: entry.workspace,
+    workspaceFileMode: entry.workspaceFileMode ?? agentDefaults?.workspaceFileMode,
     agentDir: entry.agentDir,
     model: entry.model,
     ...(entry.models ? { models: entry.models } : {}),
@@ -464,6 +472,7 @@ export function resolveAgentConfig(
     toolProgressDetail: entry.toolProgressDetail ?? agentDefaults?.toolProgressDetail,
     reasoningDefault: entry.reasoningDefault,
     fastModeDefault: entry.fastModeDefault ?? agentDefaults?.fastModeDefault,
+    newSessionPermissionMode: entry.newSessionPermissionMode,
     contextInjection: entry.contextInjection,
     bootstrapMaxChars: entry.bootstrapMaxChars,
     bootstrapTotalMaxChars: entry.bootstrapTotalMaxChars,
@@ -475,6 +484,7 @@ export function resolveAgentConfig(
     humanDelay: entry.humanDelay,
     typingMode: entry.typingMode ?? agentDefaults?.typingMode,
     tts: entry.tts,
+    ...(entry.compaction ? { compaction: entry.compaction } : {}),
     contextLimits: entry.contextLimits
       ? { ...agentDefaults?.contextLimits, ...entry.contextLimits }
       : agentDefaults?.contextLimits,

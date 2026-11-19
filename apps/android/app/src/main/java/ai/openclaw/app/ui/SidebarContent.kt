@@ -979,9 +979,6 @@ internal fun OpenClawSidebar(
           if (catalogAvailable) {
             if (catalogState.loading) SidebarCatalogStatus(nativeString("Loading"), palette, progress = true)
             catalogErrorText?.let { SidebarCatalogStatus(it, palette) }
-            if (catalogSections.isEmpty() && !catalogState.loading && catalogErrorText == null) {
-              SidebarCatalogStatus(nativeString("No sessions"), palette)
-            }
           }
           if (rosterHasMore) {
             if (rosterLoadFailed) {
@@ -1063,7 +1060,7 @@ private fun SidebarPagesHeader(
     Box {
       IconButton(
         onClick = { onMenuModeChange(SidebarPagesMenuMode.Navigate) },
-        modifier = Modifier.size(44.dp).testTag("sidebar-pages-menu"),
+        modifier = Modifier.size(48.dp).testTag("sidebar-pages-menu"),
       ) {
         Icon(
           painter = painterResource(R.drawable.ic_web_pen_line),

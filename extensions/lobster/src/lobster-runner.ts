@@ -159,7 +159,7 @@ function normalizeEnvelope(
       ? { requiresInput: { ...envelope.requiresInput, type: "input_request" as const } }
       : {}),
   };
-  if (Buffer.byteLength(JSON.stringify(normalized, null, 2), "utf8") > maxStdoutBytes) {
+  if (Buffer.byteLength(JSON.stringify(normalized), "utf8") > maxStdoutBytes) {
     throw new Error("lobster runtime result exceeded maxStdoutBytes");
   }
   return normalized;
@@ -170,7 +170,8 @@ async function detectWorkflowFile(candidate: string, cwd: string) {
   if (!trimmed || trimmed.includes("|") || !workflowExts.has(path.extname(trimmed).toLowerCase())) {
     return null;
   }
-  const resolved = path.isAbsolute(trimmed) ? trimmed : path.resolve(cwd, trimmed);
+  // Keep the caller's literal name: its whitespace belongs to the file identity.
+  const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(cwd, candidate);
   try {
     if (!(await stat(resolved)).isFile()) {
       throw new Error("Workflow path is not a file");
@@ -226,8 +227,9 @@ export function createEmbeddedLobsterRunner() {
           let envelope: EmbeddedToolEnvelope;
 
           if (params.action === "run") {
-            const pipeline = params.pipeline?.trim() ?? "";
-            if (!pipeline) {
+            // Keep the caller's literal pipeline name; only blank counts as omitted.
+            const pipeline = params.pipeline ?? "";
+            if (!pipeline.trim()) {
               throw new Error("pipeline required");
             }
 

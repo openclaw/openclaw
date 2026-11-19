@@ -79,7 +79,6 @@ it("selects canonical participant involvement without reading display fields", (
         return label();
       },
       avatarUrl: "/synthetic/avatar",
-      hasUploadedAvatar: false,
     });
   }
   const storePath = "/synthetic/involvement.sqlite";
@@ -133,7 +132,6 @@ it("selects canonical participant involvement without reading display fields", (
     kind: "resolved",
     profileId: "bob",
     avatarUrl: "/synthetic/avatar",
-    hasUploadedAvatar: false,
   });
   context.identityProjection.invalidate();
   expect(keys("bob", false)).toEqual([key]);
@@ -470,6 +468,7 @@ it("filters active sentinels only after selecting their physical store winner", 
       return rows.filter((row) => keys.has(row.key));
     };
     projection.state.scope = () => ({
+      targets: rows.map((row) => row.storeTarget),
       paths: new Map([
         ["primary", 0],
         ["fallback", 1],

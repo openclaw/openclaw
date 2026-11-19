@@ -159,6 +159,29 @@ describe("Windows process start identity", () => {
     });
   }
   describe("readWindowsProcessStartTimeSync", () => {
+    it.each([-10_000, 10_000])(
+      "preserves integer subprocess budgets across a %d ms wall-clock jump",
+      (shiftMs) => {
+        mockProcessPlatform("win32");
+        const wallTime = Date.now();
+        const monotonic = vi.spyOn(performance, "now").mockReturnValue(100.25);
+        identity.mockImplementationOnce(() => {
+          vi.setSystemTime(wallTime + shiftMs);
+          monotonic.mockReturnValue(125.5);
+          throw new Error("native binding unavailable");
+        });
+        spawn.mockImplementationOnce(() => {
+          vi.setSystemTime(wallTime + 2 * shiftMs);
+          monotonic.mockReturnValue(725.75);
+          return { status: 1, stdout: "" };
+        });
+        spawn.mockReturnValueOnce(creationDate);
+
+        expect(readWindowsProcessStartTimeSync(123, 1000)).toBe(expectedTime);
+        expect(spawn.mock.calls.map((call) => call[2].timeout)).toEqual([975, 375]);
+      },
+    );
+
     it.each([
       ["exhausted budget", 1000, 1000, null, [1000]],
       ["remaining budget", 600, 1000, expectedTime, [1000, 400]],

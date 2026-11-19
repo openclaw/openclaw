@@ -33,7 +33,7 @@ export const VoiceCallToolSchema = Type.Union([
     action: Type.Literal("initiate_call"),
     brief: Type.Optional(VoiceCallBriefToolSchema),
     to: Type.Optional(Type.String({ description: "Call target" })),
-    message: Type.String({ description: "Intro message" }),
+    message: Type.String({ description: "Verbatim opening; put the ongoing task in brief.task." }),
     mode: Type.Optional(Type.Union([Type.Literal("notify"), Type.Literal("conversation")])),
     sessionKey: Type.Optional(Type.String({ description: "OpenClaw session key for the call" })),
     dtmfSequence: Type.Optional(Type.String({ description: "DTMF digits to play before connect" })),

@@ -11,22 +11,47 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 
 const { values } = parseArgs({
-  options: { owner: { type: "string" }, output: { type: "string" } },
+  options: {
+    owner: { type: "string" },
+    output: { type: "string" },
+    observers: { type: "string", default: "1" },
+    "descendant-cgroup": { type: "string" },
+  },
 });
 assert.equal(process.platform, "linux");
 assert.ok(values.owner, "--owner is required");
 assert.ok(values.output, "--output is required");
+const observers = Number(values.observers);
+assert.ok(Number.isSafeInteger(observers) && observers >= 1);
+const companions: Array<() => void> = [];
 const owner = path.resolve(values.owner);
-const { watchChildMemory }: typeof import("../../src/process/child-memory.js") = await import(
-  pathToFileURL(owner).href
-);
+const {
+  watchHostExecMemory,
+  getHostExecMemoryBudget,
+}: typeof import("../../src/process/child-memory.js") = await import(pathToFileURL(owner).href);
+// Qualify only this task's automatic budget; the owner remains latched thereafter.
+const budget = (() => {
+  const constrainedMemory = Object.getOwnPropertyDescriptor(process, "constrainedMemory");
+  const rss = Object.getOwnPropertyDescriptor(process.memoryUsage, "rss");
+  assert.ok(constrainedMemory && rss);
+  try {
+    process.constrainedMemory = () => 1024 ** 3;
+    process.memoryUsage.rss = () => 0;
+    return getHostExecMemoryBudget();
+  } finally {
+    Object.defineProperty(process, "constrainedMemory", constrainedMemory);
+    Object.defineProperty(process.memoryUsage, "rss", rss);
+  }
+})();
+assert.ok(budget);
+assert.equal(budget.memoryBytes, 640 * 1024 ** 2, "Proof requires at least 1 GiB physical RAM");
+const limitBytes = budget.memoryBytes;
 const fixture = fileURLToPath(new URL("./child-memory-fixture.cjs", import.meta.url));
 const child = spawn(process.execPath, [fixture, "2"], {
   detached: true,
   stdio: ["pipe", "pipe", "inherit"],
 });
 const originalSetTimeout = globalThis.setTimeout;
-const limitBytes = 768 * 1024 ** 2;
 let stop: (() => void) | undefined;
 let phaseTimeout: NodeJS.Timeout | undefined;
 let armAt = 0;
@@ -65,6 +90,15 @@ try {
     }
   }
   assert.equal(pids.size, 3, "Expected both worker-spawned descendants");
+  if (values["descendant-cgroup"]) {
+    const rootGroup = fs.readFileSync(`/proc/${child.pid}/cgroup`, "utf8");
+    for (const pid of pids) {
+      if (pid !== child.pid) {
+        fs.writeFileSync(path.join(values["descendant-cgroup"], "cgroup.procs"), String(pid));
+        assert.notEqual(fs.readFileSync(`/proc/${pid}/cgroup`, "utf8"), rootGroup);
+      }
+    }
+  }
   const readPhysicalBytes = async () => {
     const statuses = await Promise.all(
       [...pids].map((pid) => readFile(`/proc/${pid}/status`, "utf8")),
@@ -85,28 +119,32 @@ try {
       15_000,
     );
     child.once("exit", () => reject(new Error("Fixture exited before the slow interval")));
-    // Forward every real timer unchanged; only this watcher can request 5,000 ms here.
+    // Forward real deadlines unchanged; shared scheduling subtracts elapsed sample time.
     globalThis.setTimeout = Object.assign((...args: Parameters<typeof setTimeout>) => {
       const timer = originalSetTimeout(...args);
-      if (args[1] === 5000 && !armAt) {
+      if (args[1] !== undefined && args[1] >= 4990 && args[1] <= 5000 && !armAt) {
         armAt = Date.now();
         resolve();
       }
       return timer;
     }, originalSetTimeout);
   });
-  stop = watchChildMemory({
-    pid: child.pid,
-    limitBytes,
-    onLimit: (bytes) => {
-      observedBytes = bytes;
-      limitAt = Date.now();
-      process.kill(-child.pid!, "SIGKILL");
-    },
-    onDiagnostic: (text) => {
-      diagnostic += text;
-    },
-  });
+  const onLimit = () => {
+    if (limitAt) {
+      return;
+    }
+    limitAt = Date.now();
+    process.kill(-child.pid!, "SIGKILL");
+  };
+  const onDiagnostic = (text: string) => {
+    diagnostic += text;
+    observedBytes = Number(/RAM (\d+)\//u.exec(text)?.[1] ?? 0) * 1024 ** 2;
+  };
+  stop = watchHostExecMemory({ pid: child.pid, onLimit, onDiagnostic });
+  // Overlapping observers share the same charge and idempotent cancellation.
+  for (let index = 1; index < observers; index++) {
+    companions.push(watchHostExecMemory({ pid: child.pid, onLimit, onDiagnostic }));
+  }
   await slowSample;
   // The pending five-second timer remains real; remove observation before the burst.
   globalThis.setTimeout = originalSetTimeout;
@@ -134,13 +172,15 @@ try {
   assert.ok(exitAt - burstAt <= 6000, "Runaway survived beyond the accepted six-second bound");
   assert.equal(exitSignal, "SIGKILL");
   assert.ok(observedBytes > limitBytes);
-  assert.match(diagnostic, /Command killed for exceeding its host memory bound/);
+  assert.match(diagnostic, /shared host exec memory budget was exceeded/);
   const result = {
     scope: "real worker-descendant burst immediately after a low/stable sample; no fake clocks",
     node: process.version,
     owner,
     ownerModuleSha256: createHash("sha256").update(fs.readFileSync(owner)).digest("hex"),
     scheduledIntervalMs: 5000,
+    observers,
+    migratedDescendants: values["descendant-cgroup"] ? pids.size - 1 : 0,
     armAt,
     burstAt,
     limitAt,
@@ -161,6 +201,7 @@ try {
   globalThis.setTimeout = originalSetTimeout;
   clearTimeout(phaseTimeout);
   stop?.();
+  companions.forEach((stopObserver) => stopObserver());
   if (child.pid) {
     try {
       process.kill(-child.pid, "SIGKILL");

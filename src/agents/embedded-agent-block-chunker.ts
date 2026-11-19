@@ -582,7 +582,8 @@ export class EmbeddedBlockChunker {
     }
 
     if (preference !== "newline") {
-      const matches = buffer.matchAll(/[.!?](?=\s|$)/g);
+      // A dot after a digit at the end of streamed text may still be a decimal or version ("11." + "65").
+      const matches = buffer.matchAll(/[.!?](?=\s)|(?:[!?]|(?<!\d)\.)$/g);
       let sentenceIdx = -1;
       for (const match of matches) {
         const at = match.index;

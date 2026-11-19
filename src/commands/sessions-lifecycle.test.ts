@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
-import { ExpectedCliError } from "../cli/failure-output.js";
+import { ExpectedCliError } from "../cli/expected-cli-error.js";
 import { getMockCallOutput } from "../cli/test-runtime-capture.js";
+import { createAbortError } from "../infra/abort-signal.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createNonExitingRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { sessionsCompactCommand } from "./sessions-compact.js";
 import { sessionsLifecycleCommand } from "./sessions-lifecycle.js";
@@ -421,26 +423,22 @@ describe("sessions lifecycle commands", () => {
             },
           });
         }
-        await compact({ key });
-        expect(mocks.callGateway.mock.calls[0]?.[2]).toEqual({ key });
+        await compact({ key, agent: "work", maxLines: 200 });
+        const rpcParams = mocks.callGateway.mock.calls[0]?.[2];
+        expect(rpcParams).toEqual({ key, agentId: "work", maxLines: 200 });
         expect(mocks.callGateway.mock.calls[0]?.[1]).toMatchObject({ timeout: null });
         const output = `${joinedArgs("log")}${joinedArgs("error")}`;
-        for (const control of ["\u0007", "\u001b", "\r"]) {
-          expect(output).not.toContain(control);
-        }
+        const hasControl = ["\u0007", "\u001b", "\r"].some((c) => output.includes(c));
+        expect(hasControl).toBe(false);
         expect(output).not.toContain("\nnext");
-        if (outcome !== "degraded") {
-          expect(output).not.toContain("\n");
-        }
+        expect(output.includes("\n")).toBe(outcome === "degraded");
         if (outcome === "compacted" || outcome === "degraded") {
           expect(runtime.exit).not.toHaveBeenCalled();
           expect(output).toContain("243868");
           expect(output).toContain("34941");
           expect(output.includes("degraded summary")).toBe(outcome === "degraded");
         }
-        if (outcome !== "throw") {
-          expect(output).toContain("agent:main:notes\\nnext");
-        }
+        expect(output.includes("agent:main:notes\\nnext")).toBe(outcome !== "throw");
         if (["noop", "failed", "throw"].includes(outcome)) {
           expect(output).toContain("detail\\rnext");
         }
@@ -498,15 +496,16 @@ describe("sessions lifecycle commands", () => {
       expect(joinedArgs("error")).toContain("Compaction failed");
     });
 
-    it("forwards agentId and maxLines to the RPC params", async () => {
-      respond({ ok: true, key: "agent:work:main", compacted: true, kept: 200 });
-      await compact({ key: "agent:work:main", agent: "work", maxLines: 200 });
-      expect(mocks.callGateway).toHaveBeenCalledExactlyOnceWith(
-        "sessions.compact",
-        expect.anything(),
-        { key: "agent:work:main", agentId: "work", maxLines: 200 },
-        expect.anything(),
-      );
+    it("settles an interrupted wait with the canonical abort and no failure output", async () => {
+      const scope = new AsyncWorkScope();
+      const reason = new Error("interrupted");
+      mocks.callGateway.mockImplementationOnce(async () => {
+        scope.beginClose(reason);
+        throw createAbortError("gateway request aborted for sessions.compact");
+      });
+      await expect(scope.run(() => compact())).rejects.toBe(reason);
+      expect(joinedArgs("log") + joinedArgs("error")).toBe("");
+      await scope.drain();
     });
   });
 });

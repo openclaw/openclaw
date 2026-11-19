@@ -12,6 +12,8 @@ export class TranscriptRowRefs {
       isCurrentRow: (element: HTMLElement, key: string) => boolean;
       beforeMeasure: () => void;
       onMount: (key: string) => void;
+      /** Observes mounted rows from mount to unmount, before the browser paints them. */
+      rows?: Pick<ResizeObserver, "observe" | "unobserve">;
     },
   ) {}
 
@@ -28,7 +30,9 @@ export class TranscriptRowRefs {
         this.callbacks.isCurrentRow(row, key) &&
         this.virtualizer.elementsCache.get(key) !== row
       ) {
-        if (!prepared) {
+        // Observer registration uses cached sizes. Synchronize with its actual
+        // measurement batch instead of forcing layout after the DOM commit.
+        if (!prepared && !this.virtualizer.targetWindow?.ResizeObserver) {
           this.callbacks.beforeMeasure();
           prepared = true;
         }
@@ -43,10 +47,12 @@ export class TranscriptRowRefs {
     return (element?: Element) => {
       if (mounted) {
         this.mountedRows.delete(mounted);
+        this.callbacks.rows?.unobserve(mounted);
       }
       mounted = element instanceof HTMLElement ? element : undefined;
       if (element instanceof HTMLElement) {
         this.callbacks.onMount(key);
+        this.callbacks.rows?.observe(element);
         this.mountedRows.set(element, key);
       } else {
         this.pruneQueued = true;

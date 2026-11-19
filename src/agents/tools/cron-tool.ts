@@ -50,6 +50,7 @@ import {
   stripExistingContext,
 } from "./cron-tool-context.js";
 import {
+  applyCronToolDefaults,
   assertInheritedCronToolCaptureReady,
   capCronJobToolsAllowOnCreate,
   cronCreateRequiresCreatorAuthority,
@@ -409,6 +410,14 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                 await callGateway(`cron.${action}`, gatewayOpts, {
                   id,
                   ...(runId ? { runId } : {}),
+                  ...(action === "runs"
+                    ? {
+                        limit: readPositiveIntegerParam(params, "limit", {
+                          max: CRON_TOOL_LIST_MAX_LIMIT,
+                        }),
+                        offset: readNonNegativeIntegerParam(params, "offset"),
+                      }
+                    : {}),
                 }),
               );
             }
@@ -441,6 +450,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
               ) {
                 delete job.enabled;
               }
+              applyCronToolDefaults(job, runtimeConfig.cron?.defaultTools, params.toolsAllowMode);
               const requiresCreatorAuthority = cronCreateRequiresCreatorAuthority(
                 job,
                 opts?.creatorToolAllowlist,
@@ -507,14 +517,13 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                   const inferred = await resolveCronCreationDelivery({
                     cfg: runtimeConfig,
                     agentId: callerAgentId,
+                    job: { agentId: job.agentId, delivery },
+                    requesterOrigin: getGatewayToolCallerIdentity()?.requesterOrigin,
                     currentDeliveryContext: opts.currentDeliveryContext,
                     agentSessionKey: opts.agentSessionKey,
                   });
                   if (inferred) {
-                    job.delivery = {
-                      ...inferred,
-                      ...delivery,
-                    } satisfies CronDelivery;
+                    job.delivery = { ...inferred, ...delivery } satisfies CronDelivery;
                   }
                 }
               }
@@ -565,6 +574,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                 throw new Error("displayName must be a non-empty string or null");
               }
               const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
+              applyCronToolDefaults(patch, runtimeConfig.cron?.defaultTools, params.toolsAllowMode);
               if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
                 throw new Error("job required");
               }

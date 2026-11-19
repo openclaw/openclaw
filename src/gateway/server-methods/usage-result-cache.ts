@@ -123,9 +123,11 @@ export async function loadCostUsageSummaryCached(params: {
   const cacheKey = `${allAgents ? "all" : `agent:${agentId}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
   return await loadUsageResultCached({
     cache: costUsageCache,
+    shareInFlight: false,
+    revisionOnly: true,
     cacheKey,
     configRef: params.config,
-    revision: `${getSessionCostUsageUpdatedAt()}:${readSessionTranscriptUpdateVersion()}:${readSessionRowChangeRevision()}`,
+    revision: `${getSessionCostUsageUpdatedAt()}:${readSessionTranscriptUpdateVersion()}:${readSessionRowChangeRevision()}:${getActiveRemoteModelCatalog(params.config)?.revision ?? ""}`,
     load: () =>
       allAgents
         ? loadAllAgentCostUsageSummary(params)
@@ -134,6 +136,8 @@ export async function loadCostUsageSummaryCached(params: {
             agentId: expectDefined(agentId, "non-aggregate usage agent id"),
             requestRefresh: true,
           }),
+    // The refresh owner can settle without another usage revision.
+    isComplete: (result) => !result.cacheStatus || result.cacheStatus.status === "fresh",
   });
 }
 

@@ -4,9 +4,14 @@ import {
   createAgentDatabaseInspectionRefusal,
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
-import { sendAuthorizationRequest } from "../server-methods.authorization.test-support.js";
+import {
+  authorizationClient,
+  sendAuthorizationRequest,
+} from "../server-methods.authorization.test-support.js";
+import { createRequestGatewayMethodRegistry } from "../server-methods.js";
+import { authorizeGatewayRequestPreDispatch } from "./request-authorization.js";
 import { expectRpcError } from "./rpc-response.test-support.js";
-import type { GatewayRequestHandler } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandler } from "./types.js";
 
 const tempDirs = createTempDirTracker();
 
@@ -30,6 +35,8 @@ function createSend(agentId: string, pending: boolean, idempotencyKey = "agent-o
   recordAgentDatabaseAdmissions([refusal], { source: "startup" });
   const startup = {
     hasPendingAgents: pending,
+    isAgentInputRecoveryPending: () => false,
+    registerInputRecovery: () => {},
     waitForAgentPreparation: () => {
       throw new Error("Send must not wait for startup preparation");
     },
@@ -91,3 +98,23 @@ it.each([true, false])(
     expect(handler).toHaveBeenCalledTimes(1);
   },
 );
+
+it("keeps admitted method authority after preparation; refuses the next request", async () => {
+  const client = authorizationClient("method-check-once", ["operator.admin"]);
+  const methodRegistry = createRequestGatewayMethodRegistry({ "demo.checkOnce": () => {} });
+  const context = { getRuntimeConfig: () => ({}) } as GatewayRequestContext;
+  const request = {
+    method: "demo.checkOnce",
+    requestParams: {},
+    client,
+    context,
+    methodRegistry,
+    assertPreparationCurrent: () => {
+      client.invalidated = true;
+    },
+  };
+  expect(await authorizeGatewayRequestPreDispatch(request)).toMatchObject({ error: null });
+  expect(await authorizeGatewayRequestPreDispatch(request)).toMatchObject({
+    error: { code: "FORBIDDEN", message: "Gateway requester authority changed" },
+  });
+});

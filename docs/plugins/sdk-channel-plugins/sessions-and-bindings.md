@@ -153,3 +153,32 @@ agent-owned targets before resolving an agent.
 For agent-owned targets with an unscoped session key such as `global`, preserve
 `metadata.agentId` so routing keeps the binding's owner. An agent-scoped target
 key remains authoritative over conflicting metadata.
+
+## Native conversation forks
+
+Implement the optional conversationBindings.prepareFork(params) capability
+when your platform can create an independently routed sibling of an existing
+thread. Core owns command authorization, source-session selection, the ordinary
+session copy, history cut, visible three-message recap, and literal outbound
+delivery. Reuse the session fork service; do not create a second transcript-copy
+engine or treat the child as an ACP session or subagent.
+
+The plugin qualifies the native source before the copy, then returns a
+create(targetSessionKey) operation. Create the sibling in the same parent
+audience, bind its observed identity to that ordinary session through the
+existing binding service, and return the committed binding. The optional
+url is a continuation link, not an invitation; notice explains an explicit
+audience restriction. formatRecap may encode provider-native literal text and
+disable mentions/unfurls; it must not select different history or add media.
+
+Retain the supplied assertCurrent and call it after awaited preparation and
+immediately before native creation and binding publication. Respect cancellation
+and provider-owned account/access checks. Core closes this command capability
+when the invocation settles; do not retain it as a background service handle.
+Return the prepared channel-owned assertCurrent callback as well, so recap
+delivery rechecks live account and installation authority after creation.
+Unsupported top-level chats, missing rights, or unqualified source identities
+return { ok: false, reason } without copying a session. Never fall back from
+a private source to a public destination. If native creation succeeded but
+binding failed, retain and report the observed native identity; do not blindly
+create a second destination or delete the copied session.

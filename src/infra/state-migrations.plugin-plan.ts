@@ -1,8 +1,10 @@
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { PluginDoctorStateMigrationInventory } from "../plugins/doctor-contract-registry.js";
 import type { PreparedLegacyStateMigrationStep } from "./state-migrations.plan.js";
 import type {
   LegacyStateMigrationEndpoint,
   LegacyStateMigrationMode,
+  MigrationMessages,
   PreparedPostSessionPluginMigration,
 } from "./state-migrations.types.js";
 
@@ -13,6 +15,25 @@ type PlannedPluginStateMigrationDescriptor = {
   requiredness: PreparedLegacyStateMigrationStep["requiredness"];
   refusal?: PreparedLegacyStateMigrationStep["refusal"];
 };
+
+export function completedPluginMigrationFields(
+  sources: readonly MigrationMessages[],
+): Pick<MigrationMessages, "completedPluginIds" | "requiredPluginIds" | "statelessPluginIds"> {
+  const completedPluginIds = sortUniqueStrings(
+    sources.flatMap((source) => source.completedPluginIds ?? []),
+  );
+  const requiredPluginIds = sortUniqueStrings(
+    sources.flatMap((source) => source.requiredPluginIds ?? []),
+  );
+  const statelessPluginIds = sortUniqueStrings(
+    sources.flatMap((source) => source.statelessPluginIds ?? []),
+  );
+  return {
+    ...(completedPluginIds.length > 0 ? { completedPluginIds } : {}),
+    ...(requiredPluginIds.length > 0 ? { requiredPluginIds } : {}),
+    ...(statelessPluginIds.length > 0 ? { statelessPluginIds } : {}),
+  };
+}
 
 export function buildPlannedPluginStateMigrationDescriptor(params: {
   inventory: PluginDoctorStateMigrationInventory;

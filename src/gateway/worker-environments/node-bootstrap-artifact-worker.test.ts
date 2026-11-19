@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, expect, it, vi } from "vitest";
 import * as distImports from "../../../scripts/lib/package-dist-imports.mjs";
 import * as bundleArchives from "../../shared/worker-bundle-archive.js";
@@ -9,8 +9,8 @@ import { createWorkerBundleProducer } from "./bundle.js";
 import { useNodeBootstrapArtifactFixtures, write } from "./node-bootstrap-artifact.test-support.js";
 
 // mock-isolation: preserve archive I/O while guarding compression on this thread only.
-vi.mock("tar", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("tar")>();
+vi.mock("tar/raw", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("tar/raw")>();
   return { ...actual, create: vi.fn(actual.create) };
 });
 

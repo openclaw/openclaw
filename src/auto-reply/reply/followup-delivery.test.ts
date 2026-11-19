@@ -96,27 +96,54 @@ describe("resolveFollowupDeliveryDecision", () => {
   const finalTarget = { ...sourceReplyTarget, sourceReplyFinal: true };
 
   it.each([
-    { state: undefined, routed: true, delivered: true },
-    { state: "missing", routed: true, delivered: false },
-    { state: undefined, routed: false, delivered: false },
+    {
+      state: undefined,
+      routed: true,
+      outcome: "deduped",
+      text: "Completed.",
+      sourceReplyFinal: undefined,
+    },
+    {
+      state: "missing",
+      routed: true,
+      outcome: "missing",
+      text: "Completed.",
+      sourceReplyFinal: undefined,
+    },
+    {
+      state: undefined,
+      routed: false,
+      outcome: "missing",
+      text: "Completed.",
+      sourceReplyFinal: undefined,
+    },
+    { state: undefined, routed: true, outcome: "deduped", text: "Done", sourceReplyFinal: false },
+    { state: "missing", routed: true, outcome: "missing", text: "Done", sourceReplyFinal: false },
+    { state: undefined, routed: false, outcome: "reply", text: "Done", sourceReplyFinal: false },
+    { state: undefined, routed: true, outcome: "deduped", text: "✅", sourceReplyFinal: false },
+    {
+      state: undefined,
+      routed: true,
+      outcome: "deduped",
+      text: "Completed.",
+      sourceReplyFinal: false,
+    },
   ] as const)(
-    "requires current-source evidence before suppressing a queued duplicate: $state/$routed",
-    async ({ state, routed, delivered }) => {
-      const execution = createSettledExecution("Completed.");
+    "requires current-source evidence before suppressing a queued duplicate: $state/$routed/$text/$sourceReplyFinal",
+    async ({ state, routed, outcome, text, sourceReplyFinal }) => {
+      const execution = createSettledExecution(text);
       execution.outcome.result.sourceReplyDeliveryState = state;
-      execution.outcome.result.messagingToolSentTexts = ["Completed."];
+      execution.outcome.result.messagingToolSentTexts = [text];
       execution.outcome.result.messagingToolSentTargets = routed
-        ? [{ ...sourceReplyTarget, text: "Completed." }]
+        ? [{ ...sourceReplyTarget, text, sourceReplyFinal }]
         : undefined;
-      const decision = await decide(
-        undefined,
-        execution,
-        createAccounting([{ text: "Completed." }]),
-      );
+      const decision = await decide(undefined, execution, createAccounting([{ text }]));
       expect(decision).toMatchObject(
-        delivered
+        outcome === "deduped"
           ? silent
-          : { kind: "deliver", payloads: [{ isError: true, text: expect.any(String) }] },
+          : outcome === "reply"
+            ? { kind: "deliver", payloads: [{ text }] }
+            : { kind: "deliver", payloads: [{ isError: true, text: expect.any(String) }] },
       );
     },
   );
@@ -221,7 +248,7 @@ describe("resolveFollowupDeliveryDecision", () => {
   );
 
   it.each(["automatic", "message_tool_only"] as const)(
-    "keeps pending tool audio after queued NO_REPLY in %s mode",
+    "keeps pending tool audio and an earlier steered answer after queued NO_REPLY in %s mode",
     async (sourceReplyDeliveryMode) => {
       const turn = createTurn();
       turn.queued.run.sourceReplyDeliveryMode = sourceReplyDeliveryMode;
@@ -232,27 +259,25 @@ describe("resolveFollowupDeliveryDecision", () => {
         terminalReply: { disposition: "silent" },
       };
       const media = setReplyPayloadMetadata(
-        {
-          text: "Unsent caption",
-          mediaUrl: "https://example.invalid/pending.opus",
-          audioAsVoice: true,
-        },
+        { text: "Unsent", mediaUrl: "https://example.invalid/pending.opus", audioAsVoice: true },
         { assistantTranscriptOwned: true, deliverDespiteSourceReplySuppression: true },
       );
+      const earlier = setReplyPayloadMetadata({ text: "Earlier" }, { precedingInputAnswer: true });
+      // Message-tool-only mode keeps plain final text private, earlier answers included.
+      const kept = sourceReplyDeliveryMode === "automatic" ? [{ text: "Earlier" }] : [];
       const decision = await decide(
         turn,
         execution,
-        createAccounting([{ text: "Unsent confirmation" }, media]),
+        createAccounting([earlier, { text: "Unsent confirmation" }, media]),
       );
       expect(decision).toMatchObject({
         kind: "deliver",
-        payloads: [{ mediaUrl: "https://example.invalid/pending.opus", audioAsVoice: true }],
+        payloads: [...kept, { mediaUrl: media.mediaUrl, audioAsVoice: true }],
       });
       if (decision.kind === "deliver") {
-        expect(decision.payloads).toHaveLength(1);
-        expect(decision.payloads[0]?.text).toBeUndefined();
+        expect(decision.payloads.at(-1)?.text).toBeUndefined();
         expect(
-          getReplyPayloadMetadata(expectDefined(decision.payloads[0], "queued media payload")),
+          getReplyPayloadMetadata(expectDefined(decision.payloads.at(-1), "queued media payload")),
         ).toMatchObject({
           assistantTranscriptOwned: true,
           deliverDespiteSourceReplySuppression: true,
@@ -582,21 +607,23 @@ describe("resolveFollowupDeliveryDecision", () => {
     },
   );
 
-  it("does not let private payloads settle a producer-declared empty message-tool final", async () => {
-    const turn = createTurn();
-    turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
-
-    const decision = await decide(
-      turn,
-      undefined,
-      createAccounting([{ text: "Private terminal diagnostic." }]),
-    );
-
-    expect(decision).toMatchObject({
-      kind: "retry-source-delivery",
-      run: { strandedReplyRetry: true },
-    });
-  });
+  it.each([false, true])(
+    "does not let private payloads settle an empty message-tool final (progress=%s)",
+    async (progress) => {
+      const turn = createTurn();
+      turn.queued.run.sourceReplyDeliveryMode = "message_tool_only";
+      const text = "Private terminal diagnostic.";
+      const execution = createSettledExecution();
+      if (progress) {
+        execution.outcome.result.messagingToolSentTargets = [{ ...progressTarget, text }];
+      }
+      const decision = await decide(turn, execution, createAccounting([{ text }]));
+      expect(decision).toMatchObject({
+        kind: "retry-source-delivery",
+        run: { strandedReplyRetry: true },
+      });
+    },
+  );
 });
 
 describe("deliverFollowupDecision", () => {

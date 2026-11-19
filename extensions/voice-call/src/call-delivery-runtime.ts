@@ -26,7 +26,9 @@ type CallDeliveryMessage = {
 type LiveCallDelivery = {
   call: CallRecord;
   cursor: number;
-  lines: TranscriptEntry[];
+  // Entries handed to a batch. A late caller final is sorted in before replies already
+  // delivered, so a transcript index cannot tell which entries are new.
+  sent: WeakSet<TranscriptEntry>;
   start: number;
   timer?: ReturnType<typeof setTimeout>;
   work: Promise<void>;
@@ -289,10 +291,15 @@ export function createCallDeliveryRuntime(params: {
       clearTimeout(state.timer);
       state.timer = undefined;
     }
-    if (state.lines.length === 0) {
+    const entries = state.call.transcript.filter(
+      (entry) => entry.isFinal && !state.sent.has(entry),
+    );
+    if (entries.length === 0) {
       return state.work;
     }
-    const entries = state.lines.splice(0);
+    for (const entry of entries) {
+      state.sent.add(entry);
+    }
     const range = `${state.start}-${state.cursor}`;
     const cursor = state.cursor;
     state.start = state.cursor;
@@ -383,14 +390,23 @@ export function createCallDeliveryRuntime(params: {
     if (params.config.live.transcript && sessionKey) {
       if (!state) {
         const cursor = persistedLiveCursor(snapshot);
-        state = { call: snapshot, cursor, start: cursor, lines: [], work: Promise.resolve() };
+        state = {
+          call: snapshot,
+          cursor,
+          sent: new WeakSet(snapshot.transcript.slice(0, cursor)),
+          start: cursor,
+          work: Promise.resolve(),
+        };
         live.set(call.callId, state);
       }
       state.call = snapshot;
-      state.lines.push(...snapshot.transcript.slice(state.cursor).filter((entry) => entry.isFinal));
       state.cursor = snapshot.transcript.length;
-      if (state.lines.length > 0 && !state.timer && !TerminalStates.has(snapshot.state)) {
-        const current = state;
+      const current = state;
+      if (
+        !state.timer &&
+        !TerminalStates.has(snapshot.state) &&
+        snapshot.transcript.some((entry) => entry.isFinal && !current.sent.has(entry))
+      ) {
         state.timer = setTimeout(() => {
           void flush(current, sessionKey);
         }, params.config.live.minIntervalMs);

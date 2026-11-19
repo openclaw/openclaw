@@ -1,57 +1,36 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile, readFile, rm, rename, link, symlink } from "node:fs/promises";
 import path from "node:path";
+import { constants, DatabaseSync } from "node:sqlite";
 import { Check } from "typebox/value";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { stringify } from "yaml";
 import { contract } from "./contract.js";
 import { SqliteIdentityStore } from "./identity-store.js";
-import { isFullHit } from "./retrieval-hit.js";
-import { keywordExpression } from "./retrieval.js";
-import { AGENT_HIT_LIMIT, COMPACT_SNIPPET_CHARS } from "./search-detail.js";
+import { keywordExpression, keywordSearch, verifyKeywordIndex } from "./retrieval.js";
 import { createKnowledgeService } from "./service.js";
-import { apiFor, useTestTempDirs, defaultOrder, type TestStoreConfig } from "./test-support.js";
+import { KnowledgeStorage } from "./storage.js";
+import {
+  apiFor,
+  useTestTempDirs,
+  defaultOrder,
+  plainAccess,
+  createVault,
+  toolContext,
+  operatorContext,
+} from "./test-support.js";
+import { COMPACT_SNIPPET_CHARS } from "./tool-result-contract.js";
+import { leanToolResults } from "./tool-results.js";
 
 const tempDirs = useTestTempDirs();
 
 async function fixture() {
   const base = tempDirs.make("knowledge-retrieval-");
-
-  const root = path.join(base, "vault"),
-    sessionId = randomUUID();
-  const manifest = {
-    format: "knowledge-vault-v2",
-    vaultId: randomUUID(),
-    generation: 0,
-    publicationId: randomUUID(),
-  };
-  await mkdir(root);
-  await mkdir(path.join(root, "private"));
-  await writeFile(path.join(root, "vault.json"), JSON.stringify(manifest));
-  const config: TestStoreConfig = {
-    root,
-    statePath: path.join(base, "state.sqlite"),
-    vaultId: manifest.vaultId,
-    publicationId: manifest.publicationId,
-    writesEnabled: false,
-    operatorRead: true,
-  };
+  const sessionId = randomUUID();
+  const { root, manifest, config } = await createVault(base, { writesEnabled: false });
   const api = apiFor(base, config);
-  const owner: any = {
-    source: "tool",
-    api,
-    tool: {
-      agentId: "main",
-      memoryAudience: { kind: "owner-private", agentId: "main" },
-      assertInvocationCurrent() {},
-      assertMemoryAudienceCurrent() {},
-    },
-  };
-  const operator: any = {
-    source: "session-action",
-    api,
-    action: { client: { connId: "test", scopes: ["operator.read"] } },
-  };
+  const owner = toolContext(api);
+  const operator = operatorContext(api, ["operator.read"]);
   const service = createKnowledgeService(api),
     store = new SqliteIdentityStore(config.statePath);
   async function put(id: any, title: any, body: any, metadata = {}, partition = "private") {
@@ -78,12 +57,13 @@ async function fixture() {
     await writeFile(target, `---\n${stringify(envelope)}---\n${body}`);
     return target;
   }
+  // What agent tools see: the service behind the lean tool-result adapter.
+  const agent: any = leanToolResults(service);
   return {
     // Total keyword hits and exact-lookup outcome for the current owner audience.
     total: async (input: any) => (await service.grep(input, owner)).total,
     outcome: async (input: any) => (await service.lookup(input, owner)).outcome,
     root,
-    base,
     config,
     manifest,
     sessionId,
@@ -91,6 +71,7 @@ async function fixture() {
     owner,
     operator,
     service,
+    agent,
     store,
     put,
     group: () => {
@@ -104,6 +85,7 @@ async function fixture() {
   };
 }
 const ids = (result: any) => result.hits.map((h: any) => h.record.id);
+const superseded = (by: string) => ({ lifecycle: "superseded", superseded_by: by });
 const stable = (value: any) =>
   JSON.parse(JSON.stringify(value), (k, v) =>
     ["checkedAt", "indexedAt", "queriedAt", "scannedAt"].includes(k) ? undefined : v,
@@ -122,20 +104,21 @@ it("UI and tool share FTS title/alias/body retrieval, literal modes and stable c
     ["purple flower", "aliases"],
     ["distinctive", "body"],
   ] as const) {
-    const result = await f.service.grep({ query, detail: "full" }, f.owner),
+    const result = await f.service.grep({ query }, f.owner),
       ui = await f.service.grep({ query }, f.operator),
-      compact = await f.service.grep({ query }, f.owner);
+      compact = await f.agent.grep({ query }, f.owner);
     expect(Check(contract.operations.grep.output, result)).toBeTruthy();
     expect(Check(contract.operations.grep.output, compact)).toBeTruthy();
     expect(stable(result)).toStrictEqual(stable(ui));
-    expect(compact.hits.map((h) => h.record.id)).toStrictEqual(ui.hits.map((h) => h.record.id));
+    expect(compact.hits.map((h: any) => h.id)).toStrictEqual(ui.hits.map((h) => h.record.id));
     expect(result.index.state).toBe("ready");
     expect(result.index.lag).toBe(false);
     expect(result.total).toBe(1);
     expect(result.hits[0]!.matches).toStrictEqual([field]);
-    const current = (await f.service.record({ id: "record_alpha" }, f.owner)).record;
-    expect(result.hits.find(isFullHit)!.citation.hash).toBe(current!.hash);
-    expect(result.hits.find(isFullHit)!.citation.revision).toBe(current!.revision);
+    const current = (await f.service.record_detail({ id: "record_alpha" }, f.owner)).record;
+    expect(result.hits[0]!.citation.hash).toBe(current!.hash);
+    expect(result.hits[0]!.citation.revision).toBe(current!.revision);
+    expect(compact.hits[0].hash).toBe(current!.hash.slice(0, 16));
   }
   expect(await f.total({ query: "orchid nonexistent", mode: "all" })).toBe(0);
   expect(await f.total({ query: "orchid nonexistent", mode: "any" })).toBe(1);
@@ -176,8 +159,8 @@ it("all saved records are discoverable regardless of legacy approval metadata; l
   ).toStrictEqual(["historical_one"]);
   expect(await f.total({ query: "orbit", lifecycle: "all" })).toBe(3);
   expect(await f.outcome({ query: "candidate_one" })).toBe("found");
-  expect((await f.service.records({}, f.owner)).total).toBe(2);
-  expect((await f.service.records({ lifecycle: "all" }, f.owner)).total).toBe(3);
+  expect((await f.service.records_detail({}, f.owner)).total).toBe(2);
+  expect((await f.service.records_detail({ lifecycle: "all" }, f.owner)).total).toBe(3);
 });
 
 it("scope isolates results, counts, exact identity, snippets, corpus statistics and cached projections", async () => {
@@ -242,7 +225,7 @@ it("observed withdrawals persist across stale-file reappearance, restart and pro
   expect(await f.total({ query: "secretword" })).toBe(2);
   await writeFile(target, stale.replace("lifecycle: active", "lifecycle: withdrawn"));
   // Any normal scoped scan records the operational safeguard, not only search.
-  await f.service.records({}, f.owner);
+  await f.service.records_detail({}, f.owner);
   await writeFile(target, stale);
   f.store.withDatabase((db) => {
     for (const row of db
@@ -267,10 +250,10 @@ it("external edits, rename, deletion, malformed replacement and ontology changes
   await rename(target, target + "-renamed.md");
   target += "-renamed.md";
   expect(await f.total({ query: "oldword" })).toBe(0);
-  const changed = await f.service.grep({ query: "newword", detail: "full" }, f.owner);
+  const changed = await f.service.grep({ query: "newword" }, f.owner);
   expect(changed.index.snapshot).not.toBe(before.index.snapshot);
-  expect(changed.hits.find(isFullHit)!.citation.path).toMatch(/renamed/);
-  expect(changed.hits.find(isFullHit)!.citation.revision).toBe(2);
+  expect(changed.hits[0]!.citation.path).toMatch(/renamed/);
+  expect(changed.hits[0]!.citation.revision).toBe(2);
   await writeFile(target, "malformed newword");
   expect(await f.total({ query: "newword" })).toBe(0);
   await f.put("editable_two", "Newname", "newword");
@@ -298,7 +281,7 @@ it("failed index updates return unavailable, not empty/stale; exact lookup and l
   expect(failed.total).toBe(null);
   expect(failed.hits).toStrictEqual([]);
   expect(await f.outcome({ query: "Known identity" })).toBe("found");
-  expect((await f.service.records({}, f.owner)).total).toBe(1);
+  expect((await f.service.records_detail({}, f.owner)).total).toBe(1);
   f.store.withDatabase((db) => db.exec("DROP TRIGGER fail_keyword"));
   expect(await f.total({ query: "newword" })).toBe(1);
   expect(await f.total({ query: "oldword" })).toBe(0);
@@ -341,8 +324,8 @@ it("bounded contextual snippets have truthful original Markdown lines", async ()
     body = `${"Introduction\n".repeat(100)}rareword <script>alert('unsafe')</script>\n${"tail 😀\n".repeat(200)}`;
   const target = await f.put("snippet_record", "Long record", body),
     raw = await readFile(target, "utf8");
-  const result = await f.service.grep({ query: "rareword", detail: "full" }, f.owner),
-    hit = result.hits.find(isFullHit),
+  const result = await f.service.grep({ query: "rareword" }, f.owner),
+    hit = result.hits[0],
     snippet = hit!.snippet;
   expect(snippet.field).toBe("body");
   expect(snippet.text).toMatch(/rareword/);
@@ -358,26 +341,19 @@ it("bounded contextual snippets have truthful original Markdown lines", async ()
   ).toBeTruthy();
   expect(Check(contract.operations.grep.output, result)).toBeTruthy();
   // Agent calls default to compact hits whose short snippet still keeps the match.
-  const compact = (await f.service.grep({ query: "rareword" }, f.owner)).hits[0]!;
+  const compact = (await f.agent.grep({ query: "rareword" }, f.owner)).hits[0]!;
   expect(Object.keys(compact).toSorted(defaultOrder)).toStrictEqual([
-    "matches",
-    "record",
-    "snippet",
-  ]);
-  expect(Object.keys(compact.record).toSorted(defaultOrder)).toStrictEqual([
+    "hash",
     "id",
-    "kind",
-    "lifecycle",
-    "path",
     "revision",
+    "snippet",
     "title",
     "type",
-    "valid",
   ]);
-  expect(compact.snippet.text).toMatch(/rareword/);
+  expect(compact.snippet).toMatch(/rareword/);
   // The cut never splits the emoji tail's surrogate pairs.
-  expect(compact.snippet.text.length <= COMPACT_SNIPPET_CHARS).toBeTruthy();
-  expect(compact.snippet.text.isWellFormed()).toBe(true);
+  expect(compact.snippet.length <= COMPACT_SNIPPET_CHARS).toBeTruthy();
+  expect(compact.snippet.isWellFormed()).toBe(true);
 });
 
 it("FTS operators are literal words, malformed/oversized input is rejected, Unicode terms work", async () => {
@@ -403,11 +379,140 @@ it("FTS operators are literal words, malformed/oversized input is rejected, Unic
   }
 });
 
-it("ranking emphasizes titles, deterministic pagination and scoped index reuse", async () => {
+it("keyword search matches canonically equivalent Unicode spellings without rewriting stored text", async () => {
   const f = await fixture();
-  await f.put("title_record", "Needle", "text");
-  await f.put("body_record", "Other", "needle");
-  for (let n = 0; n <= AGENT_HIT_LIMIT; n++) {
+  const composed = "\u03AC\u03BB\u03C6\u03B1"; // άλφα, NFC (U+03AC)
+  const decomposed = "\u03B1\u0301\u03BB\u03C6\u03B1"; // άλφα, NFD (U+03B1 U+0301)
+  const unaccented = "\u03B1\u03BB\u03C6\u03B1"; // αλφα
+
+  const nfcPath = await f.put("nfc_note", "Greek", `The word ${composed} is saved composed.`);
+  const nfdPath = await f.put("nfd_note", "Greek", `The word ${decomposed} is decomposed.`);
+  await f.put("plain_note", "Greek", `The word ${unaccented} is unaccented.`);
+
+  // Capture full records (body, hash, revision) through the real service
+  // record_detail API before searching; a query that rewrote stored text would
+  // change these fields.
+  const recordOf = async (id: string) => (await f.service.record_detail({ id }, f.owner)).record!;
+  const fields = (record: any) => ({
+    body: record.body,
+    hash: record.hash,
+    revision: record.revision,
+  });
+  const canonicalWords: Record<string, { word: string; otherSpelling?: string }> = {
+    nfc_note: { word: composed, otherSpelling: decomposed },
+    nfd_note: { word: decomposed, otherSpelling: composed },
+    plain_note: { word: unaccented },
+  };
+  const before: Record<string, any> = {};
+  for (const id of Object.keys(canonicalWords)) {
+    before[id] = await recordOf(id);
+  }
+
+  // The service grep already returns full hits (snippets and citations); the
+  // compact projection is only produced by the agent surface.
+  const fullComposed = await f.service.grep({ query: composed }, f.owner);
+  const fullDecomposed = await f.service.grep({ query: decomposed }, f.owner);
+  const sorted = (result: any) => ids(result).toSorted();
+  const byComposed = sorted(fullComposed);
+  const byDecomposed = sorted(fullDecomposed);
+  // Red on the base: the composed query found only the composed note. Canonically
+  // equivalent spellings must retrieve the same records, in either direction.
+  expect(byComposed).toStrictEqual(byDecomposed);
+  expect(byComposed).toContain("nfc_note");
+  expect(byComposed).toContain("nfd_note");
+  // No broad accent folding: an unaccented query is a separate feature and must
+  // not reach the composed accented note.
+  expect(sorted(await f.service.grep({ query: unaccented }, f.owner))).not.toContain("nfc_note");
+
+  // Every full hit's snippet offsets slice the exact original record body (the
+  // bounded-snippet contract: snippet.text === body.slice(start, end)) and identify
+  // the canonical word each note authored, in its own verbatim normalization.
+  for (const result of [fullComposed, fullDecomposed]) {
+    for (const hit of result.hits) {
+      const { word, otherSpelling } = canonicalWords[hit.record.id]!;
+      const originalBody = before[hit.record.id]!.body as string;
+      expect(hit.snippet.text).toBe(originalBody.slice(hit.snippet.start, hit.snippet.end));
+      expect(hit.snippet.text).toContain(word);
+      if (otherSpelling) {
+        expect(hit.snippet.text).not.toContain(otherSpelling);
+      }
+    }
+  }
+
+  // Re-read the authored notes after searching: body, hash and revision of both the
+  // NFC- and NFD-authored records are unchanged by either canonical search.
+  expect(fields(await recordOf("nfc_note"))).toStrictEqual(fields(before.nfc_note));
+  expect(fields(await recordOf("nfd_note"))).toStrictEqual(fields(before.nfd_note));
+
+  // Stored text stays verbatim, in its authored normalization.
+  const nfcRaw = await readFile(nfcPath, "utf8"),
+    nfdRaw = await readFile(nfdPath, "utf8");
+  expect(nfcRaw).toContain(composed);
+  expect(nfdRaw).toContain(decomposed);
+  expect(nfdRaw).not.toContain(composed);
+
+  // A partially normalized Hangul token (neither fully NFC nor fully NFD) must
+  // still match through its original literal spelling: the unchanged index holds
+  // exactly the authored term, and replacing it with a canonical spelling would
+  // lose an existing exact match.
+  const mixed = "\uAC00\u1102\u1161"; // 가나: U+AC00 U+1102 U+1161
+  const nfcHangul = mixed.normalize("NFC"); // 가나
+  const nfdHangul = mixed.normalize("NFD"); // 가나
+  await f.put("hangul_note", "Hangul", `Saved verbatim: ${mixed}.`);
+  await f.put("hangul_nfc_note", "Hangul", `Saved composed: ${nfcHangul}.`);
+  const fullHangul = await f.service.grep({ query: mixed }, f.owner);
+  expect(sorted(fullHangul)).toStrictEqual(["hangul_nfc_note", "hangul_note"]);
+  // The hit cites the record's own spelling, not a canonical replacement.
+  const hangulHit = fullHangul.hits.find((h) => h.record.id === "hangul_note");
+  expect(hangulHit!.snippet.text).toContain(mixed);
+  // Canonical query directions of the same word stay equivalent; both reach the
+  // composed note, and only the literal query reaches the mixed stored token.
+  expect(sorted(await f.service.grep({ query: nfcHangul }, f.owner))).toStrictEqual(
+    sorted(await f.service.grep({ query: nfdHangul }, f.owner)),
+  );
+  expect(sorted(await f.service.grep({ query: nfcHangul }, f.owner))).toContain("hangul_nfc_note");
+
+  // The reported multi-token regression: a query mixing NFC and NFD across its
+  // words must still match the record storing exactly that mixed spelling; the
+  // whole-query canonical alternatives alone would drop the literal form.
+  const betaDecomposed = "\u03B2\u03B7\u0301\u03C4\u03B1"; // βήτα, NFD (U+03B7 U+0301)
+  await f.put("mixed_greek_note", "Mixed", `${composed} ${betaDecomposed} reported verbatim.`);
+  const mixedGreekQuery = `${composed} ${betaDecomposed}`;
+  expect(sorted(await f.service.grep({ query: mixedGreekQuery }, f.owner))).toStrictEqual([
+    "mixed_greek_note",
+  ]);
+  expect(
+    sorted(await f.service.grep({ query: mixedGreekQuery, mode: "phrase" }, f.owner)),
+  ).toStrictEqual(["mixed_greek_note"]);
+  // In any mode the mixed query reaches every row through its own word: each
+  // word's spelling group matches independently. The mixed record and both
+  // uniformly spelled άλφα notes surface; the unaccented note surfaces through
+  // the decomposed alternative (its combining marks fold away, the composed
+  // token does not), which the composed alternative alone would never reach.
+  expect(
+    sorted(await f.service.grep({ query: mixedGreekQuery, mode: "any" }, f.owner)),
+  ).toStrictEqual(["mixed_greek_note", "nfc_note", "nfd_note", "plain_note"]);
+
+  // A uniformly spelled query must reach the mixed record word by word: per-word
+  // spelling alternatives in all/any modes match each word in any canonical form,
+  // so the same row is found from every spelling of the query. Phrase mode stays
+  // whole-phrase (documented accepted gap): a uniformly spelled phrase cannot
+  // match a record mixing NFC and NFD across its words.
+  const uniformGreekQuery = `${composed} ${betaDecomposed.normalize("NFC")}`;
+  expect(sorted(await f.service.grep({ query: uniformGreekQuery }, f.owner))).toStrictEqual([
+    "mixed_greek_note",
+  ]);
+  expect(
+    sorted(await f.service.grep({ query: uniformGreekQuery, mode: "any" }, f.owner)),
+  ).toContain("mixed_greek_note");
+  expect(await f.total({ query: uniformGreekQuery, mode: "phrase" })).toBe(0);
+});
+
+it("ranking preserves pagination and scope without rereading the filtered corpus", async () => {
+  const f = await fixture();
+  await f.put("title_record", "Needle", "text", { tags: ["chosen"] });
+  await f.put("body_record", "Other", "needle", { tags: ["chosen"] });
+  for (let n = 0; n <= 10; n++) {
     await f.put(`haystack_${n}`, "Other", "haystack");
   }
   const first = await f.service.grep({ query: "needle", limit: 1 }, f.owner);
@@ -420,9 +525,31 @@ it("ranking emphasizes titles, deterministic pagination and scoped index reuse",
   expect(next.index.snapshot).toBe(first.index.snapshot);
   expect(next.freshness.indexedAt).toBe(first.freshness.indexedAt);
   // Agent calls that omit limit get the agent page size, not the storage default.
-  const agentPage = await f.service.grep({ query: "haystack" }, f.owner);
-  expect(agentPage.hits.length).toBe(AGENT_HIT_LIMIT);
-  expect(agentPage.nextOffset).toBe(AGENT_HIT_LIMIT);
+  const agentPage = await f.agent.grep({ query: "haystack" }, f.owner);
+  expect(agentPage.hits.length).toBe(10);
+  expect(agentPage.nextOffset).toBe(10);
+  await f.put("outside_record", "Needle", "needle ".repeat(100));
+  const storage = new KnowledgeStorage(f.config, f.store);
+  const data = await storage.run(plainAccess(), (vault) => vault.scan());
+  f.store.withDatabase((db) => {
+    expect(keywordSearch(db, data, { query: "needle" }, "test", "1").total).toBe(3);
+    let corpusReads = 0;
+    db.setAuthorizer((action, table) => {
+      if (action === constants.SQLITE_READ && table?.startsWith("keyword_fts_v1_")) {
+        corpusReads++;
+      }
+      return constants.SQLITE_OK;
+    });
+    try {
+      const result = keywordSearch(db, data, { query: "needle", tag: "chosen" }, "test", "1");
+      expect(result.index.state).toBe("ready");
+      expect(ids(result)).toEqual(["title_record", "body_record"]);
+      expect(result.total).toBe(2);
+      expect(corpusReads).toBe(0);
+    } finally {
+      db.setAuthorizer(null);
+    }
+  });
 });
 
 it("published pages are immediately searchable without approval; restored generations cannot serve a newer index", async () => {
@@ -442,15 +569,15 @@ it("published pages are immediately searchable without approval; restored genera
   expect(receipt.state).toBe("published");
   expect(receipt.indexed).toBe(false);
   expect(receipt.message).toMatch(/pending/);
-  const indexed = await service.grep({ query: "newlypublishedword", detail: "full" }, f.owner);
+  const indexed = await service.grep({ query: "newlypublishedword" }, f.owner);
   expect(indexed.index.state).toBe("ready");
   expect(indexed.total).toBe(1);
-  expect(indexed.hits.find(isFullHit)!.citation.hash).toBe(receipt.hash);
-  expect(indexed.hits.find(isFullHit)!.evidence.length).toBe(1);
-  expect(indexed.hits.find(isFullHit)!.evidence[0]!.start_line).toBe(1);
-  expect(indexed.hits.find(isFullHit)!.attribution).toBe("User note");
+  expect(indexed.hits[0]!.citation.hash).toBe(receipt.hash);
+  expect(indexed.hits[0]!.evidence.length).toBe(1);
+  expect(indexed.hits[0]!.evidence[0]!.start_line).toBe(1);
+  expect(indexed.hits[0]!.attribution).toBe("User note");
   expect((await service.lookup({ query: receipt.id }, f.owner)).outcome).toBe("found");
-  const raw = (await service.record({ id: receipt.id, view: "raw" }, f.owner)).record!.raw;
+  const raw = (await service.record_detail({ id: receipt.id, view: "raw" }, f.owner)).record!.raw;
   expect(raw).not.toMatch(/acceptance:/);
   await writeFile(path.join(f.root, "vault.json"), JSON.stringify(f.manifest));
   for (const op of ["grep", "lookup"] as const) {
@@ -480,8 +607,9 @@ it("editing a legacy page removes approval metadata through journaled publicatio
   });
   const api = { ...f.api, pluginConfig: { operatorRead: true, writesEnabled: true } },
     service = createKnowledgeService(api);
-  const previous = (await service.record({ id: "legacy_record", includeMetadata: true }, f.owner))
-    .record;
+  const previous = (
+    await service.record_detail({ id: "legacy_record", includeMetadata: true }, f.owner)
+  ).record;
   const receipt = await service.save_page(
     {
       requestId: randomUUID(),
@@ -495,7 +623,7 @@ it("editing a legacy page removes approval metadata through journaled publicatio
   );
   expect(receipt.state).toBe("published");
   const current = (
-    await service.record({ id: previous!.id, view: "raw", includeMetadata: true }, f.owner)
+    await service.record_detail({ id: previous!.id, view: "raw", includeMetadata: true }, f.owner)
   ).record;
   expect(current!.raw).not.toMatch(/acceptance:/);
   // Authored metadata keys outside the contract survive the edit.
@@ -523,4 +651,182 @@ it("an index built before row tracking is repopulated, never left empty and read
     }
   });
   expect(await f.total({ query: "lanternword" })).toBe(1);
+});
+
+it("an active search follows superseded wording to the current replacement after direct matches", async () => {
+  const f = await fixture();
+  // v1 → v2 → v3: only v1 holds the query's words; v3 is current.
+  await f.put("pilot_v1", "Pilot plan", "Pilot starts at the Harbor plot.\n", {
+    ...superseded("pilot_v2"),
+    revision: 3,
+  });
+  await f.put("pilot_v2", "Pilot plan", "Pilot pushed back a month.\n", superseded("pilot_v3"));
+  await f.put("pilot_v3", "Pilot plan", "Moved to June after the soil test.\n", { tags: ["kept"] });
+  // Already a direct match: listed once, as the direct hit.
+  await f.put("venue_v1", "Venue", "Harbor plot boathouse.\n", superseded("venue_v2"));
+  await f.put("venue_v2", "Venue", "Harbor plot library annex.\n");
+  // Chains ending in a withdrawn record or looping never surface a record.
+  await f.put("gone_old", "Gone", "Harbor plot shed.\n", superseded("gone_new"));
+  await f.put("gone_new", "Gone", "Withdrawn.\n", { lifecycle: "withdrawn" });
+  await f.put("loop_one", "Loop", "Harbor plot loop.\n", superseded("loop_two"));
+  await f.put("loop_two", "Loop", "Other loop.\n", superseded("loop_one"));
+
+  const full = await f.service.grep({ query: "harbor plot" }, f.owner);
+  expect(Check(contract.operations.grep.output, full)).toBeTruthy();
+  expect(ids(full)).toStrictEqual(["venue_v2", "pilot_v3"]);
+  expect(full.hits[1]).toMatchObject({
+    matches: ["superseded"],
+    score: null,
+    snippet: { matchLocated: false },
+    citation: { id: "pilot_v3" },
+    via: {
+      id: "pilot_v1",
+      revision: 3,
+      path: "notes/pilot_v1.md",
+      hash: expect.stringMatching(/^[0-9a-f]{64}$/),
+    },
+  });
+  const compact = await f.agent.grep({ query: "harbor plot" }, f.owner);
+  expect(Check(contract.operations.grep.output, compact)).toBeTruthy();
+  expect(compact.hits[1]!.via).toStrictEqual({ id: "pilot_v1", revision: 3 });
+
+  // Pagination spans direct and followed hits as one list.
+  const second = await f.service.grep({ query: "harbor plot", offset: 1, limit: 1 }, f.owner);
+  expect([ids(second), second.total, second.nextOffset]).toStrictEqual([["pilot_v3"], 2, null]);
+  // Filters apply to the current record; explicit history returns the earlier
+  // records themselves, including the eligible dead-end chains above.
+  const kept = await f.service.grep({ query: "harbor plot", tag: "kept" }, f.owner);
+  expect(ids(kept)).toStrictEqual(["pilot_v3"]);
+  const history = await f.service.grep({ query: "harbor plot", lifecycle: "superseded" }, f.owner);
+  expect(ids(history).toSorted()).toStrictEqual(["gone_old", "loop_one", "pilot_v1", "venue_v1"]);
+  expect(history.hits.some((hit) => hit.via)).toBe(false);
+});
+
+it("superseded wording ranks only among histories whose current records pass the filters", async () => {
+  const f = await fixture();
+  await f.put("alpha_old", "Earlier", "Earlier orchid.\n", superseded("alpha_now"));
+  await f.put("alpha_now", "Current A", "Current A.\n", { tags: ["kept"] });
+  await f.put("bravo_old", "Earlier", "Earlier tulip.\n", superseded("bravo_now"));
+  await f.put("bravo_now", "Current B", "Current B.\n", { tags: ["kept"] });
+  // Histories of records outside the tag filter must not change term statistics.
+  for (const n of [1, 2, 3]) {
+    await f.put(`other_old_${n}`, "Earlier", "Earlier orchid.\n", superseded(`other_now_${n}`));
+    await f.put(`other_now_${n}`, `Other ${n}`, "Other.\n");
+  }
+  const query = { query: "orchid tulip", mode: "any", tag: "kept" } as const;
+  expect(ids(await f.service.grep(query, f.owner))).toStrictEqual(["alpha_now", "bravo_now"]);
+});
+
+it("superseded-record edits update the persistent history index and the search snapshot", async () => {
+  const f = await fixture();
+  await f.put("plan_one", "Plan", "Original quillword wording.\n", superseded("plan_two"));
+  await f.put("plan_two", "Plan", "Current wording.\n");
+  const before = await f.service.grep({ query: "quillword" }, f.owner);
+  expect(ids(before)).toStrictEqual(["plan_two"]);
+
+  // Only the superseded record changes; the current-record corpus does not.
+  const revised = { ...superseded("plan_two"), revision: 2 };
+  await f.put("plan_one", "Plan", "Revised inkword wording.\n", revised);
+  const after = await f.service.grep({ query: "inkword" }, f.owner);
+  expect(ids(after)).toStrictEqual(["plan_two"]);
+  expect(after.hits[0]!.via!.revision).toBe(2);
+  expect(after.index.snapshot).not.toBe(before.index.snapshot);
+  expect(await f.total({ query: "quillword" })).toBe(0);
+
+  // A dropped history index is rebuilt instead of served empty under a matching
+  // snapshot, even when its row tracking survives.
+  f.store.withDatabase((db) => {
+    const fts = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE name LIKE 'keyword_history_fts_v1_%' AND sql LIKE 'CREATE VIRTUAL%'",
+      )
+      .get()!;
+    db.exec(`DROP TABLE ${String(fts.name)}`);
+  });
+  expect(ids(await f.service.grep({ query: "inkword" }, f.owner))).toStrictEqual(["plan_two"]);
+});
+
+it("filtered ranking leaves the main writer available and preserves complete results", async () => {
+  const f = await fixture();
+  await f.put("writer_direct", "Orchid", "orchid flower", { tags: ["selected"] });
+  await f.put("writer_old", "Earlier", "orchid flower", superseded("writer_current"));
+  await f.put("writer_current", "Current", "replacement", { tags: ["selected"] });
+  await f.put("writer_outside", "Orchid", "orchid flower");
+  const storage = new KnowledgeStorage(f.config, f.store);
+  const data = await storage.run(plainAccess(), (vault) => vault.scan());
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-01T00:00:00Z"));
+  try {
+    f.store.withDatabase((db) => {
+      const input = { query: "orchid", tag: "selected", limit: 1, offset: 1 };
+      const expected = keywordSearch(db, data, input, "writer-test", "1");
+      expect(expected.index.state).toBe("ready");
+      expect(expected.hits[0]?.via?.id).toBe("writer_old");
+      const writer = new DatabaseSync(db.location()!);
+      try {
+        writer.exec("BEGIN IMMEDIATE");
+        try {
+          expect(verifyKeywordIndex(db, data, "writer-test", "1")?.has("writer_current")).toBe(
+            true,
+          );
+          expect(JSON.stringify(keywordSearch(db, data, input, "writer-test", "1"))).toBe(
+            JSON.stringify(expected),
+          );
+        } finally {
+          writer.exec("ROLLBACK");
+        }
+        let attempted = false;
+        let writerError: unknown;
+        db.setAuthorizer((action, _table, _column, schema) => {
+          if (!attempted && schema === "temp" && action === constants.SQLITE_CREATE_VTABLE) {
+            attempted = true;
+            try {
+              writer.exec(
+                "BEGIN IMMEDIATE; INSERT INTO keyword_state_v1 VALUES ('other-writer','snapshot','now'); COMMIT",
+              );
+            } catch (error) {
+              writerError = error;
+            }
+          }
+          return constants.SQLITE_OK;
+        });
+        try {
+          const actual = keywordSearch(db, data, input, "writer-test", "1");
+          expect(attempted).toBe(true);
+          expect(writerError).toBeUndefined();
+          expect(JSON.stringify(actual)).toBe(JSON.stringify(expected));
+          expect(
+            writer
+              .prepare("SELECT snapshot FROM keyword_state_v1 WHERE binding='other-writer'")
+              .get()?.snapshot,
+          ).toBe("snapshot");
+        } finally {
+          db.setAuthorizer(null);
+        }
+        // A sibling WAL commit between index inspection and a required update
+        // must not strand reconciliation on an obsolete read snapshot.
+        db.exec("PRAGMA journal_mode=WAL");
+        let intervened = false;
+        db.setAuthorizer((action, table) => {
+          if (!intervened && action === constants.SQLITE_READ && table === "keyword_state_v1") {
+            intervened = true;
+            writer.exec(
+              "INSERT INTO keyword_state_v1 VALUES ('intervening-writer','snapshot','now')",
+            );
+          }
+          return constants.SQLITE_OK;
+        });
+        const refreshed = keywordSearch(db, data, input, "writer-test", "2");
+        expect(intervened).toBe(true);
+        expect(refreshed.index.state).toBe("ready");
+        expect(refreshed.index.snapshot).not.toBe(expected.index.snapshot);
+        expect(refreshed.hits).toEqual(expected.hits);
+      } finally {
+        db.setAuthorizer(null);
+        writer.close();
+      }
+    });
+  } finally {
+    vi.useRealTimers();
+  }
 });

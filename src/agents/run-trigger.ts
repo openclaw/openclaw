@@ -1,5 +1,5 @@
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
-import type { InputProvenance } from "../sessions/input-provenance.js";
+import { type InputProvenance, readSessionForkSource } from "../sessions/input-provenance.js";
 import type { BootstrapContextRunKind } from "./bootstrap-mode.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
 
@@ -9,7 +9,6 @@ export type ModelCallUrgency = "foreground" | "normal" | "background";
 
 export function resolveModelCallUrgency(provenance: {
   trigger?: EmbeddedRunTrigger;
-  skillWorkshopReviewOf?: string;
   bootstrapContextRunKind?: BootstrapContextRunKind;
   currentInboundEventKind?: InboundEventKind;
   inputProvenance?: InputProvenance;
@@ -18,7 +17,8 @@ export function resolveModelCallUrgency(provenance: {
 }): ModelCallUrgency {
   const backgroundRunKind = provenance.bootstrapContextRunKind === "cron";
   const backgroundTrigger = provenance.trigger === "cron" || provenance.trigger === "memory";
-  if (backgroundRunKind || backgroundTrigger || provenance.skillWorkshopReviewOf) {
+  const sessionFork = readSessionForkSource(provenance.inputProvenance) !== undefined;
+  if (backgroundRunKind || backgroundTrigger || sessionFork) {
     return "background";
   }
   // Delegated runs may retain user provenance; they are not the interactive source turn.

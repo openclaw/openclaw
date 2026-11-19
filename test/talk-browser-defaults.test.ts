@@ -96,6 +96,13 @@ vi.mock("../src/talk/client-voice-session-write.js", async (importOriginal) => {
   return {
     ...actual,
     ensureClientVoiceAgentSessionEntry: async () => "test-agent-session",
+  };
+});
+vi.mock("../src/talk/client-voice-session-source.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../src/talk/client-voice-session-source.js")>();
+  return {
+    ...actual,
     // Creation is mocked here; preserve its source without acquiring a database writer.
     captureClientVoiceSessionWriter: ({
       physicalSource,

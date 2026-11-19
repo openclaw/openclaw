@@ -1,5 +1,6 @@
 // Isolated runtime.llm.complete tests cover zero-tool dispatch and policy enforcement.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as modelsConfigState from "../../agents/models-config-state.js";
 import {
   PreparedModelRuntimeInitialRunAdmissionError,
   PreparedModelRuntimeOwnerNotPublishedError,
@@ -14,7 +15,7 @@ import { markTrustedOtelDiagnosticListener } from "../../infra/diagnostic-otel-l
 import type { Model } from "../../llm/types.js";
 import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
-import type { LlmIsolatedAgentRuntimeCompleteParams } from "./types-core.js";
+import type { LlmIsolatedAgentRuntimeCompleteParams } from "./runtime-llm.types.js";
 
 const hoisted = vi.hoisted(() => ({
   acquireSimpleCompletionModelForAgent:
@@ -229,6 +230,13 @@ describe("runtime.llm.complete isolated agent runtime", () => {
       expected: 0.125,
     },
     {
+      name: "isolated recorded zero",
+      isolated: true,
+      tiered: true,
+      total: 0,
+      expected: 0,
+    },
+    {
       name: "direct single-call tier",
       isolated: false,
       tiered: true,
@@ -236,6 +244,10 @@ describe("runtime.llm.complete isolated agent runtime", () => {
       expected: 0.6,
     },
   ])("prices $name at its execution boundary", async ({ isolated, tiered, total, expected }) => {
+    using pricing = vi.spyOn(modelsConfigState, "captureModelsJsonCostSource");
+    if (total !== undefined) {
+      pricing.mockRejectedValue(new Error("Recorded billing must not prepare fallback pricing"));
+    }
     const selection = { provider: "fixture", modelId: "priced", agentDir: "/tmp/main" };
     const model = {
       id: "priced",
@@ -264,7 +276,7 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     const usage = {
       input: 300_000,
       output: 200,
-      ...(total !== undefined ? { cost: { total } } : {}),
+      ...(total !== undefined ? { cost: { total, totalOrigin: "provider-billed" as const } } : {}),
     };
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValueOnce(selection);
     hoisted.runIsolatedCompletion.mockResolvedValueOnce({
@@ -301,6 +313,9 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     const result = await llm.complete(request);
 
     expect(result.usage.costUsd).toBe(expected);
+    if (total !== undefined) {
+      expect(pricing).not.toHaveBeenCalled();
+    }
   });
 
   it("keeps usage-free isolated completions silent", async () => {
@@ -421,6 +436,22 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     ).rejects.toMatchObject({ code: "LLM_COMPLETION_NOT_AUTHORIZED" });
     expect(hoisted.runIsolatedCompletion).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["deepseek", "deepseek-v4-pro"],
+    ["moonshot", "kimi-k3"],
+  ])(
+    "admits max reasoning for %s/%s from its bundled row without configured models",
+    async (provider, modelId) => {
+      hoisted.resolveSimpleCompletionSelectionForAgent.mockReturnValue({
+        provider,
+        modelId,
+        agentDir: "/tmp/main",
+      });
+      await authorizedLlm().complete(isolatedRequest({ reasoning: "max" }));
+      expectSingleCallFirstArg(hoisted.runIsolatedCompletion, { provider, model: modelId });
+    },
+  );
 
   it.each([
     {

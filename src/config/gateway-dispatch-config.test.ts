@@ -73,6 +73,16 @@ it("reads only gateway dispatch fields from JSON5 config with includes and env v
   expect(shellEnvMocks.loadShellEnvFallback).not.toHaveBeenCalled();
 });
 
+it("keeps the database engine config that store-backed credentials read", () => {
+  const database = {
+    postgres: { connection: { source: "file", provider: "pgdsn", id: "value" } },
+    families: { state: { engine: "postgres" } },
+  };
+  const configPath = configFile({ gateway: { port: 18888 }, database });
+
+  expect(readGatewayDispatchConfig({ configPath, env: {} }).database).toEqual(database);
+});
+
 it("still reports broken includes in discarded config branches", () => {
   const configPath = configFile(
     '{ gateway: { port: 18888 }, models: { $include: "./missing-models.json5" } }',

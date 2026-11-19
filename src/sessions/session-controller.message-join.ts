@@ -40,9 +40,6 @@ export async function prepareReplyMessageContinuation(params: {
     ...params.input.caller,
     messageChannel: params.input.caller.originatingChannel,
   });
-  if (!principal || principal !== owner.requesterPrincipalKey) {
-    return { kind: "unsupported" as const };
-  }
   const fingerprint = owner.toolAuthorityFingerprint;
   if (!fingerprint) {
     return { kind: "unsupported" as const };
@@ -63,7 +60,11 @@ export async function prepareReplyMessageContinuation(params: {
       assertOwner,
     );
     const observation = selected?.joinObservation;
-    if (!selected || !observation) {
+    if (
+      !selected ||
+      !observation ||
+      (!selected.continuationKind && (!principal || principal !== owner.requesterPrincipalKey))
+    ) {
       // Released snapshots keep their existing complete-policy compatibility path.
       return { kind: "unsupported" as const };
     }
@@ -110,6 +111,8 @@ export async function prepareReplyMessageContinuation(params: {
     return {
       kind: "prepared" as const,
       fingerprint,
+      continuationKind: selected.continuationKind,
+      allowPendingUserInputAnswer: selected.allowPendingUserInputAnswer,
       read: () => {
         assertCurrent();
         return fingerprint;
@@ -155,7 +158,7 @@ export async function prepareReplyMessageJoin(params: {
 }) {
   const { followupRun, operation, target, assertCurrent } = params;
   const requesterMismatch = hasReplySteeringRequesterMismatch(followupRun, operation);
-  if (params.continuation && !requesterMismatch) {
+  if (params.continuation) {
     const joined = await prepareReplyMessageContinuation({
       target,
       input: params.continuation,
@@ -173,9 +176,18 @@ export async function prepareReplyMessageJoin(params: {
         automaticFallbackRoute: undefined,
         pendingInputAuthorityFingerprint: undefined,
         collaborativeCaller: undefined,
+        continuationKind: joined.continuationKind,
+        allowPendingUserInputAnswer: joined.allowPendingUserInputAnswer,
         prepareCurrent: joined.prepareCurrent,
       };
     }
+  }
+  if (requesterMismatch && !params.collaborativeCaller) {
+    return {
+      kind: "deferred" as const,
+      reason: "requester-mismatch" as const,
+      errorMessage: undefined,
+    };
   }
   const legacy = await prepareLegacyReplySteeringAuthority(
     followupRun,
@@ -200,6 +212,8 @@ export async function prepareReplyMessageJoin(params: {
     automaticFallbackRoute: legacy.automaticFallbackRoute,
     pendingInputAuthorityFingerprint: legacy.pendingInputAuthorityFingerprint,
     collaborativeCaller: legacy.collaborativeCaller,
+    continuationKind: undefined,
+    allowPendingUserInputAnswer: undefined,
     prepareCurrent: async () => {
       legacy.toolAuthority.read();
     },

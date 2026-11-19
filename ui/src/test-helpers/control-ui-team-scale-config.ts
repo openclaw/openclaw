@@ -3,18 +3,20 @@ import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import type { ConfigSnapshot } from "../api/types.ts";
 import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
 
-export function withTeamScaleConfig(
-  scenario: ControlUiMockGatewayScenario,
-): ControlUiMockGatewayScenario {
+export function withTeamScaleConfig<T extends ControlUiMockGatewayScenario>(
+  scenario: T,
+): Omit<ControlUiMockGatewayScenario, "historyMessages"> & Pick<T, "historyMessages"> {
   const { display, snapshot } = createTeamScaleConfig();
   return {
     ...scenario,
     bootstrapPreferences: {
-      profileId: scenario.presenceUsers?.find((user) => user.self)?.id,
+      profileId:
+        scenario.bootstrapPreferences?.profileId ??
+        scenario.presenceUsers?.find((user) => user.self)?.id,
       config: display,
-      entries: asOptionalRecord(
-        asOptionalRecord(scenario.methodResponses?.["users.prefs.get"])?.entries,
-      ),
+      entries:
+        scenario.bootstrapPreferences?.entries ??
+        asOptionalRecord(asOptionalRecord(scenario.methodResponses?.["users.prefs.get"])?.entries),
     },
     featureMethods: ["config.get", "tts.speak", ...(scenario.featureMethods ?? [])],
     methodResponses: { "config.get": snapshot, ...scenario.methodResponses },

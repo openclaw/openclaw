@@ -94,11 +94,16 @@ export async function handleToolsInvokeHttpRequest(
     const client = createSyntheticPluginRuntimeClient({
       authenticatedUserProfile: requestAuth.authenticatedUserProfile,
       operatorRoleActor: requestAuth.operatorRoleActor,
+      openclawIdPrincipal: requestAuth.openclawIdPrincipal,
       operatorAccessAuthority,
       scopes: operatorScopes,
     });
     const context = opts.resolveGatewayContext?.();
-    if (resolveGatewayOperatorRoleActor(client)?.kind === "operator" && !context) {
+    if (
+      (requestAuth.openclawIdPrincipal !== undefined ||
+        resolveGatewayOperatorRoleActor(client)?.kind === "operator") &&
+      !context
+    ) {
       sendJson(res, 503, {
         error: { message: "Gateway context is unavailable; retry shortly.", type: "unavailable" },
       });
@@ -124,6 +129,7 @@ export async function handleToolsInvokeHttpRequest(
           agentThreadId,
           authenticatedUserProfile: requestAuth.authenticatedUserProfile,
           operatorRoleActor: requestAuth.operatorRoleActor,
+          openclawIdPrincipal: requestAuth.openclawIdPrincipal,
           operatorScopes,
           senderIsOwner,
           conversationReadOrigin: "direct-operator",

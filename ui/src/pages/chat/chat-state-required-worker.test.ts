@@ -11,14 +11,13 @@ import {
 } from "./chat-state-refresh.ts";
 
 function createMetadataState(request: ReturnType<typeof vi.fn>): ChatPageHost {
-  return {
-    ...makeChatHost(),
+  return Object.assign(makeChatHost(), {
     agentsList: null,
     assistantAgentId: "main",
     client: { request },
     hello: { features: { methods: ["chat.metadata"] } },
     sessionKey: "agent:work:main",
-  } as unknown as ChatPageHost;
+  }) as unknown as ChatPageHost;
 }
 
 describe("required worker chat metadata", () => {

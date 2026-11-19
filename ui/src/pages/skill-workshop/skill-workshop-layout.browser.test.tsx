@@ -3,8 +3,72 @@ import "../../styles.css";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createContext } from "./skill-workshop-page.test-support.ts";
+import { createContext, createRuntimeConfigStub } from "./skill-workshop-page.test-support.ts";
 import { SkillWorkshopPage } from "./skill-workshop-page.tsx";
+
+it.each([
+  { width: 390, height: 844, nativeChrome: false },
+  { width: 844, height: 390, nativeChrome: true },
+])(
+  "reveals the stacked reader at $width px (native chrome: $nativeChrome)",
+  async ({ width, height, nativeChrome }) => {
+    const { page } = await import("vitest/browser");
+    await page.viewport(width, height);
+    vi.stubGlobal("__OPENCLAW_NATIVE_WEB_CHROME__", nativeChrome);
+    const request = vi.fn(async (method: string, params: { agentId: string }) => {
+      if (method === "skills.workshop.list") {
+        return {
+          agentId: params.agentId,
+          mode: "auto",
+          root: "/synthetic/workshop",
+          skills: Array.from({ length: 16 }, (_, index) => ({
+            name: `review-${index}`,
+            description: "Review the source and preserve existing behavior.",
+            updatedAtMs: Date.now(),
+            sizeBytes: 40,
+            files: ["SKILL.md"],
+          })),
+          archived: [],
+        };
+      }
+      if (method === "skills.workshop.changes") {
+        return { changes: [] };
+      }
+      if (method === "skills.workshop.read") {
+        return { content: "# Review procedure", files: ["SKILL.md"] };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const scrollingPage = () => (
+      <div style={{ height: "100vh", overflow: "auto" }}>
+        <SkillWorkshopPage />
+      </div>
+    );
+    const mounted = mountSolid(scrollingPage, {
+      wrapper: createSolidApplicationContextProvider(
+        createContext(request, { runtimeConfig: createRuntimeConfigStub({ sourceConfig: {} }) }),
+      ).wrapper,
+    });
+    try {
+      await waitForSolid(() =>
+        expect(mounted.container.querySelector(".sw-markdown")).not.toBeNull(),
+      );
+      const find = (selector: string) => mounted.container.querySelector<HTMLElement>(selector)!;
+      const detail = find(".sw-detail");
+      expect(detail.getBoundingClientRect().top).toBeGreaterThan(window.innerHeight);
+      mounted.getByRole("button", { name: /^review-3/ }).click();
+      await waitForSolid(() => {
+        expect(find(".sw-detail__title").textContent).toBe("review-3");
+        expect(find(".sw-detail__title").getBoundingClientRect().bottom).toBeLessThan(
+          window.innerHeight,
+        );
+      });
+    } finally {
+      mounted.unmount();
+      vi.unstubAllGlobals();
+    }
+  },
+);
 
 it("grows the skill reader with the list and keeps a bounded reader when stacked", async () => {
   const { page } = await import("vitest/browser");

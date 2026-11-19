@@ -1,6 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import chromeExtensionManifest from "../../../chrome-extension/manifest.json" with { type: "json" };
+import { useAutoCleanupTempDirTracker } from "../../../test-support.js";
 import type { ProfileContext } from "../server-context.js";
 import { makeBrowserProfile } from "../server-context.test-harness.js";
 import { createRouteFixture } from "./request.test-support.js";
@@ -52,7 +55,7 @@ function makeState(
     probe,
   ) => {
     if (ready && probe) {
-      const pageReady = await isReachable(probe.timeoutMs?.() ?? ms, { ephemeral: true, signal });
+      const pageReady = await isReachable(ms, { ephemeral: true, signal });
       probe.onResult(pageReady ? 1 : null);
     }
     return ready;
@@ -126,6 +129,32 @@ function trackLaunch(
 }
 
 describe("basic browser routes", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it.skipIf(process.platform !== "linux")(
+    "doctor diagnoses an executable that cannot load without launching a browser",
+    async () => {
+      const executablePath = path.join(tempDirs.make("browser-doctor-"), "chrome");
+      fs.writeFileSync(
+        executablePath,
+        "#!/bin/sh\necho 'error while loading shared libraries: libnss3.so: cannot open shared object file' >&2\nexit 127\n",
+        { mode: 0o700 },
+      );
+      const state = makeState({ executablePath });
+      const report = await callRoute({ state, route: "/doctor" });
+      expect(report.ok).toBe(false);
+      expect(report.checks).toContainEqual(
+        expect.objectContaining({
+          id: "managed-executable",
+          status: "fail",
+          summary: expect.stringContaining("libnss3.so"),
+        }),
+      );
+      expect(JSON.stringify(report.checks)).not.toContain("launchable");
+      expect((await callRoute({ state })).detectError).toBeNull();
+    },
+  );
+
   beforeEach(() => {
     graphics.endpoint.mockReset();
     graphics.read.mockReset();
@@ -254,7 +283,7 @@ describe("basic browser routes", () => {
     expect(graphics.endpoint).not.toHaveBeenCalled();
   });
 
-  it("retries unavailable graphics diagnostics and caches the first available result", async () => {
+  it("keeps status passive and inspects graphics only for deep doctor", async () => {
     const clock = vi.spyOn(Date, "now");
     onTestFinished(() => clock.mockRestore());
     const unavailable = {
@@ -274,10 +303,14 @@ describe("basic browser routes", () => {
     const state = makeState({}, { ready: true });
     trackLaunch(state);
 
+    expect((await callRoute({ state })).graphics).toBeNull();
+    expect(graphics.read).not.toHaveBeenCalled();
     for (const expected of [unavailable, available, available]) {
       clock.mockReturnValue(expected.observedAt);
-      expect((await callRoute({ state })).graphics).toMatchObject(expected);
+      const report = await callRoute({ state, route: "/doctor", query: { deep: "true" } });
+      expect(report.status).toMatchObject({ graphics: expected });
     }
+    expect((await callRoute({ state })).graphics).toMatchObject(available);
     expect(graphics.read).toHaveBeenCalledTimes(2);
   });
 

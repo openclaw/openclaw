@@ -17,7 +17,9 @@ function completionFlags(option: Option): string[] {
 }
 
 export function completionOptions(command: Command): { option: Option; flags: string[] }[] {
-  const options = command.options.map((option) => ({ option, flags: completionFlags(option) }));
+  // Commander's help API includes implicit help and removes flags shadowed by real options.
+  const ownOptions = new Set([...command.options, ...command.createHelp().visibleOptions(command)]);
+  const options = [...ownOptions].map((option) => ({ option, flags: completionFlags(option) }));
   const shadowedFlags = new Set(options.flatMap(({ flags }) => flags));
   let root = command;
   while (root.parent) {

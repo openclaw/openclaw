@@ -134,8 +134,23 @@ it("@openclaw/ai packed package installs externally with public exports and shar
     key === "." ? manifest.name : `${manifest.name}/${key.slice(2)}`,
   );
   const importScript = `
+      const assert = (await import("node:assert/strict")).default;
+      const runtimeKey = Symbol.for("openclaw.ai.defaultRuntime");
+      assert.equal(globalThis[runtimeKey], undefined);
+      const resources = await import("@openclaw/ai/internal/session-resources");
+      assert.equal(globalThis[runtimeKey], undefined);
       const specifiers = ${JSON.stringify(specifiers)};
       await Promise.all(specifiers.map((specifier) => import(specifier)));
+      const runtime = await import("@openclaw/ai/internal/runtime");
+      for (const name of ["cleanupSessionResources", "registerSessionResourceCleanup", "getSessionResourceOwnerId"]) {
+        assert.equal(resources[name], runtime[name], name + " was split across package entries");
+      }
+      let calls = 0;
+      const unregister = resources.registerSessionResourceCleanup(() => { calls++; });
+      try { runtime.cleanupSessionResources(); } finally { unregister(); }
+      const unregisterLegacy = runtime.registerSessionResourceCleanup(() => { calls++; });
+      try { resources.cleanupSessionResources(); } finally { unregisterLegacy(); }
+      assert.equal(calls, 2, "session resource registry was split across package entries");
       const compatibility = ${JSON.stringify(compatibility)};
       for (const [specifier, inventory] of Object.entries(compatibility)) {
         const module = await import(specifier);
@@ -159,7 +174,7 @@ it("@openclaw/ai packed package installs externally with public exports and shar
       if (legacy.encodedModelRequestBodyStream(prepared.body) !== true) {
         throw new Error("encoded request-body stream metadata was split across package entries");
       }
-      if (await prepared.body.text() !== '{"stream":true,"input":"hello"}') {
+      if (await new Response(prepared.body).text() !== '{"stream":true,"input":"hello"}') {
         throw new Error("request-body encoding changed across package entries");
       }
     `;

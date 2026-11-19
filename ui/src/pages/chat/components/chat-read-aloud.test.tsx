@@ -3,6 +3,7 @@
 import type { TtsSpeakResult } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.ts";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { restoreMocksAndGlobals } from "../../../test-helpers/mock-cleanup.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
@@ -12,11 +13,7 @@ import {
   createRuntimeConfigStub,
 } from "../../skill-workshop/skill-workshop-page.test-support.ts";
 import { createTestTranscript, renderChatInto, renderChatView } from "../chat-view.test-helpers.ts";
-import {
-  MessageActions,
-  prepareChatMessageRender,
-  resolveMessageActionDetails,
-} from "./chat-message-markdown-view.tsx";
+import { MessageActions, resolveMessageActionDetails } from "./chat-message-markdown-view.tsx";
 import { installTranscriptDomMocks } from "./chat-transcript.test-support.ts";
 
 const speech: TtsSpeakResult = {
@@ -132,9 +129,14 @@ it("keeps native transcript speech with its current application context", async 
     transcript,
     messages: [{ role: "assistant", content: speechText }],
   };
+  // Exercise cold transcript admission after its synchronous preparation budget expires.
+  let clock = 0;
+  const now = vi.spyOn(performance, "now").mockImplementation(() => (clock += 20));
   const container = renderChatView(props);
+  now.mockRestore();
   const action = (name: string) =>
     container.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`);
+  await waitForSolid(() => expect(action("Read aloud")).not.toBeNull());
   const thread = container.querySelector(".chat-thread-inner");
   const button = action("Read aloud")!;
   button.click();
@@ -272,12 +274,17 @@ it("shows a Gateway synthesis failure instead of starting another speech provide
   expect(request).toHaveBeenCalledTimes(2);
 });
 
-it("stops same-tick playback and ignores its late synthesis during a new playback", async () => {
+it("stops same-tick and pending playback without accepting late synthesis", async () => {
   const view = mount();
   const button = readButton(view);
   button.click();
   button.click();
-  expect(request).toHaveBeenCalledOnce();
+  await waitForSolid(() => expect(readButton(view)).toBe(button));
+  expect(request).not.toHaveBeenCalled();
+
+  button.click();
+  await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
+  button.click();
   await waitForSolid(() => expect(readButton(view)).toBe(button));
 
   const next = createDeferred<TtsSpeakResult>();

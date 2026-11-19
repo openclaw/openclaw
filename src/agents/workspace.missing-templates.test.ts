@@ -7,7 +7,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { fileDiffersFromTemplate } from "./workspace.js";
+import { fileDiffersFromTemplate } from "./workspace-template-load.js";
 
 const templates = vi.hoisted(() => ({ dir: "" }));
 vi.mock("./workspace-templates.js", async (importOriginal) => ({

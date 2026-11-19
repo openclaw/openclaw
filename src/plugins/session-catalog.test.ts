@@ -89,11 +89,33 @@ describe("listSessionCatalogEntries", () => {
     expect(listSessionEntries).not.toHaveBeenCalled();
     const caller = { agentId: "beta", sessionKey: "agent:alpha:unrelated", config, runtime };
     expect(listSessionCatalogEntries(caller)).toEqual([]);
-    expect(listSessionEntries).toHaveBeenCalledWith({ agentId: "beta", readOnly: true });
+    expect(listSessionEntries).toHaveBeenCalledWith({
+      agentId: "beta",
+      readOnly: true,
+      projection: "list",
+    });
   });
 });
 
 describe("listAdoptedSessionCatalogSessions", () => {
+  it("resolves duplicate bindings by binary session key regardless of enumeration order", () => {
+    const rows = ["agent:main:z", "agent:main:a", "agent:main:é"].map((sessionKey) => ({
+      agentId: "main",
+      sessionKey,
+      entry: { sessionId: sessionKey, updatedAt: 1, pluginOwnerId: "fixture" },
+    }));
+    for (const entries of [rows, rows.toReversed(), [rows[1]!, rows[2]!, rows[0]!]]) {
+      const adopted = listAdoptedSessionCatalogSessions({
+        config: {},
+        pluginId: "fixture",
+        runtime: {} as PluginRuntime,
+        sessionEntries: { entriesForAgent: () => entries, entriesForCatalog: () => entries },
+        sourceFromEntry: () => ({ hostId: "local", threadId: "shared" }),
+      });
+      expect([...adopted]).toEqual([["local\0shared", "agent:main:é"]]);
+    }
+  });
+
   it.each([true, false])("parses only completed plugin-owned entries (snapshot=%s)", (snapshot) => {
     const config: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },

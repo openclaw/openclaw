@@ -6,7 +6,15 @@ import {
   getInternalToolExecutionPreparer,
 } from "../../../packages/agent-core/src/internal-hooks.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
-import { prepareSessionSourceAuthority } from "../../config/sessions/session-source-authority.js";
+import {
+  bindCommandOwnerAuthority,
+  captureCommandOwnerAssertion,
+} from "../../auto-reply/command-owner-authority.js";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceAuthority,
+  prepareSessionSourceEffect,
+} from "../../config/sessions/session-source-authority.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import {
   claimAgentRunApprovalAuthority,
@@ -82,6 +90,51 @@ function makeTool(): AnyAgentTool {
 }
 
 describe("gateway caller context wrapper", () => {
+  it("carries prepared command authority through nested caller receipts without losing revocation", async () => {
+    let active = true;
+    const synchronousSource = vi.fn();
+    const released = vi.fn();
+    const source = composeSessionSourceAssertion([
+      Object.assign(synchronousSource, {
+        prepareSessionSourceEffect: async () => ({ assertCurrent() {}, release: released }),
+      }),
+    ]);
+    const context = {};
+    bindCommandOwnerAuthority(context, {
+      sourceAssertion: source,
+      isCurrent() {
+        expect(this.sourceAssertion).toBe(source);
+        source();
+        return active;
+      },
+    });
+    const owner = expectDefined(captureCommandOwnerAssertion(context), "command owner");
+    const receipt = Object.assign(() => {
+      owner();
+      return true;
+    }, owner);
+    await withCallers(
+      [{ operationalRunInstance: runInstance("prepared-owner"), receiptAuthority: receipt }, {}],
+      async () => {
+        const assertion = expectDefined(captureGatewayToolCallerAssertion(), "caller assertion");
+        assertion();
+        expect(synchronousSource).toHaveBeenCalledOnce();
+        synchronousSource.mockClear();
+        const prepared = await prepareSessionSourceEffect(assertion);
+        try {
+          prepared.assertCurrent();
+          expect(synchronousSource).not.toHaveBeenCalled();
+          active = false;
+          expect(() => prepared.assertCurrent()).toThrow("authority is no longer active");
+          expect(synchronousSource).not.toHaveBeenCalled();
+        } finally {
+          await prepared.release?.();
+        }
+        expect(released).toHaveBeenCalledOnce();
+      },
+    );
+  });
+
   it.each(["same", "selected", "caller"] as const)(
     "checks selected sources and observes %s source revocation",
     async (revokedSource) => {
@@ -399,6 +452,34 @@ describe("gateway caller context wrapper", () => {
     await withCallers(
       [outer, inner].map((fullPermission) => ({ fullPermission })),
       () => expect(getCaller()?.fullPermission).toBe(expected),
+    );
+  });
+
+  it("preserves every same-run automatic delegation assertion", async () => {
+    let outerActive = true;
+    let innerActive = true;
+    const outer = () => {
+      if (!outerActive) {
+        throw new Error("outer revoked");
+      }
+    };
+    const inner = () => {
+      if (!innerActive) {
+        throw new Error("inner revoked");
+      }
+    };
+    await withCallers(
+      [{ assertAutoApproveChangesCurrent: outer }, { assertAutoApproveChangesCurrent: inner }],
+      () => {
+        const assertCurrent = getCaller()?.assertAutoApproveChangesCurrent;
+        expect(assertCurrent).toBeDefined();
+        expect(assertCurrent).not.toThrow();
+        outerActive = false;
+        expect(assertCurrent).toThrow("outer revoked");
+        outerActive = true;
+        innerActive = false;
+        expect(assertCurrent).toThrow("inner revoked");
+      },
     );
   });
 

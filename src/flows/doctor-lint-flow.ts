@@ -1,6 +1,6 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../state/openclaw-state-db-readonly.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
@@ -25,7 +25,7 @@ export const stateSchemaHealthCheck: HealthCheck = {
         import("../state/agent-deletion-journal.read.js"),
         import("../state/openclaw-agent-db-registry.read.js"),
       ]);
-    const state = withExistingOpenClawStateDatabaseReadOnly(
+    const state = await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
       ({ db, path }) => {
         const journal = readRetainedAgentDeletionsFromDatabase(db, path);
         const held =

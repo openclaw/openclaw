@@ -81,13 +81,13 @@ export const sweptContext = (entry: SubagentRunRecord) => ({
 });
 
 export const isSessionCleanupDeferred = (entry: SubagentRunRecord) =>
+  entry.delivery?.disposition === "retryable" ||
   ((entry.delivery?.status === "pending" || entry.delivery?.status === "in_progress") &&
     entry.delivery.disposition === "session_queued") ||
-  (!subagentRuns.isCompletionAuthorityRetired(entry) &&
-    (entry.pauseReason === "sessions_yield" ||
-      entry.delivery?.status === "in_progress" ||
-      (entry.delivery?.status === "pending" &&
-        (entry.expectsCompletionMessage === true || entry.delivery.payload !== undefined))));
+  entry.pauseReason === "sessions_yield" ||
+  entry.delivery?.status === "in_progress" ||
+  (entry.delivery?.status === "pending" &&
+    (entry.expectsCompletionMessage === true || entry.delivery.payload !== undefined));
 
 export const isCollectorArchiveReady = (entry: SubagentRunRecord, now: number): boolean =>
   entry.collectorCompletion !== undefined &&
@@ -162,7 +162,11 @@ export function mutateCleanup(
       // Cleanup changes only top-level bookkeeping and the frozen execution record.
       const draft = { ...current, execution: { ...current.execution } };
       const next = update(draft) === null ? null : draft;
-      return { value: next, postimages: new Map([[entry.runId, next]]) };
+      return {
+        value: next,
+        postimages: new Map([[entry.runId, next]]),
+        removalReason: "retention",
+      };
     },
     { runs },
   );

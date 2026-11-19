@@ -106,8 +106,8 @@ export function parseTeamShapeOptions(argv: string[]) {
   }
   const worktreeFiles = integer("worktree-files", 0);
   const worktreeFileBytes = integer("worktree-file-bytes", 0);
-  if (worktreeFiles * worktreeFileBytes > 256 * 1024 ** 2) {
-    throw new Error("Synthetic worktree contents must fit within 256 MiB");
+  if (worktreeFiles * worktreeFileBytes > 2 * 1024 ** 3) {
+    throw new Error("Synthetic worktree contents must fit within 2 GiB");
   }
   const worktreeColdCommits = integer("worktree-cold-commits", 0);
   if (worktreeFiles > 500_000) {
@@ -159,7 +159,8 @@ export function parseTeamShapeOptions(argv: string[]) {
 }
 
 export async function generateTeamShapeFixture(
-  options: ReturnType<typeof parseTeamShapeOptions> & Pick<TeamShapeSessionsOptions, "sessionKeys">,
+  options: ReturnType<typeof parseTeamShapeOptions> &
+    Pick<TeamShapeSessionsOptions, "sessionKeys" | "agentId">,
 ) {
   const startedAt = performance.now();
   const { stateDir } = options;
@@ -208,15 +209,11 @@ export async function generateTeamShapeFixture(
         ? { session: { maintenance: { maxEntries: Math.max(5_000, options.sessions * 2) } } }
         : {}),
       agents: {
-        ...(options.teamStress
-          ? {
-              ownership: "explicit" as const,
-              defaults: {
-                systemAgent: { agentId: "main" },
-                subagents: { archiveAfterMinutes: 24 * 60 },
-              },
-            }
-          : {}),
+        ownership: "explicit" as const,
+        defaults: {
+          systemAgent: { agentId: "main" },
+          ...(options.teamStress ? { subagents: { archiveAfterMinutes: 24 * 60 } } : {}),
+        },
         entries: Object.fromEntries(
           Array.from(
             { length: options.agents },
@@ -238,17 +235,27 @@ export async function generateTeamShapeFixture(
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
 
     // Resolvers capture environment on import; bind the fixture before loading storage owners.
-    const [{ seedTeamShapeSessions }, { seedTeamShapeExtras }, agentDb, stateDb] =
-      await Promise.all([
-        import("./team-shape-sessions.ts"),
-        import("./team-shape-extras.ts"),
-        import("../../src/state/openclaw-agent-db.js"),
-        import("../../src/state/openclaw-state-db.js"),
-      ]);
-    const agent = agentDb.openOpenClawAgentDatabase({ agentId: "main" });
+    const [
+      { seedTeamShapeSessions },
+      { seedTeamShapeExtras },
+      agentDb,
+      stateDb,
+      { retainOpenClawStateDatabaseForIdle },
+    ] = await Promise.all([
+      import("./team-shape-sessions.ts"),
+      import("./team-shape-extras.ts"),
+      import("../../src/state/openclaw-agent-db.js"),
+      import("../../src/state/openclaw-state-db.js"),
+      import("../../src/state/openclaw-state-db-cache.js"),
+    ]);
+    const agent = agentDb.openOpenClawAgentDatabase({ agentId: options.agentId ?? "main" });
     const state = stateDb.openOpenClawStateDatabase();
+    const releaseState = retainOpenClawStateDatabaseForIdle(state);
     let summary;
     try {
+      // This offline writer owns checkpoints; join periodic work before a long bulk load.
+      await agent.walMaintenance.stop();
+      await state.walMaintenance.stop();
       if (options.authAvailabilityStorm) {
         const { upsertAuthProfileAsync } =
           await import("../../src/agents/auth-profiles/profiles.js");
@@ -278,6 +285,7 @@ export async function generateTeamShapeFixture(
         node: process.version,
       };
     } finally {
+      releaseState();
       await agentDb.closeOpenClawAgentDatabasesAsync();
       await stateDb.closeOpenClawStateDatabaseAsync();
     }

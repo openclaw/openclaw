@@ -23,9 +23,22 @@ case "$mode" in
     mkdir -p "$state"
     [[ ! -e "$state/baseline.sha256" ]]
     [[ "$(adb_task shell getprop ro.kernel.qemu | tr -d '\r')" == 1 ]]
-    adb_task root
+    root_status=0
+    adb_task root > "$state/adb-root-request.log" 2>&1 || root_status=$?
+    printf '%s\n' "$root_status" > "$state/adb-root-request.status"
+    cat "$state/adb-root-request.log"
+    # A clean adbd root restart can close its transport before replying.
+    # Only that observed failure may proceed to live device/UID verification.
+    if [[ "$root_status" -ne 0 ]]; then
+      if [[ "$root_status" -ne 1 ||
+            "$(cat "$state/adb-root-request.log")" != 'adb: unable to connect for root: closed' ]]; then
+        exit "$root_status"
+      fi
+    fi
     adb_task wait-for-device
-    [[ "$(adb_task shell id -u | tr -d '\r')" == 0 ]]
+    root_uid="$(adb_task shell id -u | tr -d '\r')"
+    printf '%s\n' "$root_uid" > "$state/adb-root-uid.txt"
+    [[ "$root_uid" == 0 ]]
     adb_task shell getprop ro.build.fingerprint > "$state/build-fingerprint.txt"
     adb_task shell getprop ro.build.version.security_patch > "$state/security-patch.txt"
     adb_task shell sha256sum /system/bin/toybox > "$state/toybox.sha256"
@@ -88,6 +101,8 @@ PY
     done < "$state/eligible-zygotes.txt"
     ;;
   cleanup)
+    # Reconnect within the caller's cleanup deadline before touching device state.
+    adb_task wait-for-device
     # Stop and uninstall the task app, including DeviceIdentityStore test state.
     adb_task shell am force-stop ai.openclaw.app.debug
     adb_task uninstall ai.openclaw.app.debug.test > "$state/uninstall-test.txt" 2>&1 || true

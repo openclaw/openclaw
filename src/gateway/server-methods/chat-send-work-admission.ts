@@ -445,7 +445,7 @@ export function createChatSendWorkAdmission(params: {
       this: void,
       failure: Pick<
         Parameters<typeof recordGatewaySessionRunFailure>[0],
-        "runId" | "error" | "errorKind"
+        "runId" | "error" | "errorKind" | "notice"
       >,
     ) {
       if (!terminal) {

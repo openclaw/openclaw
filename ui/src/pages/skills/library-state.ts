@@ -24,6 +24,7 @@ import {
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSkillLibraryEnglish } from "../../i18n/locales/en-skill-library.ts";
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
@@ -50,25 +51,49 @@ export type LibraryDraft = {
   entry: SkillLibraryEntry | null;
   slug: string;
   content: string;
+  baseContent: string;
   files: readonly Readonly<SkillLibraryFile>[];
   baseFiles: readonly Readonly<SkillLibraryFile>[];
   revisions: SkillsLibraryReadResult["revisions"];
   selectedFile: string;
   rollbackRevision: string;
-  dirty: boolean;
 };
+
+// The in-app dialog, not window.confirm: webviews without a dialog bridge answer that silently.
+function confirmDiscard(): Promise<boolean> {
+  return showConfirmDialog({
+    title: t("skillLibrary.discard"),
+    message: t("skillLibrary.discardBody"),
+    confirmLabel: t("skillLibrary.discardAction"),
+    danger: true,
+  });
+}
+
+function sameLibraryFile(a: SkillLibraryFile, b: SkillLibraryFile): boolean {
+  if (Boolean(a.executable) !== Boolean(b.executable)) {
+    return false;
+  }
+  if (a.encoding === b.encoding) {
+    return a.content === b.content;
+  }
+  const bytes = (file: SkillLibraryFile) =>
+    file.encoding === "base64"
+      ? file.content
+      : bytesToBase64(new TextEncoder().encode(file.content));
+  return bytes(a) === bytes(b);
+}
 
 function libraryDraft(read?: SkillsLibraryReadResult): LibraryDraft {
   return {
     entry: read ? read.entry : null,
     slug: read ? read.entry.slug : "",
     content: read ? read.content : "",
+    baseContent: read ? read.content : "",
     files: read ? read.files : [],
     baseFiles: read ? read.files : [],
     revisions: read ? read.revisions : [],
     selectedFile: "SKILL.md",
     rollbackRevision: "",
-    dirty: false,
   };
 }
 
@@ -109,6 +134,26 @@ export function createSkillLibrary(
     importSelection: [],
   });
   const data = observation.state;
+  function isDirty(): boolean {
+    const draft = observation.read().draft;
+    if (!draft) {
+      return false;
+    }
+    if (draft.slug !== (draft.entry?.slug ?? "") || draft.content !== draft.baseContent) {
+      return true;
+    }
+    if (draft.files === draft.baseFiles) {
+      return false;
+    }
+    if (draft.files.length !== draft.baseFiles.length) {
+      return true;
+    }
+    const base = new Map(draft.baseFiles.map((file) => [file.path, file]));
+    return draft.files.some((file) => {
+      const original = base.get(file.path);
+      return !original || !sameLibraryFile(file, original);
+    });
+  }
   const [local, setLocal] = createStore({ importOpen: false, newFilePath: "", query: "" });
   let lifetime = Promise.withResolvers<void>();
   const connectionScope = createMemo(
@@ -323,6 +368,7 @@ export function createSkillLibrary(
     local,
     setLocal,
     edit: observation.edit,
+    isDirty,
     setImportOpen,
     showWorkspace() {
       const view = observation.read().view;
@@ -371,8 +417,8 @@ export function createSkillLibrary(
         state.query = "";
       });
     },
-    close() {
-      if (data.busy || (data.draft?.dirty && !window.confirm(t("skillLibrary.discard")))) {
+    async close() {
+      if (data.busy || (isDirty() && !(await confirmDiscard()))) {
         return;
       }
       data.draft = null;
@@ -383,7 +429,7 @@ export function createSkillLibrary(
       });
     },
     async open(skillId: string) {
-      if (data.draft?.dirty && !window.confirm(t("skillLibrary.discard"))) {
+      if (isDirty() && !(await confirmDiscard())) {
         return;
       }
       const connection = gateway.capture();
@@ -410,7 +456,7 @@ export function createSkillLibrary(
     },
     async save() {
       const draft = data.draft;
-      if (!draft || !canEdit()) {
+      if (!draft || !canEdit() || !isDirty()) {
         return;
       }
       await perform(async (connection) => {
@@ -419,16 +465,12 @@ export function createSkillLibrary(
         }
         const client = connection.client;
         const savedFiles = draft.files;
+        const savedContent = draft.content;
         const baseFiles = new Map(draft.baseFiles.map((file) => [file.path, file]));
         const retainFiles: string[] = [];
         const files = savedFiles.filter((file) => {
           const base = draft.entry ? baseFiles.get(file.path) : undefined;
-          if (
-            base &&
-            base.content === file.content &&
-            base.encoding === file.encoding &&
-            base.executable === file.executable
-          ) {
+          if (base && sameLibraryFile(file, base)) {
             retainFiles.push(file.path);
             return false;
           }
@@ -441,7 +483,7 @@ export function createSkillLibrary(
           ...(draft.entry ? { skillId: draft.entry.skillId } : {}),
           expectedRevision: draft.entry?.revision ?? null,
           slug: draft.slug,
-          content: draft.content,
+          content: savedContent,
           files,
           ...(retainFiles.length ? { retainFiles } : {}),
         });
@@ -450,8 +492,8 @@ export function createSkillLibrary(
         }
         draft.entry = receipt.entry;
         draft.baseFiles = savedFiles;
+        draft.baseContent = savedContent;
         draft.importedFiles = false;
-        draft.dirty = false;
         draft.revisions = [
           { revision: receipt.entry.revision, createdAt: receipt.entry.updatedAt },
           ...draft.revisions.filter((item) => item.revision !== receipt.entry.revision),
@@ -462,12 +504,18 @@ export function createSkillLibrary(
     async mutate(operation: SkillsLibraryMutateParams["action"]) {
       const draft = data.draft;
       const entry = draft?.entry;
-      if (!draft || !entry || !canEdit() || draft.dirty) {
+      if (!draft || !entry || !canEdit() || isDirty()) {
         return;
       }
       if (
         (operation === "remove" || operation === "transfer") &&
-        !window.confirm(t(`skillLibrary.confirm.${operation}`, { slug: draft.slug }))
+        (!(await showConfirmDialog({
+          title: t(`skillLibrary.confirm.${operation}`, { slug: draft.slug }),
+          message: t(`skillLibrary.confirmBody.${operation}`),
+          confirmLabel: t(`skillLibrary.${operation}`),
+          danger: operation === "remove",
+        })) ||
+          data.draft !== draft)
       ) {
         return;
       }
@@ -502,6 +550,7 @@ export function createSkillLibrary(
               return;
             }
             draft.content = read.content;
+            draft.baseContent = read.content;
             draft.files = read.files;
             draft.baseFiles = read.files;
             draft.revisions = read.revisions;
@@ -619,7 +668,6 @@ export function createSkillLibrary(
             content,
             files: bundleFiles,
             slug: data.importSlug,
-            dirty: true,
             importedFiles: true,
           });
           setImportOpen(false);

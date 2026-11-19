@@ -264,6 +264,12 @@ export function createCodexAppServerConfig({
         "plugins.entries.codex.config.appServer.url must use unix:// when appServer.transport is unix",
       );
     }
+    if (
+      config.tlsPeerCertificate !== undefined &&
+      (transport !== "websocket" || !url?.startsWith("wss://"))
+    ) {
+      throw new Error("appServer.tlsPeerCertificate requires a WSS transport");
+    }
     assertCodexAppServerConnectionSecurity({
       transport,
       url,
@@ -303,6 +309,9 @@ export function createCodexAppServerConfig({
         args: args.length > 0 ? args : ["app-server", "--listen", "stdio://"],
         ...(url ? { url } : {}),
         ...(authToken ? { authToken } : {}),
+        ...(config.tlsPeerCertificate !== undefined && {
+          tlsPeerCertificate: config.tlsPeerCertificate,
+        }),
         headers,
         ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
       },
@@ -310,7 +319,6 @@ export function createCodexAppServerConfig({
       ...(remoteWorkspaceRoot ? { remoteWorkspaceRoot } : {}),
       ...(config.nativeHookRelay ? { nativeHookRelay: config.nativeHookRelay } : {}),
       codeModeOnly: config.codeModeOnly === true,
-      loopDetectionPreToolUseRelay: config.loopDetectionPreToolUseRelay !== false,
       requestTimeoutMs: resolveCodexAppServerRequestTimeoutMs(pluginConfig),
       approvalPolicy: forcedPolicy?.approvalPolicy ?? approvalPolicy,
       sandbox: resolvedSandbox,
@@ -488,6 +496,9 @@ export function codexAppServerStartOptionsKey(
     cwd: options.cwd ?? null,
     url: options.url ?? null,
     authToken: hashSecretForKey(options.authToken, "authToken"),
+    ...(options.tlsPeerCertificate !== undefined && {
+      tlsPeerCertificate: options.tlsPeerCertificate,
+    }),
     headers: Object.entries(options.headers)
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => [key, hashSecretForKey(value, `header:${key}`)]),

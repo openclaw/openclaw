@@ -1,6 +1,11 @@
 // Covers plugin-owned model id normalization through selection surfaces.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
@@ -176,47 +181,67 @@ describe("model-selection plugin runtime normalization", () => {
     expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
   });
 
-  it("keeps concurrent model-policy runs isolated while sharing metadata", async () => {
-    normalizeProviderModelIdWithPluginMock.mockReturnValue(undefined);
-    const { promise: firstCatalogLoadStarted, resolve: signalFirstCatalogLoad } = createDeferred();
+  it("keeps concurrent model-policy runs isolated while sharing metadata", async ({ signal }) => {
+    const lifetime = createFixtureLifetime();
     const { promise: firstCatalogLoadRelease, resolve: releaseFirstCatalogLoad } = createDeferred();
-    loadPreparedModelCatalogSnapshotMock
-      .mockImplementationOnce(async () => {
-        signalFirstCatalogLoad?.();
-        await firstCatalogLoadRelease;
-        return { entries: [], authoritative: true };
-      })
-      .mockResolvedValue({ entries: [], authoritative: true });
-    const createConfig = (model: string) => ({
-      agents: {
-        defaults: {
-          modelPolicy: { allow: [`custom-provider/${model}`] },
-          models: { [`custom-provider/${model}`]: {} },
-        },
-      },
+    // Release the deliberate hold before joining both selections and resetting their mocks.
+    onTestFinished(async () => {
+      releaseFirstCatalogLoad();
+      await lifetime.cleanup();
     });
-    const firstConfig = createConfig("first");
-    const secondConfig = createConfig("second");
+    await lifetime.run(async () => {
+      try {
+        normalizeProviderModelIdWithPluginMock.mockReturnValue(undefined);
+        const { promise: firstCatalogLoadStarted, resolve: signalFirstCatalogLoad } =
+          createDeferred();
+        loadPreparedModelCatalogSnapshotMock
+          .mockImplementationOnce(async () => {
+            signalFirstCatalogLoad?.();
+            await firstCatalogLoadRelease;
+            return { entries: [], authoritative: true };
+          })
+          .mockResolvedValue({ entries: [], authoritative: true });
+        const createConfig = (model: string) => ({
+          agents: {
+            defaults: {
+              modelPolicy: { allow: [`custom-provider/${model}`] },
+              models: { [`custom-provider/${model}`]: {} },
+            },
+          },
+        });
+        const firstConfig = createConfig("first");
+        const secondConfig = createConfig("second");
 
-    const select = (cfg: ReturnType<typeof createConfig>, model: string) =>
-      selectModel(cfg, "custom-provider", model, { hasModelDirective: true });
+        const select = (cfg: ReturnType<typeof createConfig>, model: string) =>
+          selectModel(cfg, "custom-provider", model, { hasModelDirective: true });
 
-    const firstPromise = select(firstConfig, "first");
-    await firstCatalogLoadStarted;
-    const second = await select(secondConfig, "second");
-    expect(loadPreparedModelCatalogSnapshotMock).toHaveBeenCalledTimes(2);
-    releaseFirstCatalogLoad?.();
-    const first = await firstPromise;
+        const firstPromise = lifetime.track(select(firstConfig, "first"));
+        await withinTest(
+          awaitGateBeforeSettlement(
+            firstCatalogLoadStarted,
+            firstPromise,
+            "first selection settled before loading its catalog",
+          ),
+          signal,
+        );
+        const second = await withinTest(lifetime.track(select(secondConfig, "second")), signal);
+        expect(loadPreparedModelCatalogSnapshotMock).toHaveBeenCalledTimes(2);
+        releaseFirstCatalogLoad?.();
+        const first = await withinTest(firstPromise, signal);
 
-    expect([...first.allowedModelKeys]).toContain("custom-provider/first");
-    expect([...first.allowedModelKeys]).not.toContain("custom-provider/second");
-    expect([...second.allowedModelKeys]).toContain("custom-provider/second");
-    expect([...second.allowedModelKeys]).not.toContain("custom-provider/first");
-    expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledTimes(2);
-    expect(getCurrentPluginMetadataSnapshotMock.mock.calls).toEqual([
-      [{ config: firstConfig, allowWorkspaceScopedSnapshot: true }],
-      [{ config: secondConfig, allowWorkspaceScopedSnapshot: true }],
-    ]);
+        expect([...first.allowedModelKeys]).toContain("custom-provider/first");
+        expect([...first.allowedModelKeys]).not.toContain("custom-provider/second");
+        expect([...second.allowedModelKeys]).toContain("custom-provider/second");
+        expect([...second.allowedModelKeys]).not.toContain("custom-provider/first");
+        expect(getCurrentPluginMetadataSnapshotMock).toHaveBeenCalledTimes(2);
+        expect(getCurrentPluginMetadataSnapshotMock.mock.calls).toEqual([
+          [{ config: firstConfig, allowWorkspaceScopedSnapshot: true }],
+          [{ config: secondConfig, allowWorkspaceScopedSnapshot: true }],
+        ]);
+      } finally {
+        releaseFirstCatalogLoad();
+      }
+    });
   });
 
   it("preserves runtime discovery fallback across configured, stored, and fallback refs", async () => {

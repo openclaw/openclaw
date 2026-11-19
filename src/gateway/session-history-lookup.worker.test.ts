@@ -8,7 +8,11 @@ import {
 } from "../config/sessions/session-accessor.js";
 import * as projection from "../config/sessions/session-accessor.sqlite-active-projection.js";
 import * as archiveWorkers from "../config/sessions/session-accessor.sqlite-archive.js";
-import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
+import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
+import {
+  restoreSessionColdTranscript,
+  runSessionColdStorageMaintenance,
+} from "../config/sessions/session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
   maintenanceConfig,
@@ -126,7 +130,7 @@ it("reads process-held incognito history by its key or explicit sentinel path", 
     }
   }));
 
-it("restores cold lookup bytes and validates selected payloads off the caller thread", () =>
+it("reads cold lookup bytes without restoring and validates selected payloads off the caller thread", () =>
   withHistoryState(async (state) => {
     const fixture = await createSessionColdStorageFixture(
       resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
@@ -139,21 +143,20 @@ it("restores cold lookup bytes and validates selected payloads off the caller th
         config: maintenanceConfig(fixture.scope.storePath),
       }),
     ).toMatchObject({ archivedTranscripts: 1 });
+    const archive = readSessionColdTranscript(fixture.database(), fixture.scope.sessionId);
+    expect(archive).toBeDefined();
     const restore = vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation");
     const decode = vi.spyOn(zlib, "zstdDecompressSync");
     const snapshot = vi.spyOn(projection, "withCurrentProjectionSnapshot");
     expect(await read()).toEqual(expected);
     expect(await read()).toEqual(expected);
-    expect(restore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workerData: expect.objectContaining({
-          plan: expect.objectContaining({ kind: "cold-restore" }),
-        }),
-      }),
-    );
+    expect(restore).not.toHaveBeenCalled();
+    expect(readSessionColdTranscript(fixture.database(), fixture.scope.sessionId)).toEqual(archive);
     expect(decode).not.toHaveBeenCalled();
     expect(snapshot).not.toHaveBeenCalled();
 
+    // Restore explicitly for the external writer; reads keep the archive intact.
+    await restoreSessionColdTranscript(fixture.scope);
     // The fixture's full snapshot deliberately decodes rows on this thread.
     expect(fixture.snapshot()).toEqual(fixture.original);
 

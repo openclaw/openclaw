@@ -1,6 +1,8 @@
+import type { Context } from "@openclaw/llm-core";
 import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as pairing from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import {
   sanitizeToolCallInputs,
   makeMissingToolResult,
@@ -9,7 +11,9 @@ import {
   stripToolResultDetails,
 } from "./session-transcript-repair.js";
 import { castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { sparseAssistant, textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
+import { transformTransportMessages } from "./transport-message-transform.js";
 
 const toolCall = (id: string, name = "read", args: Record<string, unknown> = {}) => ({
   type: "toolCall",
@@ -60,6 +64,59 @@ function getAssistantToolCallBlocks(
 }
 
 describe("sanitizeToolUseResultPairing", () => {
+  it("matches full transport repair for canonical, legacy, and displaced occurrences", () => {
+    const result = textToolResult("a", "read", "large output".repeat(1024));
+    const synthetic = makeMissingToolResult({ toolCallId: "a", toolName: "read", timestamp: 1 });
+    const histories = [
+      [sparseAssistant([toolCall("a"), toolCall("a")]), synthetic, result],
+      [sparseAssistant([toolCall("a"), toolCall("b")]), result, { ...result, toolCallId: "b" }],
+      [sparseAssistant([toolCall("a"), toolCall("b")]), { ...result, toolCallId: "b" }, result],
+      [sparseAssistant([toolCall("a")]), user("interleaved"), result],
+      [sparseAssistant([toolCall("a")]), synthetic, result],
+      [sparseAssistant([toolCall("a")]), synthetic, sparseAssistant([toolCall("b")]), result],
+      [sparseAssistant([toolCall("a")]), result, sparseAssistant([toolCall("a")]), result],
+      [sparseAssistant([toolCall("a")])],
+      [result],
+      ...["toolCall", "toolUse", "functionCall"].flatMap((type) =>
+        ["toolUse", "error", "aborted"].flatMap((stopReason) =>
+          [
+            result,
+            { ...result, toolCallId: "", call_id: " a " },
+            { ...result, toolCallId: " a ", toolUseId: "other" },
+            { ...result, toolName: " read " },
+            { ...result, toolName: "" },
+            { ...result, toolName: undefined },
+            { ...result, toolCallId: "" },
+          ].map((output) => [
+            { ...sparseAssistant([{ ...toolCall("a"), type }]), stopReason },
+            output,
+          ]),
+        ),
+      ),
+    ];
+    const model = makeProviderModelFixture({
+      api: "openai-responses",
+      provider: "openai",
+      id: "synthetic",
+      baseUrl: "https://example.test",
+    });
+    for (const raw of histories) {
+      const messages = castAgentMessages(raw) as Context["messages"];
+      for (const preserveUnframedToolResults of [false, true]) {
+        const transform = () =>
+          transformTransportMessages(messages, model, undefined, {
+            preserveUnframedToolResults,
+          });
+        const canonical = vi
+          .spyOn(pairing, "isToolUseResultPairingCanonical")
+          .mockReturnValue(false);
+        const classified = transform();
+        canonical.mockRestore();
+        expect(transform()).toStrictEqual(classified);
+      }
+    }
+  });
+
   it("does not inspect lower-priority result aliases when the canonical id is present", () => {
     const legacyId = vi.fn(() => "stale_call");
     const result = textToolResult("call_1", "read", "ok", { isError: false });
@@ -293,17 +350,17 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
     };
   }
 
-  it("keeps the real result while dropping its synthetic predecessor and an orphan", () => {
+  it("keeps a legacy real result's outcome while dropping its synthetic predecessor and an orphan", () => {
     const input = castAgentMessages([
       sparseAssistant([toolCall("call_1")]),
       makeSyntheticResult("call_1"),
       textToolResult("call_orphan", "read", "orphan", { isError: false }),
-      textToolResult("call_1", "read", "real output", { isError: false }),
+      textToolResult("", "read", "real output", { isError: false }),
     ]);
 
     const result = repairToolUseResultPairing(input);
 
-    expect(result.messages).toEqual([input[0], input[3]]);
+    expect(result.messages).toEqual([input[0], { ...input[3], toolCallId: "call_1" }]);
   });
 
   it("late real result after another assistant turn replaces prior synthetic", () => {

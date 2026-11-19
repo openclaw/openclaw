@@ -1,0 +1,4 @@
+# Native plugin catalog/confirmation/blocked/member-view and owner-signature coverage,
+# merged guest warning fixtures, started-write deletion/blocked-member regression, and real
+# Gateway first-Viewer upgrade/stale-token downgrade exercise distinct trust boundaries.
+243

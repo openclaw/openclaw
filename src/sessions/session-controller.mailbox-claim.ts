@@ -128,17 +128,7 @@ export function releaseSessionControllerClaim(claim: SessionControllerMailboxCla
     mailbox.clearing = true;
     try {
       for (const input of claim.inputs) {
-        let authorityCurrent = true;
-        if (claim.retryBeforeExecution) {
-          try {
-            input.source?.operatorAuthority?.assertCurrent();
-            input.sourceAdapter?.authority?.assertCurrent();
-          } catch {
-            authorityCurrent = false;
-          }
-        }
         const retry =
-          authorityCurrent &&
           (!input.source || !isFollowupRunAborted(input.source)) &&
           input.claim === claim &&
           input.phase === "claimed" &&
