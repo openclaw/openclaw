@@ -297,9 +297,6 @@ try {
       assert.equal(hash, expected);
     };
   }
-  const cold = performance.now();
-  await read();
-  const coldMs = performance.now() - cold;
   // Keep the post-ready idle interval and join paced facts backfill on every store.
   if (values.gateway) {
     const settling = performance.now();
@@ -322,21 +319,35 @@ try {
         setTimeout(resolve, 250);
       });
     }
-    // Owned directory observations reconcile on 30-second wall-clock boundaries.
-    // Join the next validation so both arms measure the same part of that cycle.
-    const recoveryChargeStart = chargeOperations.length;
-    await new Promise((resolve) => {
-      setTimeout(resolve, 30000 - (Date.now() % 30000) + 50);
-    });
-    do {
-      await read();
-      assert(performance.now() - settling < 180000, "Synthetic path recovery did not complete");
-    } while (
-      !chargeOperations
-        .slice(recoveryChargeStart)
-        .some((charge) => charge.operation === "session-target-prepare")
-    );
     settleMs = performance.now() - settling;
+  }
+  // Cold history-worker latency after store startup settles, not immediate-ready availability.
+  const cold = performance.now();
+  await read();
+  const coldMs = performance.now() - cold;
+  if (values.gateway) {
+    const settling = performance.now();
+    // Recovery awaits filesystem checks after its 30-second tick; join the real notification.
+    const { observeOwnedDirectory } =
+      await import("../../src/infra/owned-directory-observation.ts");
+    await new Promise((resolve, reject) => {
+      const observation = observeOwnedDirectory(
+        path.dirname(targets[0].path),
+        (filename, event) => {
+          if (filename === undefined && event === undefined) {
+            clearTimeout(deadline);
+            observation.close();
+            resolve();
+          }
+        },
+      );
+      const deadline = setTimeout(() => {
+        observation.close();
+        reject(new Error("Synthetic path recovery did not complete"));
+      }, 60000);
+    });
+    await read();
+    settleMs += performance.now() - settling;
   }
   for (let i = 0; i < 10; i++) {
     await read();
