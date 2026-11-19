@@ -1,5 +1,5 @@
 // Exercises slower TUI PTY paths against real local and Gateway backends.
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
@@ -14,8 +14,6 @@ import {
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
-import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
@@ -42,6 +40,8 @@ import {
   readLocalShellControlFloodPids,
   registerIdempotentCleanup,
   prepareLocalAuthProviderFixture,
+  signInToLocalPtyProvider,
+  readLocalPtyAuthProfile,
   writeJsonFixture,
   startGatewayCaseControlClient,
   waitForOutputAfter,
@@ -1073,62 +1073,42 @@ describe("TUI PTY real backends", () => {
     LOCAL_TEST_TIMEOUT_MS,
   );
 
-  itWithBuiltCli(
-    "authenticates a manifest-discovered provider and resumes the unchanged local model",
-    async ({ onTestFinished }) => {
+  itWithBuiltCli.for(["inline API key", "store-backed token"])(
+    "authenticates a manifest-discovered provider and resumes the unchanged local model (%s)",
+    { timeout: LOCAL_TEST_TIMEOUT_MS },
+    async (credential, { onTestFinished }) => {
+      const storeToken = credential === "store-backed token";
       const providerId = "tui-pty-mock";
-      const profileId = `${providerId}:default`;
+      const prompt = storeToken ? "Enter T05 local auth token" : "Enter T05 local auth API key";
+      const reply = storeToken ? "STORED_TOKEN_RESPONSE" : "LOCAL_AUTH_RESPONSE";
       const sentinel = `t05-${randomUUID()}`;
-      const expectedDigest = createHash("sha256").update(sentinel).digest("hex");
       const fixture = await startLocalModeTui(onTestFinished, {
-        replyText: "LOCAL_AUTH_RESPONSE",
-        prepareConfig: (params) => prepareLocalAuthProviderFixture({ ...params, providerId }),
+        replyText: storeToken ? "WARM_SESSION_READY" : reply,
+        followupReplyText: reply,
+        prepareConfig: (params) =>
+          prepareLocalAuthProviderFixture({ ...params, providerId, storeToken }),
       });
       await fixture.run.waitForOutput("local ready", LOCAL_STARTUP_TIMEOUT_MS);
-      await fixture.run.write(`/auth ${providerId}\r`, { delay: false });
-      await fixture.run.waitForOutput(`opening auth flow for ${providerId}`);
-      await fixture.run.waitForOutput("Enter T05 local auth API key");
-      await fixture.run.write("\u0003", { delay: false });
-      await fixture.run.waitForOutput("auth flow failed:");
-
-      const retryOffset = fixture.run.visibleOutput().length;
-      await fixture.run.write(`/auth ${providerId}\r`, { delay: false });
-      await waitForOutputAfter(fixture.run, "Enter T05 local auth API key", retryOffset);
-      await fixture.run.write(`${sentinel}\r`, { delay: false });
-      await fixture.run.waitForOutput(`auth flow finished for ${providerId}`);
+      await signInToLocalPtyProvider(fixture.run, {
+        providerId,
+        prompt,
+        credential: sentinel,
+        warmSession: storeToken,
+      });
       expect(fixture.run.output().includes(sentinel)).toBe(false);
 
-      const agentDir = path.join(fixture.stateDir, "agents", "main", "agent");
-      await reloadSharedAuthStoreOwnership({
-        ...process.env,
-        OPENCLAW_STATE_DIR: fixture.stateDir,
-      });
-      const store = withEnv({ OPENCLAW_STATE_DIR: fixture.stateDir }, () => {
-        return loadAuthProfileStoreForRuntime(agentDir, {
-          readOnly: true,
-          syncExternalCli: false,
-        });
-      });
-      const profile = store?.profiles[profileId];
-      expect(profile?.type === "api_key").toBe(true);
-      expect(profile?.provider === providerId).toBe(true);
-      const persistedDigest =
-        profile?.type === "api_key" && profile.key
-          ? createHash("sha256").update(profile.key).digest("hex")
-          : "";
-      expect(persistedDigest).toBe(expectedDigest);
-
-      const config = JSON.parse(await readFile(fixture.configPath, "utf8")) as OpenClawConfig;
-      expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
-        "tui-pty-mock/gpt-5.5",
-      );
-      const replyOffset = fixture.run.visibleOutput().length;
+      const offset = fixture.run.visibleOutput().length;
       await fixture.run.write("prompt after local auth\r");
-      await waitForModelRequests(fixture, 1);
-      expect(fixture.mockModel.requests()[0]?.body.model).toBe("gpt-5.5");
-      expect(fixture.mockModel.requests()[0]?.authorization).toBe(`Bearer ${sentinel}`);
-      await fixture.run.waitForOutput("LOCAL_AUTH_RESPONSE", LOCAL_OUTPUT_TIMEOUT_MS);
-      await waitForOutputAfter(fixture.run, "| idle", replyOffset);
+      await waitForOutputAfter(fixture.run, reply, offset, LOCAL_OUTPUT_TIMEOUT_MS);
+      const requests = fixture.mockModel.requests();
+      expect(requests).toHaveLength(storeToken ? 2 : 1);
+      expect(requests.at(-1)?.body.model).toBe("gpt-5.5");
+      expect(requests.at(-1)?.authorization === `Bearer ${sentinel}`).toBe(true);
+      await waitForOutputAfter(
+        fixture.run,
+        "| idle",
+        fixture.run.visibleOutput().indexOf(reply, offset),
+      );
 
       if (process.platform === "win32") {
         await fixture.run.write("/exit\r", { delay: false });
@@ -1136,12 +1116,26 @@ describe("TUI PTY real backends", () => {
         // Windows SIGTERM terminates immediately instead of running the TUI shutdown handlers.
         const shutdownOffset = fixture.run.visibleOutput().length;
         await fixture.run.write(`/auth ${providerId}\r`, { delay: false });
-        await waitForOutputAfter(fixture.run, "Enter T05 local auth API key", shutdownOffset);
+        await waitForOutputAfter(fixture.run, prompt, shutdownOffset);
         process.kill(fixture.run.pid, "SIGTERM");
       }
-      expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+      const exit = await fixture.run.waitForExit();
+      expect(exit.exitCode).toBe(0);
+      expect(exit.signal ?? 0).toBe(0);
+
+      const profile = await readLocalPtyAuthProfile(fixture.stateDir, `${providerId}:default`);
+      expect(profile?.provider).toBe(providerId);
+      if (storeToken) {
+        expect(profile?.type === "token" && profile.tokenRef?.source === "store").toBe(true);
+        expect(profile?.type === "token" && profile.token === undefined).toBe(true);
+      } else {
+        expect(profile?.type === "api_key" && profile.key === sentinel).toBe(true);
+      }
+      const config = JSON.parse(await readFile(fixture.configPath, "utf8")) as OpenClawConfig;
+      expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
+        "tui-pty-mock/gpt-5.5",
+      );
     },
-    LOCAL_TEST_TIMEOUT_MS,
   );
 
   // Register every Gateway case inside the nested suite so targeted runs retain

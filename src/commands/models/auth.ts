@@ -26,7 +26,6 @@ import {
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
 import { runProviderPluginAuthMethodUnpersisted } from "../../plugins/provider-auth-method.js";
 import { persistProviderAuthProfilesAfterLogin } from "../../plugins/provider-auth-persistence.js";
-import type { ProviderAuthContext } from "../../plugins/provider-authentication.types.js";
 import { applyPrimaryModel } from "../../plugins/provider-model-primary.js";
 import { resolvePluginProvidersCore } from "../../plugins/providers.runtime.js";
 import {
@@ -57,6 +56,11 @@ import {
 import { repairModelSelectionRuntimePlugins } from "../runtime-plugin-install.js";
 import { saveModelProviderApiKey } from "./auth-api-key.js";
 import { tryImportProviderCredential } from "./auth-credential-import.js";
+import type {
+  ModelsAuthLoginFlowOptions,
+  ModelsAuthLoginFlowResult,
+  ModelsAuthLoginOptions,
+} from "./auth-login.types.js";
 import {
   looksLikeOpenAIApiKey,
   normalizeManualAuthProvider,
@@ -70,7 +74,6 @@ import {
   allowProviderModelsInConfig,
   applyProviderLoginDefaultModel,
   withoutProviderModelPolicy,
-  type ProviderModelAccess,
 } from "./auth-model-policy.js";
 import { promotePersistedAuthProfile } from "./auth-profile-promotion.js";
 import {
@@ -89,6 +92,8 @@ import {
   resolveModelsTargetAgent,
   updateConfig,
 } from "./shared.js";
+
+export type { ModelsAuthLoginFlowOptions, ModelsAuthLoginFlowResult } from "./auth-login.types.js";
 
 function requireManualAuthProvider(raw: string | undefined): string {
   const provider = normalizeOptionalString(raw);
@@ -692,49 +697,6 @@ export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: Ru
   );
 }
 
-type LoginOptions = {
-  signal?: AbortSignal;
-  provider?: string;
-  method?: string;
-  profileId?: string;
-  setDefault?: boolean;
-  yes?: boolean;
-  agent?: string;
-  /** Discard cached provider profiles before starting a replacement login. */
-  force?: boolean;
-};
-
-export type ModelsAuthLoginFlowResult = {
-  providerId: string;
-  methodId: string;
-  authRefresh: ModelAuthRefreshOutcome;
-  defaultModel?: string;
-  imported?: boolean;
-  profiles: Array<{
-    profileId: string;
-    provider: string;
-    mode: "api_key" | "oauth" | "token";
-  }>;
-  /** Set when saving the credential added the provider to the model allowlist. */
-  modelAccess?: ProviderModelAccess;
-};
-
-export type ModelsAuthLoginFlowOptions = LoginOptions & {
-  ownerPluginId?: string;
-  credentialOnly?: boolean;
-  assertCurrent?: () => void;
-  config?: OpenClawConfig;
-  runtime: RuntimeEnv;
-  prompter: WizardPrompter;
-  env?: NodeJS.ProcessEnv;
-  isRemote?: boolean;
-  openUrl?: (url: string) => Promise<void>;
-  browserAuthorization?: ProviderAuthContext["oauth"]["authorize"];
-  beforePersistentEffect?: () => void | Promise<void>;
-  /** Publish a hosted login through its current Gateway instead of a separate CLI connection. */
-  refreshAfterLogin?: (agentId: string) => Promise<void>;
-};
-
 export async function runModelsAuthLoginFlowCore(
   opts: ModelsAuthLoginFlowOptions,
 ): Promise<ModelsAuthLoginFlowResult> {
@@ -942,14 +904,14 @@ async function runModelsAuthLoginFlow(
   };
 }
 
-export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: RuntimeEnv) {
+export async function modelsAuthLoginCommand(opts: ModelsAuthLoginOptions, runtime: RuntimeEnv) {
   if (!process.stdin.isTTY) {
     throw new Error(
       `models auth login requires an interactive TTY. In automation, use ${formatCliCommand("openclaw models auth paste-token --provider <provider>")} when token auth is available.`,
     );
   }
 
-  await runModelsAuthLoginFlow(
+  const result = await runModelsAuthLoginFlow(
     {
       ...opts,
       runtime,
@@ -957,5 +919,10 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     },
     isSharedGatewayForCliLogin,
   );
+  if (opts.refreshAfterLogin && result.authRefresh !== "refreshed") {
+    throw new ProviderCredentialsSavedError(
+      "Sign-in was saved, but this session could not refresh its credentials. Restart the local TUI and retry your message.",
+    );
+  }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

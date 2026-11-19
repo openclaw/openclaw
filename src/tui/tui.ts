@@ -32,7 +32,6 @@ import {
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
-import { createNonExitingRuntime } from "../runtime.js";
 import { getSlashCommands, shouldSubmitExactArgumentCompletion } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
@@ -43,7 +42,11 @@ import {
   type TuiRunOutcome,
 } from "./tui-activity-status.js";
 import { createTuiAuthChildOwner } from "./tui-auth-child.js";
-import { resolveCodexCliBin, resolveLocalAuthSpawnInvocation } from "./tui-auth-invocation.js";
+import {
+  resolveCodexCliBin,
+  resolveLocalAuthSpawnInvocation,
+  runLocalProviderLogin,
+} from "./tui-auth-invocation.js";
 import { createTuiAutocompleteProvider } from "./tui-autocomplete.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
@@ -994,12 +997,7 @@ async function runTuiUnlocked(
           const codexBin = provider === OPENAI_CODEX_PROVIDER ? await resolveCodexCliBin() : null;
 
           if (!codexBin) {
-            // Built-in login must share the local TUI's retained state owner.
-            const { modelsAuthLoginCommand } = await import("../commands/models/auth.js");
-            return await modelsAuthLoginCommand(
-              { provider, signal: authAbort.signal },
-              createNonExitingRuntime(),
-            );
+            return await runLocalProviderLogin(provider, authAbort.signal);
           }
 
           const command = codexBin;

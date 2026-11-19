@@ -3,9 +3,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { withTestTimeout } from "../../test/helpers/promise.js";
+import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { readServiceChildMessage } from "../process/supervisor/service-child-protocol.js";
+import { withEnv } from "../test-utils/env.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
 import { waitFor, type PtyRun } from "./tui-pty-test-support.js";
 
@@ -297,8 +300,11 @@ export async function prepareLocalAuthProviderFixture(params: {
   config: OpenClawConfig;
   tempDir: string;
   providerId: string;
+  storeToken: boolean;
 }): Promise<OpenClawConfig> {
-  const { config, tempDir, providerId } = params;
+  const { config, tempDir, providerId, storeToken } = params;
+  const method = storeToken ? "device" : "api-key";
+  const label = storeToken ? "T05 local auth token" : "T05 local auth API key";
   const pluginId = "t05-local-auth-fixture";
   const pluginDir = path.join(tempDir, "auth-plugin");
   await mkdir(pluginDir, { recursive: true });
@@ -319,9 +325,9 @@ export async function prepareLocalAuthProviderFixture(params: {
       providerAuthChoices: [
         {
           provider: providerId,
-          method: "api-key",
-          choiceId: `${providerId}-api-key`,
-          choiceLabel: "T05 local auth API key",
+          method,
+          choiceId: `${providerId}-${method}`,
+          choiceLabel: label,
           groupId: providerId,
           groupLabel: "T05 local auth",
           optionKey: "t05LocalAuthApiKey",
@@ -339,6 +345,7 @@ export async function prepareLocalAuthProviderFixture(params: {
     writeFile(
       path.join(pluginDir, "index.js"),
       `const providerId = ${JSON.stringify(providerId)};
+const storeToken = ${storeToken};
 export default {
   id: ${JSON.stringify(pluginId)},
   name: "T05 Local Auth Fixture",
@@ -348,18 +355,23 @@ export default {
       label: "T05 local auth",
       envVars: ["T05_LOCAL_AUTH_API_KEY"],
       auth: [{
-        id: "api-key",
-        kind: "api_key",
-        label: "T05 local auth API key",
+        id: ${JSON.stringify(method)},
+        kind: ${JSON.stringify(storeToken ? "device_code" : "api_key")},
+        label: ${JSON.stringify(label)},
         run: async (ctx) => {
-          const key = await ctx.prompter.text({
-            message: "Enter T05 local auth API key",
+          const value = await ctx.prompter.text({
+            message: ${JSON.stringify(`Enter ${label}`)},
             sensitive: true,
           });
           return {
             profiles: [{
               profileId: providerId + ":default",
-              credential: { type: "api_key", provider: providerId, key },
+              ...(storeToken
+                ? {
+                    credential: { type: "token", provider: providerId, token: value },
+                    secretStorage: { kind: "store", namePrefix: "TUI_AUTH_TOKEN" },
+                  }
+                : { credential: { type: "api_key", provider: providerId, key: value } }),
             }],
           };
         },
@@ -381,4 +393,45 @@ export default {
       entries: { [pluginId]: { enabled: true } },
     },
   };
+}
+
+/** Complete a local provider login after exercising cancellation and retry in the same PTY. */
+export async function signInToLocalPtyProvider(
+  run: PtyRun,
+  {
+    providerId,
+    prompt,
+    credential,
+    warmSession,
+  }: { providerId: string; prompt: string; credential: string; warmSession: boolean },
+) {
+  if (warmSession) {
+    await run.write("warm the session before sign-in\r");
+    await run.waitForOutput("WARM_SESSION_READY");
+    await waitForOutputAfter(run, "| idle", run.visibleOutput().indexOf("WARM_SESSION_READY"));
+  }
+  await run.write(`/auth ${providerId}\r`, { delay: false });
+  await run.waitForOutput(`opening auth flow for ${providerId}`);
+  await run.waitForOutput(prompt);
+  await run.write("\u0003", { delay: false });
+  await run.waitForOutput("auth flow failed:");
+
+  const retryOffset = run.visibleOutput().length;
+  await run.write(`/auth ${providerId}\r`, { delay: false });
+  await waitForOutputAfter(run, prompt, retryOffset);
+  await run.write(`${credential}\r`, { delay: false });
+  await run.waitForOutput(`auth flow finished for ${providerId}`);
+}
+
+/** Reopen the CLI's isolated store in the test process after the PTY exits. */
+export async function readLocalPtyAuthProfile(stateDir: string, profileId: string) {
+  await reloadSharedAuthStoreOwnership({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
+  return withEnv(
+    { OPENCLAW_STATE_DIR: stateDir },
+    () =>
+      loadAuthProfileStoreForRuntime(path.join(stateDir, "agents", "main", "agent"), {
+        readOnly: true,
+        syncExternalCli: false,
+      })?.profiles[profileId],
+  );
 }
