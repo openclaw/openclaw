@@ -36,6 +36,7 @@ for (const termination of ["stopGateway", "crashGateway"] as const) {
       let sequence = 0;
       let waiting = false;
       let restarted = false;
+      let restartedParentCalls = 0;
       const children = new Set<string>();
       let ids: string[] = [];
       const reservation = await reserveTestPortListener({
@@ -73,6 +74,9 @@ for (const termination of ["stopGateway", "crashGateway"] as const) {
                 return;
               }
               if (text.includes("COLLECTOR_PARENT_TASK")) {
+                if (restarted) {
+                  restartedParentCalls++;
+                }
                 const receipts = input.flatMap((item) =>
                   isRecord(item) && item.type === "function_call_output"
                     ? [findSubagentSpawnReceipt(item.output)].filter(
@@ -184,12 +188,50 @@ for (const termination of ["stopGateway", "crashGateway"] as const) {
             },
             { timeout: 30_000 },
           );
+          const queued =
+            termination === "crashGateway"
+              ? await client.request<{ runId: string }>("chat.send", {
+                  sessionKey: rootKey,
+                  message: "COLLECTOR_CRASH_QUEUED",
+                  queueMode: "followup",
+                  idempotencyKey: randomUUID(),
+                  deliver: false,
+                })
+              : undefined;
           await instance[termination]();
           await client.stopAndWait();
           client = undefined;
           restarted = true;
           await instance.startGateway();
           client = await connectRestartClient(instance, {}, signal);
+          if (queued) {
+            // SIGKILL has no graceful resume marker: settle the stranded input,
+            // then explicitly continue the parent without replaying the old turn.
+            await vi.waitFor(
+              async () => {
+                const history = await client!.request<{ inputReceipts?: unknown[] }>(
+                  "chat.history",
+                  {
+                    sessionKey: rootKey,
+                    inputRunIds: [queued.runId],
+                  },
+                );
+                expect(history.inputReceipts).toContainEqual({
+                  runId: queued.runId,
+                  state: "pending",
+                  cancelled: true,
+                });
+              },
+              { timeout: 12_000 },
+            );
+            expect(restartedParentCalls).toBe(0);
+            await client.request("chat.send", {
+              sessionKey: rootKey,
+              message: "Continue collecting the preserved child results.",
+              idempotencyKey: randomUUID(),
+              deliver: false,
+            });
+          }
           await vi.waitFor(
             async () => {
               await Promise.race([failed.promise, Promise.resolve()]);

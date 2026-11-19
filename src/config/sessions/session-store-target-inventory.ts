@@ -658,8 +658,10 @@ export function readSessionStoreTargetInventory(
         });
       } else {
         dedupeSessionStoreTargetsBySqliteTarget(
+          // Deferred startup recovery captures one prepared agent at a time. Keep
+          // selection within that request's captured candidates, not the full config.
           resolveConfiguredSessionStoreTargets(config, env, request.paths).filter(
-            (target) => !options.excludeTarget(target),
+            (target) => request.agentIds.includes(target.agentId) && !options.excludeTarget(target),
           ),
           options,
         );

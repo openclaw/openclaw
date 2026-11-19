@@ -1,0 +1,3 @@
+# 68 lines: real SIGKILL collector, deferred-input settlement, explicit recollection.
+# 16 lines: configured inventory excludes agents outside captured scope.
+84
