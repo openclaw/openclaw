@@ -32,10 +32,7 @@ export async function handleOpenClawIdMachineAction(
       undefined,
       errorShape(ErrorCodes.INVALID_REQUEST, result.detail, { details: { code: result.code } }),
     );
-  const rebindStep = Object.hasOwn(REBIND_STEPS, action)
-    ? // SAFETY: Object.hasOwn checked that action is one of REBIND_STEPS' own keys.
-      REBIND_STEPS[action as keyof typeof REBIND_STEPS]
-    : undefined;
+  const rebindStep = Object.entries(REBIND_STEPS).find(([name]) => name === action)?.[1];
   if (!rebindStep && action !== "unlink_preview" && action !== "unlink") {
     refuse({ code: "malformed", detail: `unknown action ${action}` });
     return;

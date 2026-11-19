@@ -1,0 +1,6 @@
+# OCF-281 (unlink a claw from its own computer): unlinking permanently removes every member and
+# retires the claw's name, so the tests cover the tunnel refusal on every action, binding the
+# unlink to the warned claw, the wipe and teardown with failing follow-up steps, the persisted
+# pending unlink across restarts, Discovery's refusal kept as refused, the sender's stop/start
+# lifecycle, the CLI warning and confirmation, and the Control UI dialog.
+273
