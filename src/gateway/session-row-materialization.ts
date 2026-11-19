@@ -97,6 +97,7 @@ function sessionRowMaterializationMatches(
     equal(row.swarm, input.includeSwarmSummary ? input.swarm : undefined) &&
     row.displayName === input.displayName &&
     row.derivedTitle === input.derivedTitle &&
+    row.hasMessages === input.hasMessages &&
     row.lastMessagePreview === input.lastMessagePreview &&
     source.lastMessagePreview === input.lastMessagePreview &&
     equal(row.lastAssistantMessage, input.lastAssistantMessage) &&

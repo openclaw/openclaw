@@ -878,6 +878,14 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         ownerHandle: "maker",
         official: false,
       });
+      await gateway.setHistoryMessages([]);
+      await gateway.setSessionRow({
+        key: "agent:workflow-operator:main",
+        kind: "direct",
+        sessionId: "template-empty-session",
+        hasMessages: false,
+      });
+      await gateway.deferNext("chat.startup");
       const card = page.locator("[data-templates-explore] [data-templates-entry]").first();
       await card.waitFor();
       expect(await card.textContent()).toContain("@openclaw");
@@ -977,12 +985,25 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       expect(Math.abs(admittedFooter!.y - pendingFooter!.y)).toBeLessThanOrEqual(1);
       expect(Math.abs(admittedFooter!.height - pendingFooter!.height)).toBeLessThanOrEqual(1);
       await capture(page, `template-add-${width}-admitted`, admittedPane);
+      // The session description proves there are no saved messages, even
+      // while setup and the first history response remain pending.
+      await gateway.waitForRequest("sessions.messages.subscribe", {
+        match: { key: "agent:workflow-operator:main" },
+      });
+      expect(await admittedPane.locator(".creation-composer").count()).toBe(1);
+      const transcriptSkeleton = admittedPane.locator(
+        ".chat-thread .chat-conversation-loading, .chat-thread .loading-skeleton, .chat-thread openclaw-panel-loading-skeleton",
+      );
+      expect(await transcriptSkeleton.count()).toBe(0);
       await gateway.resolveDeferred("templates.add.apply", {
         agentId: "workflow-operator",
         sessionKey: "agent:workflow-operator:main",
         status: "complete",
         readiness: { ready: false },
       });
+      await admittedPane.locator(".creation-composer").waitFor({ state: "hidden" });
+      expect(await transcriptSkeleton.count()).toBe(0);
+      await gateway.resolveDeferred("chat.startup");
       expect(await composer.inputValue()).toBe("Keep my draft while setup finishes");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       // One Add request, with no plan digest or acknowledgements, and no review first.

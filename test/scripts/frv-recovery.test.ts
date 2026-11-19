@@ -53,7 +53,7 @@ function fixture(candidateSha = Q) {
   const runs = new Map<number, Record<string, unknown>>([[10, parent]]);
   const artifacts = new Map<string, Array<Record<string, unknown>>>();
   const archives = new Map<number, Buffer>();
-  const jobs: Array<{ id: number; name: string }> = [];
+  const jobs: Array<{ id: number; name: string; steps?: Array<Record<string, unknown>> }> = [];
   const logs = new Map<number, string>();
   function artifact(runId: number, name: string, file: string, value: unknown) {
     const bytes = makeStoredZip({ [file]: JSON.stringify(value) + "\n" });
@@ -154,9 +154,13 @@ function fixture(candidateSha = Q) {
     })),
     getRunAttemptJobs: vi.fn(async () => jobs),
     getJobLog: vi.fn(async (id: number) => logs.get(id)),
-    verifyQualificationAdmission: vi.fn(async () => ({
-      coverage: { children: roles.map((key) => ({ key, parentJobName: key })) },
-    })),
+    verifyQualificationAdmission: vi.fn(
+      async (
+        _verification: Parameters<
+          typeof import("../../scripts/release-qualification-admission.mjs").verifyQualificationAdmission
+        >[0],
+      ) => ({ coverage: { children: roles.map((key) => ({ key, parentJobName: key })) } }),
+    ),
     getWorkflowSource: vi.fn((sha: string) =>
       sha === P
         ? 'env:\n  FULL_RELEASE_RECEIPT_RECOVERY_CONTRACT: "1"\n  FULL_RELEASE_RECEIPT_RECOVERY_REQUEST_CONTRACT: "1"\nrun-name: Receipt Recovery ' +
@@ -202,6 +206,68 @@ function fixture(candidateSha = Q) {
 }
 
 describe("retained receipt recovery operator", () => {
+  it.each([false, true])(
+    "recovers missing parent source from authenticated inputs (changed=%s)",
+    async (changed) => {
+      const f = fixture();
+      const original = candidatePublicationFixture({ candidateSha: Q, runId: "10" });
+      f.artifacts.set("10", []);
+      for (const child of original.admission.receipt.coverage.children) {
+        f.jobs.find((job) => job.name === child.key)!.name = child.parentJobName;
+      }
+      f.runs.get(10)!.head_branch = original.branch;
+      const frozen = f.client.getWorkflowSource(Q);
+      f.client.getWorkflowSource.mockImplementation(
+        () =>
+          frozen +
+          `
+  resolve_target:
+    name: Resolve target ref
+    steps:
+      - name: Resolve trusted workflow identity
+        env:
+          QUALIFICATION_ADMISSION_JSON: descriptor
+          QUALIFICATION_INPUTS_JSON: inputs
+`,
+      );
+      const step = {
+        name: "Resolve trusted workflow identity",
+        status: "completed",
+        conclusion: "success",
+        started_at: "2026-11-19T09:00:00Z",
+        completed_at: "2026-11-19T09:00:01Z",
+      };
+      f.jobs.push({ id: 50, name: "Resolve target ref", steps: [step] });
+      const inputs = {
+        ...original.admission.receipt.request.inputs,
+        ...(changed ? { mode: "install" } : {}),
+      };
+      f.logs.set(
+        50,
+        `2026-11-19T09:00:00.1Z ##[group]Run trusted identity
+2026-11-19T09:00:00.2Z env:
+2026-11-19T09:00:00.3Z   QUALIFICATION_ADMISSION_JSON: ${JSON.stringify(original.admission.descriptor)}
+2026-11-19T09:00:00.4Z   QUALIFICATION_INPUTS_JSON: ${JSON.stringify(inputs, null, 2)}
+2026-11-19T09:00:00.5Z   CANDIDATE_SHA: ${Q}
+2026-11-19T09:00:00.6Z ##[endgroup]`,
+      );
+      f.client.verifyQualificationAdmission.mockImplementation(async (verification) =>
+        original.client.verifyQualificationAdmission(verification),
+      );
+      const result = discoverReceiptRecoveryRequest("10", P, f.client);
+      if (changed) {
+        await expect(result).rejects.toThrow("authenticated operator request");
+      } else {
+        await expect(result).resolves.toMatchObject({
+          qualificationAdmission: original.admission.descriptor,
+          candidateBinding: { request: { targetSha: Q, toolingSha: Q } },
+        });
+        expect(f.client.verifyQualificationAdmission).toHaveBeenCalledWith(
+          expect.objectContaining({ inputs }),
+        );
+      }
+    },
+  );
   it("discovers a rerun parent without changing qualification attempt 1", async () => {
     const f = fixture();
     const parent = f.runs.get(10)!;
@@ -370,7 +436,7 @@ describe("retained receipt recovery operator", () => {
     const f = fixture();
     f.artifacts.set("10", []);
     await expect(discoverReceiptRecoveryRequest("10", P, f.client)).rejects.toThrow(
-      "full-release-source-admission-parent-10-1 is missing or ambiguous",
+      "frozen admission input step is missing or ambiguous",
     );
     expect(f.client.postRecovery).not.toHaveBeenCalled();
   });

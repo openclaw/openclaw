@@ -12,11 +12,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname } from "node:path";
-import { isDeepStrictEqual } from "node:util";
+import { isDeepStrictEqual, stripVTControlCharacters } from "node:util";
 import { parse as parseYaml } from "yaml";
 import { validateArtifactProducerRun } from "../full-release-artifacts.mjs";
 import {
   authenticateReceiptRecovery,
+  receiptRecoverySourceRequest,
   validateReceiptRecoveryRequest,
   verifyOriginalReceiptQualification,
 } from "../full-release-receipt-recovery.mjs";
@@ -210,6 +211,80 @@ export function parseReceiptRecoveryArgs(args) {
   return options;
 }
 
+// A rerun can remove parent artifacts. Read only the successful runner input
+// group; the admission owner still authenticates its descriptor and every input.
+async function discoverOriginalAdmission(parent, jobs, client) {
+  const workflow = parseYaml(client.getWorkflowSource(parent.head_sha));
+  const definition = one(
+    (workflow.jobs?.resolve_target?.steps ?? []).filter(
+      (step) => step.env?.QUALIFICATION_ADMISSION_JSON && step.env.QUALIFICATION_INPUTS_JSON,
+    ),
+    "frozen admission input step",
+  );
+  const job = one(
+    jobs.filter((entry) => entry.name === workflow.jobs.resolve_target.name),
+    "original resolve job",
+  );
+  const step = one(
+    job.steps.filter((entry) => entry.name === definition.name),
+    "original admission input step",
+  );
+  requireValue(
+    step.status === "completed" && step.conclusion === "success",
+    "original admission inputs did not succeed",
+  );
+  const log = await client.getJobLog(job.id);
+  requireValue(
+    typeof log === "string" && Buffer.byteLength(log) <= 8 * 1024 * 1024,
+    "resolve log exceeds limit",
+  );
+  const groups = [
+    ...stripVTControlCharacters(log).matchAll(
+      /^(\d{4}-\d\d-\d\dT\S+Z) ##\[group\]Run [\s\S]*?^\d{4}-\d\d-\d\dT\S+Z ##\[endgroup\]/gmu,
+    ),
+  ].filter(
+    (match) =>
+      Date.parse(match[1]) >= Date.parse(step.started_at) &&
+      Date.parse(match[1]) < Date.parse(step.completed_at) + 1000 &&
+      match[0].includes("  QUALIFICATION_INPUTS_JSON: "),
+  );
+  const header = one(groups, "original admission runner inputs")[0]
+    .replace(/^\d{4}-\d\d-\d\dT\S+Z /gmu, "")
+    .split("\nenv:\n");
+  requireValue(header.length === 2, "original admission environment differs");
+  const env = {};
+  let key;
+  for (const line of header[1].split("\n").slice(0, -1)) {
+    const match = /^ {2}([A-Z][A-Z0-9_]*): (.*)$/u.exec(line);
+    if (match) {
+      requireValue(!Object.hasOwn(env, match[1]), "duplicate admission input");
+      key = match[1];
+      env[key] = match[2];
+    } else {
+      requireValue(key, "invalid admission environment");
+      env[key] += "\n" + line;
+    }
+  }
+  const descriptor = JSON.parse(env.QUALIFICATION_ADMISSION_JSON);
+  const admission = await client.verifyQualificationAdmission({
+    descriptor,
+    repository: REPOSITORY,
+    candidateSha: env.CANDIDATE_SHA,
+    qualificationSha: parent.head_sha,
+    workflowRef: parent.head_branch,
+    inputs: JSON.parse(env.QUALIFICATION_INPUTS_JSON),
+  });
+  return {
+    ...receiptRecoverySourceRequest(admission, {
+      runId: String(parent.id),
+      runAttempt: 1,
+      fullRef: "refs/heads/" + parent.head_branch,
+      sha: parent.head_sha,
+    }),
+    qualificationAdmission: descriptor,
+  };
+}
+
 export async function discoverReceiptRecoveryRequest(runId, workflowSha, client) {
   requireValue(
     /^[1-9][0-9]*$/u.test(runId) && /^[a-f0-9]{40}$/u.test(workflowSha),
@@ -225,14 +300,12 @@ export async function discoverReceiptRecoveryRequest(runId, workflowSha, client)
       String(parent.path).split("@")[0] === ".github/workflows/full-release-validation.yml",
     "original parent identity differs",
   );
-  const source = (
-    await artifactJson(
-      client,
-      parent,
-      "full-release-source-admission-parent-" + runId + "-1",
-      "publication-source-admission.json",
-    )
-  ).value;
+  const jobs = await client.getRunAttemptJobs(runId, 1, { requireComplete: true });
+  const inventory = await client.getRunArtifacts(runId);
+  const sourceName = "full-release-source-admission-parent-" + runId + "-1";
+  const source = inventory.some((entry) => entry.name === sourceName)
+    ? (await artifactJson(client, parent, sourceName, "publication-source-admission.json")).value
+    : await discoverOriginalAdmission(parent, jobs, client);
   requireValue(source.qualificationAdmission, "original source has no qualification admission");
   const admission = await client.verifyQualificationAdmission({
     descriptor: source.qualificationAdmission,
@@ -241,8 +314,6 @@ export async function discoverReceiptRecoveryRequest(runId, workflowSha, client)
     qualificationSha: parent.head_sha,
     workflowRef: parent.head_branch,
   });
-  const jobs = await client.getRunAttemptJobs(runId, 1, { requireComplete: true });
-  const inventory = await client.getRunArtifacts(runId);
   let plan;
   if (inventory.some((entry) => entry.name === "full-release-execution-plan-" + runId)) {
     // An invalid existing plan is not a reason to fall back to discovery.

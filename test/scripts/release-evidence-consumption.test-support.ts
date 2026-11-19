@@ -668,6 +668,17 @@ export function recoveryConsumptionFixture(
     ...direct.client,
     getWorkflowSource: sourceFile,
     getRun: async (id: string) => required(runs.get(id), id),
+    getRunView: async (id: string) => {
+      const observed = required(runs.get(id), id);
+      return {
+        status: observed.status,
+        conclusion: observed.conclusion,
+        attempt: observed.run_attempt,
+        headSha: observed.head_sha,
+        headBranch: observed.head_branch,
+        url: observed.html_url,
+      };
+    },
     getRunAttempt: async (id: string, attempt: number | string) => {
       if (Number(attempt) !== 1) {
         throw new Error("Unexpected attempt");

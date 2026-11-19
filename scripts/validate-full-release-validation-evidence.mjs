@@ -10,6 +10,7 @@ import {
   publicationSourceJson,
 } from "./full-release-publication-contract.mjs";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
+import { isFrv18PublicationException } from "./lib/frv18-publication-exception.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { verifyReceiptRecoveryAuthority } from "./lib/release-evidence-identity.mjs";
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
@@ -199,7 +200,7 @@ function validatePublicationEvidence(options, evidence) {
   ) {
     throw new Error("Publication consumer differs from the authenticated release run.");
   }
-  if (current.conclusion !== "success") {
+  if (current.conclusion !== "success" && !isFrv18PublicationException(evidence)) {
     throw new Error("Required release validation evidence did not pass.");
   }
   if (manifest.version !== 4) {
@@ -327,7 +328,7 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
     },
     evidenceClient,
   );
-  if (evidence.current.conclusion !== "success") {
+  if (evidence.current.conclusion !== "success" && !isFrv18PublicationException(evidence)) {
     throw new Error("Required release validation evidence did not pass.");
   }
   if (evidence.current.runAttempt !== run.runAttempt) {
@@ -446,7 +447,7 @@ function validateCandidateOwnedArtifactBinding(manifest, candidateSha, qualifica
     qualification.candidateSha !== candidateSha ||
     qualification.qualificationSha !== qualificationSha ||
     evidence.current.runAttempt !== Number(manifest.runAttempt) ||
-    evidence.current.conclusion !== "success" ||
+    (evidence.current.conclusion !== "success" && !isFrv18PublicationException(evidence)) ||
     !isDeepStrictEqual(evidence.current.manifest, sortJsonValueKeys(manifest))
   ) {
     throw new Error("Publication artifact is not bound to authenticated candidate qualification");

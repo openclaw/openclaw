@@ -226,6 +226,9 @@ export function trustedMainPackageFixture({
     getRunArtifacts: unsupported,
     getArtifact: unsupported,
     loadExecutionPlanEvidence: unsupported,
+    loadPlanPublicationContext: unsupported,
+    loadPlanPublishInputs: unsupported,
+    loadPinnedJsonArtifact: unsupported,
     verifyQualificationAdmission: () => {
       throw new Error("historical fixture must not request candidate qualification admission");
     },
