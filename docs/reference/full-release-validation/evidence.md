@@ -170,24 +170,28 @@ separate **not run** records.
 
 <a id="receipt-backed-beta-aggregate-recovery" />
 
-## Unavailable qualification evidence
+## Receipt-backed aggregate recovery
 
-Receipt-backed aggregate recovery is retired for every release profile, including
-beta. An earlier recovery aggregate is not accepted as qualification evidence.
+After a reviewed tooling-only repair, recover the original qualification receipts without
+rerunning tests or rebuilding publication artifacts:
 
-Use the ordinary authenticated qualification flow. If its required execution plan,
-admission, child evidence, or publication artifacts are unavailable, obtain fresh
-qualification for the same immutable candidate. Do not reconstruct missing evidence,
-substitute a recovery aggregate, or relabel the original parent as successful.
+```bash
+pnpm frv recover --run <original-parent-run-id> --workflow-sha <exact-trusted-main-P> --request-file <private-request-path>
+pnpm frv recover --reconcile-request <private-request-path> --json
+```
 
-Ordinary authenticated child and qualification reuse remains available when its
-required evidence exists and passes current admitted policy. A tooling-only repair
-may use a newly admitted Q without changing C; it still requires the normal successful
-qualification parent.
+The new aggregate authenticates the original admission, C/Q, complete child receipts,
+and unchanged npm/SDK/plugin/Docker bytes under current P policy. It never changes the
+original parent result. Qualification retains attempt 1; the request separately pins
+the latest terminal parent attempt. Missing evidence, changed attempts, or lost authority
+fail closed. Keep the private request: reconciliation never redispatches an uncertain
+request. Recovery supports the originally admitted beta, stable, full, or extended-stable
+publication selection; ordinary qualification remains unchanged.
 
 ## Workflow files
 
 - `.github/workflows/full-release-validation.yml`
+- `.github/workflows/full-release-receipt-recovery.yml`
 - `.github/workflows/full-release-candidate.yml`
 - `.github/workflows/openclaw-release-checks.yml`
 - `.github/workflows/openclaw-live-and-e2e-checks-reusable.yml`

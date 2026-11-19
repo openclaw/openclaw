@@ -1,17 +1,16 @@
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
-import { projectFrv18Publication } from "../../scripts/lib/frv18-publication-exception.mjs";
-import { createReleasePublishInputs } from "../../scripts/lib/release-publish-inputs.mjs";
-import { createPluginSdkApiReleaseEvidence } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
+import { authenticatePreparedNpmArtifact } from "../../scripts/plugin-npm-prepared-release.mjs";
 import { validateReleaseRunEvidence } from "../../scripts/release-ci-summary.mjs";
 import { authenticateFullReleaseValidationEvidence } from "../../scripts/validate-full-release-validation-evidence.mjs";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
+import { createFrv18PublicationClient } from "./frv18-publication.test-support.js";
 
 afterEach(() => vi.unstubAllGlobals());
 
 it.each([
   "failure",
+  "prepared-npm",
   "cancelled",
   "in_progress",
   "other-run",
@@ -33,118 +32,10 @@ it.each([
   if (scenario === "cancelled") {
     parent.conclusion = "cancelled";
   }
-  const originalGetRun = f.client.getRun;
-  const client = {
-    ...f.client,
-    getRun: async (id: string) => {
-      if (id === f.runId) {
-        return parent;
-      }
-      if (["44507905054", "44507904089"].includes(id)) {
-        const stage = id === "44507905054" ? "npm" : "docker";
-        return {
-          id,
-          run_attempt: 1,
-          status: "completed",
-          conclusion: "success",
-          head_sha: sha,
-          head_branch: f.branch,
-          path: ".github/workflows/full-release-artifacts.yml",
-          display_title:
-            "Full Release Artifacts full-release-validation-44507108002-1-artifacts-" + stage,
-        };
-      }
-      return originalGetRun(id);
-    },
-    getRunView: async () => ({
-      status: parent.status,
-      conclusion: parent.conclusion,
-      attempt: 1,
-      headSha: sha,
-      headBranch: f.branch,
-      url: parent.html_url,
-    }),
-    getRunAttemptJobs: vi.fn((id: string) => {
-      if (id !== f.runId) {
-        throw new Error("Qualification children must not be read");
-      }
-      return f.client.getRunAttemptJobs(id);
-    }),
-    getParentJobs: vi.fn(() => {
-      throw new Error("Qualification jobs must not be read");
-    }),
-    loadExecutionPlanEvidence: () => ({
-      plan: f.plan,
-      artifact: {
-        id: 14524452145,
-        name: "full-release-execution-plan-44507108002",
-        digest: "sha256:e6cd16c92abefdc5f4a4aa949c1c8b369ec89a708652e45181d8a49cd8eea5ae",
-        size_in_bytes: 10569,
-        workflow_run: { head_sha: sha, head_branch: f.branch },
-      },
-    }),
-    loadPinnedJsonArtifact: async ({ runId }: { runId: string }) => {
-      if (runId === "44507913588") {
-        return {
-          producer: {
-            repository: f.repository,
-            runId: 44507913588,
-            runAttempt: 1,
-            workflowPath: ".github/workflows/plugin-npm-release.yml",
-            workflowEvent: "workflow_dispatch",
-            workflowHeadBranch: f.branch,
-            workflowSha: sha,
-          },
-        };
-      }
-      const stage = runId === "44507905054" ? "npm" : "docker";
-      return {
-        schema: "openclaw.full-release-artifact-receipt/v1",
-        stage,
-        dispatchId: "full-release-validation-44507108002-1-artifacts-" + stage,
-        repository: f.repository,
-        sourceSha: scenario === "tampered-artifact" ? "a".repeat(40) : sha,
-        toolingSha: sha,
-        workflowRef: f.branch,
-        releaseTag: "v2026.11.10-beta.1",
-        runAttempt: "1",
-        runId,
-        outputs:
-          stage === "npm"
-            ? { qualified_preflight_bundle_json: JSON.stringify(f.npmQualified) }
-            : {
-                prepared_run_id: f.runId,
-                prepared_run_attempt: "1",
-                prepared_artifact_name: f.manifest.publicationArtifacts.docker.preparedArtifactName,
-                prepared_manifest_sha256:
-                  f.manifest.publicationArtifacts.docker.preparedManifestSha256,
-              },
-      };
-    },
-    loadPlanPublicationContext: async (plan: typeof f.plan) => {
-      const projected = await projectFrv18Publication(plan, client);
-      expect(projected.manifest.runId).toBe(f.runId);
-      expect(projected.manifest.releaseProfile).toBe("beta");
-      return projected;
-    },
-    loadPlanPublishInputs: async (manifest: typeof f.manifest) => {
-      const diff = { entrypointsAdded: [], entrypointsRemoved: [], exports: [] };
-      const digest = createHash("sha256").update(JSON.stringify(diff)).digest("hex");
-      return createReleasePublishInputs({
-        manifest,
-        npmManifest: {
-          ...f.npmManifest,
-          pluginSdkApi: createPluginSdkApiReleaseEvidence({
-            baseRef: "v2026.11.5",
-            baseSha: "b".repeat(40),
-            headSha: sha,
-            workflowSha: sha,
-            diff: { ...diff, digest },
-          }),
-        },
-      });
-    },
-  };
+  const client = createFrv18PublicationClient(f, parent, {
+    missingManifest: scenario === "prepared-npm",
+    tamperedArtifact: scenario === "tampered-artifact",
+  });
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) =>
@@ -169,6 +60,30 @@ it.each([
     verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
     expectedCoreNpmPublication: { npmDistTag: "beta" },
   };
+  if (scenario === "prepared-npm") {
+    const authenticated = await authenticatePreparedNpmArtifact({
+      repository: f.repository,
+      sourceSha: sha,
+      workflowSha: f.p,
+      workflowFullRef: f.publisherFullRef,
+      fullReleaseValidationRunId: f.runId,
+      fullReleaseValidationRunAttempt: 1,
+      releaseTag: "v2026.11.10-beta.1",
+      selectionMode: "all-publishable",
+      plugins: "",
+      npmDistTag: "default",
+      evidenceClient: client,
+    });
+    expect(authenticated.artifact).toMatchObject({
+      artifactId: 14519599717,
+      artifactName: `plugin-npm-prepared-${sha}-44507913588-1`,
+      workflowSha: sha,
+      runId: 44507913588,
+      runAttempt: 1,
+    });
+    expect(authenticated.publicationSelection).toEqual(f.source.publicationSelection);
+    return;
+  }
   const verification = authenticateFullReleaseValidationEvidence(options, client);
   if (["tampered-artifact", "other-version", "other-candidate"].includes(scenario)) {
     await expect(verification).rejects.toThrow();
