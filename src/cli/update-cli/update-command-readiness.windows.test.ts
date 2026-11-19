@@ -47,9 +47,9 @@ vi.mock("../../infra/ports-inspect.js", async (importOriginal) => {
 vi.mock("../../infra/package-json.js", () => ({ readPackageVersion: async () => "2026.9.5" }));
 vi.mock("../../infra/update-git-runtime.js", () => ({ readBuiltGatewayBuildId: async () => null }));
 vi.mock("../../infra/gateway-owner-lease.js", () => ({ readGatewayOwnerLease: () => undefined }));
+// mock-isolation: Readiness waits must not open a real state database for lease reads.
 vi.mock("../../infra/startup-migration-checkpoint.js", () => ({
   STARTUP_MIGRATION_LEASE_TTL_MS: 300_000,
-  STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS: 10_000,
   hasActiveStartupMigrationLease: () => false,
 }));
 vi.mock("../../gateway/local-http-probe.js", () => ({
