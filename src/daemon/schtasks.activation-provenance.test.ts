@@ -393,13 +393,13 @@ describe("Scheduled Task activation provenance", () => {
       );
       verifiedGatewayPids.mockReturnValue([4242]);
       // Task Scheduler omits Settings.Enabled=true on export and inserts Enabled=false in schema order.
-      schtasksRegistration.onCommand = ([action, , , change]) => {
+      schtasksRegistration.onCommand = (argv) => {
         const registration = schtasksRegistration.response;
-        if (registration?.stdout && (action === "/Create" || change === "/DISABLE")) {
+        if (registration?.stdout && (argv[0] === "/Create" || argv.includes("/DISABLE"))) {
           schtasksRegistration.response = {
             ...registration,
             stdout:
-              action === "/Create"
+              argv[0] === "/Create"
                 ? registration.stdout.replace(
                     /(<Settings>[\s\S]*?)\s*<Enabled>true<\/Enabled>/u,
                     "$1",
