@@ -544,6 +544,7 @@ it("never delegates or captures a tool the guest sender is refused", async () =>
   expect(run.listed).toEqual(owner.listed);
   expect(run.callable).not.toContain("world__calendar_list");
   expect(run.inherited?.length).toBeGreaterThan(0);
+  expect(run.cronCreator?.length).toBeGreaterThan(0);
   for (const name of ["exec", "world__calendar_list"]) {
     expect(run.inherited ?? []).not.toContain(name);
     expect(run.cronCreator ?? []).not.toContain(name);

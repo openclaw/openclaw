@@ -265,7 +265,7 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       preparedToolBase.hasNativeWebSearch ||
       toolSearch.catalogToolCount >
         (preparedToolBase.toolSurfaceRuntime.toolSearchCatalogRef?.current?.entries ?? []).filter(
-          (entry) => runPolicyDenied.has(entry.name),
+          (entry) => runPolicyDenied.has(normalizeToolPolicyName(entry.name)),
         ).length ||
       ((catalogedClientToolNames.size > 0 || deferredDirectoryToolsCallable) &&
         explicitlyAllowedClientTool) ||
