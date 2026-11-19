@@ -44,7 +44,9 @@ import { createSubagentRegistryRestorer } from "./subagent-registry-restore.js";
 import type { RegisterSubagentRunParams } from "./subagent-registry-run-launch-record.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import { clearSubagentRunsReadCacheForTest } from "./subagent-registry-state.js";
+import { createSubagentSweepReadScope } from "./subagent-registry-sweep-cleanup.js";
 import { reconcileProvisionalSubagentKill } from "./subagent-registry-sweep-kill.js";
+import { settleRestartInterruptedSubagentRun } from "./subagent-registry-sweep-settle.js";
 import {
   createSubagentRegistrySweeper,
   retireSupersededSubagentRun as retireSupersededSubagentRunForSweep,
@@ -608,9 +610,24 @@ export async function activateSubagentRegistry(
   if (activeGatewayContextResolver !== resolver || !resolver?.()) {
     return;
   }
-  // Hydration alone does not run lifecycle work. Consumed inputs need only receipt
-  // settlement; resume that existing owner without replaying interrupted execution.
+  // Settle interrupted execution before restart admission rebinds requester custody.
+  // Do not sweep other retired delivery: its exact requester can still recover it.
+  const readScope = createSubagentSweepReadScope(subagentRuns);
   for (const entry of subagentRuns.values()) {
+    readScope.assertCurrent();
+    if (
+      await settleRestartInterruptedSubagentRun({
+        runId: entry.runId,
+        entry,
+        readScope,
+        complete: completionRuntime.completeSubagentRunWithRecovery,
+        now: Date.now(),
+      })
+    ) {
+      continue;
+    }
+    readScope.assertCurrent();
+    // Consumed inputs need only receipt settlement, never execution replay.
     if (entry.requesterSettleWake && hasConsumedRequesterInput(entry)) {
       subagentLifecycleController.markRequesterSettleWakeRestored(entry);
       resumeRequesterSettleWake(entry.runId, entry);

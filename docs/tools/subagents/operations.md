@@ -107,10 +107,13 @@ record a result already delivered after child cleanup. The registry owns recover
 of requester-settle continuations instead of starting a competing requester turn
 under the old run's operator authority.
 
-A crash or `SIGKILL` does not write a shutdown marker, so it resumes neither the
-parent nor its children. Their stored transcripts and task records remain available
-for inspection. Send a new message to continue. Reversible suspension does not
-mark or cancel children. See [Restart recovery](/gateway/restart-recovery).
+A crash or `SIGKILL` cannot write a shutdown marker. Children do not resume
+independently. A child that was still running in the previous Gateway is recorded
+as failed with an interruption error, and its requester receives that failure
+through the normal completion path rather than waiting indefinitely. Inspect its
+saved work before retrying; if the root cannot resume, send a new message to
+continue. Reversible suspension does not mark or cancel children. See
+[Restart recovery](/gateway/restart-recovery).
 
 Registry hydration, resource cleanup, and normal retention remain separate from
 execution resumption. Persisted records alone do not prove a live executor, grant
