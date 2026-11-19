@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { MemorySearchManager } from "../../packages/memory-host-sdk/src/host/search-manager.types.js";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
+import { readRuntimeConfig, resetConfigRuntimeState } from "../config/runtime-snapshot.js";
 import { getScopedDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import type { getActiveMemorySearchManagerCore } from "../plugins/memory-runtime.js";
@@ -322,4 +323,20 @@ it("rebuilds one agent at a time when the host allows no fanout", async () => {
   const results = await rebuildPortedAgentMemory({ stateDir: state.stateDir, stores });
   expect(syncs.peak()).toBe(1);
   expectStatuses(results, { alpha: "rebuilt", beta: "rebuilt", gamma: "rebuilt" });
+});
+
+it("prepares runtime config before the ported memory rebuild", async () => {
+  const stores = await agentStores(["main"]);
+  // The port publishes outside the command snapshot; start without a prepared reader.
+  resetConfigRuntimeState();
+  let prepared: ReturnType<typeof readRuntimeConfig> | undefined;
+  plugin.open.mockImplementationOnce(async () => {
+    prepared = readRuntimeConfig();
+    return { manager: manager(), searchRuntimeRegistered: true } as never;
+  });
+
+  const results = await rebuildPortedAgentMemory({ stateDir: state.stateDir, stores });
+
+  expect(prepared).toBeDefined();
+  expectStatuses(results, { main: "rebuilt" });
 });
