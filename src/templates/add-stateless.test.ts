@@ -224,7 +224,7 @@ describe("stateless Template Add", () => {
     async (failure) => {
       const bootstrap = "Run these first-time agent instructions.\n";
       writeFileSync(path.join(stateDir, "source", "BOOTSTRAP.md"), bootstrap);
-      const reread = await readTemplateManifestFile(path.join(stateDir, "source", "CLAW.md"));
+      const reread = await readTemplateManifestFile(source.source.manifestPath);
       assert(reread.ok);
       source = reread;
       const plan = await buildPlan();
@@ -373,10 +373,12 @@ describe("stateless Template Add", () => {
       );
       const unsetMcpServer = vi.spyOn(mcpMutation, "unsetConfiguredMcpServer");
       unsetMcpServer.mockResolvedValue({ ...configSnapshot, ok: true, removed: true });
+      const servers = { "new-server": changed ? { command: "different-command" } : configured };
       vi.spyOn(mcpConfig, "listConfiguredMcpServers").mockResolvedValue({
         ...configSnapshot,
         ok: true,
-        mcpServers: { "new-server": changed ? { command: "different-command" } : configured },
+        authoredConfig: { mcp: { servers } },
+        mcpServers: servers,
       });
       vi.spyOn(packageInstall, "installTemplatePackages").mockResolvedValueOnce([
         introducedPackage,
