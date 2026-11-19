@@ -296,13 +296,21 @@ struct ChatMarkdownRenderSnapshot {
     let images: [ChatMarkdownPreprocessor.InlineImage]
     let isComplete: Bool
 
+    // Only streaming preparation retains semantic inputs, for the immediately preceding snapshot.
+    private let sourceBlocks: [ChatMarkdownBlock]
+    private let preparesReveal: Bool
+    private let defaultDisclosureSummary: String
+
     init(
         text: String,
         isComplete: Bool,
         preparesReveal: Bool = false,
-        defaultDisclosureSummary: String = String(localized: "Details"))
+        defaultDisclosureSummary: String = String(localized: "Details"),
+        reusing previous: ChatMarkdownRenderSnapshot? = nil)
     {
         self.isComplete = isComplete
+        self.preparesReveal = preparesReveal
+        self.defaultDisclosureSummary = defaultDisclosureSummary
         let processed = ChatMarkdownPreprocessor.preprocess(markdown: text)
         let segments = ChatMarkdownBlockSegmenter.segments(
             markdown: processed.cleaned,
@@ -317,11 +325,25 @@ struct ChatMarkdownRenderSnapshot {
         } else {
             nil
         }
+        self.sourceBlocks = preparesReveal ? segments : []
+        let previousLastProseIndex = previous?.lastProseIndex
         self.blocks = segments.enumerated().map { index, block in
-            Self.renderedBlock(
+            let revealsBlock = preparesReveal && (isComplete || index == lastProseIndex)
+            // Reparse the whole document first: a late reference definition, Setext
+            // underline, or closed container can change an earlier block's meaning.
+            if let previous,
+               previous.isComplete == isComplete,
+               previous.defaultDisclosureSummary == defaultDisclosureSummary,
+               previous.sourceBlocks.indices.contains(index),
+               previous.sourceBlocks[index] == block,
+               (previous.preparesReveal && (isComplete || index == previousLastProseIndex)) == revealsBlock
+            {
+                return previous.blocks[index]
+            }
+            return Self.renderedBlock(
                 block,
                 isComplete: isComplete,
-                preparesReveal: preparesReveal && (isComplete || index == lastProseIndex),
+                preparesReveal: revealsBlock,
                 defaultDisclosureSummary: defaultDisclosureSummary)
         }
         self.images = processed.images
@@ -331,6 +353,9 @@ struct ChatMarkdownRenderSnapshot {
         self.blocks = blocks
         self.images = images
         self.isComplete = true
+        self.sourceBlocks = []
+        self.preparesReveal = false
+        self.defaultDisclosureSummary = ""
     }
 
     private static func renderedBlock(

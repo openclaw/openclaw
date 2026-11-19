@@ -5484,6 +5484,7 @@
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.4e0cd2a0bd1dad23","source":"Additional images hidden: %lld"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.239980858b1f788f","source":"Agent avatar"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.8d42a9b935209011","source":"Attachment"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.155be3c965dce4f9","source":"Details"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.de4a6221d5112594","source":"Message usage"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.bbbc693d37d1e48d","source":"Voice note"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.841f5c972efcd0d2","source":"Writing"},
