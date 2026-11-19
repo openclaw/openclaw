@@ -590,6 +590,7 @@ test("sessions.create replays an identical creation once and rejects conflicting
     chatSend.mockRestore();
   }
 });
+
 test.each([
   { parentKey: "agent:main:dashboard:busy", worktree: false },
   { parentKey: "agent:main:main", worktree: false },
