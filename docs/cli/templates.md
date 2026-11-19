@@ -108,6 +108,13 @@ fork a session. Review requires Templates enabled in Labs, an active administrat
 Control UI connection, and a workspace on the Gateway host. If review is unavailable,
 the proposal stays private.
 
+The agent says that it is drafting the Template as soon as it starts, then takes
+one inventory of its instructions, avatar, workspace skills, ClawHub plugins, and
+scheduled automations. It tells you what the Template will carry and what it is
+leaving out as personal before it writes the proposal, and the review card
+follows. The whole exchange is meant to take about a minute, so the first
+proposal is deliberately compact; ask for additions after you have seen it.
+
 The optional **Create Template** action in the agent's left-sidebar row menu
 still invokes the same skill in that agent's existing main chat. Pinned agents
 keep this action in a focused row menu.
@@ -176,8 +183,9 @@ continue its existing setup rather than adding another copy.
 proposal in that workspace and returns its unique `draftId` and path. It does
 not copy source files, start a model turn, contact ClawHub, or publish. Each
 invocation creates a distinct proposal; retain the returned ID instead of
-searching for a latest draft. The bundled skill uses this command when a chat
-request did not arrive with a UI-created draft.
+searching for a latest draft. The bundled skill starts the same kind of proposal
+from its inventory step when a chat request did not arrive with a UI-created
+draft.
 
 Create a minimal project, validate its inputs, preview it without mutation,
 and build an immutable package artifact:
