@@ -59,6 +59,7 @@ import {
   runBatchSessionAction,
 } from "./session-organizer-menu.runtime.ts";
 import { moveSessionFromMenu, sessionPlacementAction } from "./session-placement-action.ts";
+import { resolveAgentMenuSessionKey } from "./sidebar-agent-menu-session-key.ts";
 import { isUpdateAttentionForced } from "./sidebar-attention-dismissals.ts";
 import { isReleaseUpdateAvailable } from "./sidebar-attention-update.ts";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
@@ -233,7 +234,7 @@ function renderSidebarMenus(
                   if (view.sidebarAgentsMode === "roster") {
                     patchSettings({ sidebarAgentsMode: "chip" });
                   }
-                  view.switchChipAgent(agentId);
+                  view.switchChipAgent(agentId, resolveAgentMenuSessionKey);
                 },
                 onCreateAgent: () => {
                   if (view.sessionDataContext) {

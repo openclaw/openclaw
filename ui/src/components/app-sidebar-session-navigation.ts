@@ -19,7 +19,6 @@ import {
   sessionNavigationTarget,
 } from "../lib/sessions/route-navigation.ts";
 import {
-  buildAgentMainSessionKey,
   normalizeAgentId,
   resolveUiDefaultAgentId,
   resolveUiSessionRowAgentId,
@@ -56,7 +55,6 @@ import {
   findProjectedSidebarSession,
   findSidebarSessionInTree,
   projectSidebarVisibleMainSession,
-  resolveLatestSidebarAgentSession,
   resolveSidebarMainSessionKey,
   restoreSnapshotNavigation,
   type SidebarSessionNavigationState,
@@ -605,23 +603,24 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     });
   }
 
-  private agentResumeKey(agentId: string): string {
-    const latest = resolveLatestSidebarAgentSession({
-      agentId,
-      result: this.selectedAgentSessionResult(agentId),
-      context: this.context,
-    });
-    return latest?.key ?? buildAgentMainSessionKey({ agentId, mainKey: this.sessionMainKey() });
-  }
-
-  switchChipAgent(agentId: string) {
+  switchChipAgent(
+    agentId: string,
+    resolveKey: typeof import("./sidebar-agent-menu-session-key.ts").resolveAgentMenuSessionKey,
+  ) {
     this.sidebarMenus.closeAgentMenu();
     this.expandAgent(agentId);
     // Skills uses the shared agent selection in place; opening chat would
     // discard the discovery page instead of updating its workspace scope.
     if (this.activeRouteId !== "skills") {
       if (this.connected) {
-        this.selectSession(this.agentResumeKey(agentId));
+        this.selectSession(
+          resolveKey({
+            agentId,
+            result: this.selectedAgentSessionResult(agentId),
+            context: this.context,
+            mainKey: this.sessionMainKey(),
+          }),
+        );
       } else {
         this.onNavigate?.("appearance");
       }
