@@ -711,7 +711,7 @@ it.each([
           activity,
           messagesBytes: bytes.byteLength,
           responseHistoryBytes: 1024,
-          omission: { omittedCount: 1, normalizedBytes: 2048 },
+          omission: { omittedCount: 1 },
         };
         reply.page.encodedMessagesDeflate = deflated;
       }

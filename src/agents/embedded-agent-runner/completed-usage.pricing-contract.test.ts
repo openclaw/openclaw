@@ -61,6 +61,14 @@ describe("recorded turn cost over every bundled and hosted row", () => {
       const id = vendorIds ? `fixture-vendor/${HOSTED_ONLY_MODEL}` : HOSTED_ONLY_MODEL;
       hosted.push({ provider, id, input: 0, output: 0 });
     }
+    // A refreshable gateway that declares no static rows still owns its hosted prices.
+    providers.set("vercel-ai-gateway", true);
+    hosted.push({
+      provider: "vercel-ai-gateway",
+      id: `fixture-vendor/${HOSTED_ONLY_MODEL}`,
+      input: 0,
+      output: 0,
+    });
     hosted.forEach((row, index) => {
       row.input = 1 + (index % 7);
       row.output = 2 + (index % 11);

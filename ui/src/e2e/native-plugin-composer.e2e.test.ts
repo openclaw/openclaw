@@ -31,6 +31,14 @@ const fixture = `export default { id: "composer-fixture", activate(host) {
     },
   });
   host.ui.registerAction({
+    id: "insert", label: "Insert rewrite", icon: "wandSparkles", placement: "composer",
+    resolve: ({ draft }) => ({ disabled: !draft?.trim() }),
+    async run({ composer }) {
+      const task = composer.startTask({ title: "Inserting" });
+      proof.outcomes.push(await task.propose(${JSON.stringify(PROPOSED)}, { title: "Fixture insert", insert: true }));
+    },
+  });
+  host.ui.registerAction({
     id: "replace", label: "Replace draft", icon: "pencil", placement: "composer",
     run({ composer }) { composer.setDraft("written by another action"); },
   });
@@ -263,6 +271,24 @@ suite.define(() => {
       await textarea.press("Tab");
       await expect.poll(() => textarea.inputValue()).toBe(PROPOSED);
       await expect.poll(() => outcomes(page)).toEqual(["accepted"]);
+      await page.getByRole("button", { name: "Undo" }).click();
+      await expect.poll(() => textarea.inputValue()).toBe(DRAFT);
+      expect(await sendCount(page)).toBe(0);
+    });
+  });
+
+  it("needs a draft, then inserts its result at once with an Undo receipt", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const { textarea } = await open(page);
+      const action = page.getByRole("button", { name: "Insert rewrite", exact: true });
+      await textarea.fill("");
+      await expect.poll(() => action.isDisabled()).toBe(true);
+      await textarea.fill(DRAFT);
+      await expect.poll(() => action.isDisabled()).toBe(false);
+      await action.click();
+      await expect.poll(() => textarea.inputValue()).toBe(PROPOSED);
+      expect(await outcomes(page)).toEqual(["accepted"]);
+      expect(await page.getByRole("region", { name: "Fixture insert" }).count()).toBe(0);
       await page.getByRole("button", { name: "Undo" }).click();
       await expect.poll(() => textarea.inputValue()).toBe(DRAFT);
       expect(await sendCount(page)).toBe(0);
