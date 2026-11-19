@@ -32,7 +32,7 @@ export type UnlinkPreview = {
 /** The Gateway's `unlink` answer. */
 type UnlinkResult = {
   hostname: string;
-  discovery: "confirmed" | "pending" | "refused" | "unconfigured";
+  discovery: "confirmed" | "local_only" | "pending" | "refused" | "unconfigured";
   discoveryCode?: string;
   followUpError?: string;
 };
@@ -125,7 +125,13 @@ export function showUnlinkDialog(params: {
                 : undefined;
         showToast(
           description === undefined
-            ? { severity: "success", message: done }
+            ? {
+                severity: "success",
+                message: done,
+                ...(result.discovery === "local_only"
+                  ? { description: t("openclawId.unlinkLocalOnly") }
+                  : {}),
+              }
             : {
                 severity: "warning",
                 message: done,

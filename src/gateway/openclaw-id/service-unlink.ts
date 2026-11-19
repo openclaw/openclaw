@@ -6,7 +6,7 @@
 // The Discovery send starts first and runs alongside the teardown, so a browser that re-checks
 // Discovery when its tunnel closes usually already finds the claw unlinked. If Discovery can't
 // be reached the unlink stays pending and the pending-unlink sender delivers it later; the claw
-// is unlinked here either way.
+// is unlinked here either way. A claw no registration was ever sent for is unlinked here only.
 import type { AuthorityEvent, Channel } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
 import type { AuthorityRefusal } from "./authority-result.js";
@@ -26,8 +26,9 @@ export type UnlinkResult<Removal = unknown> = {
   /**
    * `confirmed`: Discovery retired the claw. `pending`: sent when Discovery is reachable.
    * `refused`: Discovery refused it (`discoveryCode`); the address was not retired.
+   * `local_only`: no registration was ever sent, so Discovery never had the claw to retire.
    */
-  discovery: "confirmed" | "pending" | "refused" | "unconfigured";
+  discovery: "confirmed" | "local_only" | "pending" | "refused" | "unconfigured";
   discoveryCode?: string;
   /** Steps after the stored unlink that failed; the claw stays unlinked here. */
   followUpError?: string;
@@ -146,11 +147,13 @@ export function createServiceUnlink<Removal>(deps: {
         removal: removal ?? null,
         ...(!discoveryUrl
           ? { discovery: "unconfigured" as const }
-          : !entry
-            ? { discovery: "confirmed" as const }
-            : entry.refused
-              ? { discovery: "refused" as const, discoveryCode: entry.refused }
-              : { discovery: "pending" as const }),
+          : result.neverRegistered
+            ? { discovery: "local_only" as const }
+            : !entry
+              ? { discovery: "confirmed" as const }
+              : entry.refused
+                ? { discovery: "refused" as const, discoveryCode: entry.refused }
+                : { discovery: "pending" as const }),
         ...(failures.length ? { followUpError: failures.join("; ") } : {}),
       };
     },

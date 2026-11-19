@@ -189,6 +189,77 @@ describe("unlink", () => {
     }
   });
 
+  it("unlinks locally a claw no registration was sent for, and waits once one was", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("fetch failed"));
+    const claw = await linkedClaw();
+    const { service } = serviceFor(claw.authority, config);
+    const sent = await linkedClaw();
+    await sent.authority.registrationSending(sent.clawId);
+    const next = serviceFor(sent.authority, config);
+    try {
+      expect(await service.unlink.run("local_operator", claw.clawId)).toMatchObject({
+        ok: true,
+        discovery: "local_only",
+      });
+      expect(fetch).not.toHaveBeenCalled();
+      expect(claw.authority.current()?.pending_unlinks).toBeUndefined();
+      expect(await service.linkSummary()).toEqual({ linked: false });
+      // Sent but unconfirmed: Discovery may hold the claw, so the unlink waits for it.
+      expect(await next.service.unlink.run("local_operator", sent.clawId)).toMatchObject({
+        ok: true,
+        discovery: "pending",
+      });
+      expect(await next.service.linkSummary()).toMatchObject({
+        pendingUnlinks: [{ hostname: "studio-k7x2q.claws.example.test" }],
+      });
+    } finally {
+      await next.service.stop();
+      await service.stop();
+    }
+  });
+
+  it("does not unlink as local only a claw whose registration is already on its way", async () => {
+    const claw = await linkedClaw();
+    const racing: { enabled: boolean; discoveryUrl: string; relayUrl?: string } = {
+      ...config,
+      relayUrl: "https://relay.example.test",
+    };
+    const { service } = serviceFor(claw.authority, racing);
+    const registration = Promise.withResolvers<void>();
+    let registered = false;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.pathname === "/v1/claws" && init?.method === "POST") {
+        await registration.promise;
+        registered = true;
+        return Response.json({ owner_account_id: "owner" });
+      }
+      // Discovery answers the unlink before the registration lands, then retires the claw.
+      return url.pathname.endsWith("/unlink") && registered
+        ? confirmed()
+        : Response.json({ error: { code: "not_found", message: "x" } }, { status: 404 });
+    });
+    try {
+      const publishing = service.publish("ENROLL-CODE");
+      await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
+      delete racing.relayUrl;
+      expect(await service.unlink.run("local_operator", claw.clawId)).toMatchObject({
+        ok: true,
+        discovery: "refused",
+        discoveryCode: "not_found",
+      });
+      registration.resolve();
+      await publishing;
+      expect(registered).toBe(true);
+      expect(await service.linkSummary()).toMatchObject({
+        pendingUnlinks: [{ hostname: "studio-k7x2q.claws.example.test", refused: "not_found" }],
+      });
+    } finally {
+      registration.resolve();
+      await service.stop();
+    }
+  });
+
   it("unlinks only the claw whose warning was confirmed", async () => {
     const { claw, service } = await clawWithMember();
     const fetch = vi.spyOn(globalThis, "fetch");

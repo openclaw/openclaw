@@ -40,6 +40,10 @@ export function describeUnlinkResult(result: UnlinkResult): string {
   const lines = [`Unlinked ${host}.`];
   if (result.discovery === "confirmed") {
     lines.push("OpenClaw ID retired the address. Its name can't be used again.");
+  } else if (result.discovery === "local_only") {
+    lines.push(
+      "OpenClaw ID never registered this claw, so it had no address to retire. It is unlinked on this computer.",
+    );
   } else if (result.discovery === "pending") {
     lines.push(
       "OpenClaw ID couldn't be reached. This computer sends the unlink as soon as it can; until then the address may still be listed (openclaw id status).",
@@ -56,6 +60,18 @@ export function describeUnlinkResult(result: UnlinkResult): string {
     );
   }
   return lines.join("\n");
+}
+
+/** Status lines for unlinked claws OpenClaw ID has not confirmed (`openclaw id status`). */
+export function describePendingUnlinks(
+  pending: ReadonlyArray<{ hostname: string; refused?: string }>,
+): string[] {
+  return pending.map(({ hostname, refused }) => {
+    const host = sanitizeTerminalText(hostname);
+    return refused
+      ? `Unlink refused: ${host} is unlinked here, but OpenClaw ID refused to retire it (${sanitizeTerminalText(refused)}).`
+      : `Unlink pending: ${host} is unlinked here; OpenClaw ID gets the unlink when it can be reached.`;
+  });
 }
 
 export async function runUnlink(

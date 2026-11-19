@@ -53,6 +53,8 @@ export async function reconcileRegistration(
       error.status === 404 &&
       error.code === "not_found"
     ) {
+      // A registration may follow: from now on Discovery may hold the claw (unlink-operations.ts).
+      await authority.registrationSending(record.claw_id);
       return undefined;
     }
     return {
