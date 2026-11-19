@@ -91,13 +91,18 @@ it("bounds heading-only merges to the chunker's maximum characters", () => {
   expect(chunks.map((chunk) => chunk.text).join("\n")).toBe(content);
 });
 
-it("bounds CJK heading-only merges with the weighted estimator", () => {
-  const content = Array.from({ length: 120 }, (_, index) => `###### 标题${index}中文内容测试`).join(
-    "\n",
-  );
+it("measures heading-only merges with the weighted estimator, not raw length", () => {
+  // Two headings fit the raw ceiling but exceed the weighted one, so a raw
+  // length check would merge them while the chunker budget must not.
+  const heading = "###### 中文标题甲";
+  const content = Array.from({ length: 30 }, () => heading).join("\n");
   const { chunks } = prepareHeading(content, 0);
-  const maxChars = 8 * 4 + 1; // matches the chunker's one-separator budget
+  const maxChars = 8 * 4 + 1;
   const weighted = (text: string) =>
     text.split("\n").reduce((total, line) => total + estimateStringChars(line) + 1, 0);
+
+  expect((heading + "\n" + heading).length).toBeLessThanOrEqual(maxChars);
+  expect(weighted(heading + "\n" + heading)).toBeGreaterThan(maxChars);
+  expect(chunks.map((chunk) => chunk.text)).toEqual(Array.from({ length: 30 }, () => heading));
   expect(Math.max(...chunks.map((chunk) => weighted(chunk.text)))).toBeLessThanOrEqual(maxChars);
 });
