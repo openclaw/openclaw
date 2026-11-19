@@ -99,8 +99,11 @@ BEGIN
     ALTER TABLE standing_intents
       ADD CONSTRAINT standing_intents_last_inside_check
       CHECK (last_inside IS NULL OR (last_inside IN (0, 1)));
+    -- NULLS FIRST matches the canonical DDL's index exactly: PostgreSQL's
+    -- default is NULLS LAST, pg_get_indexdef records the difference, and
+    -- verifyAndRecordPostgresSchema rejects any index-definition drift.
     CREATE INDEX IF NOT EXISTS idx_standing_intents_location
-      ON standing_intents (status, trigger_kind, location_trigger);
+      ON standing_intents (status ASC, trigger_kind ASC NULLS FIRST, location_trigger ASC NULLS FIRST);
   END IF;
 END
 $standing_intents_location$;
