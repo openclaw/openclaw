@@ -92,7 +92,8 @@ exceptionally high-risk cases where approval intentionally covers only the
 reviewed execution; record that risk and the explicit limit in the PR/handoff.
 Preserve any narrower scope the operator explicitly requested. Diagnostic run
 IDs belong in the PR/handoff, not in matching restrictions merely because they
-identify the original failure.
+identify the original failure. See the [attempt-binding correction in #201694](https://github.com/openclaw/openclaw/pull/201694)
+and the [operator-directed release-wide default in #201769](https://github.com/openclaw/openclaw/pull/201769).
 For grant-only edits, reuse the policy tests; add cases only for new matching or
 validation behavior. Keep new reasons to one sentence and authorization details
 in the PR/handoff, not published docs ([#199776](https://github.com/openclaw/openclaw/pull/199776)).
