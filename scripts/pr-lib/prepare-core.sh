@@ -434,7 +434,7 @@ prepare_baseline_materialize() (
   recover_review_transition "$pr" || return 1
   if [ "$proof" = true ]; then
     # Seed, never approve, the new candidate through the existing review owner
-    # while this current-main invocation still owns the operation and checkout.
+    # while this reviewed-workflow invocation owns the operation and checkout.
     run_prepared_correction_review "$pr" init || return 1
   fi
   echo "Refreshed candidate $target; prior proof retained at $PREP_RETIRED_EVIDENCE."
@@ -893,7 +893,7 @@ require_proof_publication_custody() (
   IFS=$'\t' read -r observed_binding observed_source <<< "$binding"
   local expected_source="$PR_WORKFLOW_SOURCE_REVISION"
   if [ "${PR_WORKFLOW_ADMISSION:-0}" = proof-baseline ]; then
-    # The native selection descriptor authenticated this one current-main
+    # The native selection descriptor authenticated this one reviewed-workflow
     # producer. It does not rewrite the historical binding or grant publication.
     pr_git merge-base --is-ancestor "$observed_source" "$expected_source" || return 1
     expected_source="$observed_source"

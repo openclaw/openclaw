@@ -1,5 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { constants as fsConstants, cpSync, readFileSync, realpathSync } from "node:fs";
+import {
+  constants as fsConstants,
+  cpSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -84,6 +90,115 @@ function fixture() {
 }
 
 describe.skipIf(process.platform === "win32")("native workflow binding storage", () => {
+  it.each([
+    "valid",
+    "before binding",
+    "divergent",
+    "unlanded",
+    "stale main",
+    "nonofficial",
+    "changed review",
+    "changed binding",
+    "replaced binding",
+    "symbolic binding",
+    "symbolic main",
+    "retained outcome",
+  ])("authenticates an exact reviewed proof source: %s", (fault) => {
+    const f = fixture();
+    const next = (parent: string, message: string) =>
+      f.git(["commit-tree", `${parent}^{tree}`, "-p", parent], message);
+    const bound = next(f.source, "bound workflow");
+    const reviewed = next(bound, "reviewed workflow");
+    const main = next(reviewed, "later main");
+    const official = "https://github.com/openclaw/openclaw.git";
+    f.git([
+      "remote",
+      "set-url",
+      "origin",
+      fault === "nonofficial" ? f.record.repository : official,
+    ]);
+    const binding = f.write(
+      {
+        ...f.record,
+        repository: fault === "nonofficial" ? f.record.repository : official,
+        source: bound,
+      },
+      [bound],
+    );
+    f.git(["update-ref", "refs/remotes/origin/main", main]);
+    const source =
+      fault === "before binding"
+        ? f.source
+        : fault === "divergent"
+          ? next(f.source, "divergent workflow")
+          : fault === "unlanded"
+            ? next(main, "private workflow")
+            : reviewed;
+    const path = join(f.root, "review.json");
+    const bytes = JSON.stringify({
+      correction: {
+        proofPublication: {
+          version: 1,
+          kind: "published-candidate-proof",
+          workflowSource: source,
+          workflowBinding: fault === "changed binding" ? f.source : binding,
+        },
+      },
+    });
+    writeFileSync(path, bytes + (fault === "changed review" ? "\n" : ""));
+    const review = f.git(["hash-object", "--stdin"], bytes);
+    if (fault === "symbolic main")
+      f.git(["symbolic-ref", "refs/remotes/origin/main", "refs/heads/main"]);
+    if (fault === "retained outcome")
+      f.git(["update-ref", "refs/openclaw/pr-merge-outcomes/123", main]);
+    if (fault === "symbolic binding") {
+      f.git(["update-ref", "refs/openclaw/other-binding", binding]);
+      f.git(["symbolic-ref", ref, "refs/openclaw/other-binding"]);
+    }
+    if (fault === "stale main") f.git(["update-ref", "refs/remotes/origin/main", bound]);
+    let selected = f.run("workflow-proof-select", review, path);
+    if (fault === "stale main") {
+      expect(selected.status).toBe(1);
+      expect(selected.stderr).toContain(
+        "Reviewed proof workflow is absent from cached official main",
+      );
+      expect(f.git(["rev-parse", ref])).toBe(binding);
+      f.git(["update-ref", "refs/remotes/origin/main", main]);
+      selected = f.run("workflow-proof-select", review, path);
+    }
+    const selectedBeforeDrift = ["valid", "replaced binding", "stale main"].includes(fault);
+    expect(selected.status, selected.stderr).toBe(selectedBeforeDrift ? 0 : 1);
+    let retainedBinding = binding;
+    if (selectedBeforeDrift) {
+      expect(selected.stdout).toBe(`${binding}\t${reviewed}\n`);
+      if (fault === "replaced binding") {
+        retainedBinding = f.write({ ...f.record, repository: official, source: reviewed }, [
+          reviewed,
+        ]);
+      }
+      // The locked operation consumes its captured commit, not a later shared-ref read.
+      f.git(["update-ref", "refs/remotes/origin/main", f.source]);
+      const admitted = f.run(
+        "workflow-admit",
+        reviewed,
+        binding,
+        main,
+        "",
+        "",
+        "proof-baseline",
+        "",
+        "merge",
+        review,
+        path,
+      );
+      expect(admitted.status, admitted.stderr).toBe(fault === "replaced binding" ? 1 : 0);
+      if (fault !== "replaced binding") expect(admitted.stdout).toBe(binding);
+      // Ordinary current-workflow admission retains its exact-main requirement.
+      expect(f.run("workflow-admission-provenance", "", "", main, reviewed).status).toBe(1);
+    }
+    expect(f.git(["rev-parse", ref])).toBe(retainedBinding);
+  });
+
   it.each(["valid", "review", "tree", "snapshot", "predecessor", "parent order"])(
     "validates successor history including its %s continuation",
     (fault) => {

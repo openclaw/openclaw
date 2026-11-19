@@ -1018,6 +1018,10 @@ if [ "$FIXTURE_WORKFLOW_BINDING" = true ]; then
     IFS=$'\\t' read -r PR_WORKFLOW_BINDING_OID PR_WORKFLOW_SOURCE_REVISION <<< "$binding"
     PR_WORKFLOW_BOOTSTRAP=0
     PR_WORKFLOW_TRUST_ANCHOR=refs/remotes/origin/main
+    PR_BASELINE_FOR_PROOF=0
+    PR_BASELINE_REVIEW=""
+    PR_BASELINE_REVIEW_PATH=""
+    PR_BASELINE_HEAD=""
     original_scripts="$script_parent_dir"
     script_parent_dir="$FIXTURE_WORKFLOW_DIRECTORY/scripts"
     hold_pr_workflow_selection "$PR_WORKFLOW_SOURCE_REVISION" "$FIXTURE_WORKFLOW_DIRECTORY"
