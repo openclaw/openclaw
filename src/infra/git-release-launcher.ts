@@ -121,9 +121,18 @@ function retirePlans(stateDir, generation) {
 
 // A revert must never land on a build that refuses the state. The previous release
 // names the schemas it opens in its own package.json; each database records its own.
-// A database the rollback restores from a pre-image is not a reason to stay.
-// Unknown (no manifest, no node:sqlite, unreadable database) keeps the revert.
-async function newerThanPrevious(stateDir, previous, restored) {
+// A database the rollback restores is judged by the image it restores, the last one
+// restoreState renames into place. Unknown (no manifest, no node:sqlite, unreadable
+// database) keeps the revert.
+async function newerThanPrevious(stateDir, previous, restoring) {
+  const restoredFrom = new Map();
+  for (const { suffix, files } of restoring) {
+    for (const file of files) {
+      if (fs.existsSync(file + suffix)) {
+        restoredFrom.set(file, file + suffix);
+      }
+    }
+  }
   let supported;
   try {
     supported = JSON.parse(fs.readFileSync(path.join(path.resolve(path.dirname(slot), previous), "package.json"), "utf8"))?.openclaw?.schemaVersions;
@@ -144,8 +153,9 @@ async function newerThanPrevious(stateDir, previous, restored) {
     }
   } catch {}
   const newer = [];
-  for (const [file, limit] of databases) {
-    if (restored.has(file) || !fs.existsSync(file)) {
+  for (const [live, limit] of databases) {
+    const file = restoredFrom.get(live) ?? live;
+    if (!fs.existsSync(file)) {
       continue;
     }
     let version;
@@ -172,7 +182,7 @@ async function newerThanPrevious(stateDir, previous, restored) {
       } catch {}
     }
     if (Number.isInteger(version) && version > limit) {
-      newer.push(path.relative(stateDir, file) + " schema " + version + " (" + previous + " supports " + limit + ")");
+      newer.push(path.relative(stateDir, live) + " schema " + version + " (" + previous + " supports " + limit + ")");
     }
   }
   return newer;
@@ -220,8 +230,7 @@ if (trial && counts) {
         }
         trial.restoring.push({ suffix, files });
       }
-      const restored = new Set(trial.restoring.flatMap(({ files }) => files));
-      const newer = await newerThanPrevious(path.dirname(prefix), trial.previous, restored);
+      const newer = await newerThanPrevious(path.dirname(prefix), trial.previous, trial.restoring);
       if (newer.length > 0) {
         trial.forward = newer;
       } else {
@@ -235,7 +244,7 @@ if (trial && counts) {
     if (trial.forward) {
       // The migration committed and nothing restores it: the service stays forward.
       fs.rmSync(trialFile, { force: true });
-      console.error("openclaw: release " + trial.target + " failed to start twice, but its database migration has committed and no pre-migration image restores it (" + trial.forward.join("; ") + "). " + trial.previous + " cannot open this state, so the service stays on " + trial.target + ". Fix forward: run openclaw triage, or openclaw update once a fixed release is available.");
+      console.error("openclaw: release " + trial.target + " failed to start twice, but its database migration has committed and no pre-migration image restores a schema the previous release opens (" + trial.forward.join("; ") + "). " + trial.previous + " cannot open this state, so the service stays on " + trial.target + ". Fix forward: run openclaw triage, or openclaw update once a fixed release is available.");
     } else {
       for (const { suffix, files } of trial.restoring) {
         restoreState(files, suffix);

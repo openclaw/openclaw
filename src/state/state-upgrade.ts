@@ -23,10 +23,8 @@ import { resolveConfigIncludes } from "../config/includes.js";
 import { coerceConfig } from "../config/io.read-helpers.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { copySqliteFile } from "../infra/sqlite-file-copy.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { getMediaDir } from "../media/store-path.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
@@ -52,11 +50,14 @@ import {
   applyPlan,
   companionRemovals,
   fsyncPath,
+  isMachineFailure,
   isSqliteFile,
   listFiles,
   normalizeSqliteText,
   pruneGenerations,
   readPlan,
+  restorePreImages,
+  takeStateUpgradePreImage,
   withRecoveredSource,
   writePlan,
   type UpgradeOp,
@@ -409,6 +410,9 @@ export async function upgradeStateDirectory(params: {
   // A durable plan from an interrupted swap is finished before anything else.
   let resumed = false;
   let interruptedChain = false;
+  // An interrupted in-place run's record: kept until this run has written its own.
+  const interruptedDirs: string[] = [];
+  let priorInventory: Set<string> | undefined;
   for (const entry of fs.readdirSync(stateDir)) {
     if (!entry.startsWith(WORK_PREFIX)) {
       continue;
@@ -432,23 +436,36 @@ export async function upgradeStateDirectory(params: {
       // This build's in-place chain was interrupted: its databases may already be
       // current while the rest of its Doctor work (config, legacy files) is not.
       interruptedChain = true;
+      interruptedDirs.push(dir);
+      try {
+        const text = fs.readFileSync(path.join(dir, INVENTORY_FILE), "utf8");
+        const listed = JSON.parse(text) as string[]; // SAFETY: only this module writes the inventory.
+        priorInventory = new Set([...(priorInventory ?? []), ...listed]);
+      } catch {
+        // Killed before the inventory was written: nothing had changed yet.
+      }
+      continue;
     }
     fs.rmSync(dir, { recursive: true, force: true });
   }
   const { targets, retainedAgentDirectories } = discoverDatabases(stateDir);
   excludedRoots.push(...retainedAgentDirectories);
   let outdated = outdatedDatabases(targets);
-  // Finish an interrupted chain on the databases it imaged; their images stay the baseline.
-  const resumingChain = outdated.length === 0 && interruptedChain;
-  if (resumingChain) {
-    outdated = targets.filter(
+  // Finish an interrupted chain on every database it imaged, current or not: their images
+  // stay the baseline, and a refusal or fallback must cover all of them together.
+  if (interruptedChain) {
+    const imaged = targets.filter(
       (target) => target.version > 0 && fs.existsSync(`${target.path}.pre-${generation()}`),
     );
+    outdated = [...outdated, ...imaged.filter((target) => !outdated.includes(target))];
     if (outdated.length === 0) {
       outdated = targets.filter((target) => target.version > 0);
     }
   }
   if (outdated.length === 0) {
+    for (const dir of interruptedDirs) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
     if (resumed) {
       finish(stateDir, undefined, resumedFiles, resumedGenerations);
     }
@@ -487,9 +504,11 @@ export async function upgradeStateDirectory(params: {
       for (const target of outdated) {
         // A resumed chain keeps the interrupted start's images; it never images new data.
         const image =
-          resumingChain && !fs.existsSync(`${target.path}${suffix}`)
+          interruptedChain &&
+          !fs.existsSync(`${target.path}${suffix}`) &&
+          target.version >= expectedVersion(target)
             ? { skipped: "the interrupted start had already migrated it without one" }
-            : await takeStateUpgradePreImage(target.path, suffix);
+            : await takeStateUpgradePreImage(target.path, suffix, interruptedChain);
         if ("skipped" in image) {
           warn(
             `No pre-migration image of ${path.relative(stateDir, target.path)}: ${image.skipped}. It is migrated in place; once its migration commits, the previous release cannot open it, so a failed start stays on this release and is fixed forward.`,
@@ -502,13 +521,35 @@ export async function upgradeStateDirectory(params: {
         }
       }
       // The config is small; its pre-image lets a failed trial restore it with the databases.
-      if (fs.existsSync(configPath) && !fs.existsSync(`${configPath}${suffix}`)) {
+      if (
+        fs.existsSync(configPath) &&
+        (!interruptedChain || !fs.existsSync(`${configPath}${suffix}`))
+      ) {
         const partial = `${configPath}${suffix}.partial-${process.pid}`;
-        fs.copyFileSync(configPath, partial);
-        fsyncPath(partial);
-        fs.renameSync(partial, `${configPath}${suffix}`);
+        try {
+          // A symlinked config is copied through its link: the image holds the bytes.
+          fs.copyFileSync(configPath, partial);
+          fsyncPath(partial);
+          fs.renameSync(partial, `${configPath}${suffix}`);
+        } catch (error) {
+          fs.rmSync(partial, { force: true });
+          if (!isMachineFailure(error)) {
+            throw error;
+          }
+          // SAFETY: node:fs throws Error instances; only the message is read.
+          warn(`No pre-migration image of the config: ${(error as Error).message}.`);
+        }
       }
-      const listed = listFiles(stateDir, skip);
+      // The inventory before Doctor runs; a resumed run keeps the interrupted one's.
+      const listed = priorInventory ?? listFiles(stateDir, skip);
+      fs.writeFileSync(path.join(workDir, INVENTORY_FILE), JSON.stringify([...listed]), {
+        mode: 0o600,
+      });
+      // This run's record holds the inventory now; the interrupted ones it replaces can go.
+      for (const dir of interruptedDirs) {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+      migrationStarted = true;
       for (const target of outdated) {
         const db = openNodeSqliteDatabase(target.path);
         try {
@@ -527,7 +568,6 @@ export async function upgradeStateDirectory(params: {
     try {
       // Each schema step commits in one SQLite transaction with its version bump, so
       // an interrupted or failed run leaves every database at its old or new version.
-      migrationStarted = true;
       const chain = await handOff(() => runChain({ stateDir, configPath, env, logPath: chainLog }));
       warnings.push(...chain.warnings);
       await inCustody(async () => {
@@ -555,6 +595,17 @@ export async function upgradeStateDirectory(params: {
       // The rebuild reads the pre-image when one exists, else the database as the chain
       // left it (each at its old or new version), and replaces only those files.
       await inCustody(async () => {
+        // An imaged database is rebuilt from its image and its live file is replaced, so its
+        // live WAL must not survive the swap beside the standalone image. No writer runs.
+        for (const live of images.keys()) {
+          try {
+            checkpointShadowDatabases([live]);
+          } catch {
+            for (const companion of ["-wal", "-shm", "-journal"]) {
+              fs.rmSync(`${live}${companion}`, { force: true });
+            }
+          }
+        }
         const sources = outdated.map((target) => ({
           ...target,
           path: images.get(target.path) ?? target.path,
@@ -602,9 +653,19 @@ export async function upgradeStateDirectory(params: {
         );
         return { status: "refused", reason: refusal };
       }
-      // Files the run added with no predecessor; a failed Git release trial removes them.
-      const added = [...listFiles(stateDir, skip)].filter(
+      // Databases the run created with no predecessor; a failed Git release trial removes
+      // them. Other new files can be archives of moved sources, so they always stay.
+      const created = [...listFiles(stateDir, skip)].filter(
         (file) => !before.has(file) && !file.startsWith(`${workDir}${path.sep}`),
+      );
+      const databases = new Set(created.filter((file) => isSqliteFile(file)));
+      const added = created.filter(
+        (file) =>
+          databases.has(file) ||
+          ["-wal", "-shm", "-journal"].some(
+            (companion) =>
+              file.endsWith(companion) && databases.has(file.slice(0, -companion.length)),
+          ),
       );
       const applied: UpgradeOp[] = [
         ...ops,
@@ -677,134 +738,31 @@ export async function upgradeStateDirectory(params: {
       } catch {
         // A full disk can refuse the log too; the failure itself is what matters.
       }
+      if (migrationStarted) {
+        // Each database is at its old or new version; this record makes the next start
+        // finish the chain on the same images instead of serving a half-done upgrade.
+        throw error;
+      }
       fs.rmSync(workDir, { recursive: true, force: true });
-      // Before the chain nothing live changed; after it, each database is at its old
-      // or new version and the next start resumes from there.
-      throw migrationStarted ? error : explainMachineFailure(error, stateDir);
+      throw explainMachineFailure(error, stateDir);
     }
     throw error;
   }
 }
 
-/** A full disk or I/O failure before any live change: name the fix instead of the raw error. */
+/** A full disk or I/O failure before any database migrated: name the fix instead of the raw error. */
 export function explainMachineFailure(error: unknown, stateDir: string): unknown {
   return isMachineFailure(error)
     ? new Error(
         // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
-        `State upgrade to ${VERSION} stopped: ${(error as Error).message}. Nothing in ${stateDir} was changed. Free disk space for the migration inputs and scratch margin and start the Gateway again.`,
+        `State upgrade to ${VERSION} stopped: ${(error as Error).message}. No database in ${stateDir} was migrated. Free disk space for the migration and start the Gateway again.`,
         { cause: error },
       )
     : error;
 }
 
-function isMachineFailure(error: unknown): boolean {
-  // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
-  const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
-  const message = (error as Error | undefined)?.message ?? "";
-  return (
-    code === "ENOSPC" ||
-    code === "EIO" ||
-    code === "EDQUOT" ||
-    code === "EROFS" ||
-    /SQLITE_FULL|database or disk is full|disk I\/O error/iu.test(message)
-  );
-}
-
 /** Another process holds the state when the chain hands custody back; it continues. */
 export class StateUpgradeCustodyLostError extends Error {}
 
-const PRE_IMAGE_RESERVE_BYTES = 64 * 1024 * 1024;
-
-class PreImageSpaceError extends Error {}
-
-/**
- * The pre-migration image of one outdated database, under the boot's exclusive custody:
- * a copy-on-write clone where the filesystem supports one, a byte copy only when the
- * copy still leaves the migration its room, otherwise none. Never a reason to refuse.
- */
-async function takeStateUpgradePreImage(
-  file: string,
-  suffix: string,
-): Promise<{ path: string; method: "clone" | "copy" | "kept" } | { skipped: string }> {
-  const image = `${file}${suffix}`;
-  const directory = path.dirname(file);
-  for (const name of fs.readdirSync(directory)) {
-    if (name.startsWith(`${path.basename(image)}.partial-`)) {
-      // An interrupted copy; the database had not changed yet.
-      fs.rmSync(path.join(directory, name), { force: true });
-    }
-  }
-  if (fs.existsSync(image)) {
-    // An interrupted start took it before this database changed.
-    return { path: image, method: "kept" };
-  }
-  // No writer runs: fold the WAL in so one file holds the whole database.
-  const db = openNodeSqliteDatabase(file);
-  try {
-    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-  } finally {
-    db.close();
-  }
-  for (const companion of ["-wal", "-journal"]) {
-    if ((fs.statSync(`${file}${companion}`, { throwIfNoEntry: false })?.size ?? 0) > 0) {
-      return { skipped: `its ${companion.slice(1)} could not be folded into the database` };
-    }
-  }
-  const partial = `${image}.partial-${process.pid}`;
-  let method: "clone" | "copy" = "clone";
-  try {
-    await copySqliteFile(file, partial, fs.lstatSync(file, { bigint: true }), {
-      beforeByteCopy: (sizeBytes) => {
-        method = "copy";
-        // The copy must leave the migration its own room: about one database of WAL.
-        const requiredBytes = 2 * sizeBytes + PRE_IMAGE_RESERVE_BYTES;
-        const space = tryReadDiskSpace(directory);
-        if (space && space.availableBytes < requiredBytes) {
-          throw new PreImageSpaceError(
-            `this filesystem cannot clone, and a copy needs ${formatDiskSpaceBytes(requiredBytes)} with the migration's room while ${formatDiskSpaceBytes(space.availableBytes)} is free`,
-          );
-        }
-      },
-    });
-  } catch (error) {
-    fs.rmSync(partial, { force: true });
-    if (error instanceof PreImageSpaceError) {
-      return { skipped: error.message };
-    }
-    if (isMachineFailure(error)) {
-      // SAFETY: node:fs throws Error instances; only the message is read.
-      return { skipped: `the disk filled while it was copied (${(error as Error).message})` };
-    }
-    throw error;
-  }
-  // A rollback-journal image needs no WAL or SHM companion, so reading it leaves none
-  // behind; the first writer after a restore switches it back to WAL.
-  const copy = openNodeSqliteDatabase(partial);
-  try {
-    copy.exec("PRAGMA journal_mode = DELETE");
-  } finally {
-    copy.close();
-  }
-  for (const companion of ["-wal", "-shm", "-journal"]) {
-    fs.rmSync(`${partial}${companion}`, { force: true });
-  }
-  fsyncPath(partial);
-  fs.renameSync(partial, image);
-  fsyncPath(directory, true);
-  return { path: image, method };
-}
-
-/** Put pre-images back with no companion from the run left beside them. */
-function restorePreImages(files: readonly string[], suffix: string): void {
-  for (const file of files) {
-    if (!fs.existsSync(`${file}${suffix}`)) {
-      continue;
-    }
-    for (const companion of ["-wal", "-journal", "-shm", ".seal"]) {
-      fs.rmSync(`${file}${companion}`, { force: true });
-    }
-    fs.renameSync(`${file}${suffix}`, file);
-    fsyncPath(path.dirname(file), true);
-  }
-}
+// The file names that existed before Doctor ran, kept in the work directory.
+const INVENTORY_FILE = "inventory.json";

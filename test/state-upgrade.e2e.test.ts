@@ -79,16 +79,27 @@ function contents(file: string): string {
     for (const { name } of db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
       .all() as Array<{ name: string }>) {
+      let rows: string[];
       try {
-        for (const row of db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all()) {
-          hash.update(
-            `${name}:${JSON.stringify(Object.values(row), (_key, value) =>
+        // Sorted serialized rows: independent of rowid, so WITHOUT ROWID tables count too.
+        rows = db
+          .prepare(`SELECT * FROM "${name}"`)
+          .all()
+          .map((row) =>
+            JSON.stringify(Object.values(row), (_key, value) =>
               value instanceof Uint8Array ? Buffer.from(value).toString("hex") : value,
-            )}`,
-          );
+            ),
+          )
+          .toSorted();
+      } catch (error) {
+        // Virtual tables need their module; their shadow tables are read as ordinary tables.
+        if (!/no such module/u.test(String(error))) {
+          throw error;
         }
-      } catch {
-        // Virtual tables need their module; their content tables are read above.
+        continue;
+      }
+      for (const row of rows) {
+        hash.update(`${name}:${row}`);
       }
     }
     return hash.digest("hex");

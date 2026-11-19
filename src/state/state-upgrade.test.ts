@@ -519,6 +519,98 @@ describe("startup pre-images", () => {
     expect(isStateUpgradePending(env)).toBe(false);
   });
 
+  it("keeps its record when the disk fills mid-chain, and the next start finishes it", async () => {
+    const { stateDir } = corpus("openclaw-upgrade-midchain-");
+    const env = {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "x.json"),
+    };
+    const shared = path.join(stateDir, "state/openclaw.sqlite");
+    const sharedVersion = OPENCLAW_STATE_SCHEMA_VERSION;
+    const original = userVersion(shared);
+    const full = Object.assign(new Error("ENOSPC: no space left on device, write"), {
+      code: "ENOSPC",
+    });
+
+    // The shared database's migration commits, then the disk fills before the agents'.
+    await expect(
+      upgradeStateDirectory({
+        env,
+        log: { info: () => {}, warn: () => {} },
+        runChain: async () => {
+          using db = new DatabaseSync(shared);
+          db.exec(`PRAGMA user_version = ${sharedVersion}`);
+          throw full;
+        },
+      }),
+    ).rejects.toBe(full);
+    const generation = preImage("").slice(".pre-".length);
+    expect(
+      fs.readdirSync(stateDir).filter((name) => name.startsWith(`.upgrade-${generation}-`)),
+    ).toHaveLength(1);
+    expect(isStateUpgradePending(env)).toBe(true);
+    const info = vi.fn();
+
+    const result = await upgradeStateDirectory({
+      env,
+      log: { info, warn: () => {} },
+      runChain: migrate,
+    });
+
+    expect(result).toMatchObject({ status: "upgraded", mode: "chain", pinned: false });
+    // The already-current shared database stays in the resumed set, on its first image.
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining(`state/openclaw.sqlite v${sharedVersion}`),
+    );
+    expect(userVersion(preImage(shared))).toBe(original);
+    for (const [file, version] of databases(stateDir)) {
+      expect(userVersion(file)).toBe(version);
+    }
+    expect(fs.readdirSync(stateDir).some((name) => name.startsWith(".upgrade-"))).toBe(false);
+  });
+
+  it("replaces a leftover image of a finished upgrade instead of reusing it", async () => {
+    const { stateDir } = corpus("openclaw-upgrade-stale-image-");
+    const shared = path.join(stateDir, "state/openclaw.sqlite");
+    const original = userVersion(shared);
+    fs.writeFileSync(preImage(shared), "not this run's baseline");
+
+    await upgradeStateDirectory({
+      env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: path.join(stateDir, "x.json") },
+      log: { info: () => {}, warn: () => {} },
+      runChain: migrate,
+    });
+
+    expect(userVersion(preImage(shared))).toBe(original);
+  });
+
+  it("names only the databases it created as trial additions, never moved-source archives", async () => {
+    const { stateDir } = corpus("openclaw-upgrade-additions-");
+    const created = path.join(stateDir, "state", "created.sqlite");
+    const archive = path.join(stateDir, "credentials", "legacy.json.migrated-1");
+
+    await upgradeStateDirectory({
+      env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: path.join(stateDir, "x.json") },
+      log: { info: () => {}, warn: () => {} },
+      runChain: async (params) => {
+        // Doctor moves a legacy source into SQLite and archives it beside its old place.
+        fs.mkdirSync(path.dirname(archive), { recursive: true });
+        fs.writeFileSync(archive, "the only copy of the legacy credential");
+        {
+          using db = new DatabaseSync(created);
+          db.exec("CREATE TABLE store (value TEXT)");
+        }
+        return await migrate(params);
+      },
+    });
+
+    const generation = preImage("").slice(".pre-".length);
+    const applied = JSON.parse(
+      fs.readFileSync(path.join(stateDir, `.upgraded-${generation}.json`), "utf8"),
+    ) as { ops: Array<{ kind: string; live: string }> };
+    expect(applied.ops.filter((op) => op.kind === "add").map((op) => op.live)).toEqual([created]);
+  });
+
   it.each(["chain", "fallback"] as const)(
     "keeps the update run the updater recorded before the restart (%s)",
     async (mode) => {

@@ -5,7 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { copyFileDescriptorSync } from "@openclaw/fs-safe/advanced";
+import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { copySqliteFile } from "../infra/sqlite-file-copy.js";
 import { prepareSqliteDatabaseDirectory } from "../infra/sqlite-wal-filesystem.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
@@ -367,5 +369,139 @@ export function normalizeSqliteText(db: DatabaseSync): void {
         // A constraint on the decoded value leaves the row for the copy to set aside.
       }
     }
+  }
+}
+
+// The start's pre-migration images: taken under its exclusive custody before a database
+// changes, and put back when the upgraded config is refused.
+
+export function isMachineFailure(error: unknown): boolean {
+  // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
+  const message = (error as Error | undefined)?.message ?? "";
+  return (
+    code === "ENOSPC" ||
+    code === "EIO" ||
+    code === "EDQUOT" ||
+    code === "EROFS" ||
+    /SQLITE_FULL|database or disk is full|disk I\/O error/iu.test(message)
+  );
+}
+
+const PRE_IMAGE_RESERVE_BYTES = 64 * 1024 * 1024;
+
+class PreImageSpaceError extends Error {}
+
+/**
+ * The pre-migration image of one outdated database, under the boot's exclusive custody:
+ * a copy-on-write clone where the filesystem supports one, a byte copy only when the
+ * copy still leaves the migration its room, otherwise none. Never a reason to refuse.
+ */
+export async function takeStateUpgradePreImage(
+  file: string,
+  suffix: string,
+  resuming: boolean,
+): Promise<{ path: string; method: "clone" | "copy" | "kept" } | { skipped: string }> {
+  const image = `${file}${suffix}`;
+  const directory = path.dirname(file);
+  for (const name of fs.readdirSync(directory)) {
+    if (name.startsWith(`${path.basename(image)}.partial-`)) {
+      // An interrupted copy; the database had not changed yet.
+      fs.rmSync(path.join(directory, name), { force: true });
+    }
+  }
+  if (fs.existsSync(image)) {
+    if (resuming) {
+      // The interrupted start of this build took it before this database changed.
+      return { path: image, method: "kept" };
+    }
+    // Left by an earlier, finished upgrade of this build: it is not this run's baseline.
+    fs.rmSync(image, { force: true });
+  }
+  // No writer runs: fold the WAL in so one file holds the whole database.
+  const db = openNodeSqliteDatabase(file);
+  try {
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  } finally {
+    db.close();
+  }
+  for (const companion of ["-wal", "-journal"]) {
+    if ((fs.statSync(`${file}${companion}`, { throwIfNoEntry: false })?.size ?? 0) > 0) {
+      return { skipped: `its ${companion.slice(1)} could not be folded into the database` };
+    }
+  }
+  const partial = `${image}.partial-${process.pid}`;
+  let method: "clone" | "copy" = "clone";
+  try {
+    await copySqliteFile(file, partial, fs.lstatSync(file, { bigint: true }), {
+      beforeByteCopy: (sizeBytes) => {
+        method = "copy";
+        // The copy must leave the migration its own room: about one database of WAL.
+        const requiredBytes = 2 * sizeBytes + PRE_IMAGE_RESERVE_BYTES;
+        const space = tryReadDiskSpace(directory);
+        if (space && space.availableBytes < requiredBytes) {
+          throw new PreImageSpaceError(
+            `this filesystem cannot clone, and a copy needs ${formatDiskSpaceBytes(requiredBytes)} with the migration's room while ${formatDiskSpaceBytes(space.availableBytes)} is free`,
+          );
+        }
+      },
+    });
+  } catch (error) {
+    fs.rmSync(partial, { force: true });
+    if (error instanceof PreImageSpaceError) {
+      return { skipped: error.message };
+    }
+    if (isMachineFailure(error)) {
+      // SAFETY: node:fs throws Error instances; only the message is read.
+      return { skipped: `the disk filled while it was copied (${(error as Error).message})` };
+    }
+    throw error;
+  }
+  try {
+    // A rollback-journal image needs no WAL or SHM companion, so reading it leaves none
+    // behind; the first writer after a restore switches it back to WAL.
+    const copy = openNodeSqliteDatabase(partial);
+    try {
+      copy.exec("PRAGMA journal_mode = DELETE");
+    } finally {
+      copy.close();
+    }
+    for (const companion of ["-wal", "-shm", "-journal"]) {
+      fs.rmSync(`${partial}${companion}`, { force: true });
+    }
+    fsyncPath(partial);
+    fs.renameSync(partial, image);
+    fsyncPath(directory, true);
+  } catch (error) {
+    for (const companion of ["", "-wal", "-shm", "-journal"]) {
+      fs.rmSync(`${partial}${companion}`, { force: true });
+    }
+    if (!isMachineFailure(error)) {
+      throw error;
+    }
+    // SAFETY: node:fs and node:sqlite throw Error instances; only the message is read.
+    return { skipped: `the disk filled while it was published (${(error as Error).message})` };
+  }
+  return { path: image, method };
+}
+
+/** Put pre-images back with no companion from the run left beside them. */
+export function restorePreImages(files: readonly string[], suffix: string): void {
+  for (const file of files) {
+    if (!fs.existsSync(`${file}${suffix}`)) {
+      continue;
+    }
+    if (fs.lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      // Write the bytes back through the link and keep the link itself.
+      fs.copyFileSync(`${file}${suffix}`, file);
+      fs.rmSync(`${file}${suffix}`);
+      continue;
+    }
+    for (const companion of ["-wal", "-journal", "-shm", ".seal"]) {
+      fs.rmSync(`${file}${companion}`, { force: true });
+    }
+    fs.renameSync(`${file}${suffix}`, file);
+    fsyncPath(path.dirname(file), true);
   }
 }

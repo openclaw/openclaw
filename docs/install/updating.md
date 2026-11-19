@@ -113,7 +113,7 @@ pre-migration image of each outdated database and of the config:
 Snapshot space never stops a start; only a disk too full for the migration itself
 can. Doctor then runs on the live state. Every schema step commits in one SQLite
 transaction with its version bump, so a killed or failed start leaves each database
-at its old or new version, and the next start resumes. Doctor takes no original-state
+at its old or new version, and the next start finishes the same run on the same images. Doctor takes no original-state
 capture and no pre-migration `.bak` set of its own in this run; the start's images
 are the only ones. A standalone `openclaw doctor --fix` keeps its own backups.
 
@@ -124,8 +124,10 @@ config is invalid, the start restores the images when every outdated database ha
 one; otherwise the databases stay migrated and the start reports that.
 
 A failed Git release trial now restores less than before. It restores the outdated
-databases and the config from their images, and removes the files the run added.
-It no longer restores other files Doctor changed in place (for example workspace files
+databases and the config from their images, and removes the databases the run
+created. Other new files, such as the archive Doctor leaves of a legacy file it moved
+into SQLite, always stay. It reverts only when every database it would restore opens
+in the previous release; otherwise it stays forward. It no longer restores other files Doctor changed in place (for example workspace files
 it migrated or legacy files it moved); the earlier copy-and-swap upgrade restored them
 too. Only the fallback rebuild still replaces a database file; a successful start
 migrates `state/openclaw.sqlite` in place, so a process holding it open keeps the same

@@ -327,7 +327,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
 
     describe("after a committed schema migration", () => {
       /** The previous release opens state 36 and agent 38; the trial migrated past it. */
-      async function migratedTrial(options: { preImage: boolean; liveVersion: number }) {
+      async function migratedTrial(options: { preImage?: number; liveVersion: number }) {
         const { stateDir, prefix } = await setup();
         const good = await release(prefix, "1.0.0", 'console.log("old");\n', {
           state: 36,
@@ -348,8 +348,8 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
             `PRAGMA user_version=${version}; CREATE TABLE witness(v); INSERT INTO witness VALUES (${version})`,
           );
         };
-        if (options.preImage) {
-          write(`${db}.pre-2.0.0`, 36);
+        if (options.preImage !== undefined) {
+          write(`${db}.pre-2.0.0`, options.preImage);
         }
         write(db, options.liveVersion);
         const slot = gitReleaseSlot(prefix);
@@ -361,10 +361,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       };
 
       it("stays on the new release when no pre-image can restore the state", async () => {
-        const { prefix, db, slot, target, previousLink } = await migratedTrial({
-          preImage: false,
-          liveVersion: 40,
-        });
+        const { prefix, db, slot, target, previousLink } = await migratedTrial({ liveVersion: 40 });
 
         startGateway(prefix);
         startGateway(prefix);
@@ -374,7 +371,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         expect(third.status).not.toBe(0);
         expect(third.stdout).not.toContain("old");
         expect(third.stderr).toContain(
-          `openclaw: release ${target} failed to start twice, but its database migration has committed and no pre-migration image restores it (state/openclaw.sqlite schema 40 (`,
+          `openclaw: release ${target} failed to start twice, but its database migration has committed and no pre-migration image restores a schema the previous release opens (state/openclaw.sqlite schema 40 (`,
         );
         expect(third.stderr).toContain(
           `supports 36)). ${previousLink} cannot open this state, so the service stays on ${target}. Fix forward: run openclaw triage, or openclaw update once a fixed release is available.`,
@@ -388,7 +385,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
 
       it("switches back and restores the pre-image when one exists", async () => {
         const { prefix, db, slot, previous } = await migratedTrial({
-          preImage: true,
+          preImage: 36,
           liveVersion: 40,
         });
 
@@ -403,8 +400,23 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         expect(witness(db)).toEqual({ v: 36 });
       });
 
+      it("stays on the new release when the image it would restore is newer too", async () => {
+        // An image of a database an earlier upgrade had already moved past the previous release.
+        const { prefix, db, slot, target } = await migratedTrial({ preImage: 38, liveVersion: 40 });
+
+        startGateway(prefix);
+        startGateway(prefix);
+        const third = startGateway(prefix);
+
+        expect(third.stdout).not.toContain("old");
+        expect(third.stderr).toContain("state/openclaw.sqlite schema 38 (");
+        expect(await fs.readlink(slot)).toBe(target);
+        expect(witness(db)).toEqual({ v: 40 });
+        expect(witness(`${db}.pre-2.0.0`)).toEqual({ v: 38 });
+      });
+
       it("switches back when the state never moved past the previous release", async () => {
-        const { prefix, db } = await migratedTrial({ preImage: false, liveVersion: 36 });
+        const { prefix, db } = await migratedTrial({ liveVersion: 36 });
 
         startGateway(prefix);
         startGateway(prefix);

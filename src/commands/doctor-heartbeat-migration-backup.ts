@@ -75,7 +75,6 @@ export async function prepareDoctorMigrationBackups(params: {
       verifiedSnapshots,
       automaticRepair,
       schemaPreparationPending: hasUnpreparedSchemas(schemas, backups.versionMigrations),
-      preImageOwner,
     }),
   );
   for (const message of [...heartbeatBackups.changes, ...heartbeatBackups.warnings]) {
@@ -144,7 +143,7 @@ async function hasPendingHeartbeatMigration(
 async function backupHeartbeatMigrationDatabases(
   params: Omit<
     Parameters<typeof backupDoctorMigrationDatabases>[0],
-    "pendingDatabasePaths" | "pendingMigrations" | "versionMigrationsOnly"
+    "pendingDatabasePaths" | "pendingMigrations" | "versionMigrationsOnly" | "preImageOwner"
   > & {
     automaticRepair: boolean;
     schemaPreparationPending: boolean;
@@ -172,7 +171,6 @@ async function backupHeartbeatMigrationDatabases(
     databasePaths: params.databasePaths,
     agentDatabaseTargets: params.agentDatabaseTargets,
     verifiedSnapshots: params.verifiedSnapshots,
-    preImageOwner: params.preImageOwner,
     pendingDatabasePaths: [sharedPath, ...params.databasePaths].filter(
       (pathname) =>
         existsSync(pathname) ||
