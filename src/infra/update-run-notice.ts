@@ -1,7 +1,6 @@
 import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { resolveUpdateRunVerifiedServingVersion } from "./update-run-report.js";
-import { isRefusedRestartFinishedLater } from "./update-run-restart-finished.js";
 
 export type UpdateRunNoticeKind = "ack" | "parking" | "activating" | "verifying" | "finished";
 type NoticeRun = Pick<UpdateRunRecord, "status" | "reason"> &
@@ -40,10 +39,6 @@ export function renderUpdateRunSummary(
   run: NoticeRun,
   options: { manualCommand?: string } = {},
 ): string {
-  if (isRefusedRestartFinishedLater(run)) {
-    // The refused restart was finished and verified after the installed updater exited.
-    return renderUpdateRunSummary({ status: "succeeded", reason: null }, options);
-  }
   const headline =
     run.status !== "skipped"
       ? UPDATE_RUN_HEADLINES.get(run.status)

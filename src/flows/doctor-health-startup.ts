@@ -402,7 +402,11 @@ export async function prepareDoctorRuntimeChecks(
   await measure("Gateway restart handoff", async () => {
     const { maybeLeaveShippedRestartFinisher } =
       await import("../cli/update-cli/update-shipped-restart-finisher.js");
-    await maybeLeaveShippedRestartFinisher({ root, log: (message) => runtime.log(message) });
+    await maybeLeaveShippedRestartFinisher({
+      root,
+      log: (message) => runtime.log(message),
+      diagnose: (message) => runtime.error(message),
+    });
   });
   await measure("Plugin runtime links", () => noteStalePluginRuntimeSymlinks(root));
   noteStartupOptimizationHints();

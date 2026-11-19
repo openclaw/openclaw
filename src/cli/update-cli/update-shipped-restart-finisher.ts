@@ -3,9 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveGatewayPort } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
-import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
+import {
+  resolveServiceEntrypoint,
+  summarizeGatewayServiceLayout,
+} from "../../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
@@ -14,31 +16,19 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireFileLock } from "../../infra/file-lock.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
+import { pathEntryExists } from "../../infra/path-existence.js";
+import { inspectSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { listActivePnpmIsolatedGlobalPackages } from "../../infra/update-global.js";
 import { resolveSystemdScopeLauncher } from "../../infra/update-managed-service-handoff-launcher.js";
-import {
-  inspectUpdateRunDriver,
-  readUpdateRunDriver,
-  sameUpdateRunDriver,
-  type UpdateRunDriver,
-} from "../../infra/update-run-driver.js";
-import {
-  getUpdateRun,
-  listUpdateRuns,
-  recordUpdateRunDiagnostic,
-  recordUpdateRunVerification,
-} from "../../infra/update-run-ledger.js";
-import { SHIPPED_RESTART_FINISHER_STEP } from "../../infra/update-run-restart-finished.js";
+import { recordedUpdateRunDrivers } from "../../infra/update-run-activity.js";
+import { inspectUpdateRunDriver, type UpdateRunDriver } from "../../infra/update-run-driver.js";
+import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
+import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { runCommandWithTimeout } from "../../process/exec-runner.js";
 import { sleep } from "../../utils/sleep.js";
-import {
-  confirmGatewayReachable,
-  resolveGatewayRestartProbeContext,
-  waitForGatewayHttpReadiness,
-} from "../daemon-cli/restart-health-probe.js";
 import {
   inspectManagedGatewayServiceBeforeUpdate,
   readGatewayServiceStateForUpdate,
@@ -50,30 +40,30 @@ import {
  * fix, inspect the unchanged service definition against the global entry pnpm has just
  * repointed into a new versioned store directory, so the restart is refused and the run ends
  * `service-revalidation-failed`. They run this package's Doctor after the swap but never hand
- * it the restart when the schema is unchanged. That Doctor leaves one detached finisher which,
- * after the updater exits, refreshes the definition and starts the Gateway through the ordinary
- * `gateway install --force` and `gateway start` owners. Remove this module once no supported
- * upgrade path starts from such an updater.
+ * it the restart when the schema is unchanged. That Doctor leaves one detached waiter. Once the
+ * updater and any handoff helper are gone, it reruns `openclaw update` pinned to the installed
+ * version: this package's fixed updater then refreshes the definition (keeping the service's
+ * port and options), restarts and verifies the Gateway, and records its own run. The waiter
+ * itself never writes a service or a run. Remove this module once no supported upgrade path
+ * starts from such an updater.
  *
  * The driver's version cannot tell a fixed 2026.11.6 or 2026.11.10 build from an unfixed one, so
- * the gate does not use it. Under a fixed driver the gate can still hold; the finisher then only
- * polls the run until it leaves `running` with another outcome and exits without acting.
+ * the gate does not use it. Under a fixed driver the waiter only polls the run until it ends
+ * with another outcome, then exits.
  */
 // The shipped driver's remaining work after Doctor (plugin convergence, post-plugin Doctor,
-// revalidation and its recovery attempt) runs under per-step timeouts; two of them bound it.
+// revalidation and recovery, then the handoff helper's restore and triage) runs under per-step
+// timeouts; two of them bound it. Past the bound the waiter exits without acting or writing.
 const DRIVER_EXIT_WAIT_MS = 2 * DEFAULT_UPDATE_STEP_TIMEOUT_MS;
-// `gateway start` waits for readiness itself; this bounds each command on slow hosts.
-const SERVICE_COMMAND_TIMEOUT_MS = 10 * 60_000;
+// A full package reinstall took about 4 minutes in test cells; allow slow hosts and registries.
+const UPDATE_COMMAND_TIMEOUT_MS = 60 * 60_000;
 const POLL_MS = 2_000;
-// A finished run accepts only diagnostics; a `warning:` row is shown in that run's report,
-// and with the verification below it lets readers present the update as completed.
-const RECOVERY_STEP = SHIPPED_RESTART_FINISHER_STEP;
 const FINISHER_COMMAND = "finish-gateway-restart";
 export const FINISHER_NOTICE =
-  "If this updater leaves the Gateway stopped, OpenClaw will try to restart it after the updater exits.";
+  "If this updater leaves the Gateway stopped, OpenClaw will rerun `openclaw update` for the installed version after the updater exits.";
 // Verified in the failed state: `gateway restart` alone exits 78 on the old definition.
-const RECOVERY_HINT =
-  "The Gateway is still stopped; run `openclaw gateway install --force`, then `openclaw gateway restart`, or ask this instance's agent with `openclaw triage`.";
+export const MANUAL_RECOVERY_NOTICE =
+  "If this updater leaves the Gateway stopped, run `openclaw gateway install --force`, then `openclaw gateway restart`, or ask this instance's agent with `openclaw triage`.";
 
 type ServiceFacts = { packageRoot?: string; owned: boolean; writable: boolean; running: boolean };
 
@@ -81,32 +71,39 @@ export type FinisherDeps = {
   /** Ledger and child environment: the Doctor's, without the updater's markers. */
   env: NodeJS.ProcessEnv;
   inspectService: (root: string) => Promise<ServiceFacts | undefined>;
-  probeGateway: () => Promise<{ version?: string; ready: boolean; port?: number } | undefined>;
-  runCli: (args: string[]) => Promise<{ code: number | null; output: string }>;
+  runUpdate: (args: string[]) => Promise<void>;
   withServiceLock: <T>(operation: () => Promise<T>) => Promise<T>;
   lockDir: string;
   now: () => number;
   sleep: (ms: number) => Promise<void>;
 };
 
-/** `<home>/store/v<N>/links/@/openclaw/<version>/<hash>/node_modules/openclaw`, pnpm 11+. */
-function parsePnpmStoreEntry(root: string) {
-  const match =
-    /^(.+)[/\\]store[/\\](v\d+)[/\\]links[/\\]@[/\\]openclaw[/\\]([^/\\]+)[/\\][^/\\]+[/\\]node_modules[/\\]openclaw$/u.exec(
-      root,
-    );
-  return match ? { home: match[1]!, layout: match[2]!, version: match[3]! } : undefined;
+/**
+ * The pnpm 11+ home a package directory belongs to. Registry installs land in the global
+ * virtual store (`<home>/store/v<N>/links/@/openclaw/<version>/<hash>/node_modules/openclaw`);
+ * tarball and other non-registry installs stay in the project's own virtual store
+ * (`<home>/global/v<N>/<project>/node_modules/.pnpm/openclaw@<spec>/node_modules/openclaw`).
+ */
+function parsePnpmPackageHome(root: string) {
+  const match = /^(.+)[/\\](?:store|global)[/\\](v\d+)[/\\].+[/\\]node_modules[/\\]openclaw$/u.exec(
+    root,
+  );
+  return match ? { home: match[1]!, layout: match[2]! } : undefined;
 }
 
 /**
- * The running package is the active pnpm global entry, and the service still names this same
- * pnpm home's entry for an earlier version. Anything else is not this compatibility case.
+ * The running package is the active pnpm global entry, and the service still names another
+ * version's package in this same pnpm home, which pnpm may already have pruned.
  */
-async function inspectPnpmSwitch(root: string, deps: Pick<FinisherDeps, "inspectService">) {
+async function inspectPnpmSwitch(
+  root: string,
+  deps: Pick<FinisherDeps, "inspectService">,
+): Promise<{ skip: string } | { service: ServiceFacts; version: string }> {
   const realRoot = await fs.realpath(root).catch(() => undefined);
-  const running = realRoot ? parsePnpmStoreEntry(realRoot) : undefined;
-  if (!realRoot || !running || (await readPackageVersion(realRoot)) !== running.version) {
-    return undefined;
+  const running = realRoot ? parsePnpmPackageHome(realRoot) : undefined;
+  const version = realRoot ? await readPackageVersion(realRoot) : null;
+  if (!realRoot || !running || !version) {
+    return { skip: `the running package ${realRoot ?? root} is not in a pnpm 11+ home` };
   }
   const active = await listActivePnpmIsolatedGlobalPackages({
     globalRoot: path.join(running.home, "global", running.layout),
@@ -115,30 +112,36 @@ async function inspectPnpmSwitch(root: string, deps: Pick<FinisherDeps, "inspect
     active.map((entry) => fs.realpath(entry.packageRoot).catch(() => undefined)),
   );
   if (!activeReal.includes(realRoot)) {
-    return undefined;
+    return { skip: `no active pnpm global entry resolves to ${realRoot}` };
   }
   const service = await deps.inspectService(realRoot);
-  const previous = service?.packageRoot ? parsePnpmStoreEntry(service.packageRoot) : undefined;
+  const previous = service?.packageRoot ? parsePnpmPackageHome(service.packageRoot) : undefined;
+  // A pruned entry no longer has a manifest; its path still places it in this home.
+  const present = service?.packageRoot ? await pathEntryExists(service.packageRoot) : false;
   if (
     !service?.packageRoot ||
     !previous ||
     previous.home !== running.home ||
     previous.layout !== running.layout ||
-    previous.version === running.version ||
-    (await readPackageName(service.packageRoot)) !== "openclaw"
+    service.packageRoot === realRoot ||
+    (present &&
+      ((await readPackageName(service.packageRoot)) !== "openclaw" ||
+        (await readPackageVersion(service.packageRoot)) === version))
   ) {
-    return undefined;
+    return {
+      skip: `the service runs ${service?.packageRoot ?? "no readable package"}, not another version in ${running.home}`,
+    };
   }
-  return { service, version: running.version };
+  return { service, version };
 }
 
-/** The Doctor gate: true only for this package's Doctor run by a shipped, unfixed updater. */
+/** The Doctor gate: holds only for this package's Doctor run by a shipped updater. */
 export async function inspectShippedRestartGate(params: {
   root: string;
   env: NodeJS.ProcessEnv;
-  parent?: UpdateRunDriver;
+  isDriverAncestor: (driver: UpdateRunDriver) => boolean;
   inspectService: FinisherDeps["inspectService"];
-}): Promise<{ runId: string } | undefined> {
+}): Promise<{ runId: string } | { skip: string } | undefined> {
   const { env } = params;
   if (
     (process.platform !== "linux" && process.platform !== "darwin") ||
@@ -148,8 +151,9 @@ export async function inspectShippedRestartGate(params: {
   ) {
     return undefined;
   }
-  // Shipped drivers pass the run id to the post-plugin Doctor only; the package-step
-  // Doctor is identified by being the recorded driver's own child.
+  // Shipped drivers pass the run id to the post-plugin Doctor only. The package-step Doctor
+  // is identified by descending from the recorded live driver; the CLI entry can respawn
+  // itself, so the driver is an ancestor and not necessarily the parent.
   const runId = env[UPDATE_RUN_ID_ENV]?.trim();
   const options = { env };
   const candidates = runId
@@ -161,20 +165,46 @@ export async function inspectShippedRestartGate(params: {
       run?.status === "running" &&
       driver &&
       inspectUpdateRunDriver(driver) === "alive" &&
-      (runId || (params.parent && sameUpdateRunDriver(driver, params.parent)))
+      (runId || params.isDriverAncestor(driver))
     );
   });
   const run = runs.length === 1 ? runs[0] : undefined;
   if (!run) {
-    return undefined;
+    return {
+      skip: `${runs.length} running update runs with a live driver ${runId ? `match ${runId}` : "above this Doctor"} (${candidates.length} candidates)`,
+    };
   }
   const pnpm = await inspectPnpmSwitch(params.root, params);
-  return pnpm?.service.owned && pnpm.service.writable ? { runId: run.runId } : undefined;
+  if ("skip" in pnpm) {
+    return pnpm;
+  }
+  return !pnpm.service.owned
+    ? { skip: `the service at ${pnpm.service.packageRoot} is not owned by this installation` }
+    : !pnpm.service.writable
+      ? { skip: "the service definition is not writable" }
+      : { runId: run.runId };
 }
 
-type FinisherOutcome = "duplicate" | "not-needed" | "yielded" | "restarted" | "gave-up";
+/** The recorded driver is this process's live ancestor, by PID and start identity. */
+function isLiveDriverAncestor(driver: UpdateRunDriver): boolean {
+  const ancestry = inspectSelfAndAncestorPidsSync(undefined, {
+    requireVerifiedParent: true,
+    throughPid: driver.pid,
+  });
+  return ancestry.pids.has(driver.pid) && inspectUpdateRunDriver(driver) === "alive";
+}
 
-/** Waits for the shipped driver to exit, then finishes the restart it refused. */
+/** Until each is provably gone, a driver or handoff helper may still restore or triage. */
+function updateProcessesMayRun(run: UpdateRunRecord): boolean {
+  const helper = run.origin.managedHandoff?.helper;
+  return [...recordedUpdateRunDrivers(run), ...(helper ? [helper] : [])].some(
+    (driver) => inspectUpdateRunDriver(driver) !== "dead",
+  );
+}
+
+type FinisherOutcome = "duplicate" | "timed-out" | "not-needed" | "yielded" | "handed-off";
+
+/** Waits for the shipped updater to exit, then hands the refused restart to `openclaw update`. */
 export async function runShippedRestartFinisher(params: {
   runId: string;
   root: string;
@@ -184,18 +214,18 @@ export async function runShippedRestartFinisher(params: {
   const { runId, deps } = params;
   const options = { env: deps.env };
   let lock: Awaited<ReturnType<typeof acquireFileLock>>;
-  // One finisher per run, without blocking anyone else. The existing owners are exclusive per
+  // One waiter per run, without blocking anyone else. The existing owners are exclusive per
   // installation or service, so holding one through the wait would refuse the very `openclaw
-  // update` or `gateway restart` this finisher must yield to: the update executor and the
+  // update` or `gateway restart` this waiter must yield to: the update executor and the
   // managed-handoff lease refuse a new update while held (and the lease has no row kind for
-  // this), and the service operation lock serializes every Gateway command and is
-  // taken only around the recheck below. A file lock keyed by run id excludes only a twin
-  // finisher, and is reclaimed only after its holder is definitely dead.
+  // this), and the service operation lock serializes every Gateway command and is taken only
+  // around the recheck below. A file lock keyed by run id excludes only a twin waiter, and is
+  // reclaimed only after its holder is definitely dead.
   try {
     await fs.mkdir(deps.lockDir, { recursive: true, mode: 0o700 });
     lock = await acquireFileLock(path.join(deps.lockDir, `gateway-finisher-${sha256Hex(runId)}`), {
       retries: { retries: 0, factor: 1, minTimeout: 0, maxTimeout: 0 },
-      stale: DRIVER_EXIT_WAIT_MS + 2 * SERVICE_COMMAND_TIMEOUT_MS,
+      stale: DRIVER_EXIT_WAIT_MS + UPDATE_COMMAND_TIMEOUT_MS,
       staleRecovery: "remove-if-definitely-stale",
     });
   } catch {
@@ -203,101 +233,54 @@ export async function runShippedRestartFinisher(params: {
     return "duplicate";
   }
   params.onReady?.(true);
-  const giveUp = (reason: string): FinisherOutcome => {
-    recordUpdateRunDiagnostic(
-      runId,
-      `Automatic Gateway restart after the installed updater exited stopped: ${reason}. ${RECOVERY_HINT}`,
-      options,
-      RECOVERY_STEP,
-    );
-    return "gave-up";
-  };
   try {
     const deadline = deps.now() + DRIVER_EXIT_WAIT_MS;
     let run = getUpdateRun(runId, options);
-    while (
-      run &&
-      (run.status === "running" ||
-        (run.origin.driver && inspectUpdateRunDriver(run.origin.driver) === "alive"))
-    ) {
+    while (run && (run.status === "running" || updateProcessesMayRun(run))) {
       if (deps.now() >= deadline) {
-        return giveUp(
-          `the installed updater was still running after ${DRIVER_EXIT_WAIT_MS / 60_000} minutes`,
-        );
+        // The run may still succeed; leave its record to its own updater.
+        return "timed-out";
       }
       await deps.sleep(POLL_MS);
       run = getUpdateRun(runId, options);
     }
-    if (run?.status !== "failed" || run.reason !== "service-revalidation-failed") {
+    // A data-at-risk mark keeps the updater's own recovery guidance; never restart over it.
+    if (
+      run?.status !== "failed" ||
+      run.reason !== "service-revalidation-failed" ||
+      run.verification.recovery?.serviceRestartSafe === false
+    ) {
       return "not-needed";
     }
+    const createdAtMs = run.createdAtMs;
     // Under the service lock a user's install or restart finishes first; its result decides.
-    const decision = await deps.withServiceLock(async () => {
-      const createdAtMs = run?.createdAtMs ?? 0;
-      // This run is among those created at or after it; any other one is a newer update.
-      const sinceThisRun = listUpdateRuns({ limit: 5 }, options).filter(
-        (other) => other.createdAtMs >= createdAtMs,
-      );
-      if (sinceThisRun.length > 1) {
-        return "yielded" as const;
-      }
-      if (run?.verification.recovery?.serviceRestartSafe === false) {
-        return `the update recorded data at risk (${run.verification.recovery.dataAtRisk})`;
-      }
-      const pnpm = await inspectPnpmSwitch(params.root, deps);
-      if (!pnpm || pnpm.service.running || (await deps.probeGateway())) {
-        return "yielded" as const;
-      }
-      if (!pnpm.service.owned || !pnpm.service.writable) {
-        return "the service definition is not writable by this installation";
-      }
-      return { version: pnpm.version };
-    });
-    if (decision === "yielded") {
+    // A lock that cannot be taken, or is borrowed by a handoff, means someone else is acting.
+    const version = await deps
+      .withServiceLock(async () => {
+        const later = listUpdateRuns({ limit: 5 }, options).filter(
+          (other) => other.createdAtMs >= createdAtMs,
+        );
+        // Includes this run: a second row is a newer update, and an active row is one in flight.
+        if (later.length > 1 || listUpdateRuns({ active: true, limit: 1 }, options).length) {
+          return undefined;
+        }
+        // A helper that restored the old definition and started it left a working Gateway.
+        const pnpm = await inspectPnpmSwitch(params.root, deps);
+        return !("skip" in pnpm) &&
+          !pnpm.service.running &&
+          pnpm.service.owned &&
+          pnpm.service.writable
+          ? pnpm.version
+          : undefined;
+      })
+      .catch(() => undefined);
+    if (!version) {
       return "yielded";
     }
-    if (typeof decision === "string") {
-      return giveUp(decision);
-    }
-    for (const args of [
-      ["gateway", "install", "--force", "--json"],
-      ["gateway", "start", "--json"],
-    ]) {
-      const result = await deps.runCli(args);
-      if (result.code !== 0) {
-        return giveUp(
-          `\`openclaw ${args.slice(0, -1).join(" ")}\` exited ${result.code ?? "by signal"}: ${result.output.trim().slice(-400) || "no output"}`,
-        );
-      }
-    }
-    const serving = await deps.probeGateway();
-    if (serving?.version !== decision.version || !serving.ready) {
-      return giveUp(
-        `the Gateway did not report ready on ${decision.version} (observed ${serving?.version ?? "no Gateway"})`,
-      );
-    }
-    recordUpdateRunVerification(
-      runId,
-      {
-        serviceRunning: true,
-        runningVersion: serving.version,
-        versionMatch: true,
-        readyz: true,
-        settled: true,
-        // `update status` probes this port to show current health beside the record.
-        ...(serving.port ? { port: serving.port } : {}),
-      },
-      options,
-    );
-    recordUpdateRunDiagnostic(
-      runId,
-      `The installed updater refused the Gateway restart; after it exited, the service definition was refreshed and OpenClaw ${serving.version} is serving.`,
-      options,
-      RECOVERY_STEP,
-    );
-    return "restarted";
-  } catch (error) {
-    return giveUp(formatErrorMessage(error));
+    // From here the update owns admission: it refuses a concurrent update and revalidates the
+    // service itself, so the short gap after the lock release cannot double-apply anything.
+    await deps.runUpdate(["update", "--tag", version, "--yes", "--json"]);
+    return "handed-off";
   } finally {
     await lock.release();
   }
@@ -324,98 +307,158 @@ async function inspectGatewayServiceFacts(
     return undefined;
   }
   const layout = await summarizeGatewayServiceLayout(state.command);
+  // pnpm can prune the previous entry; its path still names it in the unit's command.
+  const entrypoint = resolveServiceEntrypoint(state.command);
+  const marker = `${path.sep}node_modules${path.sep}openclaw${path.sep}`;
+  const lexicalRoot = entrypoint?.includes(marker)
+    ? entrypoint.slice(0, entrypoint.lastIndexOf(marker) + marker.length - 1)
+    : undefined;
+  const packageRoot = layout?.packageRootReal ?? lexicalRoot;
   const verdict = await inspectManagedGatewayServiceBeforeUpdate({
     root,
     state,
     allowInstallRootChange: true,
   });
   return {
-    packageRoot: layout?.packageRootReal,
+    packageRoot,
     owned:
-      verdict.kind === "owned" &&
-      verdict.requiresInstallRootRefresh === true &&
-      verdict.root === layout?.packageRootReal,
+      (verdict.kind === "owned" &&
+        verdict.requiresInstallRootRefresh === true &&
+        verdict.root === packageRoot) ||
+      // The fixed updater proves a pruned entry against this global root itself.
+      (packageRoot !== undefined && !(await pathEntryExists(packageRoot))),
+    // An absent capability is writable to the existing owners as well (service-layout.ts).
     writable: (state.definitionMutationCapability?.kind ?? "writable") === "writable",
     running: state.running,
   };
 }
 
-/** Doctor step: leave the finisher only when the gate holds, and say so only when it is left. */
+/** Doctor step: leave the waiter only when the gate holds, and say what will happen. */
 export async function maybeLeaveShippedRestartFinisher(params: {
   root: string | null;
   log: (message: string) => void;
+  /** Update-time diagnostics only: the updater captures this Doctor's stderr. */
+  diagnose: (message: string) => void;
   env?: NodeJS.ProcessEnv;
-  spawnFinisher?: (root: string, runId: string) => Promise<boolean>;
+  spawnFinisher?: (
+    root: string,
+    runId: string,
+    diagnose: (message: string) => void,
+  ) => Promise<SpawnOutcome>;
   inspectService?: FinisherDeps["inspectService"];
+  isDriverAncestor?: (driver: UpdateRunDriver) => boolean;
 }): Promise<void> {
   const env = params.env ?? process.env;
   if (!params.root || !isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS)) {
     return;
   }
+  const diagnose = (message: string) => params.diagnose(`Gateway restart handoff: ${message}.`);
+  let gate: Awaited<ReturnType<typeof inspectShippedRestartGate>>;
   try {
-    const gate = await inspectShippedRestartGate({
+    gate = await inspectShippedRestartGate({
       root: params.root,
       env,
-      parent: readUpdateRunDriver(process.ppid),
+      isDriverAncestor: params.isDriverAncestor ?? isLiveDriverAncestor,
       inspectService:
         params.inspectService ?? ((root) => inspectGatewayServiceFacts(root, stripUpdaterEnv(env))),
     });
-    if (gate && (await (params.spawnFinisher ?? spawnFinisher)(params.root, gate.runId))) {
-      params.log(FINISHER_NOTICE);
-    }
-  } catch {
+  } catch (error) {
     // Any doubt leaves the shipped updater's outcome and recovery guidance unchanged.
+    diagnose(`skipped: ${formatErrorMessage(error)}`);
+    return;
+  }
+  if (!gate) {
+    return;
+  }
+  if ("skip" in gate) {
+    diagnose(`skipped: ${gate.skip}`);
+    return;
+  }
+  const outcome = await (params.spawnFinisher ?? spawnFinisher)(
+    params.root,
+    gate.runId,
+    diagnose,
+  ).catch((error: unknown) => {
+    diagnose(`the waiter could not start: ${formatErrorMessage(error)}`);
+    return "failed" as const;
+  });
+  if (outcome !== "duplicate") {
+    params.log(outcome === "ready" ? FINISHER_NOTICE : MANUAL_RECOVERY_NOTICE);
   }
 }
 
-/** Detached from the Doctor's process group so the updater's custody checks never see it. */
-async function spawnFinisher(root: string, runId: string): Promise<boolean> {
-  const entry = await resolveGatewayInstallEntrypoint(root);
-  if (!entry) {
-    return false;
-  }
-  const env = stripUpdaterEnv(process.env);
-  const args = [entry, "update", FINISHER_COMMAND, "--run-id", runId];
-  // A Gateway-initiated update runs this Doctor inside the shipped helper's transient
-  // `openclaw-update-*.service`, whose KillMode=control-group would kill the finisher with it.
-  const launcher =
-    process.platform === "linux"
-      ? (() => {
-          try {
-            return resolveSystemdScopeLauncher({
-              serviceEnv: env,
-              unit: `openclaw-update-restart-${runId.replace(/[^A-Za-z0-9_.:@-]+/gu, "-")}.scope`,
-              executable: process.execPath,
-              args,
-            });
-          } catch {
-            return undefined;
-          }
-        })()
-      : undefined;
-  const child = spawn(launcher?.command ?? process.execPath, launcher?.args ?? args, {
+type SpawnOutcome = "ready" | "duplicate" | "failed";
+
+async function spawnOnce(command: string, args: string[], env: NodeJS.ProcessEnv) {
+  const child = spawn(command, args, {
     cwd: os.homedir(),
     env,
     detached: true,
     stdio: ["ignore", "ignore", "ignore", "ipc"],
   });
-  const ready = await new Promise<boolean>((resolve) => {
-    const timer = setTimeout(() => resolve(false), 60_000);
-    child.once("message", (message) => {
-      clearTimeout(timer);
-      resolve(isRecord(message) && message.ready === true);
-    });
-    child.once("error", () => resolve(false));
-    child.once("exit", () => resolve(false));
+  let timer: NodeJS.Timeout | undefined;
+  const outcome = await new Promise<SpawnOutcome | "exited">((resolve) => {
+    timer = setTimeout(() => resolve("failed"), 60_000);
+    child.once("message", (message) =>
+      resolve(isRecord(message) && message.ready === true ? "ready" : "duplicate"),
+    );
+    child.once("error", () => resolve("exited"));
+    child.once("exit", () => resolve("exited"));
   });
-  if (!ready && child.exitCode === null) {
+  clearTimeout(timer);
+  if (outcome !== "ready" && child.exitCode === null) {
     child.kill("SIGTERM");
   }
   if (child.connected) {
     child.disconnect();
   }
   child.unref();
-  return ready;
+  return outcome;
+}
+
+/** Detached from the Doctor's process group so the updater's custody checks never see it. */
+async function spawnFinisher(
+  root: string,
+  runId: string,
+  diagnose: (message: string) => void,
+): Promise<SpawnOutcome> {
+  const entry = await resolveGatewayInstallEntrypoint(root);
+  if (!entry) {
+    diagnose(`the waiter could not start: no CLI entrypoint under ${root}`);
+    return "failed";
+  }
+  const env = stripUpdaterEnv(process.env);
+  const args = [entry, "update", FINISHER_COMMAND, "--run-id", runId];
+  // A Gateway-initiated update runs this Doctor inside the shipped helper's transient
+  // `openclaw-update-*.service`, whose KillMode=control-group would kill the waiter with it.
+  let scoped: ReturnType<typeof resolveSystemdScopeLauncher> | undefined;
+  try {
+    scoped =
+      process.platform === "linux"
+        ? resolveSystemdScopeLauncher({
+            serviceEnv: env,
+            unit: `openclaw-update-restart-${runId.replace(/[^A-Za-z0-9_.:@-]+/gu, "-")}.scope`,
+            executable: process.execPath,
+            args,
+          })
+        : undefined;
+  } catch {
+    scoped = undefined;
+  }
+  const outcome = scoped ? await spawnOnce(scoped.command, scoped.args, env) : "exited";
+  if (scoped && outcome !== "ready" && outcome !== "duplicate") {
+    diagnose(
+      `the scoped waiter ${outcome === "failed" ? "timed out" : "exited"} before it was ready; starting it without a scope`,
+    );
+  }
+  // A scope the user manager refused exits before signalling; a plain detached waiter remains.
+  const settled = outcome === "exited" ? await spawnOnce(process.execPath, args, env) : outcome;
+  if (settled !== "ready" && settled !== "duplicate") {
+    diagnose(
+      `the waiter could not start: it ${settled === "failed" ? "timed out" : "exited"} before it was ready`,
+    );
+  }
+  return settled === "exited" ? "failed" : settled;
 }
 
 /** `openclaw update finish-gateway-restart` entry; only the Doctor above starts it. */
@@ -429,10 +472,6 @@ export async function finishShippedRestartCommand(runId: string): Promise<void> 
   if (!root || !entry) {
     throw new Error("The OpenClaw package root for the Gateway restart could not be resolved.");
   }
-  const probeContext = async () => {
-    const context = await resolveGatewayRestartProbeContext(env);
-    return { context, port: resolveGatewayPort(context.config, env) };
-  };
   await runShippedRestartFinisher({
     runId,
     root,
@@ -443,32 +482,12 @@ export async function finishShippedRestartCommand(runId: string): Promise<void> 
     deps: {
       env,
       inspectService: (serviceRoot) => inspectGatewayServiceFacts(serviceRoot, env),
-      probeGateway: async () => {
-        const { context, port } = await probeContext();
-        const gateway = await confirmGatewayReachable({ port, ...context, env });
-        if (!gateway.reachable) {
-          return undefined;
-        }
-        const http = await waitForGatewayHttpReadiness({
-          requireChannelHealth: false,
-          config: context.config,
-          port,
-          attempts: 1,
-          deadlineAt: performance.now() + 3_000,
-          delayMs: 0,
-        });
-        return {
-          version: gateway.gatewayVersion ?? undefined,
-          ready: http.coreReady ?? (http.healthz === 200 && http.readyz === 200),
-          port,
-        };
-      },
-      runCli: async (args) => {
-        const result = await runCommandWithTimeout([process.execPath, entry, ...args], {
+      runUpdate: async (args) => {
+        // The update reports and records its own outcome; this waiter only starts it.
+        await runCommandWithTimeout([process.execPath, entry, ...args], {
           env,
-          timeoutMs: SERVICE_COMMAND_TIMEOUT_MS,
+          timeoutMs: UPDATE_COMMAND_TIMEOUT_MS,
         });
-        return { code: result.code, output: `${result.stdout}\n${result.stderr}` };
       },
       withServiceLock: (operation) => withGatewayServiceOperationLock(env, () => operation()),
       lockDir: resolvePreferredOpenClawTmpDir({ purpose: "coordination" }),

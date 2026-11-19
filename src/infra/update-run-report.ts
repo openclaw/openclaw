@@ -24,7 +24,6 @@ import {
 import { formatUpdateOwedStep, listUpdateOwedSteps } from "./update-run-owed-step.js";
 import { isAcknowledgedAbandonedUpdateRun, type UpdateRunRecord } from "./update-run-record.js";
 import type { UpdateRunReportHealth } from "./update-run-report-health.js";
-import { isRefusedRestartFinishedLater } from "./update-run-restart-finished.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 import { formatUpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
@@ -187,10 +186,6 @@ function formatUpdateVersion(identity: UpdateRunRecord["after"]): string | undef
 }
 
 function recoveryHints(run: ReportInput, nextAction?: string): string[] {
-  // Recovery advice was for the refused restart, which has been finished since.
-  if (isRefusedRestartFinishedLater(run)) {
-    return [];
-  }
   if (run.target?.installationMethod === "ocm") {
     return nextAction ? [] : run.origin.nextAction ? [run.origin.nextAction] : [];
   }
@@ -267,9 +262,6 @@ export function renderUpdateRunReport(
     run.verification.recovery?.serviceRestartSafe === false &&
     run.verification.recovery.reason === "runtime-verification-failed" &&
     !run.steps.some((step) => step.step === "doctor process settlement");
-  // The stored outcome stays failed; the update is presented as completed with its warning.
-  const restartFinishedLater = isRefusedRestartFinishedLater(run);
-  const presentedStatus = restartFinishedLater ? "succeeded" : run.status;
   // Keep the version visible and distinguish Git updates within the same version.
   const before = formatUpdateVersion(run.before);
   const after = formatUpdateVersion(run.after);
@@ -306,7 +298,7 @@ export function renderUpdateRunReport(
       : undefined;
   const refusalLine = refusalBlock?.[0]?.match(/^Update refused: .+/u)?.[0];
   let headline: string;
-  switch (presentedStatus) {
+  switch (run.status) {
     case "succeeded": {
       // A skipped post-swap step keeps the version change; the headline must not read as clean.
       const attention =
@@ -350,12 +342,7 @@ export function renderUpdateRunReport(
   const markdownLimit = opts.markdownLimit ?? 1500;
   // Successful activation must not bury recovery constraints behind snapshot inventory.
   // Failed runs keep their failure diagnostics ahead of warnings in the short report.
-  const lines: string[] = presentedStatus === "succeeded" ? [...warnings] : [];
-  if (restartFinishedLater) {
-    lines.push(
-      `The recorded update outcome is unchanged (${reason}); the target version was verified serving after the installed updater exited.`,
-    );
-  }
+  const lines: string[] = run.status === "succeeded" ? [...warnings] : [];
   if (
     currentHealth &&
     (runtimeVerificationRecovered || (!run.origin.nextAction && !opts.nextAction))
@@ -449,7 +436,7 @@ export function renderUpdateRunReport(
     }
   }
   for (const step of selectUpdateFailureReportSteps(
-    restartFinishedLater ? [] : run.steps.filter((item) => item.status === "failed"),
+    run.steps.filter((item) => item.status === "failed"),
   )) {
     const failure = `Failed: ${step.step}${step.detail ? ` — ${step.detail}` : ""}`;
     lines.push(bounded(failure, 300));
@@ -473,7 +460,7 @@ export function renderUpdateRunReport(
       ),
     );
   }
-  if (presentedStatus !== "succeeded") {
+  if (run.status !== "succeeded") {
     lines.push(...warnings);
   }
   const facts = run.verification;
@@ -524,7 +511,7 @@ export function renderUpdateRunReport(
       : undefined;
   const savedAction =
     opts.nextAction ??
-    (runtimeVerificationRecovered || restartFinishedLater ? undefined : run.origin.nextAction) ??
+    (runtimeVerificationRecovered ? undefined : run.origin.nextAction) ??
     skipGuidance;
   const nextAction =
     savedAction && currentHealth

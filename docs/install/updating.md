@@ -1529,17 +1529,19 @@ Without a schema migration there is no handoff. When 2026.11.5 or earlier (or a
 release with the same schema, such as 2026.11.5 to 2026.11.6, the installed
 updater refuses the Gateway restart and ends with `service-revalidation-failed`;
 the command still works, but the Gateway stays stopped. The new
-package's Doctor then prints that OpenClaw will try to restart the Gateway after
-the updater exits, and leaves one background process. Once the updater has
-exited, that process checks that no newer update has started, the Gateway is
-still stopped and the service still belongs to this installation. It then runs
-`openclaw gateway install --force` and `openclaw gateway start`, checks that the
-new version is serving, and adds the outcome to that update's history as a
-warning. It waits at most 60 minutes for the updater. If it cannot finish, the
-history warning names the reason. Then run `openclaw gateway install --force`
-followed by `openclaw gateway restart`, or ask the instance's agent with
-`openclaw triage`. `openclaw gateway restart` alone does not work in that state,
-because the service definition still names the previous version.
+package's Doctor then prints that OpenClaw will rerun `openclaw update` for the
+installed version after the updater exits, and leaves one background process.
+That process waits up to 60 minutes for the updater and any update helper to
+exit. It then checks that no other update has started, the Gateway is still
+stopped and the service still belongs to this installation, and runs
+`openclaw update --tag <installed-version>`. That update reinstalls the same
+version from the registry, refreshes the service definition with its port and
+options, restarts and verifies the Gateway, and records its own result. If the
+Doctor cannot start that process, or the Gateway is still stopped afterwards,
+run `openclaw gateway install --force` followed by `openclaw gateway restart`,
+or ask the instance's agent with `openclaw triage`. `openclaw gateway restart`
+alone does not work in that state, because the service definition still names
+the previous version.
 
 If `openclaw` still points into a missing `.openclaw-update-native-*` directory,
 the new package's Doctor and Gateway startup repair it. They rewrite a launcher
