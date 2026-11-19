@@ -23,7 +23,6 @@ import {
   records,
   seedSubagentCompletionDelivery,
 } from "../completion/subagent-completion-admission.test-helpers.js";
-import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";

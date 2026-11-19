@@ -58,7 +58,9 @@ it.each(["distinct gateway", "retired"] as const)("partitions completion custody
   );
   subagentRuns.set(first.runId, first);
   subagentRuns.set(second.runId, second);
-  if (kind === "retired") subagentRuns.retireCompletionAuthority(second);
+  if (kind === "retired") {
+    subagentRuns.retireCompletionAuthority(second);
+  }
   expect(
     subagentRuns.selectCompletionAuthorityBatch([first, second], first).map((entry) => entry.runId),
   ).toEqual(["first"]);
