@@ -161,6 +161,7 @@ const enOpenClawIdDialogs = {
       "Conversations and everything else on this computer stay. You can link it again later as a new claw.",
     unlinkConfirm: "Unlink",
     unlinkDone: "{host} is unlinked from OpenClaw ID.",
+    unlinkLocalOnly: "OpenClaw ID never registered this claw, so it had no address to retire.",
     unlinkPending:
       "OpenClaw ID couldn't be reached. This computer sends the unlink as soon as it can.",
     unlinkRefused:

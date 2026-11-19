@@ -425,8 +425,10 @@ export function createOpenClawIdAuthority(
           return binding;
         }
         // The caller's live ceremony authority is checked at the durable write itself.
+        // No registration has been sent for this claw yet (unlink-operations.ts).
+        const discovery = { ...current.discovery, registration_unsent: true };
         await commit(
-          { ...current, authority: added.state, binding: binding.statement },
+          { ...current, authority: added.state, binding: binding.statement, discovery },
           expected.guard,
         );
         return {

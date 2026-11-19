@@ -18,7 +18,7 @@ import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { throwExpectedCliError } from "./expected-cli-error.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 import { describeRebind, displayKey } from "./id-cli-rebind.js";
-import { runUnlink } from "./id-cli-unlink.js";
+import { describePendingUnlinks, runUnlink } from "./id-cli-unlink.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 import { promptYesNo } from "./prompt.js";
 
@@ -174,14 +174,7 @@ async function runStatus(opts: IdCliOpts, signal?: AbortSignal) {
   if (status.link?.hostname) {
     lines.push(`Claw: ${sanitizeTerminalText(status.link.hostname)}`);
   }
-  for (const pending of status.link?.pendingUnlinks ?? []) {
-    const host = sanitizeTerminalText(pending.hostname);
-    lines.push(
-      pending.refused
-        ? `Unlink refused: ${host} is unlinked here, but OpenClaw ID refused to retire it (${sanitizeTerminalText(pending.refused)}).`
-        : `Unlink pending: ${host} is unlinked here; OpenClaw ID gets the unlink when it can be reached.`,
-    );
-  }
+  lines.push(...describePendingUnlinks(status.link?.pendingUnlinks ?? []));
   if (link?.binding) {
     lines.push(
       `Binding: ${link.binding.bindingSeq} (Discovery has ${link.binding.publishedBindingSeq})`,

@@ -6,7 +6,10 @@
 // member, member device, node and invite, and clears the link and binding. The claw record
 // starts over under a new claw id, so linking this computer again makes a new claw. Tunnel-bound
 // token bindings stay until their revocation is confirmed. The signed statement is kept as a
-// pending unlink until Discovery confirms it; earlier pending unlinks are kept too.
+// pending unlink until Discovery confirms it; earlier pending unlinks are kept too. A claw no
+// registration was ever sent for cannot be at Discovery: its unlink is local only, with nothing
+// pending. A registration is marked sent in this lane before it is sent, so an unlink either sees
+// the mark or comes first, and then the publication finds the claw unlinked and sends nothing.
 import {
   bytesToHex,
   isIrohEndpointKey,
@@ -153,7 +156,8 @@ export function createUnlinkOperations(owner: {
      * Unlinks this claw, only over direct loopback, if it is still `clawId`, the claw whose
      * warning the owner confirmed (`claw_changed` otherwise). `gateway` must be the K_gw of the
      * current binding. Commits the fresh record with the signed ClawUnlink added to the pending unlinks
-     * for `discoveryUrl` (none when Discovery is not configured), and returns the removal effects.
+     * for `discoveryUrl` (none when Discovery is not configured or `neverRegistered`: no
+     * registration was ever sent), and returns the removal effects.
      */
     commitUnlink(
       channel: Channel | undefined,
@@ -165,6 +169,7 @@ export function createUnlinkOperations(owner: {
       | (AuthorityAccepted & {
           unlink: SignedStatement<"ClawUnlink">;
           removed: UnlinkPreview;
+          neverRegistered: boolean;
         })
       | AuthorityRefusal
     > {
@@ -187,9 +192,11 @@ export function createUnlinkOperations(owner: {
           { claw_id: record.claw_id, binding_seq: record.binding.body.binding_seq },
           gateway,
         );
+        const neverRegistered =
+          !record.discovery.owner_account_id && record.discovery.registration_unsent === true;
         const pending: PendingUnlink[] = [
           ...(record.pending_unlinks ?? []),
-          ...(discoveryUrl
+          ...(discoveryUrl && !neverRegistered
             ? [{ statement: unlink, hostname: record.hostname, discovery_url: discoveryUrl }]
             : []),
         ];
@@ -205,7 +212,24 @@ export function createUnlinkOperations(owner: {
           events: unlinkEvents(record),
           unlink,
           removed: preview(record),
+          neverRegistered,
         };
+      });
+    },
+
+    /**
+     * Records, before a registration of `clawId` is sent, that Discovery may hold it from now
+     * on. A claw unlinked meanwhile is gone from the record, and nothing is sent for it.
+     */
+    registrationSending(clawId: string): Promise<void> {
+      return serialize(async () => {
+        const current = await load();
+        if (current?.claw_id === clawId && current.discovery.registration_unsent) {
+          await commit({
+            ...current,
+            discovery: { ...current.discovery, registration_unsent: false },
+          });
+        }
       });
     },
 

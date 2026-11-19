@@ -68,6 +68,11 @@ export type StoredClaw = {
     owner_account_id: string | null;
     published_binding_seq: number;
     published_snapshot_seq: number;
+    /**
+     * True from linking until a registration is first sent, so Discovery cannot hold the claw and
+     * unlinking it is local only. Absent on records linked before this was kept: unknown.
+     */
+    registration_unsent?: boolean;
     /** A publication was requested and has not succeeded yet (publication-retry.ts). */
     publish_pending?: boolean;
     /** issued_at of the last snapshot Discovery accepted (freshness/v1 re-signs it hourly). */

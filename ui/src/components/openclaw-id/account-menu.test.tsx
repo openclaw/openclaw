@@ -368,17 +368,21 @@ describe("approved OpenClaw ID account menu", () => {
     expect(menu(status({ status: { state: "off" } })).text.trim()).toBe("");
   });
 
-  it("local signed-out shows only the sign-in button and keeps the local identity", () => {
+  it("local signed-out shows sign-in, keeps the local identity, and still offers Unlink", () => {
     const current = status({ link: linked });
     expect(openClawIdMenuIdentity(current)).toEqual({
       name: "Local access",
       detail: "This computer",
     });
-    expect(menu(current).labels).toEqual(["Sign in with OpenClaw ID"]);
+    // Unlinking needs only this computer's Gateway key, not an OpenClaw ID sign-in.
+    expect(menu(current).labels).toEqual(["Sign in with OpenClaw ID", "Unlink from OpenClaw ID"]);
     const entries = menu(current);
-    expect(entries.text.trim()).toBe("");
+    expect(entries.text.trim()).toBe("Unlink from OpenClaw ID");
     expect(entries.rows[0]?.render).toBeTypeOf("function");
-    expect(menu(current).text).not.toMatch(/People|\bAccess\b|Make reachable|Regenerate|Unlink/);
+    expect(menu(status()).labels).toEqual(["Sign in with OpenClaw ID"]);
+    expect(menu(status({ channel: null, link: linked })).labels).not.toContain(
+      "Unlink from OpenClaw ID",
+    );
   });
 
   it.each([

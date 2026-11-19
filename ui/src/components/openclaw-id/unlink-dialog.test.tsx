@@ -98,4 +98,17 @@ it("unlinks nothing when cancelled, and says when Discovery still needs the unli
         "OpenClaw ID couldn't be reached. This computer sends the unlink as soon as it can.",
     }),
   );
+  const third = client((action) =>
+    action === "unlink_preview"
+      ? preview
+      : { ok: true, unlinked: true, hostname: preview.hostname, discovery: "local_only" },
+  );
+  const local = showUnlinkDialog({ client: third.client, hostname: preview.hostname });
+  await click("Unlink");
+  await expect(local).resolves.toBe(true);
+  expect(notice).toHaveBeenLastCalledWith({
+    severity: "success",
+    message: "studio-k7x2q.claws.example.test is unlinked from OpenClaw ID.",
+    description: "OpenClaw ID never registered this claw, so it had no address to retire.",
+  });
 });

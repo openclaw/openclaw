@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { callGatewayFromCli } from "./gateway-rpc.js";
-import { describeUnlinkWarning, runUnlink } from "./id-cli-unlink.js";
+import { describePendingUnlinks, describeUnlinkWarning, runUnlink } from "./id-cli-unlink.js";
 import { promptYesNo } from "./prompt.js";
 
 vi.mock(import("./gateway-rpc.js"), async (importOriginal) => ({
@@ -24,10 +24,12 @@ const preview = {
 
 let output: string;
 let actions: unknown[];
+let discovery: string;
 
 beforeEach(() => {
   output = "";
   actions = [];
+  discovery = "pending";
   vi.mocked(promptYesNo).mockReset();
   vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
     output += String(chunk);
@@ -39,7 +41,7 @@ beforeEach(() => {
     actions.push(params?.action === "unlink" ? `unlink:${String(params.clawId)}` : params?.action);
     return params?.action === "unlink_preview"
       ? preview
-      : { ok: true, unlinked: true, hostname: preview.hostname, discovery: "pending" };
+      : { ok: true, unlinked: true, hostname: preview.hostname, discovery };
   });
 });
 
@@ -79,6 +81,23 @@ describe("openclaw id unlink", () => {
     expect(actions).toEqual(["unlink_preview", `unlink:${"c".repeat(32)}`]);
     expect(output).toContain("Unlinked studio-k7x2q.claws.example.test.");
     expect(output).toContain("OpenClaw ID couldn't be reached");
+  });
+
+  it("reports a never-registered claw as unlinked here only, and a waiting unlink in status", async () => {
+    discovery = "local_only";
+    await runUnlink({ yes: true }, write);
+    expect(output).toContain("OpenClaw ID never registered this claw");
+    expect(output).not.toMatch(/retired|can't be used again/);
+    expect(process.exitCode).toBeUndefined();
+    discovery = "pending";
+    await runUnlink({ yes: true }, write);
+    expect(process.exitCode).toBeUndefined();
+    expect(describePendingUnlinks([{ hostname: preview.hostname }])).toEqual([
+      `Unlink pending: ${preview.hostname} is unlinked here; OpenClaw ID gets the unlink when it can be reached.`,
+    ]);
+    discovery = "refused";
+    await runUnlink({ yes: true }, write);
+    expect(process.exitCode).toBe(2);
   });
 
   it("skips the question with --yes, and --json needs --yes", async () => {

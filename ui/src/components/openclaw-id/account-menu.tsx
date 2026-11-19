@@ -188,6 +188,16 @@ function keyAttentionEntries(
   return entries;
 }
 
+// Unlinking signs with this computer's Gateway key over direct loopback; it needs no OpenClaw ID
+// sign-in, so it stays reachable when the account session expired. Never offered over the tunnel.
+function unlinkEntries(status: OpenClawIdStatusResult): MenuEntry[] {
+  return status.channel === "local_operator" &&
+    status.link.linked &&
+    status.status.state !== "keys_refused"
+    ? [renderSidebarMenuAction(UNLINK, t("openclawId.unlinkFromOpenClawId"), "circleX")]
+    : [];
+}
+
 function isTunnelMember(status: OpenClawIdStatusResult): boolean {
   return status.channel === "tunnel" && status.connection?.kind === "member" && !status.owner;
 }
@@ -250,6 +260,7 @@ export function openClawIdMenuEntries(
           </button>
         ),
       },
+      ...unlinkEntries(status),
     ];
   }
   const card: MenuEntry[] = [];
@@ -355,12 +366,7 @@ export function openClawIdMenuEntries(
   if (status.channel === "local_operator" && status.link.linked && openClawIdAccount()) {
     entries.push(...keyAttentionEntries(status, publication));
     entries.push(renderSidebarMenuAction(MOVE_KEYS, t("openclawId.moveToNewKeys"), "key"));
-    // Unlinking signs with this computer's Gateway key; never offered over the tunnel.
-    if (status.status.state !== "keys_refused") {
-      entries.push(
-        renderSidebarMenuAction(UNLINK, t("openclawId.unlinkFromOpenClawId"), "circleX"),
-      );
-    }
+    entries.push(...unlinkEntries(status));
   } else if (
     status.remoteAccessSetup === "personal_admin" &&
     status.link.linked &&

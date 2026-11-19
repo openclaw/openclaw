@@ -145,12 +145,19 @@ again. Until Discovery has it, the address may still be listed, but this compute
 accepts anyone through it. If Discovery refuses the unlink for good, status shows
 `Unlink refused` with Discovery's reason and the Gateway does not send it again.
 
+A claw that never sent its registration to Discovery (for example because Discovery couldn't be
+reached when it was linked) has no address to retire. Its unlink is complete on this computer:
+nothing stays pending, the command exits 0 and reports `discovery: "local_only"`. Once a
+registration has been sent, Discovery may hold the claw even if this computer never got its
+answer, so the unlink is sent and waits for Discovery as above.
+
 In the Control UI on this computer the same action is **Unlink from OpenClaw ID** in the
-account menu, with the same warning. Neither is offered over the tunnel, and the Gateway
+account menu, with the same warning. It needs no OpenClaw ID sign-in, so it stays available
+when the account session has expired. Neither is offered over the tunnel, and the Gateway
 refuses an unlink that arrives over it (`not_local_operator`). An unlink is refused with
 `binding_unpublished` while a move to new keys is not yet published: publish it first
 (`openclaw id publish --code <link-code>`). With `--json` the command needs `--yes`, and
-reports `discovery: "confirmed"`, `"pending"`, `"refused"` or `"unconfigured"` with the counts it
+reports `discovery: "confirmed"`, `"local_only"`, `"pending"`, `"refused"` or `"unconfigured"` with the counts it
 removed. If another unlink or link changes the claw while the warning is open, the unlink is
 refused with `claw_changed`; run it again to see the new warning.
 
