@@ -25,6 +25,7 @@ import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolut
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { formatLine } from "./output.js";
 import { execSchtasks } from "./schtasks-exec.js";
+import { terminateFallbackRuntime } from "./schtasks-fallback-process.js";
 import { assertTaskInspectionDeadline } from "./schtasks-inspection-deadline.js";
 import {
   readScheduledTaskCommand,
@@ -45,7 +46,6 @@ import {
   readBoundedScheduledTaskProcess,
   resolveScheduledTaskCommandPort,
   shouldManageGatewayListenerPort,
-  terminateGatewayProcessTree,
 } from "./schtasks-process.js";
 import {
   probeScheduledTaskExists,
@@ -556,7 +556,7 @@ export async function stopStartupEntry(
 ): Promise<void> {
   const runtime = await resolveControllableFallbackRuntime(env);
   if (runtime.pid) {
-    await terminateGatewayProcessTree(runtime.pid, assertCurrent);
+    await terminateFallbackRuntime(env, runtime.pid, assertCurrent);
   }
   onMutation?.();
   stdout.write(`${formatLine("Stopped Windows login item", resolveTaskName(env))}\n`);
@@ -575,7 +575,7 @@ export async function terminateInstalledStartupRuntime(
     if (beforeMutation) {
       await beforeMutation();
     }
-    await terminateGatewayProcessTree(runtime.pid, assertCurrent);
+    await terminateFallbackRuntime(env, runtime.pid, assertCurrent);
   }
 }
 
@@ -587,7 +587,7 @@ export async function restartStartupEntry(
 ): Promise<GatewayServiceRestartResult> {
   const runtime = await resolveControllableFallbackRuntime(env);
   if (runtime.pid) {
-    await terminateGatewayProcessTree(runtime.pid, assertCurrent);
+    await terminateFallbackRuntime(env, runtime.pid, assertCurrent);
     onMutation?.("stop");
   }
   await launchFallbackTaskScript(env, undefined, assertCurrent);

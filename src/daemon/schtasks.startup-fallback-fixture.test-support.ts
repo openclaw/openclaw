@@ -169,6 +169,7 @@ afterEach(() => {
 export {
   runScheduledTaskOrThrow,
   resolveTaskScriptPath,
+  INSTALLED_GATEWAY_COMMAND,
   POWERSHELL_PROCESS,
   addAcceptedRunNeverStartsResponses,
   expectNoGatewayTermination,

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect } from "vitest";
 import {
@@ -13,6 +14,7 @@ import {
   addAcceptedRunNeverStartsResponses,
   mockProcesses,
   processEntry,
+  INSTALLED_GATEWAY_COMMAND,
   POWERSHELL_PROCESS,
   runScheduledTaskOrThrow,
   timeState,
@@ -49,6 +51,12 @@ function taskScriptAction(scriptPath: string) {
     workingDirectory: "",
   };
 }
+
+const supervisedFallbackTree = () => [
+  processEntry(4141, `${INSTALLED_GATEWAY_COMMAND} --task-supervisor`),
+  processEntry(4242, `${INSTALLED_GATEWAY_COMMAND} --task-supervisor-child=70000`),
+];
+const lastTaskkillPid = () => spawnSync.mock.calls.at(-1)?.[1]?.at(-1);
 
 describe("Scheduled Task activation provenance", () => {
   const cases = [
@@ -438,18 +446,26 @@ describe("Scheduled Task activation provenance", () => {
     },
   );
 
-  it.for(["running", "stopped"] as const)(
+  it.for(["running", "supervised", "stopped"] as const)(
     "migrates a %s Startup fallback to the Scheduled Task",
     async (fallback, { env }) => {
       await writeGatewayScript(env);
       const startupEntryPath = resolveStartupFixturePath(env);
       await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
       await fs.writeFile(startupEntryPath, "@echo off\r\n");
-      let fallbackAlive = fallback === "running";
+      let fallbackAlive = fallback !== "stopped";
       mockProcesses(
-        () => [...(fallbackAlive ? [processEntry(4242)] : []), POWERSHELL_PROCESS],
+        () => [
+          ...(fallbackAlive
+            ? fallback === "supervised"
+              ? supervisedFallbackTree()
+              : [processEntry(4242)]
+            : []),
+          POWERSHELL_PROCESS,
+        ],
         () => {
-          fallbackAlive = false;
+          // A task supervisor restarts a terminated child (#194492); only its root ends it.
+          fallbackAlive = fallback === "supervised" && lastTaskkillPid() !== "4141";
           return makeSpawnSyncResult();
         },
       );
@@ -486,4 +502,28 @@ describe("Scheduled Task activation provenance", () => {
       await expect(fs.access(startupEntryPath)).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
+
+  it("stops a supervised Startup fallback at its supervisor root", async ({ env }) => {
+    await writeGatewayScript(env);
+    let stopped = false;
+    mockProcesses(
+      () => [...(stopped ? [] : supervisedFallbackTree()), POWERSHELL_PROCESS],
+      () => {
+        stopped = lastTaskkillPid() === "4141";
+        return makeSpawnSyncResult();
+      },
+    );
+    inspectPortUsageMock.mockImplementation(async (port) => ({
+      port,
+      status: stopped ? "free" : "busy",
+      listeners: stopped ? [] : [{ pid: 4242, command: "node.exe" }],
+      hints: [],
+    }));
+
+    // Load after the fixture's module mocks, as the fixture loads the modules it drives.
+    const { stopStartupEntry } = await import("./schtasks-runtime.js");
+    await stopStartupEntry(env, new PassThrough());
+
+    expect(stopped).toBe(true);
+  });
 });

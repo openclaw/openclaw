@@ -18,6 +18,7 @@ import {
   type ScheduledTaskActivation,
 } from "./schtasks-control.js";
 import { execSchtasks } from "./schtasks-exec.js";
+import { terminateFallbackRuntime } from "./schtasks-fallback-process.js";
 import {
   backupScheduledTaskDefinition,
   publishScheduledTaskFiles,
@@ -44,7 +45,6 @@ import {
 import {
   resolveScheduledTaskCommandPort,
   shouldManageGatewayListenerPort,
-  terminateGatewayProcessTree,
 } from "./schtasks-process.js";
 import {
   assertSchtasksAvailable,
@@ -496,7 +496,7 @@ export async function installScheduledTask(
         : startupRuntime;
     if (takeoverRuntime?.status === "running" && takeoverRuntime.pid) {
       // The old launcher can still own the listener; terminate it and prove the replacement.
-      await terminateGatewayProcessTree(takeoverRuntime.pid);
+      await terminateFallbackRuntime(fallbackEnv, takeoverRuntime.pid, undefined, installedCommand);
       let scheduledTaskRunAccepted = false;
       try {
         // Re-reading ownership now would inspect the replacement command, not the captured fallback.
