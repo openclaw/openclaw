@@ -1,4 +1,7 @@
-import { expect, it } from "vitest";
+import { afterAll, beforeEach, expect, it, vi } from "vitest";
+import * as markdownCodeRegions from "../../packages/markdown-core/src/markdown-code-regions.js";
+import * as markdownOwnership from "../../packages/markdown-core/src/reasoning-tag-parser.js";
+import * as reasoningSyntax from "../../packages/markdown-core/src/reasoning-tag-syntax.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
 import { assistantVisibleTextFilters } from "../shared/text/assistant-visible-text.js";
 import { expectPrefixParity, streamChunks } from "../shared/text/streaming.test-support.js";
@@ -9,17 +12,40 @@ import {
   sanitizeAssistantVisibleStreamText,
 } from "./embedded-agent-utils.js";
 
+// Observe canonical work across imports, including both code-range entry points:
+// findMarkdownCodeSpans calls its local region binding without crossing an export spy.
+const reasoning = vi.spyOn(reasoningSyntax, "reduceReasoningText");
+const ownership = vi.spyOn(markdownOwnership, "parseMarkdownOwnership");
+const regions = vi.spyOn(markdownCodeRegions, "findMarkdownCodeRegions");
+const spans = vi.spyOn(markdownCodeRegions, "findMarkdownCodeSpans");
+const canonicalWork = [reasoning, ownership, regions, spans];
+beforeEach(() => canonicalWork.forEach((spy) => spy.mockClear()));
+afterAll(() => canonicalWork.forEach((spy) => spy.mockRestore()));
+function characters(calls: ReadonlyArray<readonly [string, ...unknown[]]>) {
+  return calls.reduce((sum, [text]) => sum + text.length, 0);
+}
+function processedCharacters() {
+  return canonicalWork.reduce((sum, spy) => sum + characters(spy.mock.calls), 0);
+}
 it.each([
-  [undefined, "Done."],
-  ["final_answer", "Done."],
-  [undefined, "<think>hidden</think>Done."],
-  [undefined, "<final>Done.</final>"],
-] as const)("preserves ordinary HTML and a late reasoning marker (%s, %s)", (phase, tail) => {
-  const prefix = "<article>Array<string>: a < b and c > d.</article>\n";
+  [undefined, "Done.", 2],
+  ["final_answer", "Done.", 2],
+  [undefined, "<think>hidden</think>Done.", 8],
+  [undefined, "<final>Done.</final>", 8],
+] as const)("bounds transform work (%s, %s)", (phase, tail, budget) => {
+  const prefix = "<article>Array<string>: a < b and c > d.</article>\n".repeat(96);
   const stream = createAssistantVisibleStreamText(phase);
   streamChunks(prefix, 4, stream);
-  stream.append(tail);
+  if (budget === 2) {
+    streamChunks(tail, 4, stream);
+  } else {
+    stream.append(tail);
+  }
   expect(stream.text).toBe(prefix + "Done.");
+  if (tail.startsWith("<think>")) {
+    expect(characters(reasoning.mock.calls)).toBeGreaterThan(0);
+  }
+  expect(processedCharacters()).toBeLessThan((prefix.length + tail.length) * budget);
 });
 
 it.each([
