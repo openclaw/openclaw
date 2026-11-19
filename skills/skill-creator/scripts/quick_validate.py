@@ -63,7 +63,7 @@ def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]
         if ":" not in stripped:
             return None
         key, value = stripped.split(":", 1)
-        key = key.strip()
+        key = re.sub(r"""^(["'])([a-z][a-z-]*)\1$""", r"\2", key.strip())
         value = _strip_scalar_comment(value.strip())
         if not key:
             return None
