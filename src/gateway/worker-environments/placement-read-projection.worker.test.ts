@@ -2,6 +2,7 @@ import type { SQLInputValue } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -14,6 +15,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 import { createNodeWorkspaceRetainCoordinator } from "./node-workspace-retain-coordinator.js";
@@ -216,6 +218,7 @@ describe("worker placement authority retained boundaries", () => {
       updatedAtMs: 0,
     });
     const store = createWorkerSessionPlacementStore({ database });
+    const sql = observeMainThreadSql();
     const candidates = new Map(
       (await store.readRecoveryCandidates()).map((candidate) => [candidate.sessionId, candidate]),
     );
@@ -228,6 +231,7 @@ describe("worker placement authority retained boundaries", () => {
       expect(candidate.workspaceRecoveryPending).toBe(true);
     }
     expect(candidates.get("move-local")?.moveSourceEnvironmentId).toBe("source-move-local");
+    sql.expectIdle();
   });
 
   function retentionTransport(
@@ -278,6 +282,8 @@ describe("worker placement authority retained boundaries", () => {
     const requested = await other.startDispatch(identity);
     await closeOpenClawStateDatabaseAsync();
 
+    requireNodeSqlite();
+    const counters = observeMainThreadSql({ includeClose: true });
     const projection = await store.readProjection([identity.sessionId]);
     expect(projection.placements.get(identity.sessionId)).toMatchObject({
       state: "draining",
@@ -303,6 +309,7 @@ describe("worker placement authority retained boundaries", () => {
     const reopened = await store.readProjection([identity.sessionId]);
     expect(reopened.placements.get(identity.sessionId)?.generation).toBe(draining.generation);
     expect(reopened.pendingResults.get(identity.sessionId)).toEqual(pendingResult);
+    counters.expectIdle();
   });
 
   it("rejects stale journal ownership without losing pending recovery work", async () => {
@@ -353,6 +360,7 @@ describe("worker placement authority retained boundaries", () => {
       });
     }
     const store = createWorkerSessionPlacementStore({ database });
+    const counters = observeMainThreadSql();
     const owners = await store.listWorkspaceReconciliationOwners();
     const placements = await Promise.all(
       owners.map((owner) => store.getWorkspaceReconciliationPlacement(owner)),
@@ -369,6 +377,7 @@ describe("worker placement authority retained boundaries", () => {
     expect(
       (await store.readRecoveryCandidates()).find((row) => row.sessionId === "journal-stale"),
     ).toMatchObject({ workspaceRecoveryPending: true });
+    counters.expectIdle();
   });
 
   it("fences a placement created after absence was captured", async () => {
@@ -376,6 +385,7 @@ describe("worker placement authority retained boundaries", () => {
     const first = await store.startDispatch(sessionIdentity("first"));
     const second = await store.startDispatch(sessionIdentity("second"));
     await store.getManyAsync([first.sessionId]);
+    const sql = observeMainThreadSql();
     expect(await store.getManyAsync([" first ", "first", "missing"])).toEqual(
       new Map([[first.sessionId, first]]),
     );
@@ -389,6 +399,7 @@ describe("worker placement authority retained boundaries", () => {
       context: { workerSessionPlacementService: store },
       sessionId: "late-placement",
     });
+    sql.expectIdle();
     assertCurrent();
     const late = await store.startDispatch(sessionIdentity("late-placement"));
     expect(assertCurrent).toThrow("placement late-placement changed before mutation");
@@ -430,6 +441,7 @@ describe("worker placement authority retained boundaries", () => {
         };
       }),
     );
+    const sql = observeMainThreadSql();
     const startup = coordinator.start();
     try {
       const request = await awaitGateBeforeSettlement(
@@ -441,11 +453,14 @@ describe("worker placement authority retained boundaries", () => {
         retain: [expect.objectContaining({ manifestRefs: null })],
       });
       expect(request.isDispatchAuthorized()).toBe(true);
+      sql.expectIdle();
       await store.startDispatch(sessionIdentity("unrelated"));
       expect(request.isDispatchAuthorized()).toBe(true);
       await store.startDrain(placementTransition(placement));
+      sql.clear();
       expect(request.isDispatchAuthorized()).toBe(false);
       expect(request.isCompletionAuthorized?.()).toBe(true);
+      sql.expectIdle();
       expect(warn).not.toHaveBeenCalled();
     } finally {
       reply.resolve();

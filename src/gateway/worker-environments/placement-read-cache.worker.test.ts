@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
@@ -178,19 +179,24 @@ describe("worker placement authority existing coverage", () => {
       const unexpected = async () => {
         throw new Error("unexpected workspace mutation during a disk probe");
       };
+      const sql = observeHostDataSql();
+      let discoverySql: string[] | undefined;
       const warn = vi.fn();
       const monitor = createWorkerPlacementDiskSpaceMonitor({
         placements: reader,
         environments: {
-          startTunnel: async ({ environmentId, ownerEpoch }) => ({
-            environmentId,
-            ownerEpoch,
-            runWorkspaceCommand,
-            quiesceWorkspace: unexpected,
-            syncWorkspace: unexpected,
-            reconcileWorkspace: unexpected,
-            stop: async () => {},
-          }),
+          startTunnel: async ({ environmentId, ownerEpoch }) => {
+            discoverySql ??= sql.queries.slice();
+            return {
+              environmentId,
+              ownerEpoch,
+              runWorkspaceCommand,
+              quiesceWorkspace: unexpected,
+              syncWorkspace: unexpected,
+              reconcileWorkspace: unexpected,
+              stop: async () => {},
+            };
+          },
         },
         runnerAvailability: { read: () => undefined, version: () => 0 },
         warn,
@@ -208,7 +214,9 @@ describe("worker placement authority existing coverage", () => {
           database,
           sessionIdentity("disk-cache"),
         );
+        sql.queries.length = 0;
         await monitor.sweep();
+        expect(discoverySql).toEqual([]);
         expect(runWorkspaceCommand).toHaveBeenCalledOnce();
         expect(monitor.read(active)?.status).toBe("ok");
 

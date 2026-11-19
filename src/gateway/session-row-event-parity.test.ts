@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { describe, afterEach, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
@@ -164,6 +165,9 @@ describe("session event privacy retained boundaries", () => {
           index: number,
           options: Parameters<typeof listSessions>[0]["request"] = request,
         ) => listSessions({ client: peers[index]!.client, context, request: options });
+        await Promise.all(peers.map((_peer, index) => listFor(index)));
+        const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
+        const exec = vi.spyOn(DatabaseSync.prototype, "exec");
         const expected = await Promise.all(
           peers.map(async (_peer, index) => {
             const result = await listFor(index);
@@ -297,6 +301,10 @@ describe("session event privacy retained boundaries", () => {
           }
         }
         clock.mockReturnValue(now);
+        expect(prepares).not.toHaveBeenCalled();
+        expect(exec).not.toHaveBeenCalled();
+        prepares.mockRestore();
+        exec.mockRestore();
         for (const { client } of peers) {
           connection.sessionEventSubscribers.subscribe(client.connId);
         }
@@ -321,10 +329,10 @@ describe("session event privacy retained boundaries", () => {
   });
 
   it("updates ancestor membership after child grants change", async () => {
-    const count = 2;
+    const count = 500;
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const owner = ensureProfileForEmail("ancestor-owner@presentation.test");
-      const viewers = Array.from({ length: 2 }, (value, i) =>
+      const viewers = Array.from({ length: 20 }, (value, i) =>
         ensureProfileForEmail(`ancestor-${i}@presentation.test`),
       );
       const cfg = rolePolicyConfig();
@@ -352,6 +360,7 @@ describe("session event privacy retained boundaries", () => {
       }
       using projection = await createTestProjection({ cfg, modelCatalog: [] });
       await projection.ensureMaterialized();
+      const memberships = vi.spyOn(projection, "readMembership");
       const publish = () =>
         withPreparedEventRow(projection, { agentId: "main", key: keys[1]! }, (read, ancestors) => {
           expect(ancestors?.map((row) => row.key)).toEqual([parent]);
@@ -363,6 +372,11 @@ describe("session event privacy retained boundaries", () => {
           }
         });
       await publish();
+      for (let event = 0; event < 3; event++) {
+        memberships.mockClear();
+        await publish();
+        expect(memberships.mock.calls.length).toBeLessThanOrEqual(40);
+      }
       // The prepared invited-cap contract is narrower than the configurable public view role.
       const canRead = prepareLinkedSessionEntryFilter(
         projection,
@@ -400,7 +414,10 @@ describe("session event privacy retained boundaries", () => {
           removeSessionMember(target, member.identityId);
         }
         await projection.ensureMaterialized();
+        memberships.mockClear();
+        await publish();
         const current = memberView();
+        expect(memberships.mock.calls.length).toBeLessThanOrEqual(80);
         expect(current.childSessions).toEqual(expected);
       }
     });

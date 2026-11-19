@@ -6,8 +6,6 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
-import type { WorkerEnvironmentPlacementFacts } from "./worker-environments/placement-read-projection.types.js";
 
 const runtimeMocks = vi.hoisted(() => ({
   createDispatch: vi.fn(),
@@ -47,6 +45,7 @@ vi.mock("./server-worker-placement-session-evidence.js", () => ({
 }));
 
 import { getRuntimeConfig } from "../config/config.js";
+import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import {
@@ -57,6 +56,7 @@ import {
   startRuntime,
 } from "./server-worker-placement.test-support.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./worker-environments/device-provider-identity.js";
+import type { WorkerEnvironmentPlacementFacts } from "./worker-environments/placement-read-projection.types.js";
 
 const createRuntime = createRuntimeFactory(createGatewayWorkerPlacementRuntime, getRuntimeConfig);
 type RecoveryPlacement = ReturnType<typeof recoveryPlacement>;
@@ -335,6 +335,41 @@ describe("worker placement recovery session events", () => {
       await published.promise;
       expect(publications).toBe(2);
     });
+  });
+
+  it("publishes a recovered move once and ignores an unchanged periodic sweep", async () => {
+    const recovered = recoveryPlacement("local");
+    let sweepCount = 0;
+    await withRecoveryRuntime(
+      {
+        sweep: (placements, publishChange) => {
+          sweepCount += 1;
+          if (sweepCount === 2) {
+            placements.set(recovered.sessionId, recovered);
+            publishChange(recovered);
+          }
+        },
+      },
+      async ({ context, changes, start, time, expectBroadcast }) => {
+        const initialMutationVersion = changes.mock.calls.length;
+        await start();
+        await time.advanceBy(60_000);
+        sweepCount = 0;
+        await time.advanceBy(60_000);
+        expect(sweepCount).toBe(1);
+        expect(context.broadcastToConnIds).not.toHaveBeenCalled();
+        expect(changes.mock.calls.length).toBe(initialMutationVersion);
+
+        await time.advanceBy(60_000);
+        expect(sweepCount).toBe(2);
+        await flushPendingSessionsChangedEvents(context);
+
+        expectBroadcast({ sessionKey: recovered.sessionKey, agentId: recovered.agentId });
+        expect(changes.mock.calls.length).toBe(initialMutationVersion + 1);
+        await time.advanceBy(60_000);
+        expect(changes.mock.calls.length).toBe(initialMutationVersion + 1);
+      },
+    );
   });
 
   it.each([
