@@ -99,7 +99,7 @@ describe.skipIf(process.platform === "win32")("staged launcher repair", () => {
         expect((await fs.stat(launcher)).mode & 0o777).toBe(0o755);
         expect(await fs.readFile(launcher, "utf8")).not.toContain(STAGE);
         // Repaired once; a second pass finds a current launcher and leaves no staging behind.
-        await expect(repairStagedRuntimeLauncher(launcher)).resolves.toEqual({
+        await expect(repairStagedRuntimeLauncher(launcher, packageRoot)).resolves.toEqual({
           outcome: "current",
         });
         expect((await fs.readdir(path.dirname(launcher))).toSorted()).toEqual(["node", "openclaw"]);
