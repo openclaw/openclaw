@@ -152,29 +152,18 @@ You can return to **Settings → OpenClaw** later.
 
 ## AI connection options
 
-The dashboard shows the selected connection and alternatives. Change models
-in its provider and model settings, or choose **Connection… → Gateways** to
-switch Gateways. AI setup always runs on the Gateway host, even when your Mac
-connects to a Linux Gateway.
+The dashboard's first-run setup uses the same steps and choices as the Mac app:
+**Welcome to OpenClaw**, **Where should your assistant run?**, then **Connect
+your AI**. It lists what the Gateway detected (CLI logins, saved API keys and
+sign-ins, loaded local models) and the provider sign-ins, with one **ChatGPT** choice: it uses an existing Codex login on the Gateway
+host when there is one, and otherwise signs in to ChatGPT. If that login fails its test, the same choice signs in instead. The card also offers the other choices the Mac shows: provider sign-ins, an API key or token, setting up a local model, and install links when nothing is found. Nothing is tested, installed, or saved until you pick one. A configured
+model is kept and shown as **You're all set!**. Errors show one short sentence
+with the Gateway's full message under **Show details**.
 
-### Automatic selection
-
-If no model is configured, automatic setup checks these sources in order:
-
-1. Saved OpenClaw auth profiles.
-2. Codex credentials in `CODEX_HOME` or `~/.codex` on the Gateway host.
-3. A Claude CLI login.
-4. `OPENAI_API_KEY`, then `ANTHROPIC_API_KEY`.
-5. Eligible loaded models in Ollama, LM Studio, or llama.cpp.
-
-It tries at most four detected connections and saves the first model that
-passes a live completion test. Apple Foundation Models is a utility option,
+Change models later in the provider and model settings, or choose **Connection… →
+Gateways** to switch Gateways. AI setup always runs on the Gateway host, even when
+your Mac connects to a Linux Gateway. Apple Foundation Models is a utility option,
 not a primary model.
-
-If none works, setup installs or enables the official Codex plugin, then reuses
-a Codex login or offers ChatGPT sign-in. This is the only plugin capability
-approval automatic setup grants. If it fails, the dashboard shows the reason
-and lets you choose another connection.
 
 ### Codex login and isolation
 
@@ -185,10 +174,9 @@ Choose whether to share your existing Codex state:
 | **Reuse**    | Your existing Codex login, threads, and `config.toml` on the Gateway host. |
 | **Separate** | An OpenClaw-owned login and agent home.                                    |
 
-When automatic setup selects an existing Codex ChatGPT or API-key login, it
-uses **Reuse**. Without an existing login,
-the offered ChatGPT sign-in uses a separate home. To switch, choose **Sign in separately** on the setup card, or sign in with ChatGPT or an OpenAI API key
-in **Models**. Completing that sign-in selects the isolated home.
+A new ChatGPT sign-in uses a separate home. To switch from **Reuse**, sign in
+with ChatGPT or an OpenAI API key in **Models**. Completing that sign-in selects
+the isolated home.
 
 Choosing a Claude or Codex model does not automatically show native
 conversations in the sidebar. Enable conversation discovery separately if you want to browse them.

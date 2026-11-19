@@ -88,20 +88,16 @@ detection only presents available connections; it checks and activates one after
 you select it. A verified existing model opens the normal dashboard without
 replacing the configured route.
 
-Automatic setup preserves an existing configured model. Otherwise it tries saved
-OpenClaw auth profiles, a stored Codex login, a Claude CLI login, `OPENAI_API_KEY`,
-`ANTHROPIC_API_KEY`, then eligible loaded models in Ollama, LM Studio, or
-llama.cpp. It activates the first connection that passes a live completion. If
-none works, it installs or enables the official Codex plugin and uses its login
-or asks you to sign in with ChatGPT. Apple Foundation Models is never selected
-as the primary model, and native Claude/Codex conversation discovery stays off.
-
-When setup reuses Codex, the card says **Using your existing Codex login ·
-sessions shared with Codex**. Codex owns authentication and token refresh in the
-Gateway user's `CODEX_HOME` (or `~/.codex`); OpenClaw does not copy the OAuth
-tokens. Choose **Use a separate login** on the card to sign in to an isolated
-OpenClaw agent home. You can also change providers or sign in separately through
-**Model Setup**. See [Codex login and isolation](/start/onboarding#codex-login-and-isolation).
+The dashboard setup follows the same steps as native setup: **Welcome to
+OpenClaw**, **Where should your assistant run?** (the Gateway this dashboard is
+connected to), then **Connect your AI**. It lists the AI the Gateway detected and
+the provider sign-ins, with one **ChatGPT** choice: it uses an existing Codex login on the Gateway
+host when there is one, and otherwise signs in to ChatGPT. API keys, local models and
+the other sign-ins work from the card too. Nothing is tested or
+saved until you pick one; OpenClaw then asks it a real test question and saves it
+only when it answers. A configured model is kept and shown as **You're all set!**.
+Errors show one short sentence; the Gateway's full message stays under **Show
+details**. See [Connect your AI](/start/onboarding#connect-your-ai).
 
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
 For permission recovery, use [macOS permissions](/platforms/mac/permissions).

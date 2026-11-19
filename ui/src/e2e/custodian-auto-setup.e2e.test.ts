@@ -2,8 +2,8 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import type { SystemAgentSetupDetectResult } from "../api/types.ts";
 import type { NativeSetupCapability } from "../app/native-setup.ts";
-import type { SetupAutoResult } from "../pages/custodian/custodian-auto-setup.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -19,63 +19,110 @@ const options = {
   colorScheme: "light" as const,
   reducedMotion: "reduce" as const,
   serviceWorkers: "block" as const,
-  viewport: { width: 1280, height: 1000 },
+  // Tall enough for the whole Connect your AI page in one screenshot.
+  viewport: { width: 1280, height: 1600 },
 };
+type Detection = SystemAgentSetupDetectResult;
 const codex = {
   kind: "codex-cli",
+  brandId: "openai",
   label: "Codex",
-  detail: "ChatGPT account",
+  detail: "installed; stored credentials found; login status unverified",
   modelRef: "openai/default",
-};
+  recommended: true,
+  credentials: true,
+} satisfies Detection["candidates"][number];
 const local = {
-  kind: "ollama",
+  kind: "provider-auto:ollama",
+  brandId: "ollama",
   label: "Local model",
   detail: "Already running on this Gateway",
   modelRef: "ollama/local-model",
-};
-const configured: SetupAutoResult = {
-  status: "configured",
-  selected: codex,
-  alternatives: [local],
-  attempts: [],
-  installedPlugins: [],
-};
-const shared: SetupAutoResult = {
-  ...configured,
-  selected: { ...codex, shared: true },
-  separateSignIn: { authOptionId: "codex-separate-sign-in", label: "ChatGPT" },
-};
-const needsSignIn: SetupAutoResult = {
-  status: "needs-sign-in",
-  alternatives: [],
-  attempts: [],
-  signIn: { authOptionId: "openai-codex", label: "ChatGPT" },
-  installedPlugins: ["codex"],
-};
-const unavailable: SetupAutoResult = {
-  status: "unavailable",
-  alternatives: [],
-  attempts: [
-    { kind: "ollama", label: "Local model", error: "No running model was available." },
-    { kind: "codex", label: "Codex", error: "The download could not be completed." },
+  recommended: false,
+} satisfies Detection["candidates"][number];
+const chatgpt = {
+  id: "openai-token-sharing",
+  brandId: "openai",
+  label: "Sign in with ChatGPT",
+  kind: "oauth",
+  featured: true,
+} satisfies NonNullable<Detection["authOptions"]>[number];
+const deviceCode = {
+  id: "openai-device-code",
+  brandId: "openai",
+  label: "Codex login (device code)",
+  kind: "device-code",
+  featured: false,
+} satisfies NonNullable<Detection["authOptions"]>[number];
+const anthropic = {
+  id: "anthropic-cli",
+  brandId: "anthropic",
+  label: "Claude",
+  kind: "oauth",
+  featured: false,
+} satisfies NonNullable<Detection["authOptions"]>[number];
+const install = (id: string, label: string, hint: string, website: string) => ({
+  id,
+  brandId: id,
+  label,
+  hint,
+  website,
+  icon: `${website}/favicon.ico`,
+});
+// Shaped like what a clean Mac's Gateway offers (see the Mac welcome screenshots).
+const detected: Detection = {
+  candidates: [codex, local],
+  manualProviders: [
+    { id: "openai-api-key", brandId: "openai", groupLabel: "OpenAI", label: "API key" },
+    { id: "anthropic-api-key", brandId: "anthropic", groupLabel: "Anthropic", label: "API key" },
   ],
-  installedPlugins: [],
+  authOptions: [chatgpt, deviceCode, anthropic],
+  prepareOptions: [
+    {
+      id: "lmstudio",
+      brandId: "lmstudio",
+      label: "LM Studio",
+      hint: "Connect to a running LM Studio server and use an already loaded model",
+      actionLabel: "Connect server",
+    },
+  ],
+  workspace: "/workspace",
+  setupComplete: false,
 };
+const nothingDetected: Detection = {
+  ...detected,
+  candidates: [],
+  recommendedInstalls: [
+    install("ollama", "Ollama", "Run open models locally", "https://ollama.com"),
+    install("lmstudio", "LM Studio", "Local model desktop app", "https://lmstudio.ai"),
+    install("claude", "Claude Code", "Anthropic’s coding agent CLI", "https://code.claude.com"),
+  ],
+};
+const activated = (modelRef: string) => ({
+  done: true,
+  status: "done",
+  modelActivation: { modelRef },
+});
+// Real text a failed first-run ChatGPT sign-in showed on the setup card (Control UI, 2026-11-19).
+const realSignInError =
+  "Credentials saved; default unchanged. OAuth token refresh failed for openai: Auth profile credential authority is unavailable; retry after owner recovery. Please try again or re-authenticate. Choose the saved sign-in in Model Setup to retry without signing in again. Choose whether OpenClaw can use your ChatGPT plan for eligible Responses API requests. Token sharing does not grant access to conversations, Codex history, or connected apps.";
 
-function install(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
+function installGateway(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
   return installMockGateway(page, {
+    agentModel: null,
     ...scenario,
     featureMethods: [
       ...defaultControlUiFeatureMethods,
       "openclaw.chat",
-      "openclaw.setup.auto",
-      "openclaw.setup.activate",
+      "openclaw.setup.detect",
+      "openclaw.setup.activate.start",
       "openclaw.setup.auth.start",
+      "openclaw.setup.prepare.start",
       "wizard.next",
       ...(scenario.featureMethods ?? []),
     ],
     methodResponses: {
-      "openclaw.setup.auto": configured,
+      "openclaw.setup.detect": detected,
       "openclaw.chat": {
         sessionId: "setup-proof",
         reply: "Your AI is ready. Let’s get to know each other.",
@@ -93,7 +140,6 @@ async function nativeSetup(page: Page) {
       setupProofActions: actions,
       __OPENCLAW_NATIVE_SETUP__: {
         currentGateway: { name: "This Mac", kind: "local" },
-        openAiSetup: () => actions.push("ai"),
         openGateways: () => actions.push("gateways"),
         reviewPermissions: () => actions.push("permissions"),
       } satisfies NativeSetupCapability,
@@ -117,8 +163,13 @@ async function capture(page: Page, name: string, surface: Locator, content: Loca
   await writeFile(path.join(artifacts, "card.png"), frame.elements[0]!.png);
 }
 
+async function nextStep(card: Locator, heading: string) {
+  await card.getByRole("button", { name: "Next", exact: true }).click();
+  await card.getByRole("heading", { name: heading }).waitFor();
+}
+
 suite.define(() => {
-  it("keeps the existing greeting when automatic setup is not advertised", async () => {
+  it("keeps the existing greeting when setup is not advertised", async () => {
     await suite.withPage(options, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods: [...defaultControlUiFeatureMethods, "openclaw.chat"],
@@ -127,83 +178,108 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
-      const greeting = page.getByText("Welcome to OpenClaw.", { exact: true });
-      await greeting.waitFor();
+      await page.getByText("Welcome to OpenClaw.", { exact: true }).waitFor();
       expect(await page.locator(".custodian-setup").count()).toBe(0);
-      expect(await gateway.getRequests("openclaw.setup.auto")).toHaveLength(0);
-      await capture(page, "before-automatic-setup", page.locator("openclaw-custodian-page"), [
-        greeting,
-      ]);
+      expect(await gateway.getRequests("openclaw.setup.detect")).toHaveLength(0);
     });
   });
 
-  it("shows pending, preserves a failed choice, activates an alternative, and retains dismissal", async () => {
+  it("walks the macOS welcome steps and tests only the AI the user picks", async () => {
     await suite.withPage(options, async ({ page }) => {
       await nativeSetup(page);
-      const gateway = await install(page, { deferredMethods: ["openclaw.setup.auto"] });
+      const gateway = await installGateway(page, { deferredMethods: ["openclaw.setup.detect"] });
       await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
       const card = page.locator(".custodian-setup");
-      const connecting = card.getByRole("heading", { name: "Connecting your AI…" });
-      await connecting.waitFor();
+      const welcome = card.getByRole("heading", { name: "Welcome to OpenClaw" });
+      await welcome.waitFor();
+      await capture(page, "setup-1-welcome", card, [welcome]);
+      await nextStep(card, "Where should your assistant run?");
+      const where = card.getByRole("button", { name: /On this computer/ });
+      await capture(page, "setup-2-where", card, [where]);
+      await card.getByRole("button", { name: "Use a different Gateway" }).click();
+      await nextStep(card, "Connect your AI");
+      const detecting = card.getByText("Looking for AI you already use…", { exact: true });
+      await detecting.waitFor();
+      await capture(page, "setup-3-detecting", card, [detecting]);
+      await gateway.resolveDeferred("openclaw.setup.detect", detected);
+      const codexRow = card.getByRole("button", { name: /^ChatGPT/ });
+      await codexRow.waitFor();
+      expect(await card.getByText(/openai\/default|ollama\/local-model/).count()).toBe(0);
+      // The Codex login and the ChatGPT sign-ins show as one ChatGPT choice.
+      expect(await card.getByRole("button", { name: /ChatGPT|Codex/ }).count()).toBe(1);
+      await capture(page, "setup-4-detected", card, [codexRow]);
+      expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
       expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
-      await capture(page, "pending-automatic-setup", card, [connecting]);
-      await gateway.resolveDeferred("openclaw.setup.auto", configured);
-      const selected = card.getByRole("heading", {
-        name: "Using Codex (openai/default) on This Mac",
+
+      await gateway.setMethodResponse("openclaw.setup.activate.start", {
+        done: true,
+        status: "error",
+        error: "provider-auto:ollama: model runner exited with code 137 (ECONNRESET)",
       });
-      await selected.waitFor();
+      await card.getByRole("button", { name: /^Local model/ }).click();
+      expect((await gateway.waitForRequest("openclaw.setup.activate.start")).params).toMatchObject({
+        kind: local.kind,
+        modelRef: local.modelRef,
+      });
+      const failed = card.getByText(
+        "It couldn’t complete the test. Try again, or choose another AI.",
+        {
+          exact: true,
+        },
+      );
+      await failed.waitFor();
+      expect(await card.getByText(/ECONNRESET/).isVisible()).toBe(false);
+      await capture(page, "setup-5-test-failed", card, [failed]);
+
+      await gateway.setMethodResponse("openclaw.setup.activate.start", activated(codex.modelRef));
+      await codexRow.click();
+      const done = card.getByRole("heading", { name: "You’re all set!" });
+      await done.waitFor();
+      expect(await card.getByText(/openai\/default/).count()).toBe(0);
       await page
         .getByText("Your AI is ready. Let’s get to know each other.", { exact: true })
         .waitFor();
-      expect(await gateway.getRequests("openclaw.setup.auto")).toHaveLength(1);
-      await capture(page, "configured-automatic-setup", card, [selected]);
-      await card.getByRole("button", { name: "Use a different Gateway" }).click();
-      await card.getByRole("button", { name: "Review permissions" }).click();
+      await capture(page, "setup-6-done", card, [done]);
       expect(await page.evaluate(() => Reflect.get(window, "setupProofActions"))).toEqual([
         "gateways",
-        "permissions",
       ]);
-
-      await gateway.setMethodResponse("openclaw.setup.activate", {
-        ok: false,
-        error: "The local model stopped.",
-      });
-      await card.getByRole("button", { name: "Local model", exact: true }).click();
-      expect((await gateway.waitForRequest("openclaw.setup.activate")).params).toEqual({
-        kind: "ollama",
-      });
-      await card.getByText("The local model stopped.", { exact: true }).waitFor();
-      await selected.waitFor();
-      await capture(page, "failed-alternative-automatic-setup", card, [
-        selected,
-        card.getByRole("alert"),
-      ]);
-      await gateway.setMethodResponse("openclaw.setup.activate", {
-        ok: true,
-        modelRef: local.modelRef,
-      });
-      await card.getByRole("button", { name: "Local model", exact: true }).click();
-      const activated = card.getByRole("heading", {
-        name: "Using Local model (ollama/local-model) on This Mac",
-      });
-      await activated.waitFor();
-      await capture(page, "activated-automatic-setup", card, [activated]);
       await card.getByRole("button", { name: "Dismiss", exact: true }).click();
       await card.waitFor({ state: "detached" });
       await page.reload();
-      await gateway.waitForRequest("openclaw.setup.auto");
+      await gateway.waitForRequest("openclaw.setup.detect");
       expect(await card.count()).toBe(0);
     });
   });
 
-  it.each([false, true])("runs ChatGPT sign-in and refreshes setup (shared=%s)", async (reuse) => {
+  it("connects an API key from the card's own form", async () => {
     await suite.withPage(options, async ({ page }) => {
-      await nativeSetup(page);
-      const gateway = await install(page, {
+      const gateway = await installGateway(page, {
+        methodResponses: { "openclaw.setup.activate.start": activated("anthropic/claude-sonnet") },
+      });
+      await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
+      const card = page.locator(".custodian-setup");
+      await nextStep(card, "Where should your assistant run?");
+      await nextStep(card, "Connect your AI");
+      await card.getByRole("button", { name: /^API Keys/ }).click();
+      await card.getByLabel("Provider and access method").selectOption("anthropic-api-key");
+      const key = card.getByLabel("API key or token");
+      await key.fill("sk-test-not-real");
+      await capture(page, "setup-9-api-key", card, [key]);
+      await card.getByRole("button", { name: "Connect & verify", exact: true }).click();
+      expect((await gateway.waitForRequest("openclaw.setup.activate.start")).params).toMatchObject({
+        kind: "api-key",
+        authChoice: "anthropic-api-key",
+        apiKey: "sk-test-not-real",
+      });
+      await card.getByRole("heading", { name: "You’re all set!" }).waitFor();
+    });
+  });
+
+  it.each([true, false])("signs in with ChatGPT from the AI step (succeeds=%s)", async (ok) => {
+    await suite.withPage(options, async ({ page }) => {
+      const gateway = await installGateway(page, {
         methodResponses: {
-          "openclaw.setup.auto": {
-            sequence: [reuse ? shared : needsSignIn, { ...configured, status: "activated" }],
-          },
+          "openclaw.setup.detect": nothingDetected,
           "openclaw.setup.auth.start": { sessionId: "sign-in", done: false, status: "running" },
           "wizard.next": {
             sequence: [
@@ -218,90 +294,37 @@ suite.define(() => {
                   executor: "client",
                 },
               },
-              { done: true, status: "done" },
+              ok
+                ? { done: true, status: "done", modelActivation: { modelRef: "openai/gpt-5.5" } }
+                : { done: true, status: "error", error: realSignInError },
             ],
           },
         },
       });
       await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
       const card = page.locator(".custodian-setup");
-      const signIn = card.getByRole("button", {
-        name: reuse ? "Sign in separately" : "Sign in with ChatGPT",
-      });
-      await signIn.waitFor();
-      const sharedNotice = card.getByText(
-        "Using your existing Codex login · sessions shared with Codex",
-        { exact: true },
-      );
-      if (reuse) {
-        await sharedNotice.waitFor();
-        await capture(page, "shared-codex-login", card, [signIn, sharedNotice]);
-      } else {
-        expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
-        await capture(page, "needs-sign-in-automatic-setup", card, [signIn]);
-      }
+      await nextStep(card, "Where should your assistant run?");
+      await nextStep(card, "Connect your AI");
+      await card.getByText("No usable AI access found on this Gateway", { exact: true }).waitFor();
+      const signIn = card.getByRole("button", { name: /^ChatGPT/ });
+      await capture(page, "setup-7-nothing-detected", card, [signIn]);
       await signIn.click();
       expect((await gateway.waitForRequest("openclaw.setup.auth.start")).params).toMatchObject({
-        authChoice: reuse ? "codex-separate-sign-in" : "openai-codex",
+        authChoice: chatgpt.id,
       });
       const confirmation = card.getByRole("textbox", { name: "Enter the confirmation code" });
       await confirmation.fill("DEMO-CONFIRMATION");
-      await capture(page, "sign-in-wizard-automatic-setup", card, [confirmation]);
       await card.getByRole("button", { name: "Submit", exact: true }).click();
-      expect(
-        (
-          await gateway.waitForRequest("wizard.next", {
-            match: { answer: { stepId: "confirmation", value: "DEMO-CONFIRMATION" } },
-          })
-        ).params,
-      ).toMatchObject({ answer: { stepId: "confirmation", value: "DEMO-CONFIRMATION" } });
-      await gateway.waitForRequest("openclaw.setup.auto", { after: 1 });
-      const selected = card.getByRole("heading", { name: /Using Codex/ });
-      await selected.waitFor();
-      await sharedNotice.waitFor({ state: "detached" });
-      expect(await card.getByRole("button", { name: "Sign in separately" }).count()).toBe(0);
-      if (reuse) {
-        await capture(page, "separate-codex-login", card, [selected]);
+      if (ok) {
+        await card.getByRole("heading", { name: "You’re all set!" }).waitFor();
+        return;
       }
-      await page
-        .getByText("Your AI is ready. Let’s get to know each other.", { exact: true })
-        .waitFor();
+      const alert = card.getByRole("alert");
+      await alert.getByText("ChatGPT didn’t finish", { exact: true }).waitFor();
+      expect(await alert.getByText(/OAuth token refresh failed/).isVisible()).toBe(false);
+      await capture(page, "setup-8-sign-in-failed", card, [alert]);
+      await alert.getByText("Show details", { exact: true }).click();
+      await alert.getByText(/OAuth token refresh failed/).waitFor();
     });
   });
-
-  it.each([false, true])(
-    "explains unavailable inference and routes recovery (native=%s)",
-    async (native) => {
-      await suite.withPage(options, async ({ page }) => {
-        if (native) {
-          await nativeSetup(page);
-        }
-        await install(page, { methodResponses: { "openclaw.setup.auto": unavailable } });
-        await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
-        const card = page.locator(".custodian-setup");
-        const failure = card.getByText("The download could not be completed.", { exact: false });
-        await failure.waitFor();
-        await card.getByText("No running model was available.", { exact: false }).waitFor();
-        await capture(
-          page,
-          native ? "unavailable-native-automatic-setup" : "unavailable-web-automatic-setup",
-          card,
-          [failure],
-        );
-        if (native) {
-          await card.getByRole("button", { name: "Open AI setup" }).click();
-          expect(await page.evaluate(() => Reflect.get(window, "setupProofActions"))).toEqual([
-            "ai",
-          ]);
-          expect(await card.getByText("openclaw onboard", { exact: true }).count()).toBe(0);
-        } else {
-          await card.getByText("openclaw onboard", { exact: true }).waitFor();
-          expect(await card.getByRole("button", { name: "Use a different Gateway" }).count()).toBe(
-            0,
-          );
-          expect(await card.getByRole("button", { name: "Review permissions" }).count()).toBe(0);
-        }
-      });
-    },
-  );
 });
