@@ -206,7 +206,7 @@ describe("session model projection retained boundaries", () => {
         ]);
       };
       let catalog = view("original");
-      using _release = holdForeground();
+      using release = holdForeground();
       using projection = await createTestProjection({
         cfg,
         getConfig: () => cfg,
@@ -252,7 +252,7 @@ describe("session model projection retained boundaries", () => {
         { agentId: "main", sessionKey: key },
         { sessionId: key, updatedAt: 1, createdActor: actor(bob.id) },
       );
-      using _release = holdForeground();
+      using _ = holdForeground();
       using projection = await createTestProjection({
         cfg,
         getConfig: () => cfg,

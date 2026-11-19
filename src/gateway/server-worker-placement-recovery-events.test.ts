@@ -56,6 +56,7 @@ import {
   placementAsyncDefaults,
   startRuntime,
 } from "./server-worker-placement.test-support.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./worker-environments/device-provider-identity.js";
 
 const createRuntime = createRuntimeFactory(createGatewayWorkerPlacementRuntime, getRuntimeConfig);
 type RecoveryPlacement = ReturnType<typeof recoveryPlacement>;
