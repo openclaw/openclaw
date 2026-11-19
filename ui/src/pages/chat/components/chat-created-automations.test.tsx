@@ -24,7 +24,9 @@ it("reserves the whole plan before any job exists and settles its keyed slots in
   const heading = card.getByRole("heading", { name: "Automations" });
   const rows = () => card.getAllByRole("listitem");
   const [first, second] = rows();
-  if (!first || !second) throw new Error("Both declared slots must be mounted");
+  if (!first || !second) {
+    throw new Error("Both declared slots must be mounted");
+  }
   expect(first.querySelector("[role=status]")?.textContent).toContain(
     "Morning digestCreating automation…",
   );

@@ -94,8 +94,9 @@ function LiveAutomation(props: { id: string; name: string }) {
   let watch: ReturnType<typeof watchCronJobDefinition> | undefined;
   onSettled(() => {
     if (app) {
-      watch = watchCronJobDefinition(app.gateway, props.id, publish);
-      return watch.dispose;
+      const observer = watchCronJobDefinition(app.gateway, props.id, publish);
+      watch = observer;
+      return () => observer.dispose();
     }
     return undefined;
   });
@@ -111,7 +112,7 @@ function LiveAutomation(props: { id: string; name: string }) {
       ? t("cron.scheduleLabel.withTimeZone", { value: label, timeZone: value.tz })
       : label;
   });
-  const search = () => "?" + new URLSearchParams({ job: props.id, tab: "settings" });
+  const search = () => `?${new URLSearchParams({ job: props.id, tab: "settings" })}`;
   return (
     <>
       <Show
