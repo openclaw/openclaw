@@ -567,11 +567,6 @@ export async function applyPluginNodeInvokePolicy(params: {
           ? { placementGrantAuthority: scope.nodePlacementGrantAuthority }
           : {}),
         turnSource: trustedTurnSource,
-        isCurrent: () =>
-          isPluginCurrent() &&
-          isCallerRuntimeAuthorityActive() &&
-          params.privateTransport?.isCurrent() !== false &&
-          params.isApprovalAuthorityActive?.() !== false,
       }),
       invokeNode,
       ...(ownedInvocation
