@@ -1,9 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { AgentToolResult } from "../../packages/agent-core/src/types.js";
 import { validateToolArguments } from "../../packages/agent-core/src/validation.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-type ToolExecutionValidator = (params: unknown) => void | Promise<void>;
+// The host may return a refusal at this final, hook-adjusted side-effect boundary.
+type ToolExecutionValidation = void | AgentToolResult<unknown>;
+type ToolExecutionValidator = (
+  params: unknown,
+) => ToolExecutionValidation | Promise<ToolExecutionValidation>;
 type ScopedToolExecutionValidator = {
   toolCallId: string;
   validate: ToolExecutionValidator;
@@ -22,6 +27,21 @@ function rejectClosedToolExecutionValidation(): never {
 /** Keep per-call validation inside the policy wrapper's final execution boundary. */
 export async function runWithToolExecutionValidation<T>(
   toolCallId: string,
+  validator: (params: unknown) => void | Promise<void>,
+  execute: () => Promise<T>,
+): Promise<T> {
+  return runWithToolExecutionGate(
+    toolCallId,
+    async (params) => {
+      await validator(params);
+    },
+    execute,
+  );
+}
+
+/** Host-owned interception after argument preparation, before the tool implementation starts. */
+export async function runWithToolExecutionGate<T>(
+  toolCallId: string,
   validator: ToolExecutionValidator,
   execute: () => Promise<T>,
 ): Promise<T> {
@@ -38,10 +58,10 @@ export async function runWithToolExecutionValidation<T>(
 export async function validateToolExecutionParams(
   toolCallId: string,
   params: unknown,
-): Promise<void> {
+): Promise<ToolExecutionValidation> {
   const scopedValidator = executionValidators.getStore();
   if (scopedValidator?.toolCallId === toolCallId) {
-    await scopedValidator.validate(params);
+    return await scopedValidator.validate(params);
   }
 }
 

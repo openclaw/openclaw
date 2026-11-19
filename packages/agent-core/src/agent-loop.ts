@@ -53,16 +53,24 @@ import {
   type FinalizedToolCallOutcome,
   type ImmediateToolCallOutcome,
 } from "./tool-call-outcome.js";
-import { captureAgentToolInputScope } from "./tool-execution-context.js";
+import {
+  captureAgentToolInputScope,
+  resolveAgentAssistantTurnId,
+} from "./tool-execution-context.js";
 import {
   TOOL_REPEAT_LIMIT_CODE,
   createToolRepeatState,
   createToolRepeatStopResult,
+  createToolNoProgressResult,
   formatToolRepeatStopMessage,
+  observeToolNoProgress,
   observeToolRepeat,
+  recordToolProgress,
+  toolProgressOutcome,
   resetToolRepeatState,
   type ToolRepeatState,
   type ToolRepeatVerdict,
+  type ToolNoProgressState,
 } from "./tool-repeat-guard.js";
 import {
   appendInterruptedTurnMessage,
@@ -372,7 +380,10 @@ async function runLoop(
       if (await stopIfAborted()) {
         return newMessages;
       }
-      if (executedToolBatch?.repeatStop) {
+      // Preserve accepted input for the normal commit checkpoint, which also resets the guard.
+      const inputOverridesRepeatStop =
+        executedToolBatch?.repeatStop !== undefined && pendingMessages.length > 0;
+      if (executedToolBatch?.repeatStop && !inputOverridesRepeatStop) {
         const reason = formatToolRepeatStopMessage(executedToolBatch.repeatStop);
         const terminalMessage = {
           ...createFailureMessage(config.model, new Error(reason), false),
@@ -391,7 +402,7 @@ async function runLoop(
         return newMessages;
       }
 
-      if (providerFailed) {
+      if (providerFailed && !inputOverridesRepeatStop) {
         await emit({ type: "agent_end", messages: newMessages });
         return newMessages;
       }
@@ -498,6 +509,11 @@ async function executeToolCalls(
     hasUnobservedAsyncToolResults,
     isLocalError,
     toolPlan,
+    noProgress:
+      config.toolRepeatGuard !== false
+        ? (toolRepeatState.noProgress ??= { history: [], recoveryUsed: false })
+        : undefined,
+    nestedProgressCalls: new Set(),
     waitForPrevious: scheduling?.waitForPrevious,
   };
   if (config.toolRepeatGuard !== false) {
@@ -587,6 +603,10 @@ export type ToolBatchContext = {
   emit: AgentEventSink;
   resolved: Map<AgentToolCall, ResolvedToolCallOutcome>;
   repeatNotes?: ToolRepeatVerdict[];
+  noProgress?: ToolNoProgressState;
+  noProgressStop?: ToolRepeatVerdict;
+  noProgressReported?: ToolRepeatVerdict;
+  nestedProgressCalls: Set<AgentToolCall>;
   onParallelStarted?: () => void;
   onTerminalLoop?: () => void;
   hasUnobservedAsyncToolResults: boolean;
@@ -625,6 +645,17 @@ async function executeToolCallGroups(
       outcome: ExecutedToolCallOutcome,
     ) => {
       const finalized = await completeStartedToolCall(batch, entry, outcome, sequential);
+      if (
+        batch.noProgress &&
+        finalized.executionStarted &&
+        !batch.nestedProgressCalls.has(entry.toolCall)
+      ) {
+        recordToolProgress(
+          batch.noProgress,
+          { ...entry.toolCall, arguments: entry.execution.args },
+          toolProgressOutcome(finalized.result, finalized.isError),
+        );
+      }
       ordered[index] = finalized;
       return finalized;
     };
@@ -651,6 +682,23 @@ async function executeToolCallGroups(
         throw error;
       }
 
+      if (batch.noProgressReported) {
+        // A later prepared call can confirm the loop before any ready sibling starts.
+        for (const [index, entry] of entries.entries()) {
+          if (!("kind" in entry)) {
+            continue;
+          }
+          entry.execution.dispose();
+          const blocked = await finalizeNoProgressToolCall(
+            batch,
+            entry.toolCall,
+            entry.execution.args,
+            batch.noProgressReported,
+          );
+          entries[index] = blocked;
+          await emitToolExecutionEnd(blocked, batch);
+        }
+      }
       const hasReady = entries.some((entry) => "kind" in entry);
       if (sequential && batch.toolPlan.executionStarted && hasReady && !batch.signal?.aborted) {
         const steering = getSteeringAtCheckpoint(batch.config);
@@ -739,7 +787,7 @@ async function executeToolCallGroups(
     if (thrown) {
       throw thrown.error;
     }
-    if (steeringMessages.length > 0 || fatal || batch.signal?.aborted) {
+    if (steeringMessages.length > 0 || fatal || batch.signal?.aborted || batch.noProgressStop) {
       break;
     }
   }
@@ -771,11 +819,43 @@ async function executeToolCallGroups(
     messages,
     steeringMessages,
     ...resolveToolBatchTermination(finalizedCalls),
+    ...(batch.noProgressStop ? { terminate: true, repeatStop: batch.noProgressStop } : {}),
     ...(fatal ? { fatal } : {}),
   };
 }
 
 type ValidatedToolCallOutcome = PreparedToolCall | ImmediateToolCallOutcome;
+
+function reportNoProgressVerdict(batch: ToolBatchContext, verdict: ToolRepeatVerdict): void {
+  if (batch.noProgressReported !== verdict) {
+    batch.noProgressReported = verdict;
+    batch.config.onToolRepeat?.(verdict);
+  }
+  if (verdict.kind === "stop" && batch.noProgressStop !== verdict) {
+    batch.noProgressStop = verdict;
+    batch.onTerminalLoop?.();
+  }
+}
+
+async function finalizeNoProgressToolCall(
+  batch: ToolBatchContext,
+  toolCall: AgentToolCall,
+  args: unknown,
+  verdict: ToolRepeatVerdict,
+): Promise<FinalizedToolCallOutcome> {
+  const hideFromChannelProgress = hidesToolCallFromChannelProgress(batch, toolCall);
+  return await finalizeToolCallOutcome(
+    batch,
+    {
+      toolCall,
+      result: createToolNoProgressResult(verdict),
+      isError: true,
+      executionStarted: false,
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+    },
+    args,
+  );
+}
 
 async function prepareToolCallEntry(
   batch: ToolBatchContext,
@@ -800,6 +880,7 @@ async function prepareToolCallEntry(
   }
   const inputQueue = getInternalSteeringQueueObserver(batch.config.getSteeringMessages);
   const subscribeInput = inputQueue?.subscribe;
+  const progressState = batch.noProgress;
   const execution = await prepareToolCallExecution(
     preparation,
     {
@@ -809,6 +890,27 @@ async function prepareToolCallEntry(
           ? { hasPending: () => inputQueue.peek().length > 0, subscribe: subscribeInput }
           : undefined,
       toolCall: preparation.toolCall,
+      ...(progressState
+        ? {
+            toolProgress: {
+              before: (nestedCall, nestedTool) => {
+                batch.nestedProgressCalls.add(toolCall);
+                const verdict = observeToolNoProgress(
+                  progressState,
+                  nestedCall,
+                  nestedTool,
+                  resolveAgentAssistantTurnId(batch.assistantMessage) ?? batch.assistantMessage,
+                );
+                if (verdict) {
+                  reportNoProgressVerdict(batch, verdict);
+                }
+                return verdict;
+              },
+              completed: (nestedCall, outcome) =>
+                recordToolProgress(progressState, nestedCall, outcome),
+            },
+          }
+        : {}),
       hasUnobservedAsyncToolResults:
         batch.hasUnobservedAsyncToolResults ||
         batch.assistantMessage.content
@@ -820,6 +922,19 @@ async function prepareToolCallEntry(
     batch.isLocalError,
     batch.config.toolInterruptions,
   );
+  if (execution.kind === "ready" && batch.noProgress) {
+    const verdict = observeToolNoProgress(
+      batch.noProgress,
+      { ...toolCall, arguments: execution.args },
+      preparation.tool,
+      resolveAgentAssistantTurnId(batch.assistantMessage) ?? batch.assistantMessage,
+    );
+    if (verdict) {
+      execution.dispose();
+      reportNoProgressVerdict(batch, verdict);
+      return await finalizeNoProgressToolCall(batch, toolCall, execution.args, verdict);
+    }
+  }
   return execution.kind === "immediate"
     ? await finalizeExecutedToolCall(batch, preparation, execution.outcome, preparation.args)
     : { ...preparation, execution };

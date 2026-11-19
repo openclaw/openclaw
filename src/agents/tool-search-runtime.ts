@@ -2,8 +2,14 @@ import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
   attachInternalToolResultContentSource,
+  clearInternalToolResultProgress,
   copyInternalToolResultState,
 } from "../../packages/agent-core/src/internal-hooks.js";
+import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
+import {
+  createToolNoProgressResult,
+  toolProgressOutcome,
+} from "../../packages/agent-core/src/tool-repeat-guard.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { resolveAgentToolExecutionSchema } from "./agent-tool-availability.js";
@@ -13,7 +19,7 @@ import {
 } from "./agent-tools.before-tool-call.js";
 import {
   coerceToolExecutionArguments,
-  runWithToolExecutionValidation,
+  runWithToolExecutionGate,
 } from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
@@ -30,11 +36,13 @@ import {
   selectToolOutputSchema,
 } from "./schema/tool-output-schema.js";
 import { bindJoinedCollectorInvocation } from "./subagents/swarm/swarm-collector-capability.js";
-import { markToolContractFailure } from "./tool-contract-error.js";
+import { getToolContractFailureCode, markToolContractFailure } from "./tool-contract-error.js";
 import { readToolExecutionRefusal } from "./tool-effect-receipt.js";
 import {
+  formatToolExecutionErrorMessage,
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
+  resolveToolExecutionErrorKind,
 } from "./tool-execution-error.js";
 import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 import { isToolResultError, resolveToolResultFailureKind } from "./tool-result-error.js";
@@ -483,6 +491,10 @@ export class ToolSearchRuntime {
           result: candidate,
         });
         if (update) {
+          // A middleware rewrite owns its visible progress, not the raw producer identity.
+          if (update !== candidate) {
+            clearInternalToolResultProgress(update);
+          }
           candidate = resolveAgentHarnessToolResultPresentation({
             result: update,
             executionIsError: failureKind !== undefined,
@@ -502,7 +514,12 @@ export class ToolSearchRuntime {
       acceptedSnapshot = snapshot;
       return snapshot;
     };
-    const validateExecution = validateInput || outputVariants !== undefined;
+    const progress = getAgentToolExecutionContext()?.toolProgress;
+    const progressCall = { id: toolCallId, name: entry.name, arguments: normalizedInput };
+    const validateExecution =
+      validateInput ||
+      outputVariants !== undefined ||
+      (progress !== undefined && entry.source === "openclaw");
     const executionTool = prepareToolSearchCatalogExecutionTool(entry, {
       ...this.options,
       validateInput: validateExecution,
@@ -540,6 +557,21 @@ export class ToolSearchRuntime {
         return result;
       } catch (error) {
         if (
+          !preExecutionRefused &&
+          getBeforeToolCallFailureDisposition(error) === undefined &&
+          !isTrustedToolExecutionPreflightError(error) &&
+          getToolContractFailureCode(error) === undefined &&
+          !signal?.aborted
+        ) {
+          progress?.completed(progressCall, {
+            isError: true,
+            value: {
+              kind: resolveToolExecutionErrorKind(error),
+              message: formatToolExecutionErrorMessage(error, "Tool execution failed."),
+            },
+          });
+        }
+        if (
           networkInvocation &&
           !preExecutionRefused &&
           getBeforeToolCallFailureDisposition(error) === undefined &&
@@ -557,27 +589,46 @@ export class ToolSearchRuntime {
       }
     };
     let acceptedResult: AgentToolResult<unknown> | undefined;
+    let loopVerdict =
+      entry.source === "openclaw" ? undefined : progress?.before(progressCall, entry.tool);
     try {
-      const result = validateExecution
-        ? await runWithToolExecutionValidation(
-            toolCallId,
-            async (finalInput) => {
-              if (validateInput) {
-                await assertCatalogInputMatchesSchema(entry, finalInput);
-              }
-              executedInput = asOptionalRecord(structuredClone(finalInput));
-              if (outputVariants) {
-                // Retain the prepared primitive, not an input object the tool can mutate.
-                executedOutputSelection = captureToolOutputSelection(
-                  outputVariants.inputProperty,
-                  finalInput,
-                );
-              }
-            },
-            runExecution,
-          )
-        : await runExecution();
+      const result = loopVerdict
+        ? { ...createToolNoProgressResult(loopVerdict), isError: true }
+        : validateExecution
+          ? await runWithToolExecutionGate(
+              toolCallId,
+              async (finalInput) => {
+                if (validateInput) {
+                  await assertCatalogInputMatchesSchema(entry, finalInput);
+                }
+                executedInput = asOptionalRecord(structuredClone(finalInput));
+                if (outputVariants) {
+                  // Retain the prepared primitive, not an input object the tool can mutate.
+                  executedOutputSelection = captureToolOutputSelection(
+                    outputVariants.inputProperty,
+                    finalInput,
+                  );
+                }
+                progressCall.arguments = structuredClone(finalInput);
+                loopVerdict = progress?.before(progressCall, entry.tool);
+                return loopVerdict
+                  ? { ...createToolNoProgressResult(loopVerdict), isError: true }
+                  : undefined;
+              },
+              runExecution,
+            )
+          : await runExecution();
       acceptedResult = await acceptResultBeforeProjection(result);
+      if (!loopVerdict && !preExecutionRefused) {
+        progress?.completed(
+          progressCall,
+          toolProgressOutcome(
+            acceptedResult,
+            isToolResultError(acceptedResult),
+            projectToolResultValue(acceptedResult),
+          ),
+        );
+      }
       if (options?.parentToolCallId) {
         this.terminalTargetBatchByParent.set(
           options.parentToolCallId,

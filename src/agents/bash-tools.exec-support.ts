@@ -1,6 +1,7 @@
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import {
+  attachExecProgress,
   type ExecDroppedOutputFacts,
   type ExecProcessOutcome,
   renderExecDroppedOutputNote,
@@ -63,10 +64,10 @@ export function buildExecForegroundResult(params: {
         : "";
     const outputText = `${retentionCapNote}${warningText}${params.outcome.reason}${linuxOomGuidance}`;
     const message = `${retentionCapNote}${warningText}${params.outcome.message}${linuxOomGuidance}`;
-    return textResult(outputText, { ...details, status: "failed", message });
+    return attachExecProgress(textResult(outputText, { ...details, status: "failed", message }));
   }
   const outputText = `${retentionCapNote}${warningText}${renderExecOutputText(params.outcome.aggregated)}`;
-  return textResult(outputText, details);
+  return attachExecProgress(textResult(outputText, details));
 }
 
 export function resolveExecReviewerDefaults(params: {

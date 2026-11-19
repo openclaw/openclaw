@@ -1,5 +1,5 @@
 ---
-summary: "How the tool repeat guard stops identical tool-call loops"
+summary: "How the tool repeat guard stops identical calls and stable cross-tool rotations"
 title: "Tool-loop detection"
 read_when:
   - A user reports agents getting stuck repeating tool calls
@@ -13,7 +13,7 @@ arguments again and again. It is on by default.
 
 ## How it works
 
-The guard compares each tool call with the call before it. It compares only the
+The consecutive-call guard compares each tool call with the call before it. It compares only the
 tool name and the canonical arguments (key order does not matter). It never
 compares results, so a repeated failing call and a repeated successful call
 count the same way.
@@ -25,6 +25,15 @@ count the same way.
   `OpenClaw stopped this turn: the model called <tool> with the same arguments 20 times in a row. Send a new message to continue.`
 
 A different call resets the count. New user input also resets it.
+
+The guard also retains at most 30 completed outcomes for cross-tool rotations.
+When participating calls repeatedly produce the same observable outcomes across
+multiple tools, the next participating call blocks its batch and offers one
+recovery opportunity. A new tool or new arguments can run during recovery;
+another confirmed stable loop ends the turn. Changed outcomes restart this
+shared no-progress tail. Pending results and first observations do not establish
+repetition. Code Mode's nested calls share this history instead of counting the
+outer wrapper twice. New accepted user input starts a fresh history.
 
 A call to an unavailable tool counts by name only, so a model that keeps trying
 a missing tool with changing arguments still reaches the note and the stop.
@@ -90,8 +99,8 @@ removes them.
 ## Logs
 
 Each note and each stop writes a `tool loop:` diagnostic line and a `tool.loop`
-diagnostic event with `detector=tool_repeat`. A note uses `action=warn`; a stop
-uses `action=block`.
+diagnostic event with `detector=tool_repeat`. An identical-call redirect uses
+`action=warn`; critical rotations and stops use `action=block`.
 
 ## Related
 

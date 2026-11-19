@@ -55,18 +55,24 @@ export function toolRepeatDiagnostics({
   sessionId,
   agentId,
 }: SessionRef & { agentId?: string }): (verdict: ToolRepeatVerdict) => void {
-  return ({ kind, toolName, count }) => {
+  return ({ kind, toolName, count, noProgress }) => {
     const stop = kind === "stop";
+    const blocked = stop || noProgress === true;
     logToolLoopAction({
       sessionKey,
       sessionId,
       ...(agentId ? { agentId } : {}),
       toolName,
       count,
-      level: stop ? "critical" : "warning",
-      action: stop ? "block" : "warn",
+      level: blocked ? "critical" : "warning",
+      action: blocked ? "block" : "warn",
       detector: "tool_repeat",
-      message: stop ? "repeat limit reached; turn ended" : "redirect note added",
+      message:
+        noProgress && !stop
+          ? "stable loop blocked; recovery allowed"
+          : stop
+            ? "repeat limit reached; turn ended"
+            : "redirect note added",
     });
   };
 }

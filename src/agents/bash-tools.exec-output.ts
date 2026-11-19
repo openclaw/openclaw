@@ -2,8 +2,11 @@
  * Keeps no-output placeholders and warning placement consistent across exec
  * progress, polling, and completion surfaces.
  */
+import { attachInternalToolResultProgress } from "../../packages/agent-core/src/internal-hooks.js";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
 import { isOneShotRunSessionKey } from "../sessions/session-key-utils.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
+import type { AgentToolResult } from "./runtime/index.js";
 import type { PrivateTempFileStream } from "./sessions/tools/private-temp-file.js";
 import { formatFullOutputFooter } from "./sessions/tools/tool-contracts.js";
 
@@ -46,6 +49,32 @@ export type ExecProcessOutcome =
       message: string;
       reason: string;
     };
+
+export function attachExecProgress<T extends AgentToolResult<ExecToolDetails>>(result: T): T {
+  const details = result.details;
+  if (details.status !== "completed" && details.status !== "failed") {
+    return result;
+  }
+  const failed = details.status === "failed" || details.exitCode !== 0;
+  const output = failed
+    ? details.aggregated
+        .replace(
+          /(\b(?:pid|process id|attempt|retry|elapsed|duration)(?:ms)?[\s:=]+)\d+(?:\.\d+)?(?:ms|s)?\b/gi,
+          "$1<runtime>",
+        )
+        .replace(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\b/g, "<timestamp>")
+    : details.aggregated;
+  return attachInternalToolResultProgress(result, {
+    status: details.status,
+    exitCode: details.exitCode,
+    exitSignal: details.exitSignal,
+    exitReason: details.exitReason,
+    timedOut: details.timedOut,
+    noOutputTimedOut: details.noOutputTimedOut,
+    failureKind: details.failureKind,
+    output,
+  });
+}
 
 export const EXEC_NO_OUTPUT_PLACEHOLDER = "(no output)";
 // Keep launch and later process observations consistent without naming an aliased tool.

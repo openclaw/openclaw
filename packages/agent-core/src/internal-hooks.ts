@@ -127,11 +127,26 @@ type InternalToolResultAcknowledgement = () => void;
 const toolResultAcknowledgementByValue = new WeakMap<object, InternalToolResultAcknowledgement>();
 const toolResultProvenanceByValue = new WeakMap<object, object>();
 const toolResultContentSourceByValue = new WeakMap<object, ToolResultContentSource>();
+const toolResultProgressByValue = new WeakMap<object, unknown>();
+
+/** Producer-owned semantic outcome; presentation and runtime receipts remain unchanged. */
+export function attachInternalToolResultProgress<T extends object>(value: T, progress: unknown): T {
+  toolResultProgressByValue.set(value, progress);
+  return value;
+}
+
+export function getInternalToolResultProgress(value: object): unknown {
+  return toolResultProgressByValue.get(value);
+}
+
+export function clearInternalToolResultProgress(value: object): void {
+  toolResultProgressByValue.delete(value);
+}
 
 /** Copy present private state without clearing a target's existing slot. */
 function copyInternalSlot<T>(slots: WeakMap<object, T>, source: object, target: object): void {
   const value = slots.get(source);
-  if (value) {
+  if (value !== undefined) {
     slots.set(target, value);
   }
 }
@@ -257,6 +272,7 @@ export function copyInternalToolResultState<T extends object>(source: object, ta
   copyInternalSlot(toolResultAcknowledgementByValue, source, target);
   copyInternalSlot(toolResultProvenanceByValue, source, target);
   copyInternalSlot(toolResultContentSourceByValue, source, target);
+  copyInternalSlot(toolResultProgressByValue, source, target);
   return target;
 }
 

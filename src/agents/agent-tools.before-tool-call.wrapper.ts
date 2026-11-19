@@ -423,7 +423,10 @@ export function wrapToolWithBeforeToolCallHook(
         });
         // Hooks can repair or rewrite arguments; only the final execution
         // shape is safe to validate, after vetoes but before side effects.
-        await validateToolExecutionParams(toolCallId, executeParams);
+        const intercepted = await validateToolExecutionParams(toolCallId, executeParams);
+        if (intercepted) {
+          return intercepted;
+        }
       } catch (error) {
         recordPreExecutionError(error, outcome.params ?? hookParams, "tool_preparation");
         throw tagBeforeToolCallFailure(error, signal, "tool_preparation");

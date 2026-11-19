@@ -13,6 +13,7 @@ import {
 import { ToolArgumentValidationError } from "./errors.js";
 import {
   copyInternalToolResultState,
+  clearInternalToolResultProgress,
   getInternalToolResultContentSource,
 } from "./internal-hooks.js";
 import type { AgentCoreStreamRuntimeDeps } from "./runtime-deps.js";
@@ -69,16 +70,21 @@ function applyToolResultUpdate(
   update: Partial<AgentToolResult<unknown>>,
 ): AgentToolResult<unknown> {
   // Classification-only hooks must retain tool-owned outcome identity.
-  return update.content === undefined &&
-    update.details === undefined &&
-    update.terminate === undefined
-    ? result
-    : copyInternalToolResultState(result, {
-        ...result,
-        content: update.content ?? result.content,
-        details: update.details ?? result.details,
-        terminate: update.terminate ?? result.terminate,
-      });
+  const unchanged =
+    update.content === undefined && update.details === undefined && update.terminate === undefined;
+  if (unchanged) {
+    return result;
+  }
+  const next = copyInternalToolResultState(result, {
+    ...result,
+    content: update.content ?? result.content,
+    details: update.details ?? result.details,
+    terminate: update.terminate ?? result.terminate,
+  });
+  if (update.content !== undefined || update.details !== undefined) {
+    clearInternalToolResultProgress(next);
+  }
+  return next;
 }
 
 export async function finalizeExecutedToolCall(

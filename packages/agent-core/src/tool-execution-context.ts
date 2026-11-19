@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AssistantMessage } from "@openclaw/llm-core";
+import type { ToolProgressObserver } from "./tool-repeat-guard.js";
 import type { AgentToolCall } from "./types.js";
 
 /** Observation only: the exact runtime queue retains input and delivery custody. */
@@ -15,6 +16,8 @@ export interface AgentToolExecutionContext {
   pendingInput?: AgentToolPendingInput;
   /** Earlier async calls in this response have not reached a subsequent model request. */
   hasUnobservedAsyncToolResults?: boolean;
+  /** One accepted-input owner, shared by the outer call and its nested tool calls. */
+  toolProgress?: ToolProgressObserver;
 }
 
 const activeToolExecution = new AsyncLocalStorage<AgentToolExecutionContext>();
