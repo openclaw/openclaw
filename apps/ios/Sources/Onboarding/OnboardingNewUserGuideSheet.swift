@@ -4,7 +4,7 @@ import SwiftUI
 /// Onboarding offers it only while no Gateway has ever been saved on this device.
 struct OnboardingNewUserGuideSheet: View {
     static let setupGuideURL = URL(string: "https://docs.openclaw.ai/start/getting-started")!
-    static let connectionHelpURL = URL(string: "https://docs.openclaw.ai/platforms/ios#quick-start-pair-connect")!
+    static let connectionHelpURL = URL(string: "https://docs.openclaw.ai/platforms/ios#quick-start-pair-+-connect")!
 
     @Environment(\.openURL) private var openURL
 
