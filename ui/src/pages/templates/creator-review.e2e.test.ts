@@ -379,8 +379,8 @@ it.skipIf(!chromiumAvailable).each([
       expect(await card.locator("input, textarea").count()).toBe(0);
       expect(await card.getByRole("checkbox").count()).toBe(0);
       const initialRect = await card.evaluate((element) => {
-        const { width, left, right } = element.getBoundingClientRect();
-        return { width, left, right };
+        const rect = element.getBoundingClientRect();
+        return { width: rect.width, left: rect.left, right: rect.right };
       });
       if (width === 1440) {
         // A short description must not shrink the inline host to its content width.
