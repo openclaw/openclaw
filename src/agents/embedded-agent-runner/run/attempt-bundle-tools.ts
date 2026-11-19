@@ -108,7 +108,9 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     cfg: params.attempt.config,
     manifestRegistry: bundleManifestRegistry,
     toolOverrides: params.attempt.toolOverrides,
-    toolDenylist: runtimeCapabilityProfile.policy.explicitToolDenylist,
+    toolDenylist: params.preparedToolBase.fixedListing
+      ? runtimeCapabilityProfile.policy.sessionToolDenylist
+      : runtimeCapabilityProfile.policy.explicitToolDenylist,
   };
   const { fixedListing } = params.preparedToolBase;
   // A fixed listing builds bundled tools whatever the allowlist names; policy gates their calls.
@@ -164,7 +166,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
               chatType: params.attempt.chatType,
               isTurnTainted: params.attempt.isTurnTainted,
               toolOverrides: params.attempt.toolOverrides,
-              toolDenylist: runtimeCapabilityProfile.policy.explicitToolDenylist,
+              toolDenylist: mcpConfig.toolDenylist,
             }
           : undefined,
         reservedToolNames: [
@@ -198,8 +200,9 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       applyEmbeddedAttemptToolsAllow(bundleTools, effectiveToolsAllow, {
         toolMeta: (tool) => getPluginToolMeta(tool),
       });
-    const applyBundlePolicy = (bundledTools: typeof toolsRaw) =>
+    const applyBundlePolicy = (bundledTools: typeof toolsRaw, sessionFactsOnly = false) =>
       applyFinalEffectiveToolPolicy({
+        sessionFactsOnly,
         bundledTools,
         config: params.attempt.config,
         workspaceDir: params.setup.effectiveWorkspace,
@@ -214,9 +217,9 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     const allowedBundledTools = new Set(
       applyBundlePolicy(applyRuntimeAllowlist(bundledSourceTools)),
     );
-    // A fixed listing keeps every bundled tool listed and refuses what policy does not allow.
+    // A fixed listing removes by session facts and refuses by sender, group and run policy.
     const filteredBundledTools = fixedListing
-      ? bundledSourceTools.map((tool) =>
+      ? applyBundlePolicy(bundledSourceTools, true).map((tool) =>
           allowedBundledTools.has(tool) ? tool : refuseRunAllowlistTool(tool),
         )
       : [...allowedBundledTools];

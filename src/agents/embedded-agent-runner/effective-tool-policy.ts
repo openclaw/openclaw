@@ -23,6 +23,8 @@ type FinalEffectiveToolPolicyParams = {
   conversationCapabilityProfile: ResolvedConversationCapabilityProfile;
   warn: (message: string) => void;
   onFilter?: (event: ToolPolicyFilterEvent) => void;
+  /** Session facts only: a fixed listing refuses by sender and group policy instead. */
+  sessionFactsOnly?: boolean;
 };
 
 export function applyFinalEffectiveToolPolicy(
@@ -40,7 +42,10 @@ export function applyFinalEffectiveToolPolicy(
       "effective tool policy: dropping caller-provided groupId that does not match session-derived group context",
     );
   }
-  const policies = resolveConversationToolPolicies({ capabilityProfile });
+  const resolved = resolveConversationToolPolicies({ capabilityProfile });
+  const policies = params.sessionFactsOnly
+    ? { ...resolved, groupPolicy: undefined, senderPolicy: undefined }
+    : resolved;
   // Core tools are absent from this subset but already validated. Suppress only
   // their unavailable warnings; the pipeline still reports unknown entries.
   const pipelineSteps = buildConversationToolPolicyPipelineSteps({

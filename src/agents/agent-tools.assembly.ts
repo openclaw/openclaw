@@ -336,12 +336,19 @@ export function* assembleOpenClawCodingTools(
     ? [...sessionToolAccess.ownerOnlyCoreToolDenylist, AUTOMATIONS_TOOL_NAME]
     : sessionToolAccess.ownerOnlyCoreToolDenylist;
   const pluginToolAllowlist = appendRuntimePluginToolGrant(
-    capabilityProfile.policy.explicitToolAllowlist,
+    fixedListing
+      ? capabilityProfile.policy.sessionToolAllowlist
+      : capabilityProfile.policy.explicitToolAllowlist,
     runtimePluginToolGrant,
   );
   // Owner-only tools stay listed; descendants and captured allowlists cannot inherit them.
-  const pluginToolDenylist = [...capabilityProfile.policy.explicitToolDenylist];
-  const requesterToolDenylist = pluginToolDenylist.concat(
+  const pluginToolDenylist = [
+    ...(fixedListing
+      ? capabilityProfile.policy.sessionToolDenylist
+      : capabilityProfile.policy.explicitToolDenylist),
+  ];
+  // Children inherit the turn's full denylist, including sender, group and run policy.
+  const requesterToolDenylist = capabilityProfile.policy.explicitToolDenylist.concat(
     capabilityProfile.policy.inheritedToolPolicy?.deny ?? [],
     ownerOnlyCoreToolDenylist,
   );
@@ -384,6 +391,7 @@ export function* assembleOpenClawCodingTools(
     sandboxed: Boolean(sandbox),
     pluginToolAllowlist,
     pluginToolDenylist,
+    fixedToolListing: fixedListing !== undefined,
     // Only the grant's owner reaches tool construction; the grant itself stays in the allowlist.
     ...(runtimePluginToolGrant
       ? { runtimePluginToolOwnerId: runtimePluginToolGrant.pluginId }

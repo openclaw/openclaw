@@ -8,7 +8,7 @@ import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import {
   finalizeAgentToolAvailability,
   gateAgentToolExecution,
-  isAgentToolExecutionAvailable,
+  isAgentToolRunPolicyDenied,
 } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { isCodeModeControlTool } from "../../code-mode-control-tools.js";
@@ -253,20 +253,25 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
     const explicitlyAllowedClientTool = (clientTools ?? []).some(({ function: fn }) =>
       Boolean(fn?.name?.trim() && clientToolMatchers.some((matches) => matches(fn.name))),
     );
-    // Auto-added controls, and listed tools this turn refuses, cannot conceal an explicit
-    // allowlist that matched nothing.
+    // Tools a run allowlist or sender/group policy refuses were absent on main; they cannot
+    // conceal an allowlist that matched nothing. Auto-added controls cannot either.
+    const runPolicyDenied = collectAllowedToolNames({
+      tools: uncompactedEffectiveTools.filter(isAgentToolRunPolicyDenied),
+    });
+    const emptyAllowlistVisibleToolNames = deferredDirectoryToolsCallable
+      ? collectAllowedToolNames({ tools: effectiveTools })
+      : visibleAllowedToolNames;
     const hasCallableTools =
       preparedToolBase.hasNativeWebSearch ||
+      toolSearch.catalogToolCount >
+        (preparedToolBase.toolSurfaceRuntime.toolSearchCatalogRef?.current?.entries ?? []).filter(
+          (entry) => runPolicyDenied.has(entry.name),
+        ).length ||
       ((catalogedClientToolNames.size > 0 || deferredDirectoryToolsCallable) &&
         explicitlyAllowedClientTool) ||
-      [
-        ...collectAllowedToolNames({
-          tools: uncompactedEffectiveTools.filter(isAgentToolExecutionAvailable),
-          clientTools: clientTools?.filter(
-            (tool) => !catalogedClientToolNames.has(tool.function.name),
-          ),
-        }),
-      ].some((toolName) => !nonTaskControlNames.has(toolName));
+      [...emptyAllowlistVisibleToolNames].some(
+        (toolName) => !nonTaskControlNames.has(toolName) && !runPolicyDenied.has(toolName),
+      );
     const toolSearchRunPlan = {
       visibleAllowedToolNames,
       replayAllowedToolNames,
