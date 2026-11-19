@@ -136,7 +136,8 @@ describe("local checkout publication", () => {
     ]);
     for (const [other, message] of [
       [workspace, "not a git repository"],
-      [root, "operator.admin"],
+      // The refusal names the admitted paths; a bare scope gives a tool caller no next step.
+      [root, "operator.admin. Without it, workspacePath"],
       [path.join(source.cwd, ".git"), "operator.admin"],
       ["repository", "cwd must be absolute"],
     ] as const) {
@@ -337,7 +338,7 @@ describe("local checkout publication", () => {
         expect(await invoke(checkout, true, key)).toMatchObject([
           false,
           undefined,
-          { message: expect.stringContaining("operator.admin. Without it, workspacePath") },
+          { message: expect.stringContaining("operator.admin") },
         ]);
       }
       requesterClient = writer;
