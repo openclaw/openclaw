@@ -12,19 +12,16 @@ import {
   type BackupSqliteSnapshotFact,
 } from "../commands/backup-resource-inventory.js";
 import {
-  buildBackupArchiveBasename,
   buildBackupArchiveRoot,
   canonicalizePathForContainment,
   type BackupAsset,
   resolveBackupPlanFromDisk,
-  resolveBackupArchivePath,
 } from "../commands/backup-shared.js";
 import { encodeBackupManifest, type BackupManifest } from "../commands/backup-verify-manifest.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { runOfflineDatabaseBackup } from "../snapshot/database-backup.js";
-import { resolveHomeDir } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import {
   recordArchiveSymbolicLink,
@@ -47,6 +44,7 @@ import {
   removePreparedBackupArchive,
   writeArchiveStreamToFile,
 } from "./backup-create-stream.js";
+import { resolveBackupOutputPath } from "./backup-output-path.js";
 import {
   createBackupScratchDirectory,
   finishBackupScratch,
@@ -59,7 +57,6 @@ import {
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { walkBackupTar } from "./backup-tar-walk.js";
 import { isErrno } from "./errors.js";
-import { safeStat } from "./path-existence.js";
 import {
   createLegacyAuditBackupCapture,
   legacyAuditBackupCapturesMatch,
@@ -75,10 +72,7 @@ export type BackupCreateOptions = {
   /** Internal lifecycle cancellation for backup preparation, not admitted repairs. */
   signal?: AbortSignal;
   output?: string;
-  /**
-   * Without `output`, write to the home folder unless it lies inside a backed-up source,
-   * then fall back to the usual cwd default. For backups no one started from a shell.
-   */
+  /** Unattended callers prefer home unless it is included in the backup. */
   preferHomeOutput?: boolean;
   dryRun?: boolean;
   includeWorkspace?: boolean;
@@ -124,41 +118,6 @@ export type BackupCreateResult = {
   externalSymbolicLinks?: BackupSymbolicLink[];
   warnings?: string[];
 };
-
-async function resolveOutputPath(params: {
-  output?: string;
-  nowMs: number;
-  includedAssets: BackupAsset[];
-  stateDir: string;
-  preferHomeOutput?: boolean;
-}): Promise<string> {
-  const basename = buildBackupArchiveBasename(params.nowMs);
-  const rawOutput = params.output;
-  if (!rawOutput?.trim()) {
-    const insideSource = async (dir: string) => {
-      const canonical = await fs.realpath(dir).catch(() => dir);
-      return params.includedAssets.some((asset) => isPathInside(asset.sourcePath, canonical));
-    };
-    const home = resolveHomeDir();
-    if (params.preferHomeOutput && home && !(await insideSource(path.resolve(home)))) {
-      return path.resolve(home, basename);
-    }
-    const cwd = path.resolve(process.cwd());
-    const defaultDir = (await insideSource(cwd)) ? (home ?? path.dirname(params.stateDir)) : cwd;
-    return path.resolve(defaultDir, basename);
-  }
-
-  const resolved = resolveBackupArchivePath(rawOutput, "--output");
-  if (rawOutput.endsWith("/") || rawOutput.endsWith("\\")) {
-    return path.join(resolved, basename);
-  }
-
-  if ((await safeStat(resolved))?.isDirectory()) {
-    return path.join(resolved, basename);
-  }
-
-  return resolved;
-}
 
 type BackupOutputFailurePhase = "parent" | "publication" | "write";
 
@@ -411,7 +370,7 @@ async function createBackupArchiveInScope(
       { config: plan.databaseConfig, selection },
     );
   }
-  const outputPath = await resolveOutputPath({
+  const outputPath = await resolveBackupOutputPath({
     output: opts.output,
     nowMs,
     includedAssets: plan.included,
