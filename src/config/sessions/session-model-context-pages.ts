@@ -36,7 +36,7 @@ export function modelContextPageWriteScope(
   };
 }
 
-type ModelContextNavigationRow = {
+export type ModelContextNavigationRow = {
   entry: ContextEntry;
   bytes: number;
   withoutCheckpointBytes: number;
@@ -207,6 +207,9 @@ export function readModelContextNavigationPages(params: {
   through: number;
   anchorId?: string;
   maxEvents?: number;
+  readCompacted?: () =>
+    | { rows: Map<number, ModelContextNavigationRow>; entries: ContextEntry[] }
+    | undefined;
   readRows: (after: number, through: number) => Iterable<ModelContextNavigationRow>;
 }) {
   const { database, sessionId, generation, through, anchorId, maxEvents, readRows } = params;
@@ -309,6 +312,11 @@ export function readModelContextNavigationPages(params: {
         },
       };
     }
+  }
+  const compacted = params.readCompacted?.();
+  if (compacted) {
+    // Partial ancestry has no receipt for discarded-prefix rewrites; do not cache it.
+    return { ...compacted, anchorFound: true, prepared: undefined };
   }
   // Old anchors, branch/reset/compaction or prompt-series restarts and displaced results need
   // canonical ancestry once. The resulting compact state serves subsequent ordinary reads.
