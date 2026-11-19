@@ -1,0 +1,3 @@
+# Exact net regression-test growth: shared closures, same-version patches, cycles,
+# nearest-source shadowing, and future root/bundle slot ownership.
+104

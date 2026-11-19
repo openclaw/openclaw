@@ -76,6 +76,110 @@ async function fixture() {
 }
 
 describe("bundled dependency links", () => {
+  it.each(["shared", "patched", "reserved", "declared", "shadowed"])(
+    "shares complete dependency closures without replacing %s sources",
+    async (mode) => {
+      const f = await fixture();
+      const makePackage = async (
+        name: string,
+        dependencies: Record<string, string>,
+        code: string,
+      ) => {
+        const root = path.join(f.source, "packages", name);
+        await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
+        await f.writeManifest(root, { name, version: "1.0.0", main: "index.js", dependencies });
+        await fs.writeFile(path.join(root, "index.js"), code);
+        return root;
+      };
+      const link = (owner: string, name: string, source: string) =>
+        fs.symlink(source, path.join(owner, "node_modules", name), "junction");
+      const helper = await makePackage(
+        "helper",
+        { leaf: "1.0.0" },
+        'exports.value = "original"; exports.leaf = require("leaf");',
+      );
+      const leaf = await makePackage(
+        "leaf",
+        { helper: "1.0.0" },
+        'module.exports = require.resolve("helper");',
+      );
+      await link(helper, "leaf", leaf);
+      await link(leaf, "helper", helper);
+      const patched = await makePackage(
+        "patched",
+        { leaf: "1.0.0" },
+        'exports.value = "patched"; exports.leaf = require("leaf");',
+      );
+      await f.writeManifest(patched, {
+        name: "helper",
+        version: "1.0.0",
+        main: "index.js",
+        dependencies: { leaf: "1.0.0" },
+      });
+      await link(patched, "leaf", leaf);
+      const second = await makePackage(
+        "second",
+        { helper: "1.0.0" },
+        'module.exports = require("helper");',
+      );
+      const differentSource = mode === "patched" || mode === "shadowed";
+      await link(second, "helper", differentSource ? patched : helper);
+      await link(f.source, "second", second);
+      await fs.mkdir(path.join(f.store, "node_modules"));
+      await link(f.store, "helper", helper);
+      await f.writeManifest(f.store, {
+        name: "fixture-bundle",
+        version: "1.0.0",
+        main: "index.js",
+        dependencies: { helper: "1.0.0" },
+      });
+      await fs.writeFile(path.join(f.store, "index.js"), 'module.exports = require("helper");');
+      const bundles = ["fixture-bundle", "second"];
+      const owners = new Map<string, string>();
+      if (mode === "reserved") {
+        // A later plugin-owned bundle must not replace a dependency hoisted by an earlier one.
+        bundles.push("helper");
+        const plugin = await makePackage("plugin", {}, "");
+        await link(plugin, "helper", patched);
+        owners.set("helper", plugin);
+      }
+      await f.writeManifest(f.packed, {
+        bundleDependencies: bundles,
+        ...(mode === "declared" ? { dependencies: { helper: "1.0.0" } } : {}),
+        ...(mode === "shadowed" ? { optionalDependencies: { leaf: "1.0.0" } } : {}),
+      });
+      await materializeMissingBundledDependencies(f.source, f.packed, PACK_TIMEOUT_MS, owners);
+      const load = (name: string) => createRequire(path.join(f.packed, "package.json"))(name);
+      expect(load("fixture-bundle").value).toBe("original");
+      expect(load("second").value).toBe(differentSource ? "patched" : "original");
+      const rootHelper = path.join(f.packed, "node_modules/helper");
+      if (mode === "reserved") {
+        expect(load("helper").value).toBe("patched");
+      } else if (mode === "declared") {
+        await expect(fs.lstat(rootHelper)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        expect(load("fixture-bundle").leaf).toBe(path.join(rootHelper, "index.js"));
+        await expect(
+          fs.lstat(path.join(f.destination, "node_modules/helper")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      if (mode === "shadowed") {
+        // A nearer same-version patch must not satisfy the leaf needing original bytes.
+        const original = path.join(
+          f.packed,
+          "node_modules/second/node_modules/helper/node_modules/leaf/node_modules/helper/index.js",
+        );
+        expect(load("second").leaf).toBe(original);
+        expect(createRequire(path.join(f.packed, "package.json"))(original).value).toBe("original");
+      }
+      if (mode === "shared") {
+        await expect(
+          fs.lstat(path.join(f.packed, "node_modules/second/node_modules/helper")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    },
+  );
+
   it.each([true, false])(
     "respects publishable file selection with files allowlist=%s",
     async (allowlist) => {

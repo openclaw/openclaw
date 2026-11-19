@@ -5,7 +5,6 @@ import { listDirectoryTreeStrict } from "../../src/infra/directory-walk.ts";
 import { collectNpmPackInventory } from "./npm-pack-inventory.mts";
 import { listBundleDependencies } from "./package-bundle-dependencies.mts";
 import {
-  hasInstalledPackageAncestor,
   installedPackageDependencies,
   installedPackagePath,
   validateBundledPackageName,
@@ -13,6 +12,12 @@ import {
 import { isRecord } from "./record-shared.mjs";
 
 const PNPM_STORE = "node_modules/.pnpm";
+
+type PackagePlacements = {
+  modules: string;
+  reserved: ReadonlySet<string>;
+  completed: Map<string, string>;
+};
 
 export async function hasMissingBundledDependencies(tarballPath: string): Promise<boolean> {
   const entries = new Set<string>();
@@ -86,6 +91,7 @@ async function stagePackage(
   destination: string,
   timeoutMs: number,
   ancestors: ReadonlyMap<string, string>,
+  placements: PackagePlacements,
 ): Promise<void> {
   const original = await fs.lstat(packagePath);
   const source = await fs.realpath(packagePath);
@@ -137,22 +143,34 @@ async function stagePackage(
     }
     const staged = new Map(ancestors).set(destination, source);
     for (const dependency of await installedPackageDependencies(source, packageJson)) {
-      // A cycle can use an already staged ancestor through ordinary Node resolution.
-      if (hasInstalledPackageAncestor(destination, dependency, staged)) {
+      const resolved = await installedPackagePath(destination, dependency.name);
+      // Ignore the packer's installation outside the private archive. Unknown packed
+      // bytes and nearer conflicting sources must shadow outer matches.
+      const nearest = resolved?.startsWith(`${placements.modules}${path.sep}`)
+        ? resolved
+        : undefined;
+      const placedSource = nearest && (staged.get(nearest) ?? placements.completed.get(nearest));
+      // Only a complete closure can be shared across branches. Active ancestors are
+      // also usable for cycles, because they resolve through this same call stack.
+      if (placedSource === dependency.root) {
         continue;
       }
       const { name } = dependency;
-      const modules = path.join(destination, "node_modules");
+      const rootSlot = path.join(placements.modules, name);
+      const canHoist =
+        !nearest && !placements.reserved.has(name) && !(await lstatIfPresent(rootSlot));
+      const modules = canHoist ? placements.modules : path.join(destination, "node_modules");
       await directory(modules);
       if (name.startsWith("@")) {
         await directory(path.join(modules, name.split("/")[0]!));
       }
-      await stagePackage(dependency.path, path.join(modules, name), timeoutMs, staged);
+      await stagePackage(dependency.path, path.join(modules, name), timeoutMs, staged, placements);
     }
     const current = await fs.lstat(packagePath);
     if (current.dev !== original.dev || current.ino !== original.ino) {
       throw new Error(`Bundled package source changed while packing: ${packagePath}`);
     }
+    placements.completed.set(destination, source);
   } catch (error) {
     try {
       const current = await fs.lstat(destination);
@@ -185,7 +203,25 @@ export async function materializeMissingBundledDependencies(
     await fs.readFile(path.join(packedRoot, "package.json"), "utf8"),
   );
   let changed = false;
-  for (const name of new Set(listBundleDependencies(manifest))) {
+  const bundles = new Set(listBundleDependencies(manifest));
+  const reserved = new Set(bundles);
+  // Later bundles and root-installed dependencies own their slots even before
+  // they exist. Never let an earlier closure claim or later replace those bytes.
+  if (isRecord(manifest)) {
+    for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+      if (isRecord(manifest[field])) {
+        for (const name of Object.keys(manifest[field])) {
+          reserved.add(name);
+        }
+      }
+    }
+  }
+  const placements: PackagePlacements = {
+    modules: path.join(packedRoot, "node_modules"),
+    reserved,
+    completed: new Map(),
+  };
+  for (const name of bundles) {
     validateBundledPackageName(name);
     const modules = path.join(packedRoot, "node_modules");
     await directory(modules);
@@ -214,7 +250,7 @@ export async function materializeMissingBundledDependencies(
     if (!owner && !(await fs.lstat(packagePath)).isSymbolicLink()) {
       throw new Error(`Packed bundle is missing from a materialized source: ${packagePath}`);
     }
-    await stagePackage(packagePath, destination, timeoutMs, new Map());
+    await stagePackage(packagePath, destination, timeoutMs, new Map(), placements);
     changed = true;
   }
   const store = path.join(packedRoot, PNPM_STORE);
