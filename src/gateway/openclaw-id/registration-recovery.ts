@@ -64,7 +64,7 @@ export async function reconcileRegistration(
         : {
             state: "failed",
             code: "claw_changed",
-            message: "this claw changed before its registration was sent",
+            message: "this claw was unlinked, so its registration was not sent",
             retryable: false,
           };
     }
