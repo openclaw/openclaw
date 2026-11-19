@@ -18,6 +18,7 @@ Use the commands below for the suite you need:
 - Full suite: `pnpm test`; higher worker cap: `pnpm test:max`
 - Informational coverage: `pnpm test:coverage`
 - E2E: `pnpm test:e2e`
+- Opt-in [incident replay trial](/help/testing/incident-replay): `pnpm test:incident-replay`
 - Docker QA site: `pnpm qa:lab:up`
 - Linux VM QA: `pnpm openclaw qa suite --runner multipass --scenario channel-chat-baseline`
 

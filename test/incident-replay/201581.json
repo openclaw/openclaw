@@ -1,0 +1,12 @@
+{
+  "issue": "https://github.com/openclaw/openclaw/issues/201581",
+  "repair": "https://github.com/openclaw/openclaw/pull/197265",
+  "frozenAt": "2026-11-19T13:10:27.097Z",
+  "originalScenarioHash": "091b542529a12468d64d06ff4fc4ee307ed0ed6bdfc0a99f6cbbb9f91c64b8f2",
+  "scenarioHash": "0abf362ef1941b83ffb5fee7dda8f50abf13cb626b040a63389be7f70c7f913c",
+  "preFix": "7154e4efb11bf33fdd7b9fc4ccbe3333f0bcf585",
+  "fix": "e89431f17eec09cf12a93a20765e4e89cf258be1",
+  "report": "An ordinary Error thrown by a feature operation loses its user-facing message in plugins.sessionAction. Invoke a feature operation that throws Error(\"Choose a project first.\"); the caller must receive that message instead of only \"plugin session action failed\". A successful sibling operation qualifies feature dispatch.",
+  "provenance": "Behavior written from the original issue before repair inspection. Public SDK construction documentation used to build the fixture. Executable frozen before reading the repair PR. Promotion preserves all frozen inputs and assertions. Only required braces and error/cleanup reporting changed: cleanup no longer overwrites the original failure. The final executable is requalified on both exact revisions.",
+  "scope": "One isolated built-Gateway RPC scenario. No UI, reconnect, cancellation, restart, or live-provider claim."
+}

@@ -34,6 +34,9 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "scripts/incident-replay.mts!",
+  // The opt-in runner stages this exact scenario for the canonical E2E runner.
+  "test/incident-replay-201581.scenario.ts",
   "scripts/perf/isolated-completion-registry-measure.ts!",
   "scripts/perf/audit-retention-fixture.mjs!",
   "scripts/perf/file-log-main-thread-measure.mjs!",
