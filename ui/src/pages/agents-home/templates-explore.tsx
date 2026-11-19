@@ -29,7 +29,7 @@ import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { PluginsHubHeader } from "../plugins/plugins-hub-header.tsx";
 import { pluginsHubPanel } from "../plugins/plugins-hub.ts";
-import { preloadTemplateArtwork, TemplateArtwork } from "./template-artwork.tsx";
+import { TemplateArtwork } from "./template-artwork.tsx";
 import { TemplateUpload } from "./template-upload.tsx";
 import "../../styles/templates-catalog.css";
 import "../../styles/carapace-control-ui.css";
@@ -37,6 +37,7 @@ import "../../styles/plugins.css";
 import {
   readTemplatesOverview,
   searchTemplates,
+  TEMPLATE_SEARCH_PAGE_SIZE,
   type TemplateCatalogEntry,
 } from "./templates-catalog-client.ts";
 
@@ -60,26 +61,15 @@ const templateCategories = [
   ["other", "templatesCatalog.categoryOther", "shapes"],
 ] as const satisfies readonly (readonly [string, string, IconName])[];
 const SECTION_SIZE = 4;
-// Enough placeholders and decoded artwork to cover a tall first screen.
 const SKELETON_SECTIONS = 4;
-const FIRST_SCREEN_SIZE = 24;
 type TemplateCategory = (typeof templateCategories)[number];
 type TemplateSection = { category: TemplateCategory; entries: TemplateCatalogEntry[] };
 type TemplateCatalog = {
+  nextCursor?: string | null;
   entries: TemplateCatalogEntry[];
   featured: TemplateCatalogEntry[];
   sections: TemplateSection[];
 };
-
-function firstScreenArtwork(catalog: TemplateCatalog): string[] {
-  const entries = [
-    ...catalog.featured,
-    ...catalog.sections.flatMap((section) => section.entries),
-    ...catalog.entries,
-  ];
-  const urls = new Set(entries.flatMap((entry) => (entry.iconUrl ? [entry.iconUrl] : [])));
-  return [...urls].slice(0, FIRST_SCREEN_SIZE);
-}
 
 type TemplateAddProps = {
   onAdd: (entry: TemplateCatalogEntry) => void;
@@ -172,7 +162,7 @@ function TemplateCatalogSkeleton(props: { overview: boolean }) {
               <h2 style={{ width: "120px", ...placeholderBar("100%") }}>{"\u00a0"}</h2>
             </header>
             <div class="plugin-catalog-grid">
-              <Repeat count={props.overview ? SECTION_SIZE : FIRST_SCREEN_SIZE}>
+              <Repeat count={props.overview ? SECTION_SIZE : TEMPLATE_SEARCH_PAGE_SIZE}>
                 {() => (
                   <div class="agents-home__template-card oc-card" data-templates-placeholder>
                     <div class="agents-home__template-head">
@@ -214,6 +204,7 @@ export function TemplatesExplore(
     scope: GatewayConnectionScope;
     query: string;
     category: string;
+    cursors: readonly string[];
     ready?: Promise<void>;
     isCurrent: () => boolean;
   }>();
@@ -241,7 +232,11 @@ export function TemplatesExplore(
   });
   onSettled(() => () => cancelSearch());
 
-  function loadCatalog(category = view.category, query = view.query, delay = 0) {
+  function loadCatalog(
+    category = view.category,
+    query = view.query,
+    { delay = 0, cursors = [] }: { delay?: number; cursors?: readonly string[] } = {},
+  ) {
     cancelSearch();
     const scope = gateway.capture();
     if (!scope || !canSearch()) {
@@ -254,6 +249,7 @@ export function TemplatesExplore(
       scope,
       query,
       category,
+      cursors,
       ready,
       isCurrent: () =>
         !isCancelled() &&
@@ -266,7 +262,7 @@ export function TemplatesExplore(
     setView((draft) => {
       draft.query = query;
     });
-    loadCatalog(view.category, query, 150);
+    loadCatalog(view.category, query, { delay: 150 });
   }
 
   function selectCategory(category: string) {
@@ -342,73 +338,68 @@ export function TemplatesExplore(
                     if (!current.isCurrent()) {
                       return { entries: [], featured: [], sections: [] };
                     }
-                    if (overview) {
-                      const catalog = await readTemplatesOverview(
-                        current.scope.client,
-                        SECTION_SIZE,
-                      );
-                      if (!current.isCurrent()) {
-                        return { entries: [], featured: [], sections: [] };
-                      }
-                      if (catalog) {
-                        return {
-                          entries: [],
-                          featured: catalog.featured,
-                          sections: templateCategories.slice(1).flatMap((category) => {
-                            const entries = catalog.sections.find(
-                              (section) => section.category === category[0],
-                            )?.entries;
-                            return entries?.length ? [{ category, entries }] : [];
-                          }),
-                        };
-                      }
+                    if (!overview) {
+                      const page = await searchTemplates(current.scope.client, current.query, {
+                        category: current.category || undefined,
+                        cursor: current.cursors.at(-1),
+                      });
+                      return { ...page, featured: [], sections: [] };
                     }
-                    const [entries, featured, sections] = await Promise.all([
-                      overview
-                        ? Promise.resolve([])
-                        : searchTemplates(current.scope.client, current.query, undefined, {
-                            category: current.category || undefined,
-                          }),
-                      overview
-                        ? searchTemplates(current.scope.client, "", SECTION_SIZE, {
-                            featured: true,
-                          })
-                        : Promise.resolve([]),
-                      overview
-                        ? Promise.all(
-                            templateCategories
-                              .slice(1)
-                              .map(async (category): Promise<TemplateSection> => ({
-                                category,
-                                entries: await searchTemplates(
-                                  current.scope.client,
-                                  "",
-                                  SECTION_SIZE,
-                                  {
-                                    category: category[0],
-                                  },
-                                ),
-                              })),
-                          )
-                        : Promise.resolve([]),
+                    const catalog = await readTemplatesOverview(current.scope.client, SECTION_SIZE);
+                    if (!current.isCurrent()) {
+                      return { entries: [], featured: [], sections: [] };
+                    }
+                    if (catalog) {
+                      return {
+                        entries: [],
+                        featured: catalog.featured,
+                        sections: templateCategories.slice(1).flatMap((category) => {
+                          const entries = catalog.sections.find(
+                            (section) => section.category === category[0],
+                          )?.entries;
+                          return entries?.length ? [{ category, entries }] : [];
+                        }),
+                      };
+                    }
+                    // An incomplete upstream overview retains its legacy shelves.
+                    const [featured, sections] = await Promise.all([
+                      searchTemplates(current.scope.client, "", {
+                        limit: SECTION_SIZE,
+                        featured: true,
+                      }),
+                      Promise.all(
+                        templateCategories.slice(1).map(async (category) => ({
+                          category,
+                          entries: (
+                            await searchTemplates(current.scope.client, "", {
+                              limit: SECTION_SIZE,
+                              category: category[0],
+                            })
+                          ).entries,
+                        })),
+                      ),
                     ]);
                     return {
-                      entries,
-                      featured,
+                      entries: [],
+                      featured: featured.entries,
                       sections: sections.filter((section) => section.entries.length > 0),
                     };
                   };
-                  const result = createMemo(async () => {
-                    const catalog = await readCatalog();
-                    await preloadTemplateArtwork(firstScreenArtwork(catalog));
-                    return catalog;
-                  });
+                  const result = createMemo(readCatalog);
                   return (
                     <Errored
                       fallback={(error) => (
                         <InlineAlert tone="danger" role="alert">
                           {formatUiError(error(), t("templatesCatalog.unavailable"))}
-                          <button type="button" class="btn btn--sm" onClick={() => loadCatalog()}>
+                          <button
+                            type="button"
+                            class="btn btn--sm"
+                            onClick={() =>
+                              loadCatalog(current.category, current.query, {
+                                cursors: current.cursors,
+                              })
+                            }
+                          >
                             {t("templatesCatalog.retry")}
                           </button>
                         </InlineAlert>
@@ -514,6 +505,40 @@ export function TemplatesExplore(
                               </For>
                             </div>
                           </CatalogDiscoverySection>
+                        </Show>
+                        <Show
+                          when={!overview && (current.cursors.length > 0 || result().nextCursor)}
+                        >
+                          <nav
+                            class="data-table-pagination__controls"
+                            aria-label={t("templatesCatalog.results")}
+                          >
+                            <button
+                              type="button"
+                              disabled={current.cursors.length === 0}
+                              onClick={() =>
+                                loadCatalog(current.category, current.query, {
+                                  cursors: current.cursors.slice(0, -1),
+                                })
+                              }
+                            >
+                              {t("common.previous")}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={!result().nextCursor}
+                              onClick={() => {
+                                const next = result().nextCursor;
+                                if (next) {
+                                  loadCatalog(current.category, current.query, {
+                                    cursors: [...current.cursors, next],
+                                  });
+                                }
+                              }}
+                            >
+                              {t("common.next")}
+                            </button>
+                          </nav>
                         </Show>
                       </Loading>
                     </Errored>

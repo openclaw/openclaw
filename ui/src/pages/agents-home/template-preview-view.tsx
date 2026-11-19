@@ -265,7 +265,8 @@ export function TemplatePreviewView(props: { view: TemplatesCatalogViewProps }) 
                           >
                             <TemplateWorkspaceFiles
                               files={contents()!.instructions}
-                              onOpen={(name) => (name ? open(name) : setAllFiles(true))}
+                              onOpen={open}
+                              onViewAll={() => setAllFiles(true)}
                             />
                           </Show>
                         </Show>

@@ -1,4 +1,4 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { Tooltip } from "../../components/solid/tooltip.tsx";
@@ -11,9 +11,13 @@ registerEnglishCatalog(registerTemplatesEnglish);
 
 export function TemplateWorkspaceFiles(props: {
   files: TemplateCatalogDetail["contents"]["instructions"];
-  onOpen: (name?: string) => void;
+  onOpen: (name: string) => void;
+  onViewAll?: () => void;
 }) {
-  const documents = createMemo(() => props.files.filter((file) => agentDocuments.has(file.name)));
+  const [expanded, setExpanded] = createSignal(false);
+  const documents = createMemo(() =>
+    expanded() ? props.files : props.files.filter((file) => agentDocuments.has(file.name)),
+  );
   const orderedFiles = createMemo(() => {
     const preferred = ["SOUL.md", "AGENTS.md"].flatMap((name) =>
       documents().filter((file) => file.name === name),
@@ -75,7 +79,7 @@ export function TemplateWorkspaceFiles(props: {
                 <button
                   type="button"
                   class="templates-workspace-file__open"
-                  onClick={() => props.onOpen()}
+                  onClick={() => (props.onViewAll ? props.onViewAll() : setExpanded(true))}
                 >
                   <span class="settings-row__title oc-settings-row-title">
                     {t("templatesCatalog.viewAll")}

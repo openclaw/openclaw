@@ -2,6 +2,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { TemplateWorkspaceFiles } from "./templates-workspace-files.tsx";
 
 describe("Template workspace file roles", () => {
@@ -56,7 +57,11 @@ describe("Template workspace file roles", () => {
     ));
     expect(view.queryAllByRole("button")).toHaveLength(1);
     view.getByRole("button", { name: "View all" }).click();
-    expect(onOpen).toHaveBeenCalledExactlyOnceWith();
+    flush();
+    expect(onOpen).not.toHaveBeenCalled();
+    for (const name of names) {
+      expect(view.getByRole("button", { name, exact: true })).toBeTruthy();
+    }
     expect(view.container.querySelector(".plugin-capability__icon svg")).not.toBeNull();
     expect(view.container.querySelector(".settings-row__chevron svg")).not.toBeNull();
     view.unmount();
