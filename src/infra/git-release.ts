@@ -220,10 +220,17 @@ async function isCheckoutServingCommit(
   return Boolean(checkout && (await readBuiltRuntimeCommit(checkout)) === commit);
 }
 
-/** Present and intact: its runtime artifacts verify against the commit it was built from. */
+/**
+ * Present and intact: its runtime artifacts verify against the commit it was built from,
+ * and the entry the launcher imports (`dist/index.js`) is there.
+ */
 export async function verifiesAsGitRelease(root: string): Promise<boolean> {
-  return (await verifyGitUpdateRecovery({ root, sha: await readReleaseHead(root) }))
-    .serviceRestartSafe;
+  const verified = await verifyGitUpdateRecovery({ root, sha: await readReleaseHead(root) });
+  const entry = await fs.access(path.join(root, "dist", "index.js")).then(
+    () => true,
+    () => false,
+  );
+  return verified.serviceRestartSafe && entry;
 }
 
 /** A verified release built from `commit`, other than `exclude`, if one is on disk. */

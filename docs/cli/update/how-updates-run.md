@@ -1611,7 +1611,8 @@ serve (see below), the next plain `openclaw update` builds on it:
 - If the target is newer, the link goes back to the serving release. The new release
   goes on trial with the serving release as its fallback. The superseded release stays
   on disk, because an `openclaw` started through the link may be running from it; release
-  collection removes it once it has been deselected for 24 hours.
+  collection in a later update that publishes a release removes it once it has been
+  deselected for 24 hours.
 - If the serving release is the target, the update runs the candidate checks on it and the
   caller's mutation check, puts the link back on the serving release, and reports that the
   installation is current. If the placed release started or ended its trial meanwhile, the
@@ -1634,8 +1635,8 @@ that commit. Every Gateway that runs from a release first takes a lease under
 `releases/.leases/`, and that directory stays, so any lease directory there means the
 checkout's build no longer shows what serves. Nothing on disk records that a release's
 trial passed, and a lease is taken before the Gateway is ready, so neither shows which
-release served. With that evidence, a fallback must be present and its build must
-verify against its commit. If it is incomplete, the update rebuilds that commit as a new
+release served. With that evidence, a fallback must be present, its build must verify
+against its commit, and it must have the `dist/index.js` the launcher loads. If it is incomplete, the update rebuilds that commit as a new
 release. It switches to the rebuilt release only at the normal switch point, after the
 target passed its checks. A later attempt reuses that rebuild instead of building another
 copy.

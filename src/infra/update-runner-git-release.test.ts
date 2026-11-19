@@ -54,6 +54,8 @@ vi.mock("./update-runner-git-preflight.js", () => ({
       params.release.worktreeDir,
       params.targetRevision,
     );
+    await fs.mkdir(path.join(params.release.worktreeDir, "dist"));
+    await fs.writeFile(path.join(params.release.worktreeDir, "dist", "index.js"), "");
     return { status: "ok", candidateSha: params.targetRevision };
   },
 }));
@@ -407,7 +409,6 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
       expect(result.before).toMatchObject({ sha: install.commits["1.0.0"], version: "1.0.0" });
       const candidate = await fs.realpath(install.slot);
       expect(await install.readTrial()).toEqual({ target: candidate, previous: install.serving });
-      // An updater started through the link runs from it; only collection retires it.
       expect(await install.releaseCount()).toBe(3);
 
       await fs.mkdir(path.join(candidate, "dist"));
@@ -437,8 +438,8 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     try {
       const result = await install.update(install.commits["3.0.0"]!);
 
-      // The launcher owns a started trial's state rollback; nothing here removes or re-arms it.
-      await expect(fs.access(install.unserved)).resolves.toBeUndefined();
+      // The launcher owns a started trial's state rollback: the next trial falls back to it.
+      expect((await install.readTrial()).previous).toBe(install.unserved);
       expect(result.steps.some((entry) => entry.name === "git-release-placement")).toBe(false);
     } finally {
       release();
@@ -501,22 +502,24 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   });
 
   it.each([
-    ["", false],
-    [" under a linked state directory", true],
-  ])(
-    "rebuilds the serving commit as the fallback when it does not verify%s",
-    async (_l, linkedState) => {
-      const install = await halfSwitchedInstall({ linkedState });
+    ["does not verify", false],
+    ["does not verify under a linked state directory", true],
+    ["lacks the launcher's entry", false],
+  ])("rebuilds the serving commit as the fallback when it %s", async (label, linkedState) => {
+    const install = await halfSwitchedInstall({ linkedState });
+    if (label.startsWith("lacks")) {
+      await fs.rm(path.join(install.serving, "dist", "index.js"));
+    } else {
       target.broken.push(install.serving);
+    }
 
-      await install.update(install.commits["3.0.0"]!);
+    await install.update(install.commits["3.0.0"]!);
 
-      expect(target.conversionTargets).toEqual([install.commits["1.0.0"]]);
-      const { previous } = await install.readTrial();
-      expect([install.serving, install.unserved]).not.toContain(previous);
-      expect(await readPackageVersion(previous)).toBe("1.0.0");
-    },
-  );
+    expect(target.conversionTargets).toEqual([install.commits["1.0.0"]]);
+    const { previous } = await install.readTrial();
+    expect([install.serving, install.unserved]).not.toContain(previous);
+    expect(await readPackageVersion(previous)).toBe("1.0.0");
+  });
 
   it.each([
     ["a newer target", "3.0.0"],
@@ -626,7 +629,6 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     const own = path.join(prefix, "releases", path.basename(release), "lib/node_modules/openclaw");
     const collect = (runningRoot: string | null) =>
       collectGitReleases({ prefix, keep: [], prune: async () => {}, runningRoot });
-    // An updater started through the link while it named the release runs from it.
     expect((await collect(own)).removed).toEqual([]);
     expect((await collect(null)).removed).toHaveLength(1);
     await expect(fs.access(install.unserved)).rejects.toThrow();
@@ -635,9 +637,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   it("does not report the serving target current once the placed release ends its trial", async () => {
     const install = await halfSwitchedInstall();
     target.duringValidation = () => fs.rm(install.trialFile);
-
     const result = await install.update(install.commits["1.0.0"]!);
-
     expect(result).toMatchObject({ status: "error", reason: "git-release-selection-changed" });
     expect(await fs.realpath(install.slot)).toBe(install.unserved);
   });

@@ -288,7 +288,7 @@ export async function updateGitRelease(params: {
     const superseded = await supersedeUnservedGitRelease({ prefix, placement });
     await reportPlacement(
       superseded
-        ? "The link is back on the fallback; release collection removes the placed release once it has been deselected for 24 hours."
+        ? "The link is back on the fallback; the release collection of a later update that publishes a release removes the placed release once it has been deselected for 24 hours."
         : "It started or ended its trial during this update, so the link and trial stay with the launcher.",
     );
     return superseded;
@@ -336,10 +336,7 @@ export async function updateGitRelease(params: {
             }),
           )
         : undefined;
-    const verified =
-      rebuilt?.status === "ok" &&
-      (await verifyGitUpdateRecovery({ root: rebuilt.releaseRoot, sha: rebuilt.candidateSha }))
-        .serviceRestartSafe;
+    const verified = rebuilt?.status === "ok" && (await verifiesAsGitRelease(rebuilt.releaseRoot));
     if (!verified || rebuilt?.status !== "ok") {
       if (rebuilt?.status === "ok" && !earlier) {
         await fs.rm(path.resolve(rebuilt.releaseRoot, "../../.."), {
