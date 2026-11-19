@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 import { writeGitReleaseLauncher } from "./git-release-launcher.js";
 import {
   GIT_RELEASE_TRIAL,
@@ -47,6 +48,28 @@ const startGateway = (prefix: string, env: NodeJS.ProcessEnv = {}) =>
 describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
   "git releases",
   () => {
+    it("loads a bundled plugin's source contract from the selected release (#201874)", async () => {
+      const { prefix } = await setup();
+      const root = (await createGitReleaseDirs(prefix)).releaseRoot;
+      // A release is a worktree of the checkout: bundled plugins keep their TypeScript sources.
+      await fs.cp(
+        fileURLToPath(new URL("../../extensions/deepseek", import.meta.url)),
+        path.join(root, "extensions", "deepseek"),
+        { recursive: true, filter: (source) => path.basename(source) !== "node_modules" },
+      );
+      await publishGitRelease({ prefix, releaseRoot: root, trial: false });
+
+      // The Gateway names its root by the release link, as the MCP web-search request does.
+      const contract = loadPluginPublicArtifactModuleSync<{
+        createDeepSeekWebSearchProvider: unknown;
+      }>({
+        pluginRoot: path.join(gitReleaseSlot(prefix), "extensions", "deepseek"),
+        artifactBasename: "web-search-contract-api.js",
+        origin: "bundled",
+      });
+      expect(contract.createDeepSeekWebSearchProvider).toBeTypeOf("function");
+    });
+
     it("switches back and restores upgraded state after two failed trial starts", async () => {
       const { stateDir, prefix } = await setup();
       const good = await release(prefix, "1.0.0", 'console.log("old " + process.argv[1]);\n');

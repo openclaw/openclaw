@@ -4,11 +4,7 @@ import path from "node:path";
 import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { readPackageReleaseLeases, packageReleaseLeaseDir } from "./package-release-lease.js";
-import {
-  PACKAGE_RELEASES_DIR,
-  packageReleaseGlobalRoot,
-  readPackageReleaseSlotSync,
-} from "./package-release-slot-path.js";
+import { PACKAGE_RELEASES_DIR, readPackageReleaseSlotSync } from "./package-release-slot-path.js";
 import { readPackageReleaseIdentity, type PackageReleaseIdentity } from "./package-release-slot.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 
@@ -35,10 +31,7 @@ export async function listPackageReleases(slot: string): Promise<PackageReleaseE
     if (id.startsWith(".")) {
       continue;
     }
-    const root = path.join(
-      packageReleaseGlobalRoot(path.join(releasesDir, id)),
-      path.basename(slot),
-    );
+    const root = path.join(releasesDir, id, path.relative(selected.prefix, selected.slot));
     const identity = await readPackageReleaseIdentity(root).catch(() => null);
     const stat = await fs.stat(path.join(releasesDir, id)).catch(() => null);
     if (!identity || !stat) {
@@ -112,7 +105,7 @@ export async function collectPackageReleases(params: {
       continue;
     }
     const releasePrefix = path.join(releasesDir, id);
-    const root = path.join(packageReleaseGlobalRoot(releasePrefix), path.basename(selected.slot));
+    const root = path.join(releasePrefix, path.relative(selected.prefix, selected.slot));
     const stat = await fs.lstat(releasePrefix).catch(ignoreMissingPath);
     const leases = readPackageReleaseLeases(selected.prefix, id);
     if (
