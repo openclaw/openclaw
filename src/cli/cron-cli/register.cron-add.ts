@@ -19,6 +19,7 @@ import {
 } from "./register.cron-options.js";
 import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
+  callCronReadFromCli,
   assertCronCliJobSpec,
   assertCronTimeoutSupported,
   coerceCronDeliveryPreviews,
@@ -44,7 +45,7 @@ export function registerCronStatusCommand(cron: Command) {
       .description("Show automations scheduler status")
       .action(async (opts) => {
         try {
-          const res = await callGatewayFromCli("cron.status", opts, {});
+          const res = await callCronReadFromCli("cron.status", opts, {});
           printCronJson(res);
         } catch (err) {
           handleCronCliError(err);

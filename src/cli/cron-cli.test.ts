@@ -295,6 +295,7 @@ it("bounds oversized poll intervals by the wait timeout", async () => {
   expectRuntimeErrorContaining("timed out waiting for cron run");
 });
 
+<<<<<<< HEAD
 const interruptPhases = [
   "sleep",
   "request",
@@ -303,6 +304,10 @@ const interruptPhases = [
   "cron show job-1",
   "cron edit job-1 --pacing-min 1s",
 ];
+=======
+const reads = ["list", "show job-1", "status", "get job-1", "runs job-1", "scratch job-1"];
+const interruptPhases = ["sleep", "request", "completion", ...reads.map((c) => `cron ${c}`)];
+>>>>>>> c4b2eb5f7ae9 (fix(cron): cancel interrupted status and history reads)
 it.each(interruptPhases)("cancels cron %s", async (phase) => {
   vi.useFakeTimers();
   resetGatewayMock();
