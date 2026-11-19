@@ -9,7 +9,10 @@ import { ensureGatewayOwnerProfile } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { prepareRestartCompletionCustody } from "./session-restart-resume-custody.js";
-import { prepareRestartStores } from "./session-restart-resume-discovery.js";
+import {
+  discoverRestartSessionStores,
+  prepareRestartStores,
+} from "./session-restart-resume-discovery.js";
 
 it("recovers an owed completion after its requester has already settled", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -123,4 +126,36 @@ it.for(["archived", "replaced", "reset"] as const)(
         subagentRuns.delete(child.runId);
       }
     }),
+);
+
+it.for(["default", "explicit"] as const)(
+  "retains the captured %s environment for discovered restart stores",
+  (mode) =>
+    withOpenClawTestState(
+      { scenario: "minimal", env: { OPENCLAW_RESTART_CAPTURE_TEST: "captured" } },
+      async () => {
+        setRuntimeConfigSnapshot({});
+        const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+        replaceSessionEntrySync(
+          { agentId: "main", storePath, sessionKey: "agent:main:restart-env" },
+          { sessionId: "restart-env", updatedAt: 1 },
+        );
+        const supplied = mode === "explicit" ? { ...process.env } : undefined;
+        const discovering = discoverRestartSessionStores(
+          {
+            context: createContext(),
+            signal: new AbortController().signal,
+            log: { warn: vi.fn() },
+          },
+          supplied,
+        );
+        (supplied ?? process.env).OPENCLAW_RESTART_CAPTURE_TEST = "changed-after-capture";
+        const targets = await discovering;
+        expect(targets.length).toBeGreaterThan(0);
+        for (const target of targets) {
+          expect(target.env?.OPENCLAW_RESTART_CAPTURE_TEST).toBe("captured");
+          expect(target.env).not.toBe(supplied ?? process.env);
+        }
+      },
+    ),
 );
