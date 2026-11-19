@@ -142,35 +142,44 @@ export async function shareAgentAsTemplate(context: ApplicationContext, agentId:
       hello: context.gateway.snapshot.hello,
     }),
   });
-  try {
-    await client.request("chat.send", {
-      sessionKey,
-      ...(isUiGlobalSessionKey(sessionKey) ? { agentId } : {}),
-      message: t("agentChip.shareTemplatePrompt"),
-      deliver: false,
-      idempotencyKey: generateUUID(),
-    });
-  } catch (error) {
-    if (context.gateway.snapshot.client === client) {
-      showToast({
-        severity: "error",
-        message: formatUiError(error),
-        actionLabel: t("common.retry"),
-        onAction: () => void shareAgentAsTemplate(context, agentId),
-      });
+  const idempotencyKey = generateUUID();
+  // Retry repeats this request on this connection, so an accepted send is not sent twice.
+  // After the connection is replaced Retry does nothing; Share again starts a new request.
+  const send = async () => {
+    if (context.gateway.snapshot.client !== client) {
+      return;
     }
-    return;
-  }
-  if (context.gateway.snapshot.client === client) {
-    context.navigate(
-      "chat",
-      sessionNavigationTarget({
-        context,
-        face: "chat",
+    try {
+      await client.request("chat.send", {
         sessionKey,
-        agentId,
-        navigationKey: sessionKey,
-      }).options,
-    );
-  }
+        ...(isUiGlobalSessionKey(sessionKey) ? { agentId } : {}),
+        message: t("agentChip.shareTemplatePrompt"),
+        deliver: false,
+        idempotencyKey,
+      });
+    } catch (error) {
+      if (context.gateway.snapshot.client === client) {
+        showToast({
+          severity: "error",
+          message: formatUiError(error),
+          actionLabel: t("common.retry"),
+          onAction: () => void send(),
+        });
+      }
+      return;
+    }
+    if (context.gateway.snapshot.client === client) {
+      context.navigate(
+        "chat",
+        sessionNavigationTarget({
+          context,
+          face: "chat",
+          sessionKey,
+          agentId,
+          navigationKey: sessionKey,
+        }).options,
+      );
+    }
+  };
+  await send();
 }
