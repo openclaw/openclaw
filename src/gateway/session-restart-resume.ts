@@ -179,7 +179,8 @@ export async function persistRunningSessionsForRestart(params: {
   for (const process of listRunningSessions()) {
     assertCurrent();
     const sessionKey = process.sessionKey ?? process.scopeKey;
-    if (sessionKey) {
+    // Durable processes survive restart; their registry adopts them and wakes on exit.
+    if (sessionKey && !process.durable) {
       add({ sessionKey, agentId: process.agentId, hadBackgroundExec: true });
     }
   }
