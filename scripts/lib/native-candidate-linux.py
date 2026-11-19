@@ -440,7 +440,7 @@ def cleanup(args):
     # must never be mistaken for an already-removed rule.
     iptables("-S", "INPUT")
     resource, bridge, incoming, forwarded = names(data)
-    containers = docker("ps", "--all", "--quiet", "--filter", LABEL + "=" + data["owner"]).stdout.decode().split()
+    containers = docker("ps", "--all", "--quiet", "--filter", "label=" + LABEL + "=" + data["owner"]).stdout.decode().split()
     for container in containers:
         remove_container(container, data["owner"])
     for kind in ("network", "volume"):

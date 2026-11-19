@@ -283,7 +283,8 @@ def profile(candidate, build=False, ports=(), gateway_port=None, proxy_port=None
   (subpath "/usr/bin") (subpath "/bin") (subpath "/Library/Developer")
   (subpath "/Applications/Xcode.app") (subpath "/Library/Apple")
   (literal "/dev/null") (literal "/dev/random") (literal "/dev/urandom")
-  (literal "/private/etc/passwd") (literal "/private/etc/localtime"))
+  (literal "/private/etc/passwd") (literal "/private/etc/localtime")
+  (literal "/private/var/select/sh"))
 ; The system loader reads the directory itself, not its descendants.
 (allow file-read-data (literal "/"))
 (allow file-read-metadata (literal "/") (literal "/private")
@@ -315,6 +316,8 @@ def environment(candidate, home, proxy_port=None):
     # No host npm config, proxy settings, NODE_OPTIONS, tokens, or SSH agents.
     env = {**SYSTEM_ENV, "PATH": f"{candidate}/bin:/usr/bin:/bin:/usr/sbin:/sbin",
             "HOME": str(home), "TMPDIR": str(home / "tmp"), "CI": "1",
+            # pnpm v12 deliberately ignores TMPDIR for store-operation locks.
+            "XDG_RUNTIME_DIR": str(home),
             "npm_config_cache": str(home / "npm-cache"),
             "npm_config_userconfig": str(home / "npmrc"),
             "npm_config_registry": "https://registry.npmjs.org/",
