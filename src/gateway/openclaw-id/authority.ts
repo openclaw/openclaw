@@ -67,6 +67,7 @@ import {
 import { createNodeInviteOperations } from "./node-invites.js";
 import { createRebindOperations } from "./rebind-operations.js";
 import type { OpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
+import { createUnlinkOperations } from "./unlink-operations.js";
 
 /** What the local link ceremony signs for: the claw's identity and keys. */
 export type LinkPreparation = {
@@ -550,6 +551,12 @@ export function createOpenClawIdAuthority(
     ...createNodeInviteOperations({ serialize, load, commit }),
 
     ...createRebindOperations({ serialize, load, commit }),
+    ...createUnlinkOperations({
+      serialize,
+      load,
+      commit,
+      freshRecord: () => emptyRecord(bytesToHex(randomBytes(16))),
+    }),
 
     /** Records an invite redemption from the mailbox as pending (it admits nothing). */
     redeem(

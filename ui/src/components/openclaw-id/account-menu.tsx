@@ -37,6 +37,7 @@ const SIGN_OUT = `${VALUE_PREFIX}sign-out`;
 const COPY_LINK = `${VALUE_PREFIX}copy-link`;
 const MOVE_KEYS = `${VALUE_PREFIX}move-keys`;
 const PUBLISH_KEYS = `${VALUE_PREFIX}publish-keys`;
+const UNLINK = `${VALUE_PREFIX}unlink`;
 
 /** Derives the compact account header without ever displaying an account ID. */
 export function openClawIdMenuIdentity(status: OpenClawIdStatusResult) {
@@ -354,6 +355,12 @@ export function openClawIdMenuEntries(
   if (status.channel === "local_operator" && status.link.linked && openClawIdAccount()) {
     entries.push(...keyAttentionEntries(status, publication));
     entries.push(renderSidebarMenuAction(MOVE_KEYS, t("openclawId.moveToNewKeys"), "key"));
+    // Unlinking signs with this computer's Gateway key; never offered over the tunnel.
+    if (status.status.state !== "keys_refused") {
+      entries.push(
+        renderSidebarMenuAction(UNLINK, t("openclawId.unlinkFromOpenClawId"), "circleX"),
+      );
+    }
   } else if (
     status.remoteAccessSetup === "personal_admin" &&
     status.link.linked &&
@@ -551,6 +558,19 @@ export function selectOpenClawIdMenuValue(
         }
       });
     }
+  } else if (
+    value === UNLINK &&
+    client &&
+    status.channel === "local_operator" &&
+    status.link.linked &&
+    status.link.hostname
+  ) {
+    const hostname = status.link.hostname;
+    openDialog(async () => {
+      if (await (await import("./unlink-dialog.tsx")).showUnlinkDialog({ client, hostname })) {
+        context.onKeysChanged?.();
+      }
+    });
   } else if (value === PUBLISH_KEYS && client) {
     const signedIn = setupSignedIn(status);
     if (signedIn) {

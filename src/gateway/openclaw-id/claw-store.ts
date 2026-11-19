@@ -50,6 +50,17 @@ export type StoredClaw = {
   member_browser_requests?: Record<string, MemberBrowserRequestState>;
   /** Accepted kit-use evidence; retained after kit, browser, and member removal. */
   member_recovery_uses?: MemberRecoveryUse[];
+  /**
+   * Unlinks this computer signed that Discovery has not confirmed yet (pending-unlink.ts sends
+   * them when Discovery is reachable). They belong to earlier claw ids, not to `claw_id`.
+   */
+  pending_unlinks?: Array<{
+    statement: SignedStatement<"ClawUnlink">;
+    /** The unlinked claw's address, for status. */
+    hostname: string;
+    /** The Discovery that held the unlinked claw. */
+    discovery_url: string;
+  }>;
   /** Discovery publication state (a mirror; never authority). */
   discovery: {
     owner_account_id: string | null;
