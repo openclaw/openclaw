@@ -190,7 +190,7 @@ export async function prepareCodexAttemptContext(
     attempt: runtimeParams,
     skillsPrompt: params.skillsSnapshot?.prompt,
     dynamicTools: toolBridge.availableSpecs,
-    remoteWorkspace: Boolean(connection.appServer.remoteWorkspaceRoot),
+    remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
   });
   // This section uses the existing native thread carrier only when there is no
   // managed parent-local inference route; it is separate from immutable policy.

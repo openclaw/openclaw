@@ -15,10 +15,11 @@ import {
 setupRunAttemptTestHooks();
 
 it.each([
-  { label: "remote with skills_read", remote: true, read: true },
-  { label: "remote without skills_read", remote: true, read: false },
-  { label: "local", remote: false, read: false },
-])("lists Gateway-only library skills readably: $label", async ({ remote, read }) => {
+  { label: "remote with skills_read", remote: true, read: true, delivered: false },
+  { label: "remote without skills_read", remote: true, read: false, delivered: false },
+  { label: "remote copy without skills_read", remote: true, read: false, delivered: true },
+  { label: "local", remote: false, read: false, delivered: false },
+])("lists Gateway-only library skills readably: $label", async ({ remote, read, delivered }) => {
   const skill = (name: string, source: string, baseDir: string) => ({
     name,
     description: `${name} instructions`,
@@ -28,12 +29,17 @@ it.each([
     sourceInfo: { source, scope: "temporary", origin: "top-level", path: baseDir } as const,
     disableModelInvocation: false,
   });
+  // A remote-exec placement copies pinned skills into the worker workspace first.
   const library = skill(
     "release-guide",
     "openclaw-library",
-    path.join(tempDir, "state", "skill-library", "id-1", "revisions", "rev-1"),
+    delivered
+      ? "/remote/.skills/0"
+      : path.join(tempDir, "state", "skill-library", "id-1", "revisions", "rev-1"),
   );
-  const shownLibraryPath = "~/.openclaw/skill-library/id-1/revisions/rev-1/SKILL.md";
+  const shownLibraryPath = delivered
+    ? library.filePath
+    : "~/.openclaw/skill-library/id-1/revisions/rev-1/SKILL.md";
   const workspace = skill("lint-guide", "openclaw-workspace", "/remote/workspace/skills/lint");
   const params = createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "ws"));
   setCodexTestModelSupportsTools(params, true);
@@ -58,8 +64,9 @@ it.each([
   );
 
   expect(developer).toContain(workspace.filePath);
-  expect(developer.includes(shownLibraryPath)).toBe(!remote);
+  const rewritten = remote && !delivered;
+  expect(developer.includes(shownLibraryPath)).toBe(!rewritten);
   expect(developer).toContain("<name>release-guide</name>");
-  expect(developer.includes("read it with skills_read by name")).toBe(remote && read);
-  expect(developer.includes("cannot be read on this machine")).toBe(remote && !read);
+  expect(developer.includes("read it with skills_read by name")).toBe(rewritten && read);
+  expect(developer.includes("cannot be read on this machine")).toBe(rewritten && !read);
 });

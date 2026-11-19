@@ -449,12 +449,13 @@ export async function prepareCodexWatchedSessionsContext(params: {
 
 /**
  * Skill Library pins live in the Gateway state directory, which a remote app-server's
- * own file tools cannot open. The catalog arrives rendered (with compacted paths), so
- * entries are matched by name and their location is replaced with a note.
+ * own file tools cannot open; copies already delivered under its workspace root stay.
+ * The catalog arrives rendered (with compacted paths), so entries are matched by name.
  */
 function withoutGatewayOnlySkillLocations(
   prompt: string,
-  skills: readonly { name: string; source: string }[],
+  skills: readonly { name: string; source: string; filePath: string }[],
+  remoteRoot: string,
   readable: boolean,
 ): string {
   const escape = (value: string) =>
@@ -466,7 +467,11 @@ function withoutGatewayOnlySkillLocations(
       .replaceAll("'", "&apos;");
   const names = new Set(
     skills
-      .filter((skill) => skill.source === "openclaw-library")
+      .filter(
+        (skill) =>
+          skill.source === "openclaw-library" &&
+          !skill.filePath.startsWith(`${remoteRoot.replace(/\/+$/u, "")}/`),
+      )
       .map((skill) => `    <name>${escape(skill.name)}</name>`),
   );
   const note = readable
@@ -488,7 +493,7 @@ export function renderCodexSkillsInstructions(params: {
   attempt: EmbeddedRunAttemptParams;
   skillsPrompt?: string;
   dynamicTools?: readonly CodexDynamicToolSpec[];
-  remoteWorkspace?: boolean;
+  remoteWorkspaceRoot?: string;
 }): string | undefined {
   if (!shouldIncludeAgentHarnessRuntimeContext(params.attempt)) {
     return undefined;
@@ -502,10 +507,11 @@ export function renderCodexSkillsInstructions(params: {
   const read = names.has("skills_read");
   const trimmed = params.skillsPrompt?.trim();
   const prompt =
-    trimmed && params.remoteWorkspace
+    trimmed && params.remoteWorkspaceRoot
       ? withoutGatewayOnlySkillLocations(
           trimmed,
           params.attempt.skillsSnapshot?.resolvedSkills ?? [],
+          params.remoteWorkspaceRoot,
           read,
         )
       : trimmed;
