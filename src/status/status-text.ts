@@ -22,14 +22,10 @@ import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveConfiguredThinkingDefault } from "../agents/model-thinking-default.js";
 import { resolveSandboxRuntimeStatusAsync } from "../agents/sandbox/runtime-status.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
-import { getVolitionalCompactionCount } from "../agents/tools/request-compaction-tool.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../agents/tools/sessions-helpers.js";
-import { resolveContinuationRuntimeConfig } from "../auto-reply/continuation/config.js";
-import { stagedPostCompactionDelegateCount } from "../auto-reply/continuation/delegate-store-post-compaction.js";
-import { pendingDelegateCount } from "../auto-reply/continuation/delegate-store.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
@@ -71,13 +67,13 @@ import {
 } from "./codex-synthetic-usage.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 import { readSessionFallbackModelAsync } from "./session-fallback-model.js";
-import { formatStatusTextContinuationLine } from "./status-continuation-line.js";
+import { resolveStatusTextContinuationLine } from "./status-continuation-line.js";
 import type { StatusMessageParts } from "./status-message.js";
 import { createStatusModelResolver } from "./status-model-auth.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
 
-export { formatStatusTextContinuationLine };
+export { formatStatusTextContinuationLine } from "./status-continuation-line.js";
 
 function buildStatusUptimeValue(): string {
   const format = (ms: number) => formatDurationCompact(ms, { spaced: true }) ?? "0s";
@@ -464,22 +460,11 @@ export async function buildStatusReplyParts(
       verboseEnabled,
     });
   }
-  let continuationLine: string | undefined;
-  const continuation = cfg.agents?.defaults?.continuation;
-  if (continuation?.enabled && sessionKey) {
-    const chainCount = sessionEntry?.continuationChainCount ?? 0;
-    const { maxChainLength } = resolveContinuationRuntimeConfig(cfg);
-    const pending = pendingDelegateCount(sessionKey);
-    const staged = stagedPostCompactionDelegateCount(sessionKey);
-    const volitional = getVolitionalCompactionCount(sessionKey);
-    continuationLine = formatStatusTextContinuationLine({
-      maxChainLength,
-      chainCount,
-      pending,
-      staged,
-      volitional,
-    });
-  }
+  const continuationLine = resolveStatusTextContinuationLine(
+    cfg,
+    sessionKey,
+    sessionEntry?.continuationChainCount,
+  );
   const groupActivation = isGroup
     ? (normalizeGroupActivation(sessionEntry?.groupActivation) ?? defaultGroupActivation())
     : undefined;

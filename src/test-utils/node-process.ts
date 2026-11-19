@@ -1,5 +1,6 @@
 // Test helpers for spawning Node processes and asserting their output.
 import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { resolveForwardedNodeCompilerArgs } from "../bootstrap/node-compiler-args.js";
 import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
 
 type NodeEvalArgsOptions = {
@@ -24,6 +25,11 @@ export function resolveTestNodeExecPath(env?: NodeJS.ProcessEnv): string {
     return nodePath;
   }
   throw new Error("Unable to locate a Node executable while running tests under Bun");
+}
+
+/** The runner and the parent's reviewed compiler flags that start an OpenClaw-owned Node child. */
+export function resolveTestNodeCommand(env?: NodeJS.ProcessEnv): string[] {
+  return [resolveTestNodeExecPath(env), ...resolveForwardedNodeCompilerArgs()];
 }
 
 /** Builds node args for ESM eval snippets used by subprocess boundary tests. */

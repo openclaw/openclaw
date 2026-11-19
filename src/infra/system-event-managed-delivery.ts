@@ -190,7 +190,7 @@ export function restore<E extends ManagedEvent>(
   events: readonly E[],
   clone: (event: E) => E,
   maxEvents: number,
-  isWake: (event: E) => boolean,
+  wakePool: WeakSet<E>,
 ): E[] {
   for (const event of events) {
     releaseSystemEventDeliveryAdoption(event, { settled: false });
@@ -212,10 +212,10 @@ export function restore<E extends ManagedEvent>(
   entry.queue.unshift(...restored.map(clone));
   const evicted: E[] = [];
   for (const wake of [false, true]) {
-    let overflow = entry.queue.filter((event) => isWake(event) === wake).length - maxEvents;
+    let overflow = entry.queue.filter((event) => wakePool.has(event) === wake).length - maxEvents;
     if (overflow > 0) {
       entry.queue = entry.queue.filter((event) => {
-        if (overflow > 0 && isWake(event) === wake && !event.sessionDeliveryAckId) {
+        if (overflow > 0 && wakePool.has(event) === wake && !event.sessionDeliveryAckId) {
           overflow -= 1;
           evicted.push(event);
           return false;
@@ -225,4 +225,12 @@ export function restore<E extends ManagedEvent>(
     }
   }
   return evicted;
+}
+
+/** Puts a copy in its original's pool (waking or passive) and returns the copy. */
+export function keepPool<E extends object>(wakePool: WeakSet<E>, original: E, copy: E): E {
+  if (wakePool.has(original)) {
+    wakePool.add(copy);
+  }
+  return copy;
 }

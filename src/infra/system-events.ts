@@ -202,16 +202,12 @@ function getSessionQueue(sessionKey: string): SessionQueue | undefined {
 }
 
 function cloneSystemEvent(event: SystemEvent): SystemEvent {
-  const clone = {
+  // Continuation: a consumed copy keeps its pool, so restoring it cannot move it to the other pool.
+  return managedDelivery.keepPool(wakeEvents, event, {
     ...event,
     ...(event.deliveryContext ? { deliveryContext: { ...event.deliveryContext } } : {}),
     ...(event.recipientAuthority ? { recipientAuthority: { ...event.recipientAuthority } } : {}),
-  };
-  // Continuation: a consumed copy keeps its pool, so restoring it cannot move it to the other pool.
-  if (wakeEvents.has(event)) {
-    wakeEvents.add(clone);
-  }
-  return clone;
+  });
 }
 
 export function isSystemEventContextChanged(
@@ -729,9 +725,7 @@ export function restoreConsumedSystemEventEntries(
   const key = requireSessionKey(sessionKey);
   const entry = getSessionQueue(key) ?? { queue: [], lastContextKey: null };
   retireSystemEvents(
-    managedDelivery.restore(key, entry, events, cloneSystemEvent, MAX_EVENTS, (event) =>
-      wakeEvents.has(event),
-    ),
+    managedDelivery.restore(key, entry, events, cloneSystemEvent, MAX_EVENTS, wakeEvents),
   );
   queues.set(key, entry);
   resetQueueState(key, entry);

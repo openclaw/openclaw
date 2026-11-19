@@ -117,10 +117,7 @@ import {
   migrateAgentPendingInputEndingsInTransaction,
 } from "./openclaw-agent-pending-input-endings-schema.js";
 import { interruptHistoricalPendingInputs } from "./openclaw-agent-pending-inputs-schema.js";
-import {
-  AGENT_RECIPIENT_AUTHORITY_SCHEMA_VERSION,
-  withoutSessionRecipientAuthoritySchema,
-} from "./openclaw-agent-recipient-authority-schema.js";
+import { planRecipientAuthorityStep } from "./openclaw-agent-recipient-authority-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { migrateSessionEntrySnapshotsInTransaction } from "./openclaw-agent-session-snapshots-migration.js";
 import {
@@ -341,15 +338,10 @@ function ensureAgentSchema(
       const requiresSnapshotMigration = crossesVersion(SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION);
       const requiresTrajectoryMigration = crossesVersion(AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION);
       // Continuation: historical step DDL leaves recipient authority (44) to its own step.
-      const requiresRecipientAuthorityMigration = crossesVersion(
-        AGENT_RECIPIENT_AUTHORITY_SCHEMA_VERSION,
-      );
-      const stepSchemaSql = requiresRecipientAuthorityMigration
-        ? withoutSessionRecipientAuthoritySchema(schemaSql)
-        : schemaSql;
+      const authorityStep = planRecipientAuthorityStep(crossesVersion, schemaSql);
       const trajectorySchemaSql = requiresTrajectoryMigration
-        ? withoutTrajectoryPayloadColumns(stepSchemaSql)
-        : stepSchemaSql;
+        ? withoutTrajectoryPayloadColumns(authorityStep.stepSchemaSql)
+        : authorityStep.stepSchemaSql;
       const storageSchemaSql = requiresSnapshotMigration
         ? withoutSessionEntrySnapshotsSchema(trajectorySchemaSql)
         : trajectorySchemaSql;
@@ -413,7 +405,7 @@ function ensureAgentSchema(
           migrateAgentPendingInputEndingsInTransaction(db);
         }
         // Continuation's recipient authority (44) follows every upstream step.
-        if (requiresRecipientAuthorityMigration) {
+        if (authorityStep.required) {
           migrateSessionRecipientAuthorityInTransaction(db);
         }
         // Historical rebuilds also converge indexes. Later version steps own

@@ -3,7 +3,6 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolvePreparedSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import {
   clearRuntimeConfigSnapshot,

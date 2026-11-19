@@ -11,6 +11,7 @@ import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.
 import { isUserMessage, resolvePersistedUserTurnMessage } from "./user-turn-transcript.message.js";
 import { preparePersistedUserTurnMessageForTranscriptWrite } from "./user-turn-transcript.metadata.js";
 import type {
+  CreateUserTurnTranscriptRecorderParams,
   PersistUserTurnTranscriptParams,
   PersistedUserTurnMessage,
   UserTurnTranscriptPersistResult,
@@ -165,4 +166,26 @@ export async function persistUserTurnTranscript(
   }
 
   return appended;
+}
+
+/** Reports a persistence failure to the recorder's handler, else to verbose logs. */
+export function reportUserTurnPersistenceError(
+  params: Pick<CreateUserTurnTranscriptRecorderParams, "errorContext" | "onPersistenceError">,
+  error: unknown,
+): void {
+  if (params.onPersistenceError) {
+    try {
+      params.onPersistenceError(error);
+    } catch {
+      // Diagnostics cannot change an already committed transcript outcome.
+    }
+    return;
+  }
+  void import("../globals.js")
+    .then(({ logVerbose }) => {
+      logVerbose(
+        `failed to persist ${params.errorContext ?? "user turn transcript"}: ${String(error)}`,
+      );
+    })
+    .catch(() => undefined);
 }

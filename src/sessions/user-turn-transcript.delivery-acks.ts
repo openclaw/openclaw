@@ -3,9 +3,12 @@ import type { PersistedUserTurnMessage } from "./user-turn-transcript.types.js";
 /**
  * Session-delivery ack ids carried on a user turn. A replacement set, once given,
  * fully replaces the message's ids before persistence (an empty set removes them).
- * The recorder decides when replacement is still allowed.
+ * The recorder reports when persistence has started; replacement is refused from then on.
  */
-export function createSessionDeliveryAckReplacement(initial: PersistedUserTurnMessage | undefined) {
+export function createSessionDeliveryAckReplacement(
+  initial: PersistedUserTurnMessage | undefined,
+  persistenceStarted: () => unknown,
+) {
   const ids = new Set<string>();
   let replaced = false;
   const add = (deliveryIds: readonly unknown[]) => {
@@ -22,10 +25,14 @@ export function createSessionDeliveryAckReplacement(initial: PersistedUserTurnMe
     add(initialIds);
   }
   return {
-    replace(deliveryIds: readonly string[]) {
+    replace(deliveryIds: readonly string[]): boolean {
+      if (persistenceStarted()) {
+        return false;
+      }
       replaced = true;
       ids.clear();
       add(deliveryIds);
+      return true;
     },
     apply(candidate: PersistedUserTurnMessage | undefined): PersistedUserTurnMessage | undefined {
       if (!candidate || !replaced) {

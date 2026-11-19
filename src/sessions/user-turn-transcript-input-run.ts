@@ -25,16 +25,14 @@ import { getUserTurnTranscriptAdmissionOwner } from "./user-turn-transcript-admi
 import { isUserMessage } from "./user-turn-transcript.message.js";
 import type { UserTurnTranscriptRecorder } from "./user-turn-transcript.types.js";
 
-type InputRunStampScheduler = (
-  admissionWrite: Promise<void> | undefined,
-  onError: (error: unknown) => void,
-) => Promise<void> | undefined;
+type InputDispatch = {
+  admissionWrite: () => Promise<void> | undefined;
+  onError: (error: unknown) => void;
+  stamp?: Promise<void>;
+};
 
 const inputRunIds = new WeakMap<UserTurnTranscriptRecorder, string>();
-const dispatchHandlers = new WeakMap<
-  UserTurnTranscriptRecorder,
-  (schedule: InputRunStampScheduler) => void
->();
+const inputDispatches = new WeakMap<UserTurnTranscriptRecorder, InputDispatch>();
 
 /** The executing run binds itself before it may dispatch; a later preparation's run replaces it. */
 export function bindUserTurnInputRunId(recorder: UserTurnTranscriptRecorder, runId: string): void {
@@ -42,26 +40,40 @@ export function bindUserTurnInputRunId(recorder: UserTurnTranscriptRecorder, run
 }
 
 /**
- * Only the recorder factory registers: it schedules the stamp for an input it marked sent and
- * keeps the stamp for its persistence waits to settle.
+ * Only the recorder factory registers: the stamp follows its admission write, reports to its
+ * persistence error handler, and its persistence waits settle the stamp.
  */
 export function registerUserTurnInputDispatch(
   recorder: UserTurnTranscriptRecorder,
-  onDispatched: (schedule: InputRunStampScheduler) => void,
+  admissionWrite: () => Promise<void> | undefined,
+  onError: (error: unknown) => void,
 ): void {
-  dispatchHandlers.set(recorder, onDispatched);
+  inputDispatches.set(recorder, { admissionWrite, onError });
+}
+
+/** The recorder's persistence waits settle its admission write, then the stamp scheduled behind it. */
+export async function settleUserTurnInputAdmission(
+  recorder: UserTurnTranscriptRecorder,
+  admissionWrite: Promise<void> | undefined,
+): Promise<void> {
+  await admissionWrite;
+  await inputDispatches.get(recorder)?.stamp;
 }
 
 /**
  * The dispatch owner reports that the transport carrying the run's request accepted it. A
- * rejected or aborted dispatch never reaches this call.
+ * rejected or aborted dispatch never reaches this call. Only an input the recorder marked sent
+ * is stamped, and only its first scheduled stamp is kept.
  */
 export function markUserTurnInputDispatched(
   recorder: UserTurnTranscriptRecorder | undefined,
 ): void {
-  if (recorder) {
-    dispatchHandlers.get(recorder)?.((admissionWrite, onError) =>
-      scheduleUserTurnInputRunIdStamp(recorder, admissionWrite, onError),
+  const dispatch = recorder && inputDispatches.get(recorder);
+  if (dispatch && getUserTurnTranscriptAdmissionOwner(recorder)?.sentToProvider()) {
+    dispatch.stamp ??= scheduleUserTurnInputRunIdStamp(
+      recorder,
+      dispatch.admissionWrite(),
+      dispatch.onError,
     );
   }
 }

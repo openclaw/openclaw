@@ -10,6 +10,18 @@ export function sessionRecipientAuthoritySchemaSql(schema: string): string {
   return extractSqliteTableSchema(schema, "session_recipient_authority");
 }
 
+/** A crossing of the authority step leaves its table out of the historical step DDL. */
+export function planRecipientAuthorityStep(
+  crossesVersion: (version: number) => boolean,
+  schemaSql: string,
+): { required: boolean; stepSchemaSql: string } {
+  const required = crossesVersion(AGENT_RECIPIENT_AUTHORITY_SCHEMA_VERSION);
+  return {
+    required,
+    stepSchemaSql: required ? withoutSessionRecipientAuthoritySchema(schemaSql) : schemaSql,
+  };
+}
+
 /**
  * Historical admission must validate only the tables its schema version supported. The table
  * leaves with its comment and trailing blank line, so each historical schema is upstream's text.
