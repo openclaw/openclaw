@@ -3,8 +3,7 @@ import { listAgentEntriesWithSource, listAgentIds } from "../agents/agent-roster
 import { resolveCommandSecretRefsViaGateway } from "../cli/command-secret-gateway.js";
 import { getMemoryEmbeddingCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
-import { captureRuntimeConfigAsyncReader } from "../config/config.js";
-import { createConfigIO } from "../config/io.js";
+import { createConfigIO, setAppliedRuntimeConfigSnapshot } from "../config/io.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import { getScopedDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { runDatabasePortTask } from "../infra/database-engine/port-command.worker.js";
@@ -56,11 +55,6 @@ export async function rebuildPortedAgentMemory(params: {
       databaseEngine: "configured",
       onForeignOwner: "refuse",
       runLocal: async ({ env, assertCurrent }) => {
-        // The port publishes config outside this command's snapshot, and the
-        // embedding provider reads the prepared runtime reader. Capture it the
-        // same way the standalone `memory index` command does before rebuilding.
-        await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
-        assertCurrent();
         // Port publication intentionally leaves the running command's config snapshot unchanged.
         const config = await createConfigIO({
           env,
@@ -68,6 +62,9 @@ export async function rebuildPortedAgentMemory(params: {
           observe: false,
           pluginValidation: "skip",
         }).loadConfigAsync({ assertCurrent });
+        // Embedding local-service acquisition reads the runtime snapshot, including on a warm CLI.
+        await setAppliedRuntimeConfigSnapshot(config, config);
+        assertCurrent();
         const registered = await inspectOpenClawRegisteredAgentDatabases({ env });
         const known = new Map(
           [

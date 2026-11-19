@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { MemorySearchManager } from "../../packages/memory-host-sdk/src/host/search-manager.types.js";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
-import { readRuntimeConfig, resetConfigRuntimeState } from "../config/runtime-snapshot.js";
+import { readRuntimeConfig, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { getScopedDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import type { getActiveMemorySearchManagerCore } from "../plugins/memory-runtime.js";
@@ -141,6 +141,30 @@ it("rebuilds under fresh configured custody and keeps that custody through plugi
   expect(() => memoryOwner?.assertCurrent()).toThrow();
   expect(captureGatewayStateOwner(state.statePath("state", "openclaw.sqlite"))).toBeUndefined();
 });
+
+it.each(["cold", "pre-port"])(
+  "prepares the destination runtime config for %s local embeddings",
+  async (snapshot) => {
+    const stores = await agentStores(["main"]);
+    const workspace = state.path("destination");
+    await state.writeConfig({ agents: { entries: { main: { workspace } } } });
+    if (snapshot === "pre-port") {
+      setRuntimeConfigSnapshot({
+        agents: { entries: { main: { workspace: state.path("source") } } },
+      });
+    }
+    const selected = manager({
+      sync: async () => {
+        // Local-service acquisition uses this strict reader, independently of the manager config.
+        expect(readRuntimeConfig().agents?.entries?.main?.workspace).toBe(workspace);
+      },
+    });
+    plugin.open.mockResolvedValue({ manager: selected, searchRuntimeRegistered: true });
+
+    const results = await rebuildPortedAgentMemory({ stateDir: state.stateDir, stores });
+    expectStatuses(results, { main: "rebuilt" });
+  },
+);
 
 it("reports one result per agent and continues after sync, dirty-state, and close failures", async () => {
   const agents = ["bad-sync", "dirty", "bad-close", "healthy"];
@@ -323,20 +347,4 @@ it("rebuilds one agent at a time when the host allows no fanout", async () => {
   const results = await rebuildPortedAgentMemory({ stateDir: state.stateDir, stores });
   expect(syncs.peak()).toBe(1);
   expectStatuses(results, { alpha: "rebuilt", beta: "rebuilt", gamma: "rebuilt" });
-});
-
-it("prepares runtime config before the ported memory rebuild", async () => {
-  const stores = await agentStores(["main"]);
-  // The port publishes outside the command snapshot; start without a prepared reader.
-  resetConfigRuntimeState();
-  let prepared: ReturnType<typeof readRuntimeConfig> | undefined;
-  plugin.open.mockImplementationOnce(async () => {
-    prepared = readRuntimeConfig();
-    return { manager: manager(), searchRuntimeRegistered: true } as never;
-  });
-
-  const results = await rebuildPortedAgentMemory({ stateDir: state.stateDir, stores });
-
-  expect(prepared).toBeDefined();
-  expectStatuses(results, { main: "rebuilt" });
 });
