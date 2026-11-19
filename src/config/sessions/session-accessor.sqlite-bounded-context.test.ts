@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { expect, it as baseIt, vi } from "vitest";
+import { renderConversationEntriesWithinBudget } from "../../../packages/agent-core/src/harness/compaction/conversation-serialization.js";
 import {
   collectConversationMessageFact,
   collectConversationRangeDescriptors,
-  renderConversationEntriesWithinBudget,
   serializeConversationEntry,
   serializeConversationWithinBudget,
   type ConversationMessageFact,
