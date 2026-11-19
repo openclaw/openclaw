@@ -261,27 +261,56 @@ it("records the boundary count on a legacy checkpoint that names the visible bou
   ]);
 });
 
-it("counts boundaries on the active path when a rewind leaves a compaction behind", async () => {
-  // unknown:<count> names a history only if the count follows the active path, not the store.
+it("keeps the first history's series after a rewind past a later compaction", async () => {
   const session = await openCompactedSession("history-boundary-rewind");
-  const rewindTo = expectDefined(
-    await (await session.open()).appendMessageAsync(makeUserMessage("Kept turn", 2)),
-    "message",
-  );
-  const later = await session.open();
-  await later.appendCompactionAsync("Later summary. ".repeat(350), rewindTo, 10_000);
   await session.pushOut();
-  const before = await session.run("P1");
-  expect(hasCompaction(before.manager)).toBe(false);
-  expect(before.manager.getBoundaryCount()).toBe(2);
+  // Count 1 with the compaction outside the window: the series is named unknown:1.
+  const first = await session.run("P1");
+  expect(hasCompaction(first.manager)).toBe(false);
+  const rewindTo = expectDefined(
+    first.manager.getBranch().findLast(isCheckpoint)?.id,
+    "checkpoint",
+  );
+  const writer = await session.open();
+  await writer.appendCompactionAsync("Later summary.", rewindTo, 1_000);
+  expect((await session.run("P2")).prepared).toMatchObject({ restart: true, systemPrompt: "P2" });
+  // Rewind to P1's checkpoint and continue there. The abandoned compaction is still stored, but
+  // the active path has one boundary again, so the unknown:1 series of P1 still applies.
   const rewound = await session.open();
   await rewound.branchAsync(rewindTo);
-  await rewound.appendMessageAsync(makeUserMessage("z".repeat(5_000), 3));
-  const after = await session.run("P2");
-  expect(hasCompaction(after.manager)).toBe(false);
-  expect(after.manager.getBoundaryCount()).toBe(1);
-  // The checkpoint written at count 2 is on the abandoned branch, so the series restarts.
-  expect(after.prepared).toMatchObject({ restart: true, systemPrompt: "P2" });
+  await rewound.appendMessageAsync(makeUserMessage("Rewound turn", 3));
+  const third = await session.run("P3");
+  expect(third.manager.getBoundaryCount()).toBe(1);
+  expect(third.prepared).toMatchObject({ restart: false, systemPrompt: "P1" });
+});
+
+it("restarts at a reset even though the window holds a checkpoint of the earlier history", async () => {
+  const session = await openCompactedSession("history-boundary-reset");
+  await session.run("P1", 65_536);
+  // The reset is counted, so the checkpoint written at count 1 no longer names the history.
+  await (await session.open()).appendResetBoundaryAsync("reset");
+  const next = await session.run("P2", 65_536);
+  expect(next.manager.getBoundaryCount()).toBe(2);
+  expect(next.prepared).toMatchObject({
+    restart: true,
+    seriesStatus: "restarted:history",
+    systemPrompt: "P2",
+  });
+});
+
+it("restarts at a visible compaction after a counted checkpoint", async () => {
+  const session = await openCompactedSession("history-boundary-new-compaction");
+  await session.run("P1", 65_536);
+  const writer = await session.open();
+  const kept = await writer.appendMessageAsync(makeUserMessage("Later turn", 2));
+  await writer.appendCompactionAsync("Later summary.", kept!, 1_000);
+  const next = await session.run("P2", 65_536);
+  expect(next.manager.getBoundaryCount()).toBe(2);
+  expect(next.prepared).toMatchObject({
+    restart: true,
+    seriesStatus: "restarted:history",
+    systemPrompt: "P2",
+  });
 });
 
 it("records an unknown history as unknown:<boundaryCount>", async () => {

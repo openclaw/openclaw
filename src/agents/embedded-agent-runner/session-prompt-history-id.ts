@@ -37,8 +37,8 @@ function readHistoryId(entries: SessionEntry[], boundaryCount: number | undefine
 /**
  * Omit the boundary count only for a view that holds the newest boundary. An unknown history is
  * named by its count: the count changes only at a compaction or reset on the active path, so a
- * checkpoint that recorded `unknown:N` at count N belongs to the same history, and the series
- * restarts at most once when nothing in the window names it.
+ * checkpoint that recorded `unknown:N` at count N belongs to the same history. The series
+ * restarts once each time the newest checkpoint and the boundary both leave the window.
  */
 export function resolvePromptHistoryId(params: {
   state: { historyBoundary?: { count: number; id: string | null } };
