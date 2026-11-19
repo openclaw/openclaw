@@ -2897,7 +2897,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/session-row-projection.topology.test.ts",
   "src/gateway/session-row-projection.transcript-regression.test.ts",
   "src/gateway/session-row-projection.worker-read.test.ts",
-  "src/gateway/session-row-selection.retained.test.ts",
+  "src/gateway/session-row-selection.test.ts",
   "src/gateway/session-row-transcript-backfill.test.ts",
   "src/gateway/session-runtime-selection-projection.test.ts",
   "src/gateway/session-sharing-committed-read.test.ts",

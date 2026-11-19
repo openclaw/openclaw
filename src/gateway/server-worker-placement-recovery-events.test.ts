@@ -416,6 +416,41 @@ describe("worker placement recovery session events", () => {
     },
   );
 
+  it("coalesces reconciliation reporting without fencing independent destruction", async () => {
+    const operationStarted = createDeferredCore();
+    const firstOperation = createDeferredCore();
+    const started: string[] = [];
+    await withRecoveryRuntime(
+      {
+        sweep: async () => {
+          started.push("first");
+          operationStarted.resolve();
+          await firstOperation.promise;
+        },
+        startup: () => void started.push("second"),
+      },
+      async ({ runtime }) => {
+        const first = runtime.dispatchService.reconcileActive();
+        const second = runtime.dispatchService.reconcile("startup");
+        let destroy: Promise<unknown> | undefined;
+        try {
+          await operationStarted.promise;
+          expect(started).toEqual(["first"]);
+          destroy = runtime.dispatchService.forceDestroyEnvironment("environment-recovered");
+          await destroy;
+          expect(runtimeMocks.destroyEnvironment).toHaveBeenCalledOnce();
+          firstOperation.resolve();
+          await Promise.all([first, second, destroy]);
+          expect(started).toEqual(["first"]);
+          expect(runtimeMocks.destroyEnvironment).toHaveBeenCalledOnce();
+        } finally {
+          firstOperation.resolve();
+          await Promise.all([first, second, destroy]);
+        }
+      },
+    );
+  });
+
   it("publishes startup reconciliation after admitting the runtime", async () => {
     const recovered = recoveryPlacement();
     await withRecoveryRuntime(

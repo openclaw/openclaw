@@ -7,8 +7,6 @@ import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
 import {
-  assignSessionOwner,
-  patchSessionEntryCore,
   replaceSessionEntrySync,
   persistSessionTranscriptTurn,
 } from "../config/sessions/session-accessor.js";
@@ -80,15 +78,6 @@ export function seedProjectionRow(
     query: { agentId, key: scope.sessionKey, ...(storePath === undefined ? {} : { storePath }) },
     entry,
   };
-}
-
-function seedAgentOwnedSession(key: string, owner: string, fields: Partial<SessionEntry> = {}) {
-  const seeded = seedProjectionRow(key, fields);
-  assignSessionOwner(seeded.scope, {
-    owner: { type: "agent", id: owner },
-    assignedBy: { type: "system", id: "test" },
-  });
-  return seeded;
 }
 
 export function appendProjectionMessages(
@@ -558,70 +547,4 @@ export function createResidentSessionRowReader() {
       pending = undefined;
     },
   };
-}
-
-export async function verifyConfiguredAgentOwnerFacets(
-  expect: typeof import("vitest").expect,
-  listProjectedSessions: typeof import("./session-utils-list.js").listProjectedSessions,
-  setRuntimeConfigSnapshot: typeof import("../config/runtime-snapshot.js").setRuntimeConfigSnapshot,
-) {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    let cfg: OpenClawConfig = {
-      agents: { entries: { main: {}, owner: {} } },
-      acp: { allowedAgents: ["transport"] },
-    };
-    setRuntimeConfigSnapshot(cfg);
-    const key = "agent:main:owned";
-    seedAgentOwnedSession(key, "owner", { sessionId: "owned" });
-    const acpKey = "agent:main:acp-owner";
-    seedAgentOwnedSession(acpKey, "transport", {
-      sessionId: "acp-owner",
-      updatedAt: 2,
-      archivedAt: 3,
-    });
-    const projection = await createSessionRowProjection({
-      cfg,
-      getConfig: () => cfg,
-      modelCatalog: [],
-    });
-    try {
-      const list = (scoped = true) =>
-        listProjectedSessions({
-          projection,
-          opts: {
-            agentId: scoped ? "main" : undefined,
-            configuredAgentsOnly: true,
-            includeGlobal: true,
-            includeUnknown: true,
-            rowMode: "sidebar",
-            limit: 200,
-            archived: "all",
-          },
-        });
-      // Read the cold ACP row before a scoped read can populate its owner projection.
-      expect((await list(false)).owners?.map(({ id }) => id)).toEqual(["owner"]);
-      expect((await list()).owners?.map(({ id }) => id)).toEqual(["owner"]);
-      const searchOwned = async (search: string, ownerId: string) =>
-        (
-          await listProjectedSessions({ projection, opts: { archived: "all", search, ownerId } })
-        ).sessions.map((row) => row.key);
-      expect(await searchOwned("owned", "owner")).toEqual([key]);
-      await patchSessionEntryCore({ agentId: "main", sessionKey: key }, () => ({
-        label: "Metadata changed",
-      }));
-      expect(await searchOwned("metadata changed", "owner")).toEqual([key]);
-      expect(await searchOwned("metadata changed", "main")).toEqual([]);
-      expect((await list()).owners?.map(({ id }) => id)).toEqual(["owner"]);
-      cfg = { ...cfg, agents: { entries: { main: {} } } };
-      setRuntimeConfigSnapshot(cfg);
-      expect((await list()).owners).toEqual([]);
-      expect((await list(false)).owners).toEqual([]);
-      cfg = { ...cfg, agents: { entries: { main: {}, owner: {} } } };
-      setRuntimeConfigSnapshot(cfg);
-      expect((await list()).owners?.map(({ id }) => id)).toEqual(["owner"]);
-      expect((await list(false)).owners?.map(({ id }) => id)).toEqual(["owner"]);
-    } finally {
-      projection.dispose();
-    }
-  });
 }

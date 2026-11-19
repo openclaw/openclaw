@@ -1,4 +1,5 @@
 import { describe, afterEach, expect, it, vi } from "vitest";
+import type { SessionCommunicationMode } from "../../packages/gateway-protocol/src/session-communication.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
 import { setRuntimeConfigSnapshot, resetConfigRuntimeState } from "../config/runtime-snapshot.js";
@@ -14,6 +15,7 @@ import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { linkEmail, setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -32,6 +34,44 @@ import { prepareSessionRowSelection, listProjectedSessions } from "./session-uti
 
 describe("session model projection retained boundaries", () => {
   afterEach(() => vi.restoreAllMocks());
+  it("refreshes configured agent labels and communication without losing stored overrides", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = {
+        agents: { entries: { main: { identity: { name: "Original agent" } } } },
+        session: { communication: { receive: "ask" as SessionCommunicationMode } },
+      };
+      const scope = { agentId: "main", sessionKey: "agent:main:identity-cache" };
+      replaceSessionEntrySync(scope, {
+        sessionId: "identity-cache",
+        updatedAt: 1,
+        communication: { send: "never" },
+        createdActor: { type: "agent", id: "main" },
+      });
+      using _ = holdForeground();
+      using projection = await createTestProjection({ cfg, modelCatalog: [] });
+      const list = () => listProjectedSessions({ projection, opts: {} });
+      try {
+        const initial = await list();
+        expect(initial.sessions[0]?.owner?.actor.label).toBe("Original agent");
+        expect(initial.sessions[0]?.effectiveCommunication).toEqual({
+          send: "never",
+          receive: "ask",
+        });
+        cfg.agents.entries.main.identity.name = "Renamed agent";
+        cfg.session.communication.receive = "always";
+        sessionChanges.emit({ all: true, scope: "config" });
+        const updated = await list();
+        expect(updated.owners?.[0]?.label).toBe("Renamed agent");
+        expect(updated.sessions[0]?.effectiveCommunication).toEqual({
+          send: "never",
+          receive: "always",
+        });
+        expect(updated.sessions[0]?.communication).toEqual({ send: "never" });
+      } finally {
+        await projection.ensureMaterialized();
+      }
+    });
+  });
   it("indexes and filters the causal creator without publishing its isolation actor", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = { agents: { entries: { main: {} } } };
