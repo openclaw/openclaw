@@ -1,7 +1,7 @@
 import { createMemo, createSignal, For } from "solid-js";
+import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
-import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
-import { hasUnchangedCronSchedule, parseCronScheduleAt } from "../../lib/cron/form-schedule.ts";
+import { hasUnchangedCronSchedule } from "../../lib/cron/form-schedule.ts";
 import type { CronFieldKey, CronFormState } from "../../lib/cron/types.ts";
 import { formatMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -18,45 +18,6 @@ import {
 import { describeJobNextRun } from "./view-job-status.tsx";
 import { ScheduleSentence } from "./view-schedule-sentence.tsx";
 import type { CronProps } from "./view-types.ts";
-const EVERY_SUMMARY_KEYS = {
-  seconds: ["cron.form.summaryEverySecondOne", "cron.form.summaryEverySeconds"],
-  minutes: ["cron.form.summaryEveryMinuteOne", "cron.form.summaryEveryMinutes"],
-  hours: ["cron.form.summaryEveryHourOne", "cron.form.summaryEveryHours"],
-  days: ["cron.form.summaryEveryDayOne", "cron.form.summaryEveryDays"],
-} as const;
-// Human-readable schedule summary; null while invalid so it never disagrees with the saved value.
-function describeFormSchedule(form: CronFormState): string | null {
-  if (form.scheduleKind === "every") {
-    const amount = form.everyAmount.trim();
-    if (parseCronDurationMs(amount, form.everyUnit) === undefined) {
-      return null;
-    }
-    const [singular, plural] = EVERY_SUMMARY_KEYS[form.everyUnit];
-    return Number(amount) === 1 ? t(singular) : t(plural, { amount });
-  }
-  if (form.scheduleKind === "at") {
-    const at = parseCronScheduleAt(form.scheduleAt);
-    return at ? t("cron.form.summaryOnce", { at: formatMs(Date.parse(at)) }) : null;
-  }
-  if (form.scheduleKind === "cron") {
-    const expr = form.cronExpr.trim();
-    if (!expr) {
-      return null;
-    }
-    const tz = form.cronTz.trim();
-    return tz ? t("cron.form.summaryCronTz", { expr, tz }) : t("cron.form.summaryCron", { expr });
-  }
-  if (form.scheduleKind === "event") {
-    return t("cron.events.summary", {
-      server: form.eventServer,
-      name: form.eventName || form.eventSource,
-    });
-  }
-  if (form.scheduleKind === "on-exit") {
-    return t("cron.form.repeatOnExit");
-  }
-  return form.scheduleKind === "stream" ? t("cron.form.repeatStream") : null;
-}
 export function DurationRow(
   props: CronProps & {
     kind: "every" | "stagger";
@@ -226,7 +187,6 @@ export function ScheduleControls(props: CronProps & { phoneLayout: boolean }) {
               label={t("cron.form.every")}
               required
               errorKey="everyAmount"
-              size="narrow"
               placeholder={t("cron.form.everyAmountPlaceholder")}
             />
             <span class="cron-tray-picker">
@@ -286,8 +246,11 @@ export function TrayErrors(props: Pick<CronProps, "fieldErrors"> & { fields: Cro
     </For>
   );
 }
-/** The form's live schedule in words, with the saved one-shot's runtime facts. */
-export function ScheduleSummary(props: CronProps) {
+/**
+ * What the tray's controls cannot say: a time zone set under Advanced, or a saved
+ * one-shot's runtime when it no longer matches the configured time.
+ */
+export function ScheduleNote(props: CronProps) {
   const form = () => props.form;
   // The form owns the authored occurrence; runtime deadlines may move after
   // a continuation or retry. Never copy that deadline into the editable time.
@@ -298,35 +261,41 @@ export function ScheduleSummary(props: CronProps) {
     },
     { equals: false },
   );
-  const summary = createMemo(() => {
+  const timeZone = () => (form().scheduleKind === "cron" ? form().cronTz.trim() : "");
+  const runtime = createMemo(() => {
     const job = savedOneShot();
-    return job?.schedule.kind === "at"
-      ? t("cron.form.summaryConfiguredAt", { at: formatMs(Date.parse(job.schedule.at)) })
-      : describeFormSchedule(form());
+    if (job?.schedule.kind !== "at") {
+      return null;
+    }
+    const next = describeJobNextRun(job, true);
+    // A next run at the configured time would only repeat the time field.
+    return next === t("cron.form.nextRunAt", { at: formatMs(Date.parse(job.schedule.at)) })
+      ? null
+      : next;
   });
-  const runtimeSummary = () => {
-    const job = savedOneShot();
-    return job ? describeJobNextRun(job, true) : null;
-  };
   return (
     <>
-      {summary() ? (
-        <div
-          class={[
-            "cron-schedule-summary",
-            { "cron-schedule-summary--expression": form().scheduleKind === "cron" },
-          ]}
-        >
-          <span>
-            {summary()}
-            {runtimeSummary() ? (
-              <>
-                {" · "}
-                <strong>{runtimeSummary()}</strong>
-              </>
-            ) : undefined}
+      {timeZone() ? (
+        <span class="cron-sentence__row">
+          <span class="cron-sentence__label" aria-hidden="true">
+            {t("cron.form.timezoneOptional")}
           </span>
-        </div>
+          <span
+            class="cron-tray-note__text"
+            data-test-id="cron-schedule-note"
+            title={t("cron.form.timezoneOptional")}
+          >
+            <Icon name="globe" />
+            <span class="sr-only">{t("cron.form.timezoneOptional")}: </span>
+            {timeZone()}
+          </span>
+        </span>
+      ) : runtime() ? (
+        <span class="cron-sentence__row">
+          <span class="cron-tray-note__text" data-test-id="cron-schedule-note">
+            {runtime()}
+          </span>
+        </span>
       ) : undefined}
     </>
   );

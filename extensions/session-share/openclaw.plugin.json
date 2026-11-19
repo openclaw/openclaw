@@ -1,13 +1,9 @@
 {
   "id": "session-share",
-  "categories": [
-    "inbox-collaboration"
-  ],
+  "categories": ["inbox-collaboration"],
   "activation": {
     "onStartup": false,
-    "onConfigPaths": [
-      "plugins.entries.session-share"
-    ]
+    "onConfigPaths": ["plugins.entries.session-share"]
   },
   "uiHints": {
     "share.groups": {
@@ -22,10 +18,17 @@
       "label": "Serve Gateway Session Reads",
       "help": "Allow explicitly granted paired devices to read selected groups AND the canonical person with the closed publication-read scope."
     },
+    "gateways": {
+      "label": "Outbound Gateway Sources",
+      "help": "Read-only outbound WSS connections with a preprovisioned named identity and singleton publication-read token; Cloudflare Access grants no session authority."
+    },
     "share.gatewayDeviceIds": {
       "label": "Publication Reader Devices",
       "help": "Exact source-approved paired device IDs. Missing or empty grants no Gateway reads. Devices do not impersonate the selected person."
     },
+    "gateways.*.deviceToken": { "sensitive": true },
+    "gateways.*.cloudflareAccess.clientId": { "sensitive": true },
+    "gateways.*.cloudflareAccess.clientSecret": { "sensitive": true },
     "nodes": {
       "label": "Paired Node Attribution",
       "help": "Optional display attribution keyed by paired node id. Attribution never grants session access."
@@ -44,17 +47,19 @@
       "id": "session-sharing",
       "title": "Session sharing",
       "order": 10,
-      "properties": [
-        "share"
-      ]
+      "properties": ["share"]
+    },
+    {
+      "id": "gateway-sources",
+      "title": "Outbound Gateway sources",
+      "order": 15,
+      "properties": ["gateways"]
     },
     {
       "id": "node-attribution",
       "title": "Node attribution",
       "order": 20,
-      "properties": [
-        "nodes"
-      ]
+      "properties": ["nodes"]
     }
   ],
   "configSchema": {
@@ -64,32 +69,18 @@
       "share": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "groups"
-        ],
+        "required": ["groups"],
         "properties": {
           "groups": {
             "type": "array",
             "uniqueItems": true,
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 200
-            }
+            "items": { "type": "string", "minLength": 1, "maxLength": 200 }
           },
-          "gateway": {
-            "type": "boolean",
-            "default": false
-          },
+          "gateway": { "type": "boolean", "default": false },
           "gatewayDeviceIds": {
             "type": "array",
             "uniqueItems": true,
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 512,
-              "pattern": "^\\S+$"
-            }
+            "items": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^\\S+$" }
           },
           "involvingProfileId": {
             "type": "string",
@@ -99,21 +90,68 @@
           }
         }
       },
+      "gateways": {
+        "type": "object",
+        "maxProperties": 32,
+        "propertyNames": { "pattern": "^[a-zA-Z0-9_-]{1,80}$" },
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url", "deviceToken", "deviceIdentityKey"],
+          "properties": {
+            "url": { "type": "string", "pattern": "^wss://", "maxLength": 2048 },
+            "label": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "deviceIdentityKey": {
+              "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^(?!primary$)\\S+$"
+            },
+            "deviceToken": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["source", "provider", "id"],
+              "properties": {
+                "source": { "enum": ["env", "file", "exec", "store"] },
+                "provider": { "type": "string", "minLength": 1 },
+                "id": { "type": "string", "minLength": 1 }
+              }
+            },
+            "cloudflareAccess": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["clientId", "clientSecret"],
+              "properties": {
+                "clientId": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["source", "provider", "id"],
+                  "properties": {
+                    "source": { "enum": ["env", "file", "exec", "store"] },
+                    "provider": { "type": "string", "minLength": 1 },
+                    "id": { "type": "string", "minLength": 1 }
+                  }
+                },
+                "clientSecret": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["source", "provider", "id"],
+                  "properties": {
+                    "source": { "enum": ["env", "file", "exec", "store"] },
+                    "provider": { "type": "string", "minLength": 1 },
+                    "id": { "type": "string", "minLength": 1 }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "nodes": {
         "type": "object",
         "additionalProperties": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "owner": {
-              "type": "string",
-              "pattern": "^(github|profile):[^\\s:]+$",
-              "maxLength": 512
-            },
-            "linkGitHubIdentities": {
-              "type": "boolean",
-              "default": false
-            }
+            "owner": { "type": "string", "pattern": "^(github|profile):[^\\s:]+$", "maxLength": 512 },
+            "linkGitHubIdentities": { "type": "boolean", "default": false }
           }
         }
       }

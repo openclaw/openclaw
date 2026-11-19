@@ -1,11 +1,34 @@
 import { describe, expect, it } from "vitest";
 import { fitCompactionSummary } from "../../../../packages/agent-core/src/harness/compaction/compaction-summary-budget.js";
 import {
+  assertCompactionRequestCanFitFromTokens,
   createCompactionRequestBudget,
   estimateCompactedRequestTokens,
   replayTokenBudget,
+  resolveCompactionRetentionBudgetFromTokens,
   withCompactionQueuedContext,
 } from "./request-budget.js";
+
+it("reads history pressure only at the public budget's original estimation points", () => {
+  let reads = 0;
+  const tokens = () => {
+    reads += 1;
+    return 50;
+  };
+  const budget = { contextWindow: 100, reserveTokens: 10, fixedTokens: 20, pendingTokens: 5 };
+  assertCompactionRequestCanFitFromTokens(tokens, undefined, false);
+  assertCompactionRequestCanFitFromTokens(tokens, budget, true);
+  expect(resolveCompactionRetentionBudgetFromTokens(budget, tokens).maxTokens).toBe(65);
+  expect(reads).toBe(0);
+  expect(
+    resolveCompactionRetentionBudgetFromTokens({ ...budget, reserveTokens: 100 }, tokens).maxTokens,
+  ).toBe(49);
+  assertCompactionRequestCanFitFromTokens(tokens, budget, false);
+  expect(reads).toBe(2);
+  expect(() => assertCompactionRequestCanFitFromTokens(80, budget, false)).toThrow(
+    "retained history: 80",
+  );
+});
 
 describe("createCompactionRequestBudget", () => {
   it.each([

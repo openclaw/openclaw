@@ -17,6 +17,7 @@ import { CronService } from "../cron/service.js";
 import { createNoopLogger } from "../cron/service.test-harness.js";
 import { saveCronStore } from "../cron/store.js";
 import type { CronStoredJob } from "../cron/types.js";
+import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
 import { isMissingPathError } from "../infra/errors.js";
 import {
   bindGatewayContextResolver,
@@ -30,7 +31,12 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureCronJobTurnTarget } from "./cron-job-turn-target.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import { decodeGatewayOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
-import { pairedOperator, recoveryFixture } from "./operator-run-recovery.test-support.js";
+import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
+import {
+  pairedOperator,
+  recoveryFixture,
+  withRecovery,
+} from "./operator-run-recovery.test-support.js";
 import {
   captureOperatorToolGatewayContinuationContext,
   withOperatorToolGatewayAuthority,
@@ -38,7 +44,7 @@ import {
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 
 it.each(["device revocation", "email reassignment", "email restoration"] as const)(
-  "restores native cron owner continuation, persists its child write, and fences the final write after %s",
+  "restores native cron owner continuation and lets its admitted child finish after %s",
   (change) =>
     withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
       const profile = ensureProfileForEmail("recovery@example.test");
@@ -176,14 +182,15 @@ it.each(["device revocation", "email reassignment", "email restoration"] as cons
         await child.run(() => tool.execute("allowed", { path: file, content: "allowed\n" }));
         expect(await readFile(path.join(stateDir, file), "utf8")).toBe("allowed\n");
 
-        // No cancellation signal: the final write must revalidate its admitted principal.
+        // No Stop was requested: the already-admitted write may finish.
         pauseWrite = true;
         pendingWrite = child.run(() =>
-          tool.execute("revoked", { path: file, content: "forbidden\n" }),
+          tool.execute("admitted", { path: file, content: "finished\n" }),
         );
         void pendingWrite.catch(beforeWrite.reject);
         await beforeWrite.promise;
         if (change === "device revocation") {
+          await rotateDeviceToken({ deviceId: "recovery-device", role: "operator" });
           invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
         } else {
           const other = ensureProfileForEmail("other@example.test");
@@ -193,10 +200,136 @@ it.each(["device revocation", "email reassignment", "email restoration"] as cons
           }
         }
         releaseWrite.resolve();
-        await expect(pendingWrite).rejects.toThrow("no longer active");
-        expect(writes).toBe(1);
+        await expect(pendingWrite).resolves.toBeDefined();
+        expect(writes).toBe(2);
+        expect(await readFile(path.join(stateDir, file), "utf8")).toBe("finished\n");
+        expect(child.signal.aborted).toBe(false);
+        await expect(fixture.restore()).rejects.toThrow();
+      } finally {
+        releaseWrite.resolve();
+        await pendingWrite?.catch(() => undefined);
+        host?.close();
+        admission?.close();
+        child.release();
+        restored.release();
+      }
+    }),
+);
+it.each(["device revocation", "email reassignment", "email restoration"] as const)(
+  "lets an accepted child finish after %s while refusing the next restoration",
+  (change) =>
+    withRecovery(async (fixture, stateDir, profile) => {
+      // Keep this profile independent when its original authentication email moves.
+      linkEmail("retained@example.test", profile.id);
+      const restored = expectDefined(await fixture.restore(), "recovered requester authority");
+      const client = createSyntheticPluginRuntimeClient({
+        authenticatedUserProfile: fixture.client.authenticatedUserProfile,
+        operatorRoleActor: { kind: "operator", profileId: restored.authority.profileId },
+        operatorRunAuthority: restored.authority,
+        scopes: ["operator.write"],
+      });
+      const child = expectDefined(
+        await withPluginRuntimeGatewayRequestScope(
+          { client, context: fixture.context, isWebchatConnect: () => false },
+          () =>
+            withOperatorToolGatewayAuthority(
+              { operatorRunAuthority: restored.authority, scopes: ["operator.write"] },
+              async () => await captureOperatorToolGatewayContinuationContext(),
+            ),
+        ),
+        "accepted child authority",
+      );
+      const beforeWrite = createDeferredCore();
+      const releaseWrite = createDeferredCore();
+      let pauseWrite = false;
+      let writes = 0;
+      let pendingWrite: Promise<unknown> | undefined;
+      let admission: ReturnType<typeof prepareAgentRunAdmission> | undefined;
+      let host: ReturnType<typeof createAgentHarnessHostCapabilities> | undefined;
+      try {
+        const runId = "recovered-child-effect";
+        const { agentId, sessionKey, sessionId } = fixture.target;
+        const prepared = prepareAgentRunAdmission({
+          cfg: {},
+          facts: {
+            runId,
+            agentId,
+            ingress: { kind: "system", boundary: "recovered-child-test", state: "present" },
+          },
+          operationalRunInstance: createOperationalRunInstanceRef(runId),
+          operatorAuthority: child.operatorAuthority,
+        });
+        admission = prepared;
+        const admittedRunContext = await child.run(() =>
+          prepared.admit("plugin-harness", `harness-${runId}`),
+        );
+        bindGatewayContextResolver(admittedRunContext, () => fixture.context);
+        host = child.run(() =>
+          createAgentHarnessHostCapabilities({
+            attempt: { runId, agentId, sessionKey, sessionId, admittedRunContext },
+            pluginId: "codex",
+          }),
+        );
+        const tool = expectDefined(
+          host.capabilities.bindToolSurface([
+            createWriteTool(stateDir, {
+              operations: {
+                mkdir: async (dir) => {
+                  await mkdir(dir, { recursive: true });
+                  if (pauseWrite) {
+                    beforeWrite.resolve();
+                    await releaseWrite.promise;
+                  }
+                },
+                readFile: (file, signal) => readFile(file, { signal }),
+                statFile: (file) => readPersistedFileStat(file, isMissingPathError),
+                writeFile: async (file, content) => {
+                  writes += 1;
+                  await writeFile(file, content, "utf8");
+                },
+              },
+            }),
+          ])[0],
+          "child write capability",
+        );
+        const file = "recovered-child-effect.txt";
+        fixture.retire();
+        restored.release();
+        expect(restored.authority.assertCurrent).toThrow("Recovery claim retired");
+        expect(child.operatorAuthority?.scopes).toEqual(["operator.write"]);
+        await child.run(() => tool.execute("allowed", { path: file, content: "allowed\n" }));
         expect(await readFile(path.join(stateDir, file), "utf8")).toBe("allowed\n");
-        expect(child.signal.aborted).toBe(true);
+
+        // Policy changes affect the next restoration, not this admitted write.
+        pauseWrite = true;
+        pendingWrite = child.run(() =>
+          tool.execute("admitted", { path: file, content: "finished\n" }),
+        );
+        void pendingWrite.catch(beforeWrite.reject);
+        await beforeWrite.promise;
+        if (change === "device revocation") {
+          await rotateDeviceToken({ deviceId: "recovery-device", role: "operator" });
+          invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
+        } else {
+          const other = ensureProfileForEmail("other@example.test");
+          linkEmail("recovery@example.test", other.id);
+          if (change === "email restoration") {
+            expect(linkEmail("recovery@example.test", profile.id).id).toBe(profile.id);
+          }
+        }
+        releaseWrite.resolve();
+        await expect(pendingWrite).resolves.toBeDefined();
+        expect(writes).toBe(2);
+        expect(await readFile(path.join(stateDir, file), "utf8")).toBe("finished\n");
+        expect(child.signal.aborted).toBe(false);
+        await expect(
+          restoreGatewayOperatorSource({
+            snapshot: fixture.snapshot,
+            target: fixture.target,
+            context: fixture.context,
+            assertCurrent() {},
+          }),
+        ).rejects.toThrow(/operator|profile/);
       } finally {
         releaseWrite.resolve();
         await pendingWrite?.catch(() => undefined);

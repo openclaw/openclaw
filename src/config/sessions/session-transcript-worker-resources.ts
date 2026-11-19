@@ -36,6 +36,7 @@ import {
 } from "./session-store-read-candidates.js";
 import type { SessionStoreTargetPreparationRequest } from "./session-store-target-inventory.js";
 import {
+  createSessionHistoryLanePool,
   createSessionTranscriptHistoryPool,
   createUsageCostPool,
   type SessionCostWorkerLane,
@@ -111,8 +112,9 @@ function createHistoryLane(name: string, maxWorkers?: number) {
   );
 }
 
-export const historyLane = registerSessionTranscriptReaderLane("Session history", (closed) =>
-  createSessionTranscriptHistoryPool(SESSION_TRANSCRIPT_FOREGROUND_WORKERS, closed),
+export const historyLane = registerSessionTranscriptReaderLane(
+  "Session history",
+  createSessionHistoryLanePool,
 );
 // Search readiness can await a host writer; it cannot occupy committed-history workers.
 export const transcriptSearchLane = createHistoryLane(

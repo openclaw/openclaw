@@ -97,3 +97,16 @@ export async function prepareGatewayPublicationReaderV1(
   const runtime = await import("../gateway/publication-reader.js");
   return runtime.prepareGatewayPublicationReaderV1(...args);
 }
+
+/** Read an already provisioned non-primary machine identity; never creates credentials. */
+export async function loadGatewayReaderIdentityV1(identityKey: string) {
+  if (!identityKey || identityKey !== identityKey.trim() || identityKey === "primary") {
+    throw new Error("A named non-primary Gateway reader identity is required");
+  }
+  const { loadDeviceIdentityIfPresentAsync } = await import("../infra/device-identity-async.js");
+  const identity = await loadDeviceIdentityIfPresentAsync({ identityKey });
+  if (!identity) {
+    throw new Error("Gateway reader identity is not provisioned");
+  }
+  return identity;
+}

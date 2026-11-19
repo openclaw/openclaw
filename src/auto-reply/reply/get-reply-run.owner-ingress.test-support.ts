@@ -1,3 +1,5 @@
+import { getRuntimeConfig } from "../../config/config.js";
+import { isConfiguredCommandOwner } from "../command-auth.js";
 import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
 import {
   createPreparedReplyTurn as turn,
@@ -36,7 +38,7 @@ export function bindOwnerIngress(
   params: ReturnType<typeof createOwnerIngress>,
   channel: string,
   kind: string,
-  isCurrent: () => boolean,
+  isCurrent = () => isConfiguredCommandOwner(getRuntimeConfig(), { channel, senderId: "owner-1" }),
 ) {
   if (kind === "configured-owner" || kind === "configured-owner-revoked") {
     return;

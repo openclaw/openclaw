@@ -11,7 +11,7 @@ import type { GatewayRequestHandlerOptions } from "./server-methods/shared-types
 export type PublicationReaderAdmission = Readonly<PairedDeviceTokenIdentity>;
 const admissions = new WeakSet<PublicationReaderAdmission>();
 
-export function isPublicationReaderAdmission(
+function isPublicationReaderAdmission(
   admission: PublicationReaderAdmission | undefined,
 ): admission is PublicationReaderAdmission {
   return admission !== undefined && admissions.has(admission);
