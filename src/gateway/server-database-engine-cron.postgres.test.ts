@@ -31,7 +31,7 @@ import type { toCronBroadcastEvent } from "./server-cron-plugin-job.js";
 import {
   createCronRestartDiagnostics,
   expectStoredCronOneShotComplete,
-  readCronRetrySnapshot,
+  readGatewayExitBoots,
   startHeldCronRetryProvider,
   observePostgresPoolReuse,
 } from "./server-database-engine-cron.test-support.js";
@@ -138,7 +138,6 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       },
       models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
       cron: { enabled: true },
-      ...(schedulerEnabled ? { logging: { file: current.statePath("cron-diagnostic.log") } } : {}),
     };
     await current.writeConfig(config);
     // Only the child leaves test mode so it acquires the real Gateway owner lease.
@@ -196,7 +195,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
   }) {
     const { instance, gateway, anchor, applicationName, bootId, closed } = initial;
     const child = instance.child!;
-    diagnostics?.trackChild(child);
+    diagnostics?.trackChild(child, () => instance.logs());
     const pid = child.pid!;
     expect(bootId).toEqual(expect.any(String));
     const pool = await observePostgresPoolReuse(gateway, () => instance.logs());
@@ -513,11 +512,8 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       expect(pending.state.nextRunAtMs).toEqual(expect.any(Number));
       expect(pending.state.consecutiveErrors).toBe(activeJob.state.consecutiveErrors);
       trace("await-retry-provider");
-      const completeRetry = await diagnostics.observeRetry(
-        retryResponse.promise,
-        restarted,
-        pending.state.nextRunAtMs!,
-        () => readCronRetrySnapshot(connection!, quoteIdentifier(anchor.namespace), job.id),
+      const completeRetry = await diagnostics.observeRetry(retryResponse.promise, () =>
+        readGatewayExitBoots(connection!, quoteIdentifier(anchor.namespace)),
       );
       trace("retry-provider-accepted");
       const receipts = await readReceipts();
