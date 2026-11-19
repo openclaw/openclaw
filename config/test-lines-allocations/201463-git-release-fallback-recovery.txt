@@ -1,2 +1,0 @@
-# Exact net regression-test lines for #201463: a recovered Git release update falls back only to a release of the build that serves, at the shared decision owner and in the candidate finalizer.
-88

@@ -488,51 +488,6 @@ it.each([false, true])(
   },
 );
 
-it("hands an in-place checkout run's inconclusive hold to finalization unchanged", async () => {
-  // The shipped in-place runner's record matches no release recovery; the candidate
-  // must finalize exactly what it received, as before that recovery existed.
-  const failed = {
-    ...result,
-    status: "error",
-    mode: "git",
-    root: "/fixture/checkout",
-    reason: "rollback-state-unverified",
-    recovery: {
-      serviceRestartSafe: false,
-      reason: "state-migration-started",
-      dataAtRisk: "rollback-state-unverified",
-    },
-    steps: [
-      {
-        name: "state-schema-verification",
-        command: "openclaw update",
-        cwd: "/fixture/checkout",
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: "SQLite source did not stabilize (reason=wal-copy-unstable, attempts=10)",
-      },
-    ],
-    runId: "in-place-run",
-  };
-  const input = {
-    ...workerInput({
-      ...finalizationParams({ runId: "in-place-run" }, "/fixture/checkout"),
-      gitRelease: false,
-      rollbackBlockedReason: "rollback-state-unverified",
-      result: failed,
-    }),
-    executor: undefined,
-  };
-  fixture.finish.mockResolvedValue(failed);
-  fixture.terminal.mockReturnValue({ runId: "in-place-run", status: "failed", phase: "finished" });
-  await runWorker(input);
-
-  const expected = structuredClone(input.params);
-  Object.assign(expected.opts.run, { executorFence: fixture.fence, busyTimeoutMs: 1_000 });
-  expect(fixture.finish).toHaveBeenCalledExactlyOnceWith(expected, finalizationOptions);
-  expectResultFile(input, false, "in-place-run");
-});
-
 it("times the fresh-driver handoff from the previous driver's last receipt", async () => {
   const handoffStartedAtMs = 1_791_594_640_455;
   const readyAtMs = handoffStartedAtMs + 23_400;

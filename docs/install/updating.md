@@ -1832,11 +1832,12 @@ cannot read after a new-version Doctor or boot check may have written it. When n
 new-version process has opened state yet, an unreadable store is a recorded warning
 (`state-schema-verification`), not data at risk, and the update continues or fails for its
 own recorded reason. On a Git release the new release migrates state when it starts, and its
-trial switches back if it fails to start. Installed
-updaters from before this change copied every live store, so a busy multi-gigabyte database
-could end a Git update as `rollback-state-unverified` with the Gateway still serving; the
-new release's finalization recognizes that record, rereads the stores, and continues when
-no schema moved.
+trial switches back if it fails to start. The Git release inspection also does not
+require the new schema before that start: "migration did not finish" applies only to
+installs whose updater runs Doctor before restarting. Installed updaters that run Git
+releases without this change (main builds since the release layout landed) fail
+every Git update that changes a schema in their own process, before the new release runs;
+rebuild the checkout once to get an updater with the fix.
 
 Database rehearsal also avoids a second full backup of each private snapshot.
 Candidate inventory reads database registrations and the installed plugin index

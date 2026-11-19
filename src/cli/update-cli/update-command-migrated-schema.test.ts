@@ -2,10 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { writeGitReleaseBuild } from "../../infra/git-release-backout.test-support.js";
 import { migrateDaemonRuntimePins } from "../../infra/state-migrations.daemon-runtime-pins.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import { readUpdateDatabaseGenerations } from "../../infra/update-database-generations.js";
@@ -27,31 +26,11 @@ import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journ
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { execNodeEvalSync } from "../../test-utils/node-process.js";
 import { prepareCandidateAuthorityRuntime } from "./update-command-candidate-authority.test-support.js";
-import type { FinishUpdateParams } from "./update-command-finish-types.js";
-import {
-  finishParams,
-  updateResult,
-  updateStep,
-} from "./update-command-maintenance-fixtures.test-support.js";
-import {
-  inspectActivatedUpdateState,
-  reinspectInconclusiveGitReleaseState,
-} from "./update-command-migrated.js";
+import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
+import { inspectActivatedUpdateState } from "./update-command-migrated.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 // The retained updater reads through the real candidate's newer schema contract.
-// The serving Gateway's health report is the only network boundary in recovery.
-const gatewayProbe = vi.hoisted(() => ({ buildId: undefined as string | undefined }));
-vi.mock("../daemon-cli/restart-health-probe.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../daemon-cli/restart-health-probe.js")>()),
-  resolveGatewayRestartProbeContext: async () => ({ auth: undefined, config: {} }),
-  confirmGatewayReachable: async () => ({
-    reachable: gatewayProbe.buildId !== undefined,
-    gatewayVersion: gatewayProbe.buildId ? "1.0.0" : null,
-    gatewayBuildId: gatewayProbe.buildId,
-  }),
-}));
-
 vi.mock("../../state/openclaw-schema-versions.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/openclaw-schema-versions.js")>();
   return { ...actual, OPENCLAW_STATE_SCHEMA_VERSION: actual.OPENCLAW_STATE_SCHEMA_VERSION - 1 };
@@ -63,20 +42,11 @@ const currentSchemas = {
 };
 const runtimeFixture = createFixtureLifetime();
 let candidateRoot: string;
-/** The Git release link selecting the candidate runtime, as a switched release leaves it. */
-let releaseSlot: string;
 beforeAll(async () => {
-  const prefix = await fs.realpath(runtimeFixture.createTempDir("schema-candidate-runtime-"));
-  const releaseRoot = path.join(prefix, "releases", "r1", "lib", "node_modules", "openclaw");
-  await fs.mkdir(releaseRoot, { recursive: true });
-  const runtime = await runtimeFixture.run(() => prepareCandidateAuthorityRuntime(releaseRoot));
+  const runtime = await runtimeFixture.run(() =>
+    prepareCandidateAuthorityRuntime(runtimeFixture.createTempDir("schema-candidate-runtime-")),
+  );
   candidateRoot = fileURLToPath(new URL("../../", runtime.worker));
-  releaseSlot = path.join(prefix, "lib", "node_modules", "openclaw");
-  // Release links are POSIX-only; the slot cases below skip on Windows.
-  if (process.platform !== "win32") {
-    await fs.mkdir(path.dirname(releaseSlot), { recursive: true });
-    await fs.symlink(path.relative(path.dirname(releaseSlot), releaseRoot), releaseSlot);
-  }
 });
 afterAll(() => runtimeFixture.cleanup());
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -435,206 +405,5 @@ it.each([
     ).resolves.toBe(blocked);
     // The previous Gateway still serves the old schema; no Doctor ran to finish it.
     expect(result).toMatchObject({ status: "ok", steps: [] });
-  },
-);
-
-describe.skipIf(process.platform === "win32")(
-  "a shipped Git release updater's inconclusive record",
-  () => {
-    const unstable =
-      "SQLite source did not stabilize (reason=wal-copy-unstable, attempts=10) after 10 read-only inspection attempts.";
-    const servingCommit = "a".repeat(40);
-    const prefix = () => path.dirname(path.dirname(path.dirname(releaseSlot)));
-    const releaseLink = (id: string) => `../../releases/${id}/lib/node_modules/openclaw`;
-    const trialFile = () => path.join(prefix(), "releases", ".trial");
-    afterEach(async () => {
-      gatewayProbe.buildId = undefined;
-      await fs.rm(trialFile(), { force: true });
-      await fs.rm(path.join(prefix(), "releases", "served"), { recursive: true, force: true });
-      await fs.rm(path.join(prefix(), "releases", "never-served"), {
-        recursive: true,
-        force: true,
-      });
-      // A no-fallback outcome unlinks the shared release link; restore it for the next case.
-      await fs.rm(releaseSlot, { force: true });
-      await fs.symlink(releaseLink("r1"), releaseSlot);
-    });
-
-    async function shippedFailure(
-      overrides: {
-        stderrTail?: string;
-        shouldRestart?: boolean;
-        laterFailure?: boolean;
-        /** The release directory itself, which is not the slot link. */
-        plainRoot?: boolean;
-        params?: Partial<FinishUpdateParams>;
-        /** Where the serving Gateway's build lives, and what the trial falls back to. */
-        serving?: "release" | "checkout";
-        previous?: "served" | "never-served";
-      } = {},
-    ) {
-      const { stderrTail = unstable, shouldRestart = true, laterFailure = false } = overrides;
-      const root = overrides.plainRoot ? candidateRoot : releaseSlot;
-      const store = await servingAgentStore("update-shipped-inconclusive-");
-      const checkout = path.join(store.stateDir, "checkout");
-      await writeGitReleaseBuild(
-        overrides.serving === "checkout"
-          ? checkout
-          : path.join(prefix(), "releases", "served", "lib", "node_modules", "openclaw"),
-        servingCommit,
-        "serving-build",
-      );
-      await writeGitReleaseBuild(
-        path.join(prefix(), "releases", "never-served", "lib", "node_modules", "openclaw"),
-        "b".repeat(40),
-        "never-served-build",
-      );
-      await fs.writeFile(
-        trialFile(),
-        JSON.stringify({
-          target: releaseLink("r1"),
-          previous: releaseLink(overrides.previous ?? "served"),
-          version: "1.0.0",
-          createdAt: Date.now(),
-          attempts: 0,
-        }),
-      );
-      gatewayProbe.buildId = "serving-build";
-      const params = finishParams({
-        shouldRestart,
-        root: overrides.serving === "checkout" ? checkout : root,
-        gitRelease: true,
-        configSnapshot: { config: {} } as FinishUpdateParams["configSnapshot"],
-        schemaVersions: store.schemaVersions,
-        candidateSchemaVersions: nextSchemas,
-        ownedManagedUpdateEnv: store.env,
-        rollbackBlockedReason: "rollback-state-unverified",
-        result: updateResult({
-          status: "error",
-          mode: "git",
-          root,
-          reason: "rollback-state-unverified",
-          recovery: {
-            serviceRestartSafe: false,
-            reason: "state-migration-started",
-            dataAtRisk: "rollback-state-unverified",
-          },
-          steps: [
-            updateStep("state-schema-verification", { cwd: root, stderrTail }),
-            // The adopting driver records its handoff timing before finalizing.
-            updateStep("update-driver-handoff", { exitCode: laterFailure ? 1 : 0 }),
-          ],
-        }),
-        ...overrides.params,
-      });
-      return { ...store, params, checkout };
-    }
-
-    it.each([
-      { case: "falls back to a release of the serving build", previous: "served", replaced: false },
-      { case: "fell back to a build that never served", previous: "never-served", replaced: true },
-    ] as const)("re-reads the live stores and continues when the trial $case", async (c) => {
-      const { params } = await shippedFailure({ previous: c.previous });
-      const recovered = await reinspectInconclusiveGitReleaseState(params);
-      expect(recovered.rollbackBlockedReason).toBeUndefined();
-      expect(recovered.result).toMatchObject({
-        status: "ok",
-        steps: [
-          { name: "state-schema-verification", exitCode: 0 },
-          ...(c.replaced ? [{ name: "git-release-trial-fallback", exitCode: 0 }] : []),
-          { name: "update-driver-handoff", exitCode: 0 },
-        ],
-      });
-      expect(recovered.result.reason).toBeUndefined();
-      expect(recovered.result.steps[0]?.advisory?.message).toContain(
-        "The new release reread them directly: no schema moved and no data was changed. The update continues.",
-      );
-      // The selected release's own verdict replaces the shipped data-at-risk stamp.
-      expect(recovered.result.recovery).not.toMatchObject({ reason: "state-migration-started" });
-      expect(recovered.result.recovery).not.toHaveProperty("dataAtRisk");
-      // A failed trial now returns to the release of the build that served.
-      expect(JSON.parse(await fs.readFile(trialFile(), "utf8"))).toMatchObject({
-        target: releaseLink("r1"),
-        previous: releaseLink("served"),
-      });
-    });
-
-    it("does not restart when no release of the serving build exists, and resets the link", async () => {
-      const { params, checkout } = await shippedFailure({
-        serving: "checkout",
-        previous: "never-served",
-      });
-      const recovered = await reinspectInconclusiveGitReleaseState(params);
-      expect(recovered.rollbackBlockedReason).toBeUndefined();
-      expect(recovered.result).toMatchObject({
-        status: "error",
-        reason: "git-release-fallback-unavailable",
-        root: checkout,
-        recovery: { serviceRestartSafe: true, version: "1.0.0", buildId: "serving-build" },
-      });
-      expect(recovered.result.steps.at(-1)?.stderrTail).toMatch(
-        /^No installed release matches the build the Gateway serves, 1\.0\.0 \(a{12}\), .* The update did not restart: the Gateway keeps serving 1\.0\.0 and no data was changed\. The release link was reset to what serves, so the next `openclaw update` starts clean\.$/,
-      );
-      const nextAction = resolveUpdateResultNextAction({
-        result: recovered.result,
-        serviceRunning: true,
-        verifiedServingVersion: "1.0.0",
-        env: params.ownedManagedUpdateEnv!,
-      });
-      expect(nextAction).toContain("Your Gateway is still serving 1.0.0");
-      expect(nextAction).not.toMatch(/data at risk|Keep the Gateway stopped/);
-      // The service runs the checkout, so the next update converts afresh from it.
-      await expect(fs.lstat(releaseSlot)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.stat(trialFile())).rejects.toMatchObject({ code: "ENOENT" });
-    });
-
-    it.each([
-      { control: "a moved schema", moveSchema: true, overrides: {} },
-      { control: "another read failure", overrides: { stderrTail: "permission denied" } },
-      { control: "--no-restart", overrides: { shouldRestart: false } },
-      { control: "a later failed step", overrides: { laterFailure: true } },
-      { control: "an inconclusive reread", unreadable: true, overrides: {} },
-      { control: "an unreachable Gateway", unreachable: true, overrides: {} },
-      { control: "a package update", overrides: { params: { gitRelease: false } } },
-      {
-        control: "another recorded hold",
-        overrides: { params: { rollbackBlockedReason: "state-migrated-no-rollback" as const } },
-      },
-      {
-        control: "a stopped Gateway",
-        overrides: {
-          params: {
-            preManagedServiceStop: {
-              stopped: true,
-              inspected: true,
-              runtimeInspected: true,
-              running: false,
-            } as FinishUpdateParams["preManagedServiceStop"],
-          },
-        },
-      },
-      { control: "a root outside a release slot", overrides: { plainRoot: true } },
-    ])(
-      "keeps the recorded outcome for $control",
-      async ({ moveSchema, unreadable, unreachable, overrides }) => {
-        const { params, agentPath } = await shippedFailure(overrides);
-        if (moveSchema) {
-          setSchema(agentPath, OPENCLAW_AGENT_SCHEMA_VERSION + 1);
-        }
-        if (unreadable) {
-          await makeUnreadable(agentPath);
-        }
-        if (unreachable) {
-          gatewayProbe.buildId = undefined;
-        }
-        const trial = await fs.readFile(trialFile(), "utf8");
-        await expect(reinspectInconclusiveGitReleaseState(params)).resolves.toBe(params);
-        expect(params.result).toMatchObject({
-          status: "error",
-          reason: "rollback-state-unverified",
-        });
-        expect(await fs.readFile(trialFile(), "utf8")).toBe(trial);
-      },
-    );
   },
 );
