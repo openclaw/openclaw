@@ -459,7 +459,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     const install = await halfSwitchedInstall();
     target.duringBuild = () => fs.rm(install.trialFile);
 
-    const result = await install.update(install.commits["3.0.0"]!);
+    await install.update(install.commits["3.0.0"]!);
 
     expect(await install.readTrial()).toMatchObject({ previous: install.unserved });
     await expect(fs.access(install.unserved)).resolves.toBeUndefined();
@@ -494,7 +494,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     const install = await halfSwitchedInstall();
     await arrange(install);
 
-    const result = await install.update(install.commits["2.0.0"]!);
+    await install.update(install.commits["2.0.0"]!);
 
     expect(target.builds).toBe(1);
     expect(await fs.realpath(install.slot)).not.toBe(install.unserved);
@@ -506,7 +506,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   ])("a release a --no-restart update left: %s", async (_label, version, builds) => {
     const install = await halfSwitchedInstall({ pending: true });
 
-    const result = await install.update(install.commits[version]!);
+    await install.update(install.commits[version]!);
 
     expect(target.builds).toBe(builds);
     const linked = await fs.realpath(install.slot);
@@ -528,7 +528,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
       const install = await halfSwitchedInstall({ linkedState });
       target.broken.push(install.serving);
 
-      const result = await install.update(install.commits["3.0.0"]!);
+      await install.update(install.commits["3.0.0"]!);
 
       expect(target.conversionTargets).toEqual([install.commits["1.0.0"]]);
       const { previous } = await install.readTrial();
