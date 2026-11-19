@@ -300,6 +300,9 @@ describe("sessions_send steering custody", () => {
               turn.revoke(alice.profileId);
               await expect(receiver.commit()).rejects.toThrow(/authority|access|revoked/i);
               // After admission the receiving run owns the refused input; its end settles custody.
+              await setImmediate();
+              // The refused commit alone does not settle the receiver's steering custody.
+              expect(custodyLeases.some((lease) => lease.releases === 0)).toBe(true);
               receiver.end();
             } else if (outcome === "receiver cancelled") {
               await receiver.cancel();
