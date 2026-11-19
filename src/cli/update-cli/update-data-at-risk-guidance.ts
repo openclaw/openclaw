@@ -8,7 +8,7 @@ import {
   dataAtRiskVerifiedStep,
   listUnverifiedDataAtRisk,
 } from "../../infra/update-run-data-at-risk.js";
-import { listUpdateRuns, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import { listUpdateRunsAsync, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { confirmGatewayReachable } from "../daemon-cli/restart-health-probe.js";
@@ -33,7 +33,8 @@ export async function observeGatewayForGuidance(params: {
       params.timeoutMs,
     );
     if (!state.running) {
-      return { running: false };
+      // Only a confirmed stop is reported as stopped; an unreadable runtime stays unknown.
+      return state.runtime?.status === "stopped" ? { running: false } : {};
     }
     const port = await resolveUpdatedGatewayRestartPort({
       config: params.config,
@@ -114,7 +115,10 @@ export async function verifyRecordedDataAtRiskBeforeUpdate(
   env: NodeJS.ProcessEnv,
   timeoutMs: number | undefined,
 ): Promise<((runId: string) => void) | undefined> {
-  const marks = listUnverifiedDataAtRisk(listUpdateRuns({ limit: 100 }, { env }));
+  // The admitted worker reads history without a cold snapshot of a busy live database.
+  const marks = listUnverifiedDataAtRisk(
+    await listUpdateRunsAsync({ limit: 100 }, { env }, { current: true }),
+  );
   if (marks.length === 0) {
     return undefined;
   }

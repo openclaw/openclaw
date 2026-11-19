@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -22,6 +26,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   vi.restoreAllMocks();
+  closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   await state.cleanup();
 });
@@ -113,16 +118,18 @@ it.each(["shared", "agent"] as const)(
   "refuses when the marked update's database rollback left a migrated %s database behind",
   async (store) => {
     openOpenClawStateDatabase();
-    const databasePath = resolveOpenClawStateSqlitePath(process.env);
-    // A rollback moves each migrated database aside beside its own file before restoring.
-    const directory =
+    // A rollback moves each migrated database aside beside its own file before restoring;
+    // a configured agent store can live outside the state directory.
+    const storePath =
       store === "shared"
-        ? path.dirname(databasePath)
-        : path.join(path.dirname(path.dirname(databasePath)), "agents", "main", "agent");
-    const leftover = path.join(
-      directory,
-      `${store === "shared" ? "openclaw" : "openclaw-agent"}.sqlite.migrated-run-1`,
-    );
+        ? resolveOpenClawStateSqlitePath(process.env)
+        : openOpenClawAgentDatabase({
+            agentId: "external",
+            path: state.path("external-store", "openclaw-agent.sqlite"),
+          }).path;
+    closeOpenClawAgentDatabasesForTest();
+    const leftover = `${storePath}.migrated-run-1`;
+    const directory = path.dirname(leftover);
     await fs.mkdir(directory, { recursive: true });
     await fs.writeFile(leftover, "migrated state");
 

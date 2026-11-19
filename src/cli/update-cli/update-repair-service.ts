@@ -3,11 +3,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { verifyUpdateStateConsistency } from "../../infra/update-data-at-risk.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
   dataAtRiskVerifiedStep,
   findUnverifiedDataAtRisk,
+  listUnverifiedDataAtRisk,
 } from "../../infra/update-run-data-at-risk.js";
 import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import {
@@ -26,6 +28,7 @@ import {
   waitForGatewayHealthyRestart,
 } from "../daemon-cli/restart-health.js";
 import { readPackageVersion } from "./shared.js";
+import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import {
   assertGatewayServiceAdmissionUnchanged,
   GatewayServiceUpdateOwnershipError,
@@ -39,7 +42,10 @@ import {
   formatDataAtRiskResolved,
   observeGatewayForGuidance,
 } from "./update-data-at-risk-guidance.js";
-import type { UpdateFinalizationPhase } from "./update-finalization-lifecycle.js";
+import type {
+  UpdateFinalizationLifecycle,
+  UpdateFinalizationPhase,
+} from "./update-finalization-lifecycle.js";
 
 function stoppedGatewayGuidance(reason: string, env: NodeJS.ProcessEnv): string {
   return `Gateway service remains stopped: ${reason}. After resolving this, start it with \`${formatCliCommand("openclaw gateway start", env)}\`, then check \`${formatCliCommand("openclaw gateway status --deep", env)}\`.`;
@@ -54,11 +60,13 @@ export async function verifyRecordedDataAtRisk(params: {
   /** Newest first; one verification settles them all. */
   marks: readonly { runId: string; mark: string }[];
   repairRunId: string;
-  config: OpenClawConfig;
+  config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   json: boolean;
   phase: UpdateFinalizationPhase;
   timeoutMs: number;
+  /** Before Doctor runs: an unfinished migration is Doctor's to finish, so defer it. */
+  beforeMaintenance?: true;
 }): Promise<string | undefined> {
   const { env, phase, marks } = params;
   const verification = await verifyUpdateStateConsistency({
@@ -68,6 +76,9 @@ export async function verifyRecordedDataAtRisk(params: {
     signal: phase.signal,
   });
   phase.assertCurrent();
+  if (params.beforeMaintenance && verification.status !== "consistent" && verification.finishable) {
+    return undefined;
+  }
   if (verification.status !== "consistent") {
     return formatDataAtRiskRefusal({
       marks,
@@ -96,6 +107,51 @@ export async function verifyRecordedDataAtRisk(params: {
   }
   defaultRuntime[params.json ? "error" : "log"](resolved);
   return undefined;
+}
+
+/** Whether recent history holds a data-at-risk mark no run has verified. */
+export function hasUnverifiedDataAtRisk(): boolean {
+  return listUnverifiedDataAtRisk(listUpdateRuns({ limit: 100 })).length > 0;
+}
+
+/** Verify every unverified mark in recent history for a repair or finalization run. */
+export async function verifyUnverifiedDataAtRisk(
+  params: Omit<Parameters<typeof verifyRecordedDataAtRisk>[0], "marks" | "env">,
+): Promise<string | undefined> {
+  const marks = listUnverifiedDataAtRisk(listUpdateRuns({ limit: 100 }));
+  return marks.length > 0
+    ? await verifyRecordedDataAtRisk({
+        ...params,
+        marks,
+        env: resolveServiceRefreshEnv(process.env, tryProcessCwd()),
+      })
+    : undefined;
+}
+
+/**
+ * Before Doctor may park and restart the Gateway, refuse an inconsistent recorded mark so
+ * nothing changes; an unfinished migration is left for Doctor and checked again after it.
+ */
+export async function refuseUnverifiedDataAtRiskBeforeMaintenance(
+  lifecycle: Pick<UpdateFinalizationLifecycle, "run" | "budget">,
+  repairRunId: string,
+  json: boolean | undefined,
+): Promise<void> {
+  if (!hasUnverifiedDataAtRisk()) {
+    return;
+  }
+  const refusal = await lifecycle.run("preflight", (phase) =>
+    verifyUnverifiedDataAtRisk({
+      repairRunId,
+      json: Boolean(json),
+      phase,
+      timeoutMs: lifecycle.budget("preflight"),
+      beforeMaintenance: true,
+    }),
+  );
+  if (refusal) {
+    throw new Error(refusal);
+  }
 }
 
 export async function restoreRepairGateway(params: {

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
+import { readRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry-listing.js";
 import { preflightOpenClawDatabaseSchemas } from "../state/openclaw-database-preflight.js";
 import type {
   IncompatibleOpenClawDatabase,
@@ -32,6 +32,8 @@ export type UpdateStateVerification =
       nextAction: string;
       /** State is newer than the installed build: an update to a build that supports it is the fix. */
       newerState?: true;
+      /** Only a migration is unfinished, which Doctor finishes. */
+      finishable?: true;
     };
 
 function retryRepair(formatCommand: (command: string) => string): string {
@@ -45,43 +47,44 @@ function listFindings(findings: readonly string[]): string {
     : (findings[0] ?? "");
 }
 
-const LEFTOVER_SCAN_DEPTH = 6;
-const LEFTOVER_SCAN_ENTRIES = 50_000;
-
 /**
  * A database rollback moves each migrated database aside as `<db>.migrated-<run>` beside
- * its own file, shared and agent stores alike, before it restores the backup. Walk the
- * state directory for that run's leftovers; `undefined` when none, `null` when the walk
- * could not finish within its bounds.
+ * its own file before it restores the backup. Check beside the shared database and every
+ * registered agent database, wherever it lives; `null` when the registry cannot be read.
  */
-function findRollbackLeftover(stateDir: string, runId: string): string | null | undefined {
-  const marker = `.migrated-${runId}`;
-  let visited = 0;
-  const walk = (directory: string, depth: number): string | null | undefined => {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(directory, { withFileTypes: true });
-    } catch {
-      return depth === 0 ? null : undefined;
-    }
-    for (const entry of entries) {
-      if ((visited += 1) > LEFTOVER_SCAN_ENTRIES) {
-        return null;
-      }
-      const file = path.join(directory, entry.name);
-      if (entry.name.includes(marker)) {
-        return file;
-      }
-      if (entry.isDirectory() && depth < LEFTOVER_SCAN_DEPTH) {
-        const found = walk(file, depth + 1);
-        if (found !== undefined) {
-          return found;
-        }
+function findRollbackLeftover(
+  env: NodeJS.ProcessEnv,
+  statePath: string,
+  runId: string,
+): string | null | undefined {
+  let agentPaths: string[];
+  try {
+    agentPaths = readRegisteredAgentDatabases(
+      { env, includeIncompatibleSchemaVersions: true },
+      false,
+    ).map((entry) => entry.path);
+  } catch {
+    return null;
+  }
+  for (const databasePath of [statePath, ...agentPaths]) {
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+      const leftover = `${databasePath}.migrated-${runId}${suffix}`;
+      if (fs.existsSync(leftover)) {
+        return leftover;
       }
     }
-    return undefined;
-  };
-  return walk(stateDir, 0);
+  }
+  return undefined;
+}
+
+function describeBehind(database: {
+  kind: string;
+  agentId?: string;
+  path: string;
+  foundVersion: number;
+  supportedVersion: number;
+}): string {
+  return `the ${database.kind} database${database.agentId ? ` for agent ${database.agentId}` : ""} ${database.path} is at schema ${database.foundVersion}; installed OpenClaw ${VERSION} needs ${database.supportedVersion}, so its migration did not finish`;
 }
 
 function describeAhead(database: IncompatibleOpenClawDatabase): string {
@@ -97,11 +100,18 @@ function classify(
   formatCommand: (command: string) => string,
 ): UpdateStateVerification {
   const pending = schemas.pendingMigrations ?? [];
+  if (schemas.incompatible.length > 0 && pending.length > 0) {
+    // Neither an update nor Doctor can finish while one store is ahead and another behind.
+    return {
+      status: "inconsistent",
+      detail: `${listFindings(schemas.incompatible.map(describeAhead))}; and ${listFindings(pending.map(describeBehind))}`,
+      nextAction: "restore the pre-update backup, which an agent can choose with you.",
+    };
+  }
   if (schemas.incompatible.length > 0) {
     return {
       status: "inconsistent",
-      // Updating fixes newer state only when nothing else is unfinished.
-      ...(pending.length === 0 ? { newerState: true as const } : {}),
+      newerState: true,
       detail: listFindings(schemas.incompatible.map(describeAhead)),
       // The installed build cannot open newer state; a build that supports it can.
       nextAction: `run \`${formatCommand("openclaw update")}\` to a version that supports it, or restore the pre-update backup.`,
@@ -110,12 +120,8 @@ function classify(
   if (pending.length > 0) {
     return {
       status: "inconsistent",
-      detail: listFindings(
-        pending.map(
-          (database) =>
-            `the ${database.kind} database${database.agentId ? ` for agent ${database.agentId}` : ""} ${database.path} is at schema ${database.foundVersion}; installed OpenClaw ${VERSION} needs ${database.supportedVersion}, so its migration did not finish`,
-        ),
-      ),
+      finishable: true,
+      detail: listFindings(pending.map(describeBehind)),
       nextAction: `run \`${formatCommand("openclaw doctor --fix")}\` to finish the migration.`,
     };
   }
@@ -159,15 +165,15 @@ export async function verifyUpdateStateConsistency(params: {
     };
   }
   const databasePath = path.resolve(resolveOpenClawStateSqlitePath(params.env));
-  const stateDir = resolveStateDir(params.env);
   const leftovers = (params.marks ?? []).map(({ runId }) => ({
     runId,
-    file: findRollbackLeftover(stateDir, runId),
+    file: findRollbackLeftover(params.env, databasePath, runId),
   }));
   if (leftovers.some(({ file }) => file === null)) {
     return {
       status: "unverifiable",
-      detail: `the state directory ${stateDir} could not be searched for database rollback leftovers`,
+      detail:
+        "the agent database registry could not be read to check for database rollback leftovers",
       nextAction: retryRepair(params.formatCommand),
     };
   }

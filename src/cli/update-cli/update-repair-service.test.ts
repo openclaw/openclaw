@@ -384,10 +384,24 @@ it("verifies a mark on an update that never stopped the Gateway without starting
   );
 });
 
+// Refusals happen before Doctor runs, so Doctor never parks or restarts the Gateway.
+function expectRefusedBeforeDoctor(refusal: string) {
+  expect(mocks.doctor).not.toHaveBeenCalled();
+  expect(service.start).not.toHaveBeenCalled();
+  expect(service.stop).not.toHaveBeenCalled();
+  expect(healthApi.waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+  expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(refusal));
+  const repairRun = listUpdateRuns()[0]!;
+  expect(repairRun.status).toBe("failed");
+  expect(
+    repairRun.steps.some((step) => step.step.startsWith("finalize:data-at-risk-verified:")),
+  ).toBe(false);
+}
+
 it.each([
   {
     status: "inconsistent",
-    // A realistic path and writer: the whole refusal must survive the 500-character warning cap.
+    // A realistic path and writer: the next steps lead, so a length cap keeps them.
     detail:
       "the state database /Users/alice/.openclaw/state/openclaw.sqlite is at schema 41 (written by OpenClaw 2026.11.9), newer than 40 supported by installed OpenClaw 2026.11.6",
     nextAction:
@@ -408,25 +422,8 @@ it.each([
 
     await repair();
 
-    expect(service.start).not.toHaveBeenCalled();
-    expect(healthApi.waitForGatewayHealthyRestart).not.toHaveBeenCalled();
-    const repairRun = listUpdateRuns()[0]!;
-    expect(
-      repairRun.steps.some((step) => step.step.startsWith("finalize:data-at-risk-verified:")),
-    ).toBe(false);
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        restart: false,
-        coreUpdate: "pending",
-        status: "warning",
-        postUpdate: expect.objectContaining({
-          doctor: expect.objectContaining({
-            warnings: [
-              `Update ${original} recorded data at risk (rollback-state-unverified). The Gateway is stopped. Repair left the Gateway as it was. ${triageLead}${verification.nextAction} ${finding} ${verification.detail}.`,
-            ],
-          }),
-        }),
-      }),
+    expectRefusedBeforeDoctor(
+      `Update ${original} recorded data at risk (rollback-state-unverified). The Gateway is stopped. Repair left the Gateway as it was. ${triageLead}${verification.nextAction} ${finding} ${verification.detail}.`,
     );
   },
 );
@@ -437,23 +434,33 @@ it("keeps a Gateway another update stopped down when a later mark is inconsisten
   const marked = seed(false, markedRisk, false, false, "rollback-state-unverified");
   vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency").mockResolvedValue({
     status: "inconsistent",
-    detail: "the state database is at schema 39",
-    nextAction: "run `openclaw doctor --fix` to finish the migration.",
+    detail: "the state database is at schema 39 behind a leftover rollback",
+    nextAction: "keep that file and the backup.",
   });
 
   await repair();
 
-  expect(service.start).not.toHaveBeenCalled();
-  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-    expect.objectContaining({
-      restart: false,
-      coreUpdate: "pending",
-      postUpdate: expect.objectContaining({
-        doctor: expect.objectContaining({
-          warnings: [expect.stringContaining(`Update ${marked} recorded data at risk`)],
-        }),
-      }),
-    }),
+  expectRefusedBeforeDoctor(`Update ${marked} recorded data at risk`);
+});
+
+it("lets Doctor finish an unfinished migration before the mark is checked again", async () => {
+  const original = seed(true, markedRisk);
+  const verify = vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency");
+  verify.mockResolvedValueOnce({
+    status: "inconsistent",
+    finishable: true,
+    detail: "the state database is at schema 39",
+    nextAction: "run `openclaw doctor --fix` to finish the migration.",
+  });
+
+  await repair(false);
+
+  // Doctor ran, then the second check found the migrated state consistent.
+  expect(mocks.doctor).toHaveBeenCalled();
+  expect(verify).toHaveBeenCalledTimes(2);
+  expect(events).toEqual(["finalized", "start", "verified"]);
+  expect(listUpdateRuns()[0]?.steps).toContainEqual(
+    expect.objectContaining({ step: `finalize:data-at-risk-verified:${original}` }),
   );
 });
 
@@ -479,19 +486,8 @@ it("reports a serving Gateway as running when a recorded mark is inconsistent", 
 
   await repair();
 
-  expect(service.start).not.toHaveBeenCalled();
-  expect(service.stop).not.toHaveBeenCalled();
-  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-    expect.objectContaining({
-      status: "warning",
-      postUpdate: expect.objectContaining({
-        doctor: expect.objectContaining({
-          warnings: [
-            `Update ${original} recorded data at risk (rollback-state-unverified). The Gateway is running and serving OpenClaw 1.0.0. Repair left the Gateway as it was. Run \`openclaw triage\` for an agent with the recorded facts, or by hand: run \`openclaw update\` to a version that supports it, or restore the pre-update backup. Found: the state database is at schema 99.`,
-          ],
-        }),
-      }),
-    }),
+  expectRefusedBeforeDoctor(
+    `Update ${original} recorded data at risk (rollback-state-unverified). The Gateway is running and serving OpenClaw 1.0.0. Repair left the Gateway as it was. ${triageLead}run \`openclaw update\` to a version that supports it, or restore the pre-update backup. Found: the state database is at schema 99.`,
   );
 });
 

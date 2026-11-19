@@ -13,7 +13,7 @@ import { verifyPackageUpdateRecovery } from "./update-global.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 import type { UpdateRecovery } from "./update-recovery.js";
-import { findUnverifiedDataAtRisk, readRecordedDataAtRisk } from "./update-run-data-at-risk.js";
+import { listUnverifiedDataAtRisk, readRecordedDataAtRisk } from "./update-run-data-at-risk.js";
 import { findUpdateGatewayStop } from "./update-run-gateway-stop.js";
 import { withUpdateRunRead } from "./update-run-read-admission.js";
 import { readUpdateRunRecord, readUpdateRuns } from "./update-run-read.kernel.js";
@@ -156,21 +156,21 @@ export async function recoverInterruptedManagedUpdate(params: {
 }
 
 function assertRestartSafe(run: UpdateRunRecord | undefined) {
-  if (!readRecordedDataAtRisk(run)) {
-    return;
-  }
-  // Post-core repair records a receipt on its own run when it verified this mark. Repair
-  // may have advanced the schema past this helper's reader; then the mark still stands.
-  let history: UpdateRunRecord[];
+  // Post-core repair records a receipt on its own run when it verified a mark, and it
+  // refuses for a mark on any recent run, so any unverified mark keeps the Gateway down.
+  // Repair may have advanced the schema past this helper's reader; then only this run's
+  // own record can be judged, and its mark still stands.
+  let history: UpdateRunRecord[] | undefined;
   try {
-    history =
-      withUpdateRunRead(({ db }) => readUpdateRuns(db, { limit: 100 }), {
-        allowNativeRead: true,
-      }) ?? [];
+    history = withUpdateRunRead(({ db }) => readUpdateRuns(db, { limit: 100 }), {
+      allowNativeRead: true,
+    });
   } catch {
-    history = [];
+    history = undefined;
   }
-  const dataAtRisk = findUnverifiedDataAtRisk(run, history);
+  const dataAtRisk = history
+    ? listUnverifiedDataAtRisk(history)[0]?.mark
+    : readRecordedDataAtRisk(run);
   if (dataAtRisk) {
     throw new Error(
       `gateway left stopped: data at risk (${dataAtRisk}) recorded and not verified by repair`,

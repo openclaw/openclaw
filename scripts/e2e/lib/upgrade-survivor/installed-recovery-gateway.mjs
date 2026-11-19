@@ -467,9 +467,10 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
 
   /**
    * A failed post-activation schema read marks a run `rollback-state-unverified`. Write
-   * that mark onto a real stopped update in the row shape the published 2026.10.33 and
+   * that mark onto a real killed update in the row shape the published 2026.10.33 and
    * 2026.11.5 updaters persist: the failed `state-schema-verification` step, the
-   * `finalize:data-at-risk` fact, and a recovery object without the named risk.
+   * `finalize:data-at-risk` fact, and a recovery object without the named risk. The run
+   * stays as the killed updater left it, so its own recovery still finishes it.
    */
   const recordDataAtRiskMark = (runId) => {
     const db = new DatabaseSync(stateDatabase);
@@ -498,8 +499,8 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
         recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
       };
       db.prepare(
-        "UPDATE update_runs SET status = 'failed', phase = 'finished', reason = 'rollback-state-unverified', finished_at_ms = ?, updated_at_ms = ?, steps_json = ?, verification_json = ? WHERE run_id = ?",
-      ).run(now, now, JSON.stringify(steps), JSON.stringify(verification), runId);
+        "UPDATE update_runs SET updated_at_ms = ?, steps_json = ?, verification_json = ? WHERE run_id = ?",
+      ).run(now, JSON.stringify(steps), JSON.stringify(verification), runId);
     } finally {
       db.close();
     }
@@ -592,6 +593,7 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
     const leftover = `${stateDatabase}.migrated-${inconsistent.runId}`;
     fs.copyFileSync(stateDatabase, leftover);
     const refused = await repairMarked("inconsistent-repair", inconsistent);
+    assert.notEqual(refused.result.status, 0, "inconsistent-repair: exit");
     assert.match(
       refused.output,
       /recorded data at risk \(rollback-state-unverified\)\. The Gateway is stopped\./u,

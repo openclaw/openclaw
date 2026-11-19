@@ -18,7 +18,6 @@ import {
 import type { ManagedHandoffRepair } from "../../infra/update-managed-service-handoff-lease-types.js";
 import { readUpdateResultPolicy } from "../../infra/update-result-telemetry.js";
 import { formatUpdateRunOwnership } from "../../infra/update-run-activity.js";
-import { listUnverifiedDataAtRisk } from "../../infra/update-run-data-at-risk.js";
 import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import {
   acknowledgeAbandonedUpdateRun,
@@ -84,7 +83,12 @@ import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-comm
 import { withUpdateFailureTriage, type UpdateTriageTarget } from "./update-command-triage.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
 import { settleManagedHandoffPluginCohort } from "./update-plugin-cohort-settlement.js";
-import { restoreRepairGateway, verifyRecordedDataAtRisk } from "./update-repair-service.js";
+import {
+  hasUnverifiedDataAtRisk,
+  refuseUnverifiedDataAtRiskBeforeMaintenance,
+  restoreRepairGateway,
+  verifyUnverifiedDataAtRisk,
+} from "./update-repair-service.js";
 import {
   reportRetainedUpdateCustody,
   type RetainedUpdateCustodyReport,
@@ -424,6 +428,9 @@ async function updateFinalizeCommandInternal(
   };
   let outcome: { complete: () => Promise<void> } | { error: unknown };
   try {
+    if (ownsMaintenance) {
+      await refuseUnverifiedDataAtRiskBeforeMaintenance(lifecycle, invokingRunId, opts.json);
+    }
     if (prepared.installKind === "git") {
       const runtimeTimeoutMs = lifecycle.budget("plugins");
       const runtimeDeadline = performance.now() + runtimeTimeoutMs;
@@ -548,23 +555,17 @@ async function updateFinalizeCommandInternal(
     }
 
     const restoresGateway = interruptedGateway && pluginUpdate.status !== "error" && !retained;
-    // The newest unverified mark is checked first, whether or not its run stopped the
-    // Gateway (Git release, refusals before mutation), so guidance naming repair stays
-    // true. Restoration then sees this run's receipt; a refusal skips restoration.
-    const marks =
-      ownsMaintenance && pluginUpdate.status !== "error" && !retained
-        ? listUnverifiedDataAtRisk(listUpdateRuns({ limit: 100 }))
-        : [];
+    // Checked again after Doctor, whether or not the marked run stopped the Gateway.
+    const checksMarks =
+      ownsMaintenance && pluginUpdate.status !== "error" && !retained && hasUnverifiedDataAtRisk();
     const gateway =
-      restoresGateway || marks.length > 0
+      restoresGateway || checksMarks
         ? await lifecycle.run("gatewayRestoration", async (phase) => {
             const markRefusal =
-              marks.length > 0 &&
-              (await verifyRecordedDataAtRisk({
-                marks,
+              checksMarks &&
+              (await verifyUnverifiedDataAtRisk({
                 repairRunId: invokingRunId,
                 config: configSnapshot.config,
-                env: resolveServiceRefreshEnv(process.env, tryProcessCwd()),
                 json: Boolean(opts.json),
                 phase,
                 timeoutMs: lifecycle.budget("gatewayRestoration"),
