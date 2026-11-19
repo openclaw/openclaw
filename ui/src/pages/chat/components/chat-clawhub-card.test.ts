@@ -7,6 +7,7 @@ import { createDeferred as deferred } from "../../../../../test/helpers/promise.
 import { GatewayRequestError } from "../../../api/gateway-connect-errors.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import * as toast from "../../../lib/toast.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
@@ -238,10 +239,16 @@ describe("ClawHub chat recommendations", () => {
 
   it("installs an official plugin from the card and leaves policy review to the plugin page", async () => {
     let installed = false;
+    const notify = vi.spyOn(toast, "showToast").mockReturnValue(true);
     const { card, context, request } = mount(async (method) => {
       if (method === "plugins.install") {
         installed = true;
-        return { ok: true, plugin: { id: "whatsapp" }, restartRequired: false };
+        return {
+          ok: true,
+          plugin: { id: "whatsapp" },
+          restartRequired: false,
+          warnings: ["Link a phone to finish setup."],
+        };
       }
       return detail(installed, { author: "@openclaw" });
     });
@@ -270,6 +277,9 @@ describe("ClawHub chat recommendations", () => {
       ],
     ]);
     expect(context.navigate).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ severity: "warning", message: "Link a phone to finish setup." }),
+    );
     expect(part(card, "installed svg")).not.toBeNull();
     expect(part(card, "install")).toBeNull();
     expect(part(card, "dismiss")).toBeNull();
