@@ -571,7 +571,12 @@ async function updateFinalizeCommandInternal(
               }));
             // Inconsistent state keeps every Gateway as it is, whichever run stopped it.
             if (markRefusal) {
-              return { restart: false, warning: markRefusal };
+              return {
+                restart: false,
+                warning: markRefusal,
+                verification: undefined,
+                refused: true as const,
+              };
             }
             if (!restoresGateway) {
               return undefined;
@@ -668,7 +673,9 @@ async function updateFinalizeCommandInternal(
           lifecycle.handoff?.complete(invokingRunId);
         }
         // Exit status and advisories do not distinguish completed core work from deferred maintenance.
-        const coreUpdate: UpdateCoreCompletion = failure || retained ? "pending" : "completed";
+        // A refused mark leaves recovery unfinished; a handoff helper must not restart on it.
+        const coreUpdate: UpdateCoreCompletion =
+          failure || retained || (gateway && "refused" in gateway) ? "pending" : "completed";
         if (stage) {
           stage.status = result.status;
         } else if (opts.json) {

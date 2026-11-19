@@ -9,6 +9,7 @@ import {
   GIT_RELEASE_LAUNCHER,
   resolveGitReleaseEntrypointForLauncher,
 } from "../infra/git-release-paths.js";
+import { readGitMetadataDirectories } from "../infra/git-root.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
 import { realpathOrResolve } from "../infra/path-existence.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -188,30 +189,6 @@ export function resolveServiceEntrypoint(
   return undefined;
 }
 
-/** A linked worktree's private Git directory, read from its `.git` file without running Git. */
-async function readLinkedGitDir(worktree: string): Promise<string | undefined> {
-  const dotGit = path.join(worktree, ".git");
-  if (!(await fs.lstat(dotGit).catch(() => null))?.isFile()) {
-    return undefined;
-  }
-  const pointer = /^gitdir:\s*(.+)$/mu.exec(await fs.readFile(dotGit, "utf8"))?.[1]?.trim();
-  return pointer ? path.resolve(worktree, pointer) : undefined;
-}
-
-/** The repository's common Git directory for a checkout or a linked worktree. */
-async function readGitCommonDir(worktree: string): Promise<string | undefined> {
-  const dotGit = path.join(worktree, ".git");
-  if ((await fs.lstat(dotGit).catch(() => null))?.isDirectory()) {
-    return await realpathOrResolve(dotGit);
-  }
-  const gitDir = await readLinkedGitDir(worktree);
-  if (!gitDir) {
-    return undefined;
-  }
-  const common = (await fs.readFile(path.join(gitDir, "commondir"), "utf8").catch(() => "")).trim();
-  return await realpathOrResolve(common ? path.resolve(gitDir, common) : gitDir);
-}
-
 /**
  * Whether a service that starts the Git release launcher runs a release of `checkout`:
  * the launcher is the entrypoint, the release sits in that launcher's `releases/`, and it
@@ -229,25 +206,26 @@ async function isGitReleaseOf(
     return false;
   }
   const releases = await realpathOrResolve(path.join(path.dirname(launcher), "releases"));
-  const gitDir = await readLinkedGitDir(release);
-  if (!release.startsWith(`${releases}${path.sep}`) || !gitDir) {
+  if (!release.startsWith(`${releases}${path.sep}`)) {
     return false;
   }
-  const backPointer = (
-    await fs.readFile(path.join(gitDir, "gitdir"), "utf8").catch(() => "")
-  ).trim();
-  if (
-    !backPointer ||
-    (await realpathOrResolve(path.resolve(gitDir, backPointer))) !==
-      (await realpathOrResolve(path.join(release, ".git")))
-  ) {
+  const releaseGit = readGitMetadataDirectories(release);
+  const checkoutGit = readGitMetadataDirectories(checkout);
+  // A linked worktree has its own Git directory; Git records the worktree it belongs to.
+  if (!releaseGit || !checkoutGit || releaseGit.gitDir === releaseGit.commonDir) {
     return false;
   }
-  const [releaseCommon, checkoutCommon] = await Promise.all([
-    readGitCommonDir(release),
-    readGitCommonDir(checkout),
-  ]);
-  return releaseCommon !== undefined && releaseCommon === checkoutCommon;
+  const backPointer = await fs
+    .readFile(path.join(releaseGit.gitDir, "gitdir"), "utf8")
+    .then((value) => value.trim())
+    .catch(() => "");
+  return (
+    backPointer !== "" &&
+    (await realpathOrResolve(path.resolve(releaseGit.gitDir, backPointer))) ===
+      (await realpathOrResolve(path.join(release, ".git"))) &&
+    (await realpathOrResolve(releaseGit.commonDir)) ===
+      (await realpathOrResolve(checkoutGit.commonDir))
+  );
 }
 
 function tryRealpath(value: string): Promise<string>;

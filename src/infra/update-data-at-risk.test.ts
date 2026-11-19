@@ -109,26 +109,38 @@ it("never resolves a mark that records live Doctor writers from schemas alone", 
   expect(verdict.status !== "consistent" && verdict.nextAction).toContain("processes have stopped");
 });
 
-it("refuses when the marked update's database rollback left migrated files behind", async () => {
-  openOpenClawStateDatabase();
-  const databasePath = resolveOpenClawStateSqlitePath(process.env);
-  // A rollback moves migrated databases aside before it restores the backup.
-  await fs.writeFile(`${databasePath}.migrated-run-1`, "migrated state");
+it.each(["shared", "agent"] as const)(
+  "refuses when the marked update's database rollback left a migrated %s database behind",
+  async (store) => {
+    openOpenClawStateDatabase();
+    const databasePath = resolveOpenClawStateSqlitePath(process.env);
+    // A rollback moves each migrated database aside beside its own file before restoring.
+    const directory =
+      store === "shared"
+        ? path.dirname(databasePath)
+        : path.join(path.dirname(path.dirname(databasePath)), "agents", "main", "agent");
+    const leftover = path.join(
+      directory,
+      `${store === "shared" ? "openclaw" : "openclaw-agent"}.sqlite.migrated-run-1`,
+    );
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(leftover, "migrated state");
 
-  const marked = (runId: string) =>
-    verifyUpdateStateConsistency({
-      env: process.env,
-      formatCommand: (command) => command,
-      marks: [{ runId, mark: "rollback-state-unverified" }],
+    const marked = (runId: string) =>
+      verifyUpdateStateConsistency({
+        env: process.env,
+        formatCommand: (command) => command,
+        marks: [{ runId, mark: "rollback-state-unverified" }],
+      });
+
+    await expect(marked("run-1")).resolves.toMatchObject({
+      status: "inconsistent",
+      detail: expect.stringContaining(leftover),
     });
-
-  await expect(marked("run-1")).resolves.toMatchObject({
-    status: "inconsistent",
-    detail: expect.stringContaining(`${databasePath}.migrated-run-1`),
-  });
-  // Another update's leftover says nothing about this mark.
-  await expect(marked("run-2")).resolves.toMatchObject({ status: "consistent" });
-});
+    // Another update's leftover says nothing about this mark.
+    await expect(marked("run-2")).resolves.toMatchObject({ status: "consistent" });
+  },
+);
 
 it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
   "reports an unlistable state directory as unverifiable, not as an interrupted restore",

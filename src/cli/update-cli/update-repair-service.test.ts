@@ -417,11 +417,12 @@ it.each([
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         restart: false,
+        coreUpdate: "pending",
         status: "warning",
         postUpdate: expect.objectContaining({
           doctor: expect.objectContaining({
             warnings: [
-              `Update ${original} recorded data at risk (rollback-state-unverified). The Gateway is stopped. Repair changed nothing. ${triageLead}${verification.nextAction} ${finding} ${verification.detail}.`,
+              `Update ${original} recorded data at risk (rollback-state-unverified). The Gateway is stopped. Repair left the Gateway as it was. ${triageLead}${verification.nextAction} ${finding} ${verification.detail}.`,
             ],
           }),
         }),
@@ -446,6 +447,7 @@ it("keeps a Gateway another update stopped down when a later mark is inconsisten
   expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
     expect.objectContaining({
       restart: false,
+      coreUpdate: "pending",
       postUpdate: expect.objectContaining({
         doctor: expect.objectContaining({
           warnings: [expect.stringContaining(`Update ${marked} recorded data at risk`)],
@@ -485,7 +487,7 @@ it("reports a serving Gateway as running when a recorded mark is inconsistent", 
       postUpdate: expect.objectContaining({
         doctor: expect.objectContaining({
           warnings: [
-            `Update ${original} recorded data at risk (rollback-state-unverified). The Gateway is running and serving OpenClaw 1.0.0. Repair changed nothing. Run \`openclaw triage\` for an agent with the recorded facts, or by hand: run \`openclaw update\` to a version that supports it, or restore the pre-update backup. Found: the state database is at schema 99.`,
+            `Update ${original} recorded data at risk (rollback-state-unverified). The Gateway is running and serving OpenClaw 1.0.0. Repair left the Gateway as it was. Run \`openclaw triage\` for an agent with the recorded facts, or by hand: run \`openclaw update\` to a version that supports it, or restore the pre-update backup. Found: the state database is at schema 99.`,
           ],
         }),
       }),

@@ -13,7 +13,7 @@ import { verifyPackageUpdateRecovery } from "./update-global.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 import type { UpdateRecovery } from "./update-recovery.js";
-import { findUnverifiedDataAtRisk } from "./update-run-data-at-risk.js";
+import { findUnverifiedDataAtRisk, readRecordedDataAtRisk } from "./update-run-data-at-risk.js";
 import { findUpdateGatewayStop } from "./update-run-gateway-stop.js";
 import { withUpdateRunRead } from "./update-run-read-admission.js";
 import { readUpdateRunRecord, readUpdateRuns } from "./update-run-read.kernel.js";
@@ -156,11 +156,21 @@ export async function recoverInterruptedManagedUpdate(params: {
 }
 
 function assertRestartSafe(run: UpdateRunRecord | undefined) {
-  // Post-core repair records a receipt on its own run when it verified this mark.
-  const history = withUpdateRunRead(({ db }) => readUpdateRuns(db, { limit: 100 }), {
-    allowNativeRead: true,
-  });
-  const dataAtRisk = findUnverifiedDataAtRisk(run, history ?? []);
+  if (!readRecordedDataAtRisk(run)) {
+    return;
+  }
+  // Post-core repair records a receipt on its own run when it verified this mark. Repair
+  // may have advanced the schema past this helper's reader; then the mark still stands.
+  let history: UpdateRunRecord[];
+  try {
+    history =
+      withUpdateRunRead(({ db }) => readUpdateRuns(db, { limit: 100 }), {
+        allowNativeRead: true,
+      }) ?? [];
+  } catch {
+    history = [];
+  }
+  const dataAtRisk = findUnverifiedDataAtRisk(run, history);
   if (dataAtRisk) {
     throw new Error(
       `gateway left stopped: data at risk (${dataAtRisk}) recorded and not verified by repair`,

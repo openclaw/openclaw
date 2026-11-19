@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolveStateDir } from "../config/paths.js";
 import { preflightOpenClawDatabaseSchemas } from "../state/openclaw-database-preflight.js";
 import type {
   IncompatibleOpenClawDatabase,
@@ -44,16 +45,43 @@ function listFindings(findings: readonly string[]): string {
     : (findings[0] ?? "");
 }
 
-/** A rollback moves migrated databases aside as `<db>.migrated-<run>` before restoring. */
-function findRollbackLeftover(databasePath: string, runId: string): string | undefined {
-  const directory = path.dirname(databasePath);
-  try {
-    const name = fs.readdirSync(directory).find((entry) => entry.includes(`.migrated-${runId}`));
-    return name ? path.join(directory, name) : undefined;
-  } catch {
-    // The restore-directory check below reports an unreadable directory.
+const LEFTOVER_SCAN_DEPTH = 6;
+const LEFTOVER_SCAN_ENTRIES = 50_000;
+
+/**
+ * A database rollback moves each migrated database aside as `<db>.migrated-<run>` beside
+ * its own file, shared and agent stores alike, before it restores the backup. Walk the
+ * state directory for that run's leftovers; `undefined` when none, `null` when the walk
+ * could not finish within its bounds.
+ */
+function findRollbackLeftover(stateDir: string, runId: string): string | null | undefined {
+  const marker = `.migrated-${runId}`;
+  let visited = 0;
+  const walk = (directory: string, depth: number): string | null | undefined => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return depth === 0 ? null : undefined;
+    }
+    for (const entry of entries) {
+      if ((visited += 1) > LEFTOVER_SCAN_ENTRIES) {
+        return null;
+      }
+      const file = path.join(directory, entry.name);
+      if (entry.name.includes(marker)) {
+        return file;
+      }
+      if (entry.isDirectory() && depth < LEFTOVER_SCAN_DEPTH) {
+        const found = walk(file, depth + 1);
+        if (found !== undefined) {
+          return found;
+        }
+      }
+    }
     return undefined;
-  }
+  };
+  return walk(stateDir, 0);
 }
 
 function describeAhead(database: IncompatibleOpenClawDatabase): string {
@@ -68,16 +96,17 @@ function classify(
   schemas: OpenClawDatabaseSchemaPreflight,
   formatCommand: (command: string) => string,
 ): UpdateStateVerification {
+  const pending = schemas.pendingMigrations ?? [];
   if (schemas.incompatible.length > 0) {
     return {
       status: "inconsistent",
-      newerState: true,
+      // Updating fixes newer state only when nothing else is unfinished.
+      ...(pending.length === 0 ? { newerState: true as const } : {}),
       detail: listFindings(schemas.incompatible.map(describeAhead)),
       // The installed build cannot open newer state; a build that supports it can.
       nextAction: `run \`${formatCommand("openclaw update")}\` to a version that supports it, or restore the pre-update backup.`,
     };
   }
-  const pending = schemas.pendingMigrations ?? [];
   if (pending.length > 0) {
     return {
       status: "inconsistent",
@@ -130,9 +159,19 @@ export async function verifyUpdateStateConsistency(params: {
     };
   }
   const databasePath = path.resolve(resolveOpenClawStateSqlitePath(params.env));
-  const leftover = params.marks
-    ?.map(({ runId }) => ({ runId, file: findRollbackLeftover(databasePath, runId) }))
-    .find(({ file }) => file);
+  const stateDir = resolveStateDir(params.env);
+  const leftovers = (params.marks ?? []).map(({ runId }) => ({
+    runId,
+    file: findRollbackLeftover(stateDir, runId),
+  }));
+  if (leftovers.some(({ file }) => file === null)) {
+    return {
+      status: "unverifiable",
+      detail: `the state directory ${stateDir} could not be searched for database rollback leftovers`,
+      nextAction: retryRepair(params.formatCommand),
+    };
+  }
+  const leftover = leftovers.find(({ file }) => file);
   if (leftover) {
     return {
       status: "inconsistent",

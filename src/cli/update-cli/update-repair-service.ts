@@ -78,7 +78,7 @@ export async function verifyRecordedDataAtRisk(params: {
         config: params.config,
         timeoutMs: params.timeoutMs,
       }),
-      outcome: `Repair changed nothing. ${formatDataAtRiskNextSteps(verification, env)}`,
+      outcome: `Repair left the Gateway as it was. ${formatDataAtRiskNextSteps(verification, env)}`,
     });
   }
   const resolved = formatDataAtRiskResolved({ marks, verification });

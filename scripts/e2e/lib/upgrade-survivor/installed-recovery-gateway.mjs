@@ -504,17 +504,6 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
       db.close();
     }
   };
-  const stateUserVersion = (version) => {
-    const db = new DatabaseSync(stateDatabase);
-    try {
-      if (version !== undefined) {
-        db.exec(`PRAGMA user_version = ${version}`);
-      }
-      return Number(db.prepare("PRAGMA user_version").get().user_version);
-    } finally {
-      db.close();
-    }
-  };
   const waitForReady = async (name) => {
     const deadline = Date.now() + 120_000;
     while ((await readyz()) !== 200) {
@@ -575,18 +564,29 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
     const nextPid = await assertServing("after-mark-update", nextVersion, resolvedPid);
     fs.unlinkSync(nextTarget);
 
-    // A real inconsistency: the state is newer than the installed version supports.
+    // A real inconsistency: the marked update's database rollback moved migrated state
+    // aside and stopped, so the shared database may be only partly restored.
     const inconsistent = await killUpdate("inconsistent-update", 3, nextPid);
     recordDataAtRiskMark(inconsistent.runId);
-    const supported = stateUserVersion();
-    stateUserVersion(supported + 1);
+    const leftover = `${stateDatabase}.migrated-${inconsistent.runId}`;
+    fs.copyFileSync(stateDatabase, leftover);
     const refused = await repairMarked("inconsistent-repair", inconsistent);
-    assert.match(refused.output, new RegExp(`schema ${supported + 1}\\b`, "u"));
-    assert.doesNotMatch(refused.output, /The Gateway is running/u);
+    assert.match(
+      refused.output,
+      /recorded data at risk \(rollback-state-unverified\)\. The Gateway is stopped\./u,
+    );
+    assert.match(
+      refused.output,
+      /Run `?openclaw triage`? for an agent with the recorded facts, or by hand: /u,
+    );
+    assert(
+      refused.output.includes(leftover),
+      "inconsistent-repair: the finding names the leftover",
+    );
     await assertStopped("inconsistent-repair", nextPid);
-    assert.equal(stateUserVersion(), supported + 1, "refused repair must leave state as it was");
-    // Restoring state the installed version supports lets the same repair proceed.
-    stateUserVersion(supported);
+    assert(fs.existsSync(leftover), "refused repair must leave the leftover as it was");
+    // Once the leftover is resolved, the same repair proceeds.
+    fs.unlinkSync(leftover);
     const restored = await repairMarked("restored-repair", inconsistent);
     assert.equal(restored.result.status, 0, "restored-repair: exit");
     assert.match(restored.output, /so that mark is resolved\./u);
