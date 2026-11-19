@@ -134,6 +134,34 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     });
   });
 
+  it("rejects explicit token auth under Funnel instead of silently replacing it", async () => {
+    const result = await applyGatewayConfig({
+      auth: { mode: "token", token: "existing-token" },
+      opts: { tailscale: "funnel", gatewayAuth: "token", gatewayToken: "flag-token" },
+    });
+
+    expect(result).toBeNull();
+    const message = String(runtime.error.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("Tailscale Funnel requires password auth");
+    expect(message).toContain("cannot use");
+    expect(message).toContain("--gateway-password");
+    expect(message).not.toContain("or use --gateway-auth token");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("asks for a Funnel password instead of suggesting an impossible token", async () => {
+    const result = await applyGatewayConfig({
+      auth: { mode: "token", token: "existing-token" },
+      opts: { tailscale: "funnel" },
+    });
+
+    expect(result).toBeNull();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Tailscale Funnel requires password auth. Pass --gateway-password or set OPENCLAW_GATEWAY_PASSWORD.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it.each([
     { opts: {}, expectedMode: "trusted-proxy" },
     { opts: { tailscale: "funnel" }, expectedMode: undefined },
