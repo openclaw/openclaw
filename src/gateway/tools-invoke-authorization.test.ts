@@ -333,17 +333,18 @@ it.each([false, true])(
 );
 
 it.each([false, true])(
-  "refuses sandbox-required member standalone tools without named roles (stored=%s)",
+  "refuses sandbox-required profile standalone tools without a default role (stored=%s)",
   async (stored) => {
     await withToolsInvokeTestState(
       { label: "member-standalone-sandbox", prepareProfileCatalog: true },
       async () => {
         const profile = ensureProfileForEmail("member-admin-sandbox@example.test");
+        setUserProfileRole(profile.id, "isolated");
         const principal = {
           kind: "member" as const,
           peerKey: "iroh:required-admin",
           accountId: "required-admin",
-          role: "isolated",
+          role: "display-only",
         };
         runtime.cfg = {
           gateway: {

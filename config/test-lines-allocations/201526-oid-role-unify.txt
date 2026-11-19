@@ -6,5 +6,8 @@
 # Recovery and automation-creator transport fixtures prove canonical role ceilings
 # independently of opaque membership labels.
 # Owner pairing remains uncapped while definitions govern identified profiles.
-# Measured against the PR base: 1406 net test lines; 400 ordinary + 1006 allocated.
-1006
+# Owner certificate revocation and catalog-only MCP consent have distinct cutoffs;
+# canonical member roles retain sandbox, history and mention nondisclosure coverage.
+# Identified MCP callers cannot acquire owner grants without owner authority.
+# Measured against the PR base: 1476 net test lines; 400 ordinary + 1076 allocated.
+1076

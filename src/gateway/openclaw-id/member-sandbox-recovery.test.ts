@@ -3,6 +3,7 @@ import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assembleScheduledAdmissionFacts } from "../../cron/execution-context-admission.js";
 import { makeIsolatedAgentJobFixture } from "../../cron/isolated-agent/job-fixtures.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveCreatorSandbox } from "../operator-role-policy.js";
@@ -11,14 +12,14 @@ import { prepareGatewayOperatorSessionRun } from "../operator-session-run.js";
 import { resolveAgentRunSessionCreation } from "../session-creation-provenance.js";
 import { setOpenClawIdTunnelPrincipalLookup } from "./tunnel-principal.js";
 
-it("restored member runs and scheduled admission retain required sandbox facts without named roles", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+it("restored member runs and scheduled admission retain required profile sandbox facts without a default role", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async (ctx) => {
     const profile = ensureProfileForEmail("member-recovery-sandbox@example.test");
     const principal = {
       kind: "member" as const,
       peerKey: `iroh:${"ab".repeat(32)}`,
       accountId: "guest",
-      role: "guest",
+      role: "display-only",
       authority: { clawId: "claw", rootPub: "root", listedSeq: 1 },
     };
     const config: OpenClawConfig = {
@@ -36,9 +37,10 @@ it("restored member runs and scheduled admission retain required sandbox facts w
       },
     };
     setRuntimeConfigSnapshot(config);
+    setUserProfileRole(profile.id, "guest");
     setOpenClawIdTunnelPrincipalLookup(() => principal);
     try {
-      const fixture = await recoveryFixture(stateDir, profile.id, {
+      const fixture = await recoveryFixture(ctx.stateDir, profile.id, {
         config,
         scopes: ["operator.sessions.write", "operator.cron"],
         openclawIdPrincipal: principal,
