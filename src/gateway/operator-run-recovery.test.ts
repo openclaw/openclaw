@@ -576,8 +576,8 @@ describe("scheduled authenticated operator source", () => {
       async (fixture) => {
         const caller = acceptedCaller(fixture);
         const captured = expectDefined(await caller.capture(), "accepted source");
-        expectDefined(fixture.client.internal, "authenticated client").operatorRunAuthority =
-          captured.authority;
+        const internal = expectDefined(fixture.client.internal, "authenticated client");
+        internal.operatorRunAuthority = captured.authority;
         const continuation = expectDefined(
           await captureGatewayOperatorContinuation({
             client: fixture.client,
@@ -585,13 +585,26 @@ describe("scheduled authenticated operator source", () => {
           }),
           "detached continuation",
         );
+        let descendant: typeof continuation | undefined;
         try {
           expect(continuation.authority.recoverySnapshot?.device).toBeUndefined();
           caller.release();
           captured.release();
           expect(continuation.authority.assertCurrent).not.toThrow();
+          // The next turn starts from the detached authority, not the original caller.
+          internal.operatorRunAuthority = continuation.authority;
+          descendant = expectDefined(
+            await captureGatewayOperatorContinuation({
+              client: fixture.client,
+              context: fixture.context,
+            }),
+            "retained descendant",
+          );
+          continuation.release();
+          expect(descendant.authority.reauthorize).not.toThrow();
+          internal.operatorRunAuthority = descendant.authority;
           invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
-          expect(continuation.authority.assertCurrent).not.toThrow();
+          expect(descendant.authority.assertCurrent).not.toThrow();
           await expect(
             captureGatewayOperatorContinuation({
               client: fixture.client,
@@ -599,6 +612,7 @@ describe("scheduled authenticated operator source", () => {
             }),
           ).rejects.toThrow();
         } finally {
+          descendant?.release();
           continuation.release();
         }
       },

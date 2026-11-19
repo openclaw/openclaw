@@ -583,6 +583,25 @@ export async function captureGatewayOperatorContinuation(
     ...restored.authority,
     // One origin keeps one comparable source identity, as completion batches require.
     source: inherited.source,
+    // Tokenless snapshots omit the device; later starts still check its original source.
+    reauthorize: () => {
+      inherited.reauthorize?.();
+      restored.authority.reauthorize?.();
+    },
+    // Each descendant must keep both owners used by reauthorization alive.
+    retain: () => {
+      const releaseSource = inherited.retain?.();
+      try {
+        const releaseRestored = restored.authority.retain?.();
+        return () => {
+          releaseRestored?.();
+          releaseSource?.();
+        };
+      } catch (error) {
+        releaseSource?.();
+        throw error;
+      }
+    },
     scopes: intersectOperatorScopes(restored.authority.scopes, input.client?.connect.scopes ?? []),
   });
   bindGatewayDeviceRevocation(authority.assertCurrent, inherited.assertCurrent);
