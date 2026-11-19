@@ -146,13 +146,43 @@ function eventStreamMessage(eventType: string, payload: unknown): Buffer {
   return message;
 }
 
-/** Tool calls of a reply; `thinking` is sent as a signed thinking block where the transport has one. */
-function replyCalls(reply: FakeReply): Array<{ tool: string; args: Record<string, unknown> }> {
-  return "calls" in reply
-    ? reply.calls
-    : "tool" in reply
-      ? [{ tool: reply.tool, args: reply.args }]
-      : [];
+/** Tool names in a request's tool list (Gemini groups them under `functionDeclarations`). */
+export function toolNames(tools: string): string[] {
+  return (JSON.parse(tools) as Array<Record<string, unknown>>)
+    .flatMap((tool) =>
+      Array.isArray(tool.functionDeclarations)
+        ? (tool.functionDeclarations as Array<Record<string, unknown>>)
+        : [tool],
+    )
+    .map((tool) =>
+      String(
+        tool.name ??
+          (tool.function as { name?: unknown } | undefined)?.name ??
+          (tool.toolSpec as { name?: unknown } | undefined)?.name,
+      ),
+    );
+}
+
+/**
+ * Tool calls of a reply; `thinking` is sent as a signed thinking block where the transport has one.
+ * A tool the request does not list is deferred by Tool Search, so the call goes through
+ * `dispatch_action`, as a model's would.
+ */
+function replyCalls(
+  reply: FakeReply,
+  listed: readonly string[] | undefined,
+): Array<{ tool: string; args: Record<string, unknown> }> {
+  const calls =
+    "calls" in reply
+      ? reply.calls
+      : "tool" in reply
+        ? [{ tool: reply.tool, args: reply.args }]
+        : [];
+  return calls.map((call) =>
+    !listed || listed.includes(call.tool)
+      ? call
+      : { tool: "dispatch_action", args: { id: call.tool, args: call.args } },
+  );
 }
 
 /**
@@ -164,9 +194,13 @@ export function writeReply(
   response: ServerResponse,
   reply: FakeReply,
   n: number,
-  { inputTokens = 10, model = MODEL_IDS[api] }: { inputTokens?: number; model?: string } = {},
+  {
+    inputTokens = 10,
+    model = MODEL_IDS[api],
+    listed,
+  }: { inputTokens?: number; model?: string; listed?: readonly string[] } = {},
 ) {
-  const calls = replyCalls(reply);
+  const calls = replyCalls(reply, listed);
   const isText = calls.length === 0;
   const text = "text" in reply ? reply.text : "";
   const thinking = "thinking" in reply ? reply.thinking : undefined;

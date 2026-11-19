@@ -16,6 +16,7 @@ import {
   hasToolResult,
   latestInput as lastMessage,
   readWireRequest,
+  toolNames,
   writeReply,
   type FakeReply as Reply,
   type FakeTransport as Api,
@@ -159,15 +160,28 @@ function prefixChange(previous: WireRequest, current: WireRequest): string | und
   return `message ${message}: ${own.slice(0, 120)} -> ${theirs.slice(0, 120)} @${at}: ${around(own)} -> ${around(theirs)}`;
 }
 
-// Tools that main still adds mid-session. The request must equal its predecessor once only these
-// tools are taken out, so the known change cannot hide another one. Remove an entry when its owner
-// lands; the suite then fails until it goes.
-const KNOWN_TOOL_ADDITIONS: ReadonlyArray<{ tools: readonly string[]; owner: string }> = [
+// Tools added mid-session, per tool surface. The request must equal its predecessor once only these
+// tools are taken out, so the known change cannot hide another one. After a switch to a second
+// provider, turns started by a subagent completion or an inter-session message list two more tools
+// than user turns do.
+const KNOWN_TOOL_ADDITIONS: ReadonlyArray<{
+  toolSearch: boolean;
+  tools: readonly string[];
+  owner: string;
+}> = [
+  // The default surface lists a fixed tool set from the first request; remove this entry when
+  // its owner lands, and the suite then fails until it goes.
   {
-    // After a switch to a second provider, turns started by a subagent completion or an
-    // inter-session message list two more tools than user turns do.
+    toolSearch: true,
     tools: ["skills_read", "skills_search"],
     owner: "https://github.com/openclaw/openclaw/pull/201710",
+  },
+  // Designed exception: with Tool Search off, each turn lists the tools it builds
+  // (docs/reference/prompt-caching.md#stable-tools-between-turns).
+  {
+    toolSearch: false,
+    tools: ["skills_read", "skills_search"],
+    owner: "docs/reference/prompt-caching.md#stable-tools-between-turns",
   },
 ];
 
@@ -194,9 +208,13 @@ function withoutTools(request: WireRequest, names: readonly string[]): WireReque
 }
 
 /** First change of `current` against `previous` that no known tool addition explains. */
-export function unknownChange(previous: WireRequest, current: WireRequest): string | undefined {
+export function unknownChange(
+  previous: WireRequest,
+  current: WireRequest,
+  toolSearch: boolean,
+): string | undefined {
   let change = prefixChange(previous, current);
-  for (const known of KNOWN_TOOL_ADDITIONS) {
+  for (const known of KNOWN_TOOL_ADDITIONS.filter((entry) => entry.toolSearch === toolSearch)) {
     const rest = prefixChange(previous, withoutTools(current, known.tools));
     if (change?.startsWith("tools ") && !rest?.startsWith("tools ")) {
       // Only the known tools changed the list; any other change still fails.
@@ -290,7 +308,8 @@ export function usePrefixRandomizedJourney() {
   afterEach(() => {
     process.env.OPENCLAW_PROMPT_CACHE_ASSERT = assertSetting;
   });
-  return async (api: Api, seed: number) => {
+  /** `toolSearch: false` runs the opt-out surface; the default surface lists tools through it. */
+  return async (api: Api, seed: number, { toolSearch = true } = {}) => {
     const journey = process.env.OPENCLAW_PREFIX_RANDOM_JOURNEY
       ? (process.env.OPENCLAW_PREFIX_RANDOM_JOURNEY.split(",") as TurnKind[])
       : randomJourney(seed);
@@ -391,7 +410,7 @@ export function usePrefixRandomizedJourney() {
         const reply = script(wire, Boolean(thinking?.type && thinking.type !== "disabled"));
         const session = /session=(\S+)/.exec(wire.text)?.[1] ?? "?";
         seen.push(`${session} last=${lastMessage(wire).slice(-200)} -> ${JSON.stringify(reply)}`);
-        writeReply(api, response, reply, ++ordinal);
+        writeReply(api, response, reply, ++ordinal, { listed: toolNames(wire.tools) });
       });
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
@@ -418,7 +437,7 @@ export function usePrefixRandomizedJourney() {
       );
       const tools = (webFetch: boolean): ToolsConfig => ({
         codeMode: { enabled: false },
-        toolSearch: false,
+        toolSearch,
         exec: { host: "gateway", security: "full", ask: "off", notifyOnExit: true },
         ...(webFetch ? {} : { deny: ["web_fetch"] }),
       });
@@ -576,7 +595,8 @@ export function usePrefixRandomizedJourney() {
                 target
                   .slice(before)
                   .filter((entry) => !entry.fork)
-                  .map((entry) => entry.request.tools.includes('"web_fetch"')),
+                  // Tool Search lists a deferred tool in the system prompt instead.
+                  .map((entry) => /\bweb_fetch\b/.test(entry.request.tools + entry.request.system)),
                 `step ${step} toolsChanged`,
               ).toEqual([toolsWidened]);
               break;
@@ -621,7 +641,7 @@ export function usePrefixRandomizedJourney() {
           const change =
             current.kind === "toolsChanged" && firstOfStep
               ? historyChange(previous.request, current.request)
-              : unknownChange(previous.request, current.request);
+              : unknownChange(previous.request, current.request, toolSearch);
           const rebuild = REBUILD_KINDS.has(current.kind) && firstOfStep;
           const silentMerge =
             SILENT_MERGE_APIS.has(api) &&
