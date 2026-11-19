@@ -16,10 +16,6 @@ function deviceCodeResponse(url = verificationUrl, userCode: unknown = "ZYXW-234
   });
 }
 
-function tokenResponse(error: string, status: number) {
-  return Response.json({ error }, { status });
-}
-
 afterEach(() => vi.restoreAllMocks());
 
 describe("ClawHub browser sign-in", () => {
@@ -45,21 +41,15 @@ describe("ClawHub browser sign-in", () => {
     });
   });
 
-  it.each([null, "", "0000-1111", "unexpected text"])(
-    "rejects an invalid public approval code",
-    async (userCode) => {
-      captureClawHubResponse(() => deviceCodeResponse(verificationUrl, userCode));
-      await expect(startClawHubDeviceSignIn({ baseUrl })).rejects.toThrow(
-        "invalid sign-in response",
-      );
-    },
-  );
-
-  it("does not send the user to a foreign approval origin", async () => {
-    captureClawHubResponse(() => deviceCodeResponse("https://different.example/cli/device"));
-    await expect(startClawHubDeviceSignIn({ baseUrl })).rejects.toThrow(
-      "ClawHub returned an invalid sign-in response.",
-    );
+  it.each([
+    [verificationUrl, null],
+    [verificationUrl, ""],
+    [verificationUrl, "0000-1111"],
+    [verificationUrl, "unexpected text"],
+    ["https://different.example/cli/device", "ZYXW-2345"],
+  ] as const)("rejects an invalid approval code or foreign origin", async (url, userCode) => {
+    captureClawHubResponse(() => deviceCodeResponse(url, userCode));
+    await expect(startClawHubDeviceSignIn({ baseUrl })).rejects.toThrow("invalid sign-in response");
   });
 
   it.each([
@@ -67,7 +57,7 @@ describe("ClawHub browser sign-in", () => {
     ["access_denied", 400, "denied"],
     ["expired_token", 400, "expired"],
   ] as const)("reports %s without returning a token", async (error, status, kind) => {
-    captureClawHubResponse(() => tokenResponse(error, status));
+    captureClawHubResponse(() => Response.json({ error }, { status }));
     await expect(pollClawHubDeviceSignIn(fakeDeviceCode, { baseUrl })).resolves.toEqual({ kind });
   });
 

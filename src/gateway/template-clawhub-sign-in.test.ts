@@ -30,18 +30,10 @@ function fixture() {
     }
     return result.requestId;
   };
-  return {
-    target,
-    start,
-    poll,
-    verify,
-    save,
-    owner,
-    admit,
-    advance: (ms: number) => {
-      now += ms;
-    },
-  };
+  function advance(ms: number) {
+    now += ms;
+  }
+  return { target, start, poll, verify, save, owner, admit, advance };
 }
 
 describe("Template ClawHub authorization ownership", () => {
@@ -53,12 +45,10 @@ describe("Template ClawHub authorization ownership", () => {
     expect(await owner.poll(target, requestId)).toMatchObject({ status: "pending" });
     expect(poll).not.toHaveBeenCalled();
     advance(1_000);
-    const results = await Promise.all([
-      owner.poll(target, requestId),
-      owner.poll(target, requestId),
-    ]);
+    const complete = () => owner.poll(target, requestId);
+    const results = await Promise.all([complete(), complete()]);
     expect(results).toEqual([{ status: "connected" }, { status: "connected" }]);
-    expect(await owner.poll(target, requestId)).toEqual({ status: "connected" });
+    expect(await complete()).toEqual({ status: "connected" });
     expect(poll).toHaveBeenCalledTimes(1);
     expect(verify).toHaveBeenCalledExactlyOnceWith(target.baseUrl, "synthetic-token");
     expect(save).toHaveBeenCalledExactlyOnceWith(
