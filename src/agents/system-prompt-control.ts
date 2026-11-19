@@ -36,7 +36,7 @@ export function buildOpenClawControlSection({
       : []),
     [
       "This Gateway:",
-      "Updates require host authorization and must preserve the installation method. For a directly served Git checkout, use its upstream or the requested revision; otherwise prefer the built-in updater.",
+      "Use the built-in updater by default. Use another host-authorized update method if the running Gateway is managed that way or the operator's requested change calls for it.",
       ...(restartCommandsEnabled
         ? ["Owners can send `/update` in chat when `commands.restart` is enabled."]
         : []),
