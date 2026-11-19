@@ -39,4 +39,29 @@ describe("workboard write tool results", () => {
     expect(read.card).toMatchObject({ notes: "n".repeat(4_000) });
     expect((read.card as typeof stored).metadata?.comments).toHaveLength(21);
   });
+
+  it("answers dispatch with compact cards", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const tools = toolsByName(createWorkboardTools({ store, context: { agentId: "main" } }));
+    const card = await store.create({
+      title: "Due",
+      status: "scheduled",
+      scheduledAt: 1,
+      notes: "n".repeat(4_000),
+    });
+    for (let i = 0; i < 20; i++) {
+      await store.addComment(card.id, { body: `${i} ${"x".repeat(700)}` });
+    }
+
+    const dispatched = (
+      await expectDefined(tools.get("workboard_dispatch"), "dispatch").execute("dispatch", {})
+    ).details as { promoted: Record<string, unknown>[] };
+
+    expect(dispatched.promoted).toEqual([
+      expect.objectContaining({ id: card.id, title: "Due", status: "ready" }),
+    ]);
+    expect(dispatched.promoted[0]).not.toHaveProperty("metadata");
+    expect(dispatched.promoted[0]).not.toHaveProperty("notes");
+    expect(JSON.stringify(dispatched).length).toBeLessThan(1_000);
+  });
 });

@@ -493,8 +493,10 @@ Agent write tools (`workboard_create`, `workboard_comment`, `workboard_move`,
 `workboard_claim`, `workboard_heartbeat`, `workboard_release`, `workboard_proof`,
 `workboard_complete` and the other card mutations) return the compact card summary
 that `workboard_list` uses under `card`, plus the id of what they added (`commentId`,
-`attachmentId`, `proofId`). They never echo the card's notes, comments, events or other
-history; use `workboard_read` for the full card.
+`attachmentId`, `proofId`). `workboard_decompose` returns `parent` and `children`, and
+`workboard_dispatch` returns `promoted`, `reclaimed`, `blocked` and `orchestrated` lists, in the
+same summary form. None of them echo the card's notes, comments, events or other history; use
+`workboard_read` for the full card.
 
 Claimed cards reject agent-tool mutations from other agents unless the caller
 holds the claim token returned by `workboard_claim`. Every card returned by an
