@@ -46,9 +46,15 @@ export const TURN_KINDS = [
   "modelSwitch",
 ] as const;
 export type TurnKind = (typeof TURN_KINDS)[number];
-// Allowed rebuild points: compaction, a model or provider switch, and a deliberate tool-policy
-// config change (a new tool set is a new prefix; Hermes starts a new session for it).
-const REBUILD_KINDS = new Set<TurnKind>(["compaction", "modelSwitch", "toolsChanged"]);
+// Allowed rebuild points: compaction and a model or provider switch. A deliberate tool-policy
+// config change may change the tools and the system prompt that lists them (Hermes starts a new
+// session for it), but the history must still only grow.
+const REBUILD_KINDS = new Set<TurnKind>(["compaction", "modelSwitch"]);
+
+/** First change of the history (messages only) of `current` against `previous`. */
+export function historyChange(previous: WireRequest, current: WireRequest): string | undefined {
+  return prefixChange(previous, { ...current, system: previous.system, tools: previous.tools });
+}
 
 /** Deterministic PRNG (mulberry32), so a failing seed reproduces exactly. */
 function prng(seed: number) {
@@ -603,10 +609,12 @@ export function usePrefixRandomizedJourney() {
         for (let index = 1; index < parents.length; index++) {
           const previous = parents[index - 1]!;
           const current = parents[index]!;
-          const change = unknownChange(previous.request, current.request);
-          const rebuild =
-            REBUILD_KINDS.has(current.kind) &&
-            parents.findIndex((entry) => entry.step === current.step) === index;
+          const firstOfStep = parents.findIndex((entry) => entry.step === current.step) === index;
+          const change =
+            current.kind === "toolsChanged" && firstOfStep
+              ? historyChange(previous.request, current.request)
+              : unknownChange(previous.request, current.request);
+          const rebuild = REBUILD_KINDS.has(current.kind) && firstOfStep;
           const silentMerge =
             SILENT_MERGE_APIS.has(api) &&
             journey.slice(0, current.step).includes("silent") &&

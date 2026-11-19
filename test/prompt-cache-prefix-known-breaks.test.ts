@@ -1,7 +1,7 @@
 // Known prefix breaks must not hide a second change in the same request.
 import { describe, expect, it } from "vitest";
 import type { WireRequest } from "./helpers/fake-model-transports.js";
-import { unknownChange } from "./prompt-cache-prefix-randomized.test-support.js";
+import { historyChange, unknownChange } from "./prompt-cache-prefix-randomized.test-support.js";
 import { KNOWN_BREAKS } from "./prompt-cache-prefix-stability.test-support.js";
 
 // Plain words stand for messages; JSON messages pass through unchanged.
@@ -25,6 +25,15 @@ describe("known prefix breaks", () => {
       /^message 0:/,
     );
     expect(unknownChange(previous, request(["u1", "a1"], [...tools, "exec"]))).toMatch(/^tools /);
+  });
+
+  it("lets a tool-policy change replace the tools but not rewrite the history", () => {
+    const previous = request(["u1", "a1"]);
+    const changed = { ...request(["u1", "a1", "u2"], ["read", "web_fetch"]), system: "new" };
+    expect(historyChange(previous, changed)).toBeUndefined();
+    expect(
+      historyChange(previous, { ...changed, messages: request(["u0", "a1", "u2"]).messages }),
+    ).toMatch(/^message 0:/);
   });
 
   it("accepts the cron reply merge only when nothing else changed", () => {
