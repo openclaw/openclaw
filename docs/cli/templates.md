@@ -109,7 +109,7 @@ Control UI connection, and a workspace on the Gateway host. If review is unavail
 the proposal stays private.
 
 The agent tells you when it starts, then checks its instructions, avatar, skills,
-plugins, and scheduled automations together. You'll see short messages as it
+plugins, and active scheduled automations together. Paused routines stay on the source agent. You'll see short messages as it
 chooses which skills and plugins to include and which routines belong in the
 Template. It writes the instructions a new owner needs, then opens the private
 review card. Nothing is published unless you choose **Publish**.

@@ -354,7 +354,8 @@ try {
 
 const [plugins, automations, identity, instructions, skills] = await Promise.all([
   cliJson(["plugins", "list", "--enabled", "--json"]),
-  cliJson(["cron", "list", "--agent", options.agent, "--all", "--json"]),
+  // Use the active-only list: a paused routine must not become a new owner’s running job.
+  cliJson(["cron", "list", "--agent", options.agent, "--json"]),
   cliJson(["config", "get", `agents.entries.${options.agent}.identity`, "--json"]),
   listInstructionFiles(options.workspace),
   listWorkspaceSkills(options.workspace),
