@@ -256,7 +256,9 @@ function waitForSessionMessageEvent(ws: GatewayWs, sessionKey: string, timeoutMs
 }
 
 async function subscribeMessages(ws: GatewayWs, key: string) {
-  expect(await rpcReq(ws, "sessions.messages.subscribe", { key })).toMatchObject({
+  const response = await rpcReq(ws, "sessions.messages.subscribe", { key });
+  const reason = response.error ? `${response.error.code}: ${response.error.message}` : undefined;
+  expect(response, reason).toMatchObject({
     ok: true,
     payload: { key, subscribed: true },
   });
