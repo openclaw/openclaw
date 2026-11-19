@@ -45,16 +45,42 @@ export function androidReleaseCommandFacts(
 }
 
 export function androidReleaseErrorFacts(error: unknown) {
-  const names = ["Error", "TypeError", "RangeError", "SyntaxError", "AggregateError", "AbortError"];
+  const names = [
+    "Error",
+    "TypeError",
+    "RangeError",
+    "SyntaxError",
+    "AggregateError",
+    "AbortError",
+    "GatewayTransportError",
+    "GatewayClientRequestError",
+    "GatewayProtocolRequestError",
+    "GatewayClientRequestTimeoutError",
+  ];
   const code: unknown =
     error instanceof Error ? Object.getOwnPropertyDescriptor(error, "code")?.value : undefined;
   return {
     class: error instanceof Error && names.includes(error.name) ? error.name : "unknown",
     code:
       typeof code === "string" &&
-      ["ETIMEDOUT", "ABORT_ERR", "EPROCESSGROUP_CLEANUP_FAILED"].includes(code)
+      [
+        "ETIMEDOUT",
+        "ABORT_ERR",
+        "EPROCESSGROUP_CLEANUP_FAILED",
+        "CLIENT_TIMEOUT",
+        "UNAVAILABLE",
+        "INVALID_REQUEST",
+        "NOT_PAIRED",
+        "UNAUTHORIZED",
+        "FORBIDDEN",
+      ].includes(code)
         ? code
-        : undefined,
+        : typeof code === "number" &&
+            [1000, 1001, 1002, 1003, 1006, 1007, 1008, 1009, 1011, 1012, 1013, 1014, 1015].includes(
+              code,
+            )
+          ? code
+          : undefined,
   };
 }
 

@@ -114,6 +114,9 @@ it.each([
   "separate-candidate",
   "candidate-mismatch",
   "candidate-missing",
+  "rpc-before-auth",
+  "rpc-after-dispatch",
+  "rpc-private-error",
 ])(
   "keeps native build/source/Gateway identities separate and fixture lifecycle rooted in the harness for %s",
   async (scenario) => {
@@ -165,7 +168,17 @@ it.each([
         identity: { targetSha: options.targetSha },
       };
     });
-    mocks.rpc.mockImplementation(async () => {
+    mocks.rpc.mockImplementation(async (options) => {
+      if (scenario.startsWith("rpc-")) {
+        if (scenario === "rpc-after-dispatch") {
+          options.onHelloOk();
+          options.assertDispatchCurrent();
+        }
+        throw Object.assign(new Error("private-token-and-log"), {
+          name: scenario === "rpc-private-error" ? "private-name" : "GatewayTransportError",
+          code: scenario === "rpc-private-error" ? "private-code" : 1008,
+        });
+      }
       if (scenario === "changed-client") {
         writeFileSync(path.join(client, "changed.txt"), "changed after build");
       }
@@ -334,7 +347,26 @@ it.each([
           ]
         : []),
     ]);
-    if (["candidate-mismatch", "candidate-missing"].includes(scenario)) {
+    if (scenario.startsWith("rpc-")) {
+      expect(proof).toMatchObject({
+        status: "failed",
+        failure: "gateway-setup-status",
+        cleanupConfirmed: true,
+        phases: [],
+      });
+      expect(proof.diagnostics).toContainEqual({
+        stage: "gateway-setup-status",
+        kind: "gateway-setup-status",
+        details: {
+          authenticated: scenario === "rpc-after-dispatch",
+          dispatchEntered: scenario === "rpc-after-dispatch",
+          class: scenario === "rpc-private-error" ? "unknown" : "GatewayTransportError",
+          ...(scenario === "rpc-private-error" ? {} : { code: 1008 }),
+        },
+      });
+      expect(JSON.stringify(proof)).not.toContain("private-");
+      expect(counters.size).toBe(0);
+    } else if (["candidate-mismatch", "candidate-missing"].includes(scenario)) {
       expect(proof.status).toBe("failed");
       expect(proof.failure).toBe("gateway-install");
       expect(counters.size).toBe(0);

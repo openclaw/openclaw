@@ -596,7 +596,11 @@ export async function main(argv = process.argv.slice(2)) {
         abort.abort();
       }
     });
-    const rpc = <T>(method: string, params: Record<string, unknown>) =>
+    const rpc = <T>(
+      method: string,
+      params: Record<string, unknown>,
+      observers: { onHelloOk?: () => void; assertDispatchCurrent?: () => void } = {},
+    ) =>
       callGateway<T>({
         config: {},
         configPath: instance!.configPath,
@@ -609,8 +613,32 @@ export async function main(argv = process.argv.slice(2)) {
         params,
         signal: abort.signal,
         timeoutMs: 30_000,
+        ...observers,
       });
-    await rpc("device.pair.setupStatus", { setupId: randomUUID() });
+    phase("gateway-setup-status");
+    let authenticated = false;
+    let dispatchEntered = false;
+    try {
+      await rpc(
+        "device.pair.setupStatus",
+        { setupId: randomUUID() },
+        {
+          onHelloOk: () => {
+            authenticated = true;
+          },
+          assertDispatchCurrent: () => {
+            dispatchEntered = true;
+          },
+        },
+      );
+    } catch (error) {
+      diagnostic("gateway-setup-status", {
+        authenticated,
+        dispatchEntered,
+        ...androidReleaseErrorFacts(error),
+      });
+      throw error;
+    }
     phase("emulators");
     await mkdir(env.ANDROID_AVD_HOME, { recursive: true });
     await mkdir(env.ANDROID_USER_HOME, { recursive: true });
