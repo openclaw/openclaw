@@ -7,6 +7,8 @@ export const uiIsolatedTestFiles = [
   "ui/src/app/app-host.server-prefs.test.ts",
   "ui/src/app/bootstrap.gateway-credentials.test.ts",
   "ui/src/app/bootstrap.test.ts",
+  // Simulates chunk refusal after the sign-in entry module has loaded.
+  "ui/src/app/browser-auth-recovery.loading.test.ts",
   // Rejected update-card imports must not poison the shared module registry.
   "ui/src/app/navigation-surface-view.stale-build.test.tsx",
   "ui/src/app/router-outlet.test.tsx",
