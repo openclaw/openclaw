@@ -82,9 +82,11 @@ describe("known prefix breaks", () => {
         role: "user",
         parts: [{ functionResponse: { name, response: { output } } }],
       });
+    const notice = "\n[... 180 more characters truncated; rerun with narrower args if needed]";
     const full = result("x".repeat(200));
-    const trimmed = result("[... 200 more characters truncated]");
-    const renamed = result("[... 200 more characters truncated]", "read");
+    const trimmed = result(`${"x".repeat(20)}${notice}`);
+    const renamed = result(`${"x".repeat(20)}${notice}`, "read");
+    const corrupted = result(`${"y".repeat(20)}${notice}`);
     const previous = request(["u1", full, "a1"]);
     expect(known("google-generative-ai", previous, request(["u1", trimmed, "a1", "u2"]))).toBe(
       true,
@@ -93,6 +95,9 @@ describe("known prefix breaks", () => {
       false,
     );
     expect(known("google-generative-ai", previous, request(["u1", renamed, "a1", "u2"]))).toBe(
+      false,
+    );
+    expect(known("google-generative-ai", previous, request(["u1", corrupted, "a1", "u2"]))).toBe(
       false,
     );
   });

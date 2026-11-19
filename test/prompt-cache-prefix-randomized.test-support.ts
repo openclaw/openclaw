@@ -571,6 +571,14 @@ export function usePrefixRandomizedJourney() {
                 setTimeout(resolve, 3_000);
               });
               await send(TARGET, `TARGET after tools change ${step}`);
+              // The new tool policy reaches the provider.
+              expect(
+                target
+                  .slice(before)
+                  .filter((entry) => !entry.fork)
+                  .map((entry) => entry.request.tools.includes('"web_fetch"')),
+                `step ${step} toolsChanged`,
+              ).toEqual([toolsWidened]);
               break;
             case "silent":
               await send(TARGET, `STEP-SILENT ${step}`);

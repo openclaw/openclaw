@@ -60,13 +60,19 @@ function outputTrimmed(before: string, after: string): boolean {
     const response = part.functionResponse?.response;
     const full = original.parts?.[index]?.functionResponse?.response?.output;
     const output = response?.output;
+    // The kept text around the notice must be the original's head and tail.
+    const notice =
+      typeof output === "string"
+        ? /\s*\[\.\.\. \d+ more characters truncated[^\]]*\]\s*/.exec(output)
+        : null;
     if (
       response &&
+      notice &&
       typeof output === "string" &&
       typeof full === "string" &&
-      output !== full &&
       output.length < full.length &&
-      output.includes("more characters truncated")
+      full.startsWith(output.slice(0, notice.index)) &&
+      full.endsWith(output.slice(notice.index + notice[0].length))
     ) {
       // Restore the known change; everything else in the message must still match.
       response.output = full;
