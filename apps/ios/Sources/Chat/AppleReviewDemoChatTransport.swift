@@ -607,7 +607,20 @@ private actor LocalFixtureChatStore {
         }
         var historyWireMessages = try JSONDecoder().decode(
             [AnyCodable].self, from: JSONEncoder().encode(historyMessages))
+        var historyActivity: [OpenClawChatHistoryActivity]?
         if ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture") {
+            historyActivity = try JSONDecoder().decode([OpenClawChatHistoryActivity].self, from: Data("""
+            [{"messageId":"fixture-step-call","items":[
+              {"itemId":"tool:fixture-exec","toolCallId":"fixture-exec","kind":"tool","phase":"end",
+               "title":"Exec — outcome unknown","name":"exec"},
+              {"itemId":"tool:fixture-no-result","toolCallId":"fixture-no-result","kind":"tool","phase":"end",
+               "title":"Exec — outcome unknown","name":"exec"},
+              {"itemId":"tool:fixture-success","toolCallId":"fixture-success","kind":"tool","phase":"end",
+               "title":"Exec","name":"exec","status":"completed"}
+            ]}]
+            """.utf8))
+        }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-nested-tools-fixture") {
             // Keep the existing step transcript/latest reply intact. These earlier raw carriers
             // cross the real history JSON decoder; the public message initializer cannot mark them.
             var nested = try JSONDecoder().decode([AnyCodable].self, from: Data(#"""
@@ -647,6 +660,17 @@ private actor LocalFixtureChatStore {
                 nested[index] = AnyCodable(carrier)
             }
             historyWireMessages.insert(contentsOf: nested, at: 0)
+            historyActivity = try (historyActivity ?? []) + JSONDecoder().decode(
+                [OpenClawChatHistoryActivity].self, from: Data("""
+                [{"messageId":"fixture-nested-success-row","items":\(self.nestedSuccessPending ? """
+                [{"itemId":"tool:fixture-nested-success","toolCallId":"fixture-nested-success","kind":"tool",
+                  "phase":"start","status":"running","title":"Knowledge status","name":"knowledge_status"}]
+                """ : "[]")},
+                {"messageId":"fixture-nested-pending-row","items":[
+                  {"itemId":"tool:fixture-nested-pending","toolCallId":"fixture-nested-pending","kind":"tool",
+                   "phase":"start","status":"running","title":"Knowledge status","name":"knowledge_status"}
+                ]}]
+                """.utf8))
         }
         return try OpenClawChatHistoryPayload(
             sessionKey: normalizedSessionKey,
@@ -667,25 +691,7 @@ private actor LocalFixtureChatStore {
                         runId: $0,
                         text: String(repeating: "Streaming layout response. ", count: 12))
                 } : nil),
-            activity: ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture")
-                ? JSONDecoder().decode([OpenClawChatHistoryActivity].self, from: Data("""
-                [{"messageId":"fixture-step-call","items":[
-                  {"itemId":"tool:fixture-exec","toolCallId":"fixture-exec","kind":"tool","phase":"end",
-                   "title":"Exec — outcome unknown","name":"exec"},
-                  {"itemId":"tool:fixture-no-result","toolCallId":"fixture-no-result","kind":"tool","phase":"end",
-                   "title":"Exec — outcome unknown","name":"exec"},
-                  {"itemId":"tool:fixture-success","toolCallId":"fixture-success","kind":"tool","phase":"end",
-                   "title":"Exec","name":"exec","status":"completed"}
-                ]},
-                {"messageId":"fixture-nested-success-row","items":\(self.nestedSuccessPending ? """
-                [{"itemId":"tool:fixture-nested-success","toolCallId":"fixture-nested-success","kind":"tool",
-                  "phase":"start","status":"running","title":"Knowledge status","name":"knowledge_status"}]
-                """ : "[]")},
-                {"messageId":"fixture-nested-pending-row","items":[
-                  {"itemId":"tool:fixture-nested-pending","toolCallId":"fixture-nested-pending","kind":"tool",
-                   "phase":"start","status":"running","title":"Knowledge status","name":"knowledge_status"}
-                ]}]
-                """.utf8)) : nil)
+            activity: historyActivity)
     }
 
     func sendMessage(
@@ -695,7 +701,7 @@ private actor LocalFixtureChatStore {
     {
         if self.fixture.sessionIDPrefix == "screenshot-fixture",
            ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-mode"),
-           ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture"),
+           ProcessInfo.processInfo.arguments.contains("--openclaw-nested-tools-fixture"),
            ["main", "agent:main:main"].contains(sessionKey),
            message == "Transition the nested success fixture to pending"
         {

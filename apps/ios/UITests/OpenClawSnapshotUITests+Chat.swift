@@ -590,7 +590,7 @@ extension OpenClawSnapshotUITests {
         self.executionTimeAllowance = 60
         self.launchApp(
             for: Self.chatScreenshotTarget,
-            additionalArguments: ["--openclaw-step-labels-fixture"])
+            additionalArguments: ["--openclaw-step-labels-fixture", "--openclaw-nested-tools-fixture"])
         let app = try XCTUnwrap(self.app)
         XCTAssertTrue(app.staticTexts["Local readiness checked."].waitForExistence(timeout: 8))
         let transcript = try self.chatTranscript(in: app)

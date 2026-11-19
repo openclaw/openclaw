@@ -294,6 +294,62 @@ struct ChatSessionsCodingTests {
         #expect(ChatToolActivity.items(message: after).first?.displayState == .blocked)
     }
 
+    @Test @MainActor func `ios nested work shares one answered group with its outer call`() async throws {
+        let prefix: [[String: Any]] = [
+            ["role": "user", "content": "Check the file", "timestamp": 0, "__openclaw": ["id": "question"]],
+            [
+                "role": "assistant", "timestamp": 1,
+                "__openclaw": ["id": "outer-row", "runId": "nested-run"],
+                "content": [[
+                    "type": "toolCall",
+                    "id": "outer",
+                    "name": "exec",
+                    "arguments": ["command": "printf checked"],
+                ]],
+            ],
+            [
+                "role": "toolResult", "toolCallId": "outer", "toolName": "exec", "content": "Checked",
+                "timestamp": 2, "__openclaw": ["id": "outer-result", "runId": "nested-run"],
+            ],
+        ]
+        var nested = Self.nestedEnvelope
+        nested["timestamp"] = 3
+        var blocks = try #require(nested["content"] as? [[String: Any]])
+        blocks[0]["name"] = "read"
+        blocks[0]["arguments"] = ["path": "synthetic.txt"]
+        blocks[1]["toolName"] = "read"
+        nested["content"] = blocks
+        let answer: [String: Any] = [
+            "role": "assistant", "content": "The file is ready", "timestamp": 4, "phase": "final_answer",
+            "__openclaw": ["id": "answer", "runId": "nested-run"],
+        ]
+        let decoded = try await OpenClawChatViewModel.decodeMessages((prefix + [nested, answer]).map(Self.nestedRaw))
+        let raw = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: decoded))
+        let rows = ChatTranscriptRow.collapseCompletedWork(raw, runWorking: false)
+        #expect(rows.count == 3)
+        guard case let .message(question)? = rows.first,
+              case let .completedWork(work)? = rows.dropFirst().first,
+              case let .message(final)? = rows.last
+        else {
+            Issue.record("Expected one Worked group between the question and visible final answer")
+            return
+        }
+        #expect(question.transcriptMessageID == "question" && final.transcriptMessageID == "answer")
+        #expect(final.content.first?.text == "The file is ready" && final.isCompletedReply)
+        #expect(work.messages.map(\.transcriptMessageID) == ["outer-row", "nested-row"])
+        let items = work.messages.flatMap { ChatToolActivity.items(message: $0) }
+        #expect(items.map(\.id) == ["outer", "nested-call"])
+        #expect(items.map(\.resultText) == ["Checked", "Nested success output"])
+        #expect(items.allSatisfy { !$0.isPending && $0.displayState == .finished })
+        #expect(ChatCompletedWorkSummary.label(work: work, expanded: true) ==
+            "Worked · 2 tool calls · 1 command · 1 read")
+        #expect(ChatTranscriptRow.collapseCompletedWork(raw, runWorking: true) == raw)
+        #expect(ChatTranscriptRow.collapseCompletedWork(
+            raw, runWorking: false, activeRunIDs: ["nested-run"]) == raw)
+        #expect(ChatTranscriptRow.collapseCompletedWork(Array(raw.dropLast()), runWorking: false) ==
+            Array(raw.dropLast()))
+    }
+
     static var nestedEnvelope: [String: Any] {
         [
             "role": "custom",
