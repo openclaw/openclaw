@@ -8,7 +8,7 @@ import {
   createNativeTypeScriptConfigReader,
   readNativeTypeScriptConfig,
 } from "../../scripts/lib/native-typescript-config.mts";
-import { createNodeEvalArgs } from "../../src/test-utils/node-process.js";
+import { createNodeEvalArgs, resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   installNativeAncestorTypes,
@@ -207,14 +207,26 @@ it.each([
   );
 });
 
-it.each([
-  ["single-threaded", undefined],
-  ["parallel with stable type ordering", { stableTypeOrdering: true }],
-])(
+// The emitting process's heap limit is the build memory owner's admission fact: only its
+// uncapped default admits the parallel pass, whose native memory the heap does not bound.
+it.skipIf(process.platform === "win32").each([
+  ["single-threaded without stable type ordering", undefined, 12_288, true],
+  ["single-threaded with stable type ordering under a capped heap", true, 7_424, true],
+  ["parallel with stable type ordering and the uncapped build heap", true, 12_288, false],
+] as const)(
   "emits identical inferred declarations and maps across fresh %s compiler processes",
-  async (_mode, compilerOptions) => {
+  (_mode, stableTypeOrdering, heapMb, singleThreaded) => {
     const root = tempRoot("determinism");
     const fixture = createNativeFixture(root);
+    // Record each config the compiler is given, then run the real compiler.
+    const real = `${fixture.native}.real`;
+    const configs = path.join(root, "compiler-configs.log");
+    fs.renameSync(fixture.native, real);
+    fs.writeFileSync(
+      fixture.native,
+      `#!/bin/sh\nprev=\nfor arg; do [ "$prev" = -p ] && { cat "$arg"; echo; } >> '${configs}'; prev=$arg; done\nexec '${real}' "$@"\n`,
+      { mode: 0o755 },
+    );
     const modules = Array.from({ length: 16 }, (_, index) => `result-${index}`);
     fixture.write({
       "src/index.ts": modules.map((name) => `export * from "./${name}.js";`).join("\n"),
@@ -228,11 +240,44 @@ it.each([
       }`,
       });
     }
-    const first = await fixture.compile({ compilerOptions });
-    const second = await fixture.compile({ compilerOptions });
-    expect(first.declarations.size).toBe(modules.length + 1);
-    expect(second.declarations).toEqual(first.declarations);
-    expect(second.inputs).toEqual(first.inputs);
+    const compile = () => {
+      // Node, not the test runtime: the heap limit is a V8 fact.
+      const result = spawnSync(
+        resolveTestNodeExecPath(),
+        [
+          `--max-old-space-size=${heapMb}`,
+          ...createNodeEvalArgs(
+            `import path from "node:path";
+            import { emitNativeDeclarations } from ${JSON.stringify(new URL("../../scripts/lib/native-declaration-emitter.mts", import.meta.url).href)};
+            const root = ${JSON.stringify(root)};
+            const emitted = await emitNativeDeclarations({
+              cwd: root, compilerRoot: root, configFile: path.join(root, "tsconfig.json"),
+              roots: [path.join(root, "src/index.ts")],
+              compilerOptions: ${JSON.stringify(stableTypeOrdering ? { stableTypeOrdering } : {})},
+            });
+            console.log(JSON.stringify({ declarations: [...emitted.declarations], inputs: emitted.inputs }));`,
+            { imports: [import.meta.resolve("tsx")] },
+          ),
+        ],
+        { encoding: "utf8", timeout: 60_000 },
+      );
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      return JSON.parse(result.stdout) as { declarations: unknown[]; inputs: string[] };
+    };
+    const first = compile();
+    const second = compile();
+    expect(first.declarations).toHaveLength(modules.length + 1);
+    expect(second).toEqual(first);
+    const leafConfigs = fs
+      .readFileSync(configs, "utf8")
+      .split("\n")
+      .filter((line) => line.includes('"emitDeclarationOnly":true'))
+      .map((line) => JSON.parse(line) as { compilerOptions: { singleThreaded?: boolean } });
+    expect(leafConfigs).toHaveLength(2);
+    for (const leaf of leafConfigs) {
+      expect(leaf.compilerOptions.singleThreaded === true).toBe(singleThreaded);
+    }
   },
 );
 

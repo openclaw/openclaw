@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import v8 from "node:v8";
 import type { API, EmitOutputFile } from "typescript/async";
 import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.ts";
 import { createDeclarationInputBoundary, resolveRepoToolBinPath } from "./local-check-runtime.mts";
@@ -283,6 +284,19 @@ export async function compileNativeProject({
 }
 
 /**
+ * The parallel pass's Go memory is outside --max-old-space-size: the unified graph peaked
+ * 4.3 GiB above the single-threaded pass (8.4 vs 6.1 GiB in its cgroup) and was OOM-killed in
+ * an 8 GiB container that the single-threaded pass completes in. The build's memory owner
+ * (tsdown-build) sizes this process's heap from the memory it can use and grants its uncapped
+ * default heap only when that memory is ample, so that heap limit is the admission fact here.
+ */
+const PARALLEL_EMIT_MIN_HEAP_LIMIT_BYTES = 12_288 * 1024 * 1024;
+
+function hostAdmitsParallelEmit() {
+  return v8.getHeapStatistics().heap_size_limit >= PARALLEL_EMIT_MIN_HEAP_LIMIT_BYTES;
+}
+
+/**
  * Emit declarations in one compiler command-line pass. The compiler reads the checkout
  * directly, which is several times faster than routing each read through the API
  * filesystem callbacks, and it may check and emit in parallel: repeated parallel emits
@@ -371,7 +385,9 @@ async function compileDeclarationsWithCompilerCli({
           composite: false,
           // Parallel emit can give shared inferred properties different readonly modifiers.
           // Stable type ordering removes that race: parallel emits are byte-identical.
-          ...(compilerOptions?.stableTypeOrdering === true ? {} : { singleThreaded: true }),
+          ...(compilerOptions?.stableTypeOrdering === true && hostAdmitsParallelEmit()
+            ? {}
+            : { singleThreaded: true }),
         },
       }),
     );
