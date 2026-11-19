@@ -266,10 +266,11 @@ describe("registered plugin SDK scope attenuation", () => {
         releases.push(recaptured.release);
         expect(recaptured.authority.scopes).toEqual([`operator.${effective}`]);
         expect(recaptured.authority.source).toBe(source.authority.source);
-        expect(recaptured.authority.signal).toBe(source.authority.signal);
+        expect(recaptured.authority.signal?.aborted).toBe(false);
         expect(recaptured.authority.assertCurrent).not.toThrow();
         sourceController.abort(new Error("original operator source revoked"));
         expect(recaptured.authority.signal?.aborted).toBe(true);
+        expect(recaptured.authority.signal?.reason).toBe(sourceController.signal.reason);
         await expect(invoke(false)).rejects.toThrow("original operator source revoked");
         expect(handler).toHaveBeenCalledTimes(effective === "write" ? 2 : 1);
       } finally {

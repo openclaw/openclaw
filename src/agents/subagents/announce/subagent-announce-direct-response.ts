@@ -178,6 +178,8 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
         delivered: false,
         path: "direct",
         error: directDeliveryFailure,
+        // A completed turn's answer did not reach the requester's channel.
+        ...(requesterCompletedSuccessfully ? { finalAssistantVisibleText: "" } : {}),
         ...(automaticEvidence.mayHaveSent ? { disposition: "ambiguous" as const } : {}),
       };
     }
@@ -221,6 +223,8 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
         delivered: false,
         path: "direct",
         reason: automaticEvidence.mayHaveSent ? undefined : "delivery_suppressed",
+        // Consumption cannot credit a completed answer with an unconfirmed channel receipt.
+        ...(requesterCompletedSuccessfully ? { finalAssistantVisibleText: "" } : {}),
         error: automaticEvidence.mayHaveSent
           ? "automatic completion delivery could not be confirmed"
           : (automaticEvidence.suppressionReason ?? "automatic completion delivery suppressed"),

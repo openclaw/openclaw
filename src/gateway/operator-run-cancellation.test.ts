@@ -231,13 +231,9 @@ async function createCancellationFixture(cfg: OpenClawConfig, stateDir: string) 
 }
 
 describe("operator access cancellation", () => {
-  it.each([
-    { sender: "agent:main:cron-sender", end: "occurrence retired" },
-    { sender: "agent:main:guest-and-staff", end: "occurrence retired" },
-    { sender: "agent:main:cron-sender", end: "sender session cleaned up" },
-  ] as const)(
-    "an accepted turn sent from $sender keeps its authority after $end",
-    cancellationCase(async (f, { sender, end }) => {
+  it.each(["agent:main:cron-sender", "agent:main:guest-and-staff"] as const)(
+    "an accepted turn sent from %s keeps its authority after the occurrence retires",
+    cancellationCase(async (f, sender) => {
       const profile = ensureProfileForEmail("scheduled-sender@example.test");
       const occurrence = await recoveryFixture(f.stateDir, profile.id, {
         device: pairedOperator(),
@@ -257,23 +253,38 @@ describe("operator access cancellation", () => {
         f.context.resolveGatewayContext = () => occurrence.context;
         const retained = await target.retain(undefined, client);
         retained.armCancellation();
-        if (end === "occurrence retired") {
-          occurrence.retire();
-        } else {
-          // An isolated run's exact-run session is removed when the run finishes.
-          await replaceSessionEntry(occurrence.target, {
-            ...occurrence.entry,
-            sessionId: "next-run-session",
-          });
-        }
+        occurrence.retire();
         expect(restored.authority.assertCurrent).toThrow();
-        expect(restored.authority.signal?.aborted).toBe(end !== "occurrence retired");
+        // Ending the occurrence revokes only that captured lifetime, not its accepted turn.
+        expect(restored.authority.signal?.aborted).toBe(true);
         expect(retained.authority!.assertCurrent).not.toThrow();
         expect(retained.authority!.signal?.aborted).not.toBe(true);
         target.expectCurrent();
-        // The accepted turn still enforces the sender's device, profile and role.
+        const continuationClient = createSyntheticPluginRuntimeClient({
+          authenticatedUserProfile: occurrence.client.authenticatedUserProfile,
+          operatorRoleActor: { kind: "operator", profileId: restored.authority.profileId },
+          operatorRunAuthority: retained.authority!,
+          agentToolCaller: { agentId: "main", sessionKey: sender },
+          scopes: ["operator.write"],
+        });
+        const beforeRevocation = await f.register(
+          "before-device-revocation",
+          undefined,
+          {},
+          false,
+          true,
+        );
+        const admittedChild = await beforeRevocation.retain(undefined, continuationClient);
+        // Revocation refuses the next start without canceling already-admitted work.
         invalidateGatewayDeviceRevocation(occurrence.context, "recovery-device", "operator");
-        expect(retained.authority!.assertCurrent).toThrow();
+        const next = await f.register("after-device-revocation", undefined, {}, false, true);
+        await expect(next.retain(undefined, continuationClient)).rejects.toThrow(
+          "Restart recovery operator source policy changed.",
+        );
+        expect(retained.authority!.assertCurrent).not.toThrow();
+        expect(retained.authority!.signal?.aborted).not.toBe(true);
+        expect(admittedChild.authority!.assertCurrent).not.toThrow();
+        expect(admittedChild.authority!.signal?.aborted).not.toBe(true);
       } finally {
         restored.release();
       }

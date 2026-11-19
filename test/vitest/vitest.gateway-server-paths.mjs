@@ -11,6 +11,7 @@ export const gatewayPluginTestFiles = [
   "test/plugins/deep-research-routing.gateway.test.ts",
   "test/plugins/deep-research-startup.gateway.test.ts",
   "test/plugins/reef-shutdown.gateway.test.ts",
+  "test/plugins/session-share-publication.gateway.test.ts",
   "test/plugins/team-reports-http.gateway.test.ts",
 ];
 
@@ -96,6 +97,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/github-publication-legacy-options.test.ts",
   "src/gateway/github-publication-native.test.ts",
   "src/gateway/github-publication-personal-pending.test.ts",
+  "src/gateway/github-publication-private-session.test.ts",
   "src/gateway/github-publication-reconciliation.test.ts",
   "src/gateway/github-publication-requester-aliases.test.ts",
   "src/gateway/github-publication-requester.members.test.ts",
@@ -179,6 +181,8 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/operator-run-authority.worker.test.ts",
   "src/gateway/operator-run-recovery.access-policy.test.ts",
   "src/gateway/operator-run-recovery.channel.test.ts",
+  "src/gateway/operator-run-recovery.effects.test.ts",
+  "src/gateway/operator-run-recovery.native.test.ts",
   "src/gateway/operator-run-recovery.test.ts",
   "src/gateway/probe.device-auth-scope.test.ts",
   "src/gateway/progress-card-store.worker.test.ts",
@@ -305,6 +309,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-repository-publication-handoff.test.ts",
   "src/gateway/session-restart-resume-custody.test.ts",
   "src/gateway/session-restart-resume.admission.test.ts",
+  "src/gateway/session-restart-resume.scope.test.ts",
   "src/gateway/session-restart-resume.test.ts",
   "src/gateway/session-row-event-ancestor-placement.test.ts",
   "src/gateway/session-row-event-trees.test.ts",

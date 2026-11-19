@@ -258,7 +258,6 @@ export function registerRequesterWakeReceiptBoundaryTests({
     "reply replacement",
     "delivery replacement",
     "rejected wake",
-    "rejected retired",
     "rejected persistence",
     "rejected newer yield",
     "rejected stopped",
@@ -346,10 +345,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
       scenario === "rejected stable newer yield"
         ? holdRequesterWakeReceipts({ holdOutcome: true })
         : undefined;
-    setWakeRefusal(rejectRequesterWake && scenario !== "rejected retired", rejectPersistence);
-    if (scenario === "rejected retired") {
-      subagentRuns.retireCompletionAuthority(registry.getSubagentRunByRunId(beta.runId)!);
-    }
+    setWakeRefusal(rejectRequesterWake, rejectPersistence);
     if (stableBatch) {
       const batchRunIds = [alpha.runId, beta.runId];
       await mutateSubagentRuns(batchRunIds, (rows) => ({
@@ -525,9 +521,9 @@ export function registerRequesterWakeReceiptBoundaryTests({
       );
       if (
         scenario === "rejected wake" ||
-        scenario === "rejected retired" ||
         stableBatch ||
-        rejectPersistence
+        rejectPersistence ||
+        scenario === "rejected newer yield"
       ) {
         const events = readTranscriptEventRows(
           openOpenClawAgentDatabase({ agentId: "main" }),

@@ -17,6 +17,7 @@ import { StringDecoder } from "node:string_decoder";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../windows-cmd-helpers.mjs";
 import { toStringifiedError } from "../error-format.mts";
 import { terminateManagedChild } from "../managed-child-process.mts";
+import { outputTail } from "../output-tail.mts";
 import { resolveWindowsTaskkillPath } from "../windows-taskkill.mjs";
 import type {
   Cleanup,
@@ -31,7 +32,7 @@ import {
   CROSS_OS_COMMAND_HEARTBEAT_SECONDS,
   CROSS_OS_PROCESS_TREE_KILL_AFTER_MS,
 } from "./config.ts";
-import { formatError, sleep, trimForSummary } from "./shared.ts";
+import { formatError, sleep } from "./shared.ts";
 
 const CROSS_OS_SIGNAL_EXIT_CODES: Partial<Record<NodeJS.Signals, number>> = {
   SIGHUP: 129,
@@ -333,6 +334,20 @@ export async function runCommandInvocation(
     let timer: NodeJS.Timeout | null = null;
     let heartbeatTimer: NodeJS.Timeout | null = null;
     const maxCapturedOutputBytes = resolveCommandCaptureLimit(options);
+    const commandError = (message: string, cause?: unknown) => {
+      const details = [message];
+      // Keep both streams visible; a noisy stdout must not crowd out the failure on stderr.
+      for (const [label, output] of [
+        ["stderr", stderr],
+        ["stdout", stdout],
+      ]) {
+        const tail = outputTail(output, 300);
+        if (tail) {
+          details.push(`${label} tail:\n${tail}`);
+        }
+      }
+      return new Error(details.join("\n"), { cause });
+    };
 
     const clearTimers = () => {
       if (timer) {
@@ -409,10 +424,11 @@ export async function runCommandInvocation(
             killWaitTimer = setTimeout(() => {
               finalize(() => {
                 rejectPromise(
-                  terminationError ??
-                    new Error(
+                  commandError(
+                    terminationError?.message ??
                       `Command timed out and could not be terminated cleanly: ${commandLabel}`,
-                    ),
+                    terminationError?.cause,
+                  ),
                 );
               });
             }, 15_000);
@@ -478,17 +494,16 @@ export async function runCommandInvocation(
           stderr,
         };
         if (timedOut) {
-          rejectPromise(terminationError ?? new Error(`Command timed out: ${commandLabel}`));
+          rejectPromise(
+            commandError(
+              terminationError?.message ?? `Command timed out: ${commandLabel}`,
+              terminationError?.cause,
+            ),
+          );
           return;
         }
         if ((options.check ?? true) && result.exitCode !== 0) {
-          rejectPromise(
-            new Error(
-              `Command failed (${result.exitCode}): ${commandLabel}\n${trimForSummary(
-                `${stdout}\n${stderr}`,
-              )}`,
-            ),
-          );
+          rejectPromise(commandError(`Command failed (${result.exitCode}): ${commandLabel}`));
           return;
         }
         resolvePromise(result);

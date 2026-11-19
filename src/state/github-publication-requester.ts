@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { openClawIdRecoveryPrincipalSchema } from "../gateway/openclaw-id/tunnel-principal.js";
+import { openClawIdRecoveryPrincipalSchema } from "../gateway/openclaw-id/tunnel-principal-schema.js";
 
 const requesterSchema = z
   .strictObject({

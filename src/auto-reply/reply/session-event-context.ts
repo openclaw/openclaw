@@ -22,6 +22,7 @@ import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { CRON_EXECUTION_SOURCE_TOOL } from "../../sessions/input-provenance.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
@@ -68,6 +69,26 @@ export function prepareSessionEventInput(text: string, options: SessionEventOpti
     );
   }
   return { cfg, agentId, sessionKey, env, storePath, operatorAuthority };
+}
+
+/** Durably stage the admitted occurrence before the reply owner starts it. */
+export async function stageSessionEventInput(
+  recorder: UserTurnTranscriptRecorder,
+  runId: string,
+  assertCurrent: SessionSourceAssertion,
+  readmissionAttempt: number,
+): Promise<void> {
+  if (
+    !recorder.stageApproved ||
+    !(await recorder.stageApproved({
+      runId,
+      assertCurrent,
+      // Only this live admission retry can reclaim its cancelled attempt.
+      retryCancelled: readmissionAttempt > 0,
+    }))
+  ) {
+    throw new Error("Session event input was not durably admitted");
+  }
 }
 
 /** Validate and claim producer input; execution consumes this occurrence custody. */
@@ -220,7 +241,7 @@ export function buildSessionEventContext(params: {
       skillLibrarySelections: automation.job.skillLibrarySelections,
     };
   }
-  const operatorAuthority = automation?.controlUiAdmin
+  const operatorAuthority = automation?.automationAdmin
     ? automation.operatorAuthority
     : options.source === "plugin" ||
         options.source === "tool_handoff" ||
@@ -232,7 +253,7 @@ export function buildSessionEventContext(params: {
   const requesterOwnerCheck = readSessionEventTargetRequesterOwner(target)?.assertCurrent;
   if (
     operatorAuthority &&
-    (automation?.controlUiAdmin ||
+    (automation?.automationAdmin ||
       (options.source === "restart"
         ? operatorAuthority.scopes.includes("operator.admin")
         : readSessionEventTargetOwnerContinuation(target)))

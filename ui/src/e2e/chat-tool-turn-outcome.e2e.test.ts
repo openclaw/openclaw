@@ -296,7 +296,7 @@ suite.define(() => {
     });
     const activity = page.locator(".chat-group--activity .chat-activity-group__summary");
     await activity.waitFor();
-    expect((await activity.textContent())?.trim()).toBe("Read files, edited files");
+    expect((await activity.textContent())?.trim()).toBe("Read files, changed files");
     const activityGeometry = await activity.evaluate((node) => {
       const container = node.closest<HTMLElement>(".chat-activity-group");
       const label = node.querySelector<HTMLElement>(".chat-activity-group__label");
@@ -410,7 +410,7 @@ suite.define(() => {
     await expect
       .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
       .toBe("dark");
-    expect((await summary.textContent())?.trim()).toBe("Ran commands, edited files");
+    expect((await summary.textContent())?.trim()).toBe("Ran commands, changed files");
     expect(await patchRow.locator(".chat-tool-row__verb").textContent()).toBe("Changed");
     await context.close();
   });

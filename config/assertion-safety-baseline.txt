@@ -817,7 +817,6 @@ extensions/voice-call/src/providers/shared/guarded-json-api.ts	2
 extensions/voice-call/src/runtime.ts	1
 extensions/voice-call/src/webhook.ts	5
 extensions/voyage/embedding-batch.ts	1
-extensions/web-readability/web-content-extractor.ts	2
 extensions/whatsapp/src/account-config.ts	1
 extensions/whatsapp/src/agent-tools-call.ts	1
 extensions/whatsapp/src/agent-tools-login.ts	6
@@ -1023,7 +1022,7 @@ src/agents/agent-tools.before-tool-call.wrapper.ts	3
 src/agents/agent-tools.execution-preparer.ts	2
 src/agents/agent-tools.params.ts	5
 src/agents/agent-tools.policy.ts	1
-src/agents/agent-tools.read.ts	3
+src/agents/agent-tools.read.ts	2
 src/agents/agent-tools.ring-zero-context.ts	1
 src/agents/ai-transport-runtime-host.ts	9
 src/agents/apply-patch-file-ops.ts	2
@@ -1070,10 +1069,7 @@ src/agents/context-cache.ts	1
 src/agents/context-runtime-state.ts	1
 src/agents/cron-creator-authority-context.ts	1
 src/agents/delegation-capability.ts	1
-src/agents/embedded-agent-helpers/bootstrap.ts	2
-src/agents/embedded-agent-helpers/images.ts	3
-src/agents/embedded-agent-helpers/openai.ts	11
-src/agents/embedded-agent-helpers/turns.ts	8
+src/agents/embedded-agent-helpers/openai.ts	8
 src/agents/embedded-agent-live-edit-diff.ts	1
 src/agents/embedded-agent-messaging-extraction.ts	1
 src/agents/embedded-agent-messaging.ts	1
@@ -1132,7 +1128,7 @@ src/agents/embedded-agent-runner/thinking-replay-repair.ts	1
 src/agents/embedded-agent-runner/thinking.ts	3
 src/agents/embedded-agent-runner/tool-call-argument-decoding.ts	3
 src/agents/embedded-agent-runner/tool-result-char-estimator.ts	7
-src/agents/embedded-agent-runner/tool-result-context-guard.ts	5
+src/agents/embedded-agent-runner/tool-result-context-guard.ts	4
 src/agents/embedded-agent-runner/tool-result-truncation.ts	6
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	1
@@ -1213,14 +1209,14 @@ src/agents/session-model-auto-revert.ts	1
 src/agents/session-placement-admission.ts	1
 src/agents/session-suspension.ts	1
 src/agents/session-tool-result-guard.ts	3
-src/agents/session-transcript-repair.ts	2
+src/agents/session-transcript-repair.ts	1
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/extensions/loader.ts	2
 src/agents/sessions/extensions/runner.ts	13
 src/agents/sessions/keybindings.ts	2
 src/agents/sessions/resolve-config-value.ts	1
 src/agents/sessions/sdk.ts	1
-src/agents/sessions/session-manager-codec.ts	5
+src/agents/sessions/session-manager-codec.ts	4
 src/agents/sessions/session-manager-core.ts	1
 src/agents/sessions/session-manager-entries.ts	2
 src/agents/sessions/session-manager.ts	2
@@ -1239,7 +1235,7 @@ src/agents/subagents/swarm/swarm-output-schema.ts	1
 src/agents/system-prompt-report.ts	1
 src/agents/system-prompt.ts	1
 src/agents/thinking-block.ts	1
-src/agents/tool-call-id.ts	7
+src/agents/tool-call-id.ts	1
 src/agents/tool-display-common.ts	1
 src/agents/tool-images.ts	2
 src/agents/tool-policy-shared.ts	1
@@ -1304,7 +1300,6 @@ src/auto-reply/chunk.ts	1
 src/auto-reply/command-auth.ts	3
 src/auto-reply/command-turn-context.ts	1
 src/auto-reply/heartbeat-filter.ts	2
-src/auto-reply/reply.directive.directive-behavior.e2e-mocks.ts	1
 src/auto-reply/reply/acp-reset-target.ts	1
 src/auto-reply/reply/agent-lifecycle-terminal.ts	2
 src/auto-reply/reply/agent-runner-fallback-candidate.ts	1
@@ -1710,7 +1705,6 @@ src/gateway/server-methods/agent-run-handler.ts	1
 src/gateway/server-methods/agent-session-patch.ts	1
 src/gateway/server-methods/agent-session-reset.ts	1
 src/gateway/server-methods/approval-publication.ts	4
-src/gateway/server-methods/approval-request-delivery.ts	1
 src/gateway/server-methods/approval-shared.ts	1
 src/gateway/server-methods/approval.ts	2
 src/gateway/server-methods/attachment-normalize.ts	1
@@ -1887,7 +1881,6 @@ src/infra/sqlite-index-schema.ts	1
 src/infra/sqlite-integrity.ts	1
 src/infra/sqlite-readonly-location.ts	3
 src/infra/sqlite-schema-contract.ts	3
-src/infra/sqlite-snapshot.ts	1
 src/infra/sqlite-strict.ts	6
 src/infra/sqlite-wal.ts	3
 src/infra/state-migrations.audit-backup.ts	1
@@ -1947,7 +1940,7 @@ src/mcp/codex-supervision-tools-serve.ts	1
 src/mcp/openclaw-tools-serve-config.ts	1
 src/mcp/plugin-tools-handlers.ts	1
 src/media-understanding/entry-capabilities.ts	1
-src/media-understanding/image-model-runtime.ts	3
+src/media-understanding/image-model-runtime.ts	2
 src/media-understanding/shared.ts	1
 src/media/audio-transcode.ts	1
 src/media/bounded-read-file.ts	2
@@ -2059,7 +2052,7 @@ src/plugins/hook-decision-types.ts	1
 src/plugins/hook-isolation.ts	3
 src/plugins/hook-runner-global-state.ts	1
 src/plugins/hook-types.ts	1
-src/plugins/hooks.ts	5
+src/plugins/hooks.ts	4
 src/plugins/host-hook-attachments.ts	1
 src/plugins/host-hook-runtime.ts	1
 src/plugins/host-hook-scheduled-turns.ts	4
@@ -2082,7 +2075,6 @@ src/plugins/loader-load-context.ts	4
 src/plugins/loader-module-runtime.ts	5
 src/plugins/loader-records.ts	1
 src/plugins/loader-runtime-candidate.ts	1
-src/plugins/loader-shared.ts	2
 src/plugins/managed-npm-retention.ts	3
 src/plugins/manifest-setup-normalizers.ts	4
 src/plugins/manifest.ts	2
@@ -2113,7 +2105,7 @@ src/plugins/runtime.ts	1
 src/plugins/runtime/channel-runtime-contexts.ts	1
 src/plugins/runtime/runtime-agent.ts	1
 src/plugins/runtime/runtime-llm-isolated.ts	2
-src/plugins/schema-validator.ts	4
+src/plugins/schema-validator.ts	2
 src/plugins/setup-registry.ts	2
 src/plugins/slots.ts	1
 src/plugins/toggle-config.ts	2

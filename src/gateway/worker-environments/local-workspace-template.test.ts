@@ -18,7 +18,10 @@ import {
 } from "../../agents/worktrees/preparation-timing.js";
 import { IDLE_GC_MS } from "../../agents/worktrees/retention.js";
 import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
-import { collectWorktreeTemplates } from "../../agents/worktrees/template-cache.js";
+import {
+  collectWorktreeTemplates,
+  retainWorktreeTemplate,
+} from "../../agents/worktrees/template-cache.js";
 import {
   listTemplatesAsync,
   markTemplateReadyAsync,
@@ -131,6 +134,9 @@ beforeAll(async () => {
   await git(source, "commit", "--quiet", "-am", "source update");
   sourceCommit = await git(source, "rev-parse", "HEAD");
   await write(source, "pnpm-lock.yaml", secondLock);
+  await write(source, "package.json", '{"name":"fixture","private":true,"version":"2.0.0"}\n');
+  await write(source, "lock-generation.txt", "second generation\n");
+  await git(source, "add", ".");
   await git(source, "commit", "--quiet", "-am", "lockfile update");
   changedCommit = await git(source, "rev-parse", "HEAD");
   await write(source, ".gitattributes", "source.ts text eol=crlf\n");
@@ -194,7 +200,7 @@ async function fixture(signal: AbortSignal) {
   };
 }
 
-it("refreshes source changes once, isolates clones, and rebuilds changed lockfiles", async ({
+it("refreshes source and lockfile changes without rewriting unchanged files", async ({
   signal,
 }) => {
   const backend = createCopyWorktreeBackend();
@@ -219,6 +225,16 @@ it("refreshes source changes once, isolates clones, and rebuilds changed lockfil
     (record) => record.worktreeRoot === path.join(path.dirname(first), "templates"),
   );
   assert(template, "Template was not reserved");
+  const reader = await retainWorktreeTemplate(env, template, () => signal.throwIfAborted());
+  assert(reader, "Old generation reader was not retained");
+  const readers = [reader];
+  await using _ = {
+    async [Symbol.asyncDispose]() {
+      for (const retained of readers) {
+        await retained.release();
+      }
+    },
+  };
   const indexPath = path.join(template.path, ".git", "index");
   const originalIndex = await fs.readFile(indexPath);
   // Reuse consumes producer validation without rescanning or changing the shared index.
@@ -261,15 +277,63 @@ it("refreshes source changes once, isolates clones, and rebuilds changed lockfil
   expect(mocks.install.mock.calls[0]![0].scopeKey).not.toBe(
     mocks.install.mock.calls[1]![0].scopeKey,
   );
+  const currentTemplate = (await listTemplatesAsync(env)).find(
+    (record) =>
+      record.worktreeRoot === template.worktreeRoot && record.sourceCommit === sourceCommit,
+  );
+  assert(currentTemplate, "Refreshed generation was not published");
+  const currentReader = await retainWorktreeTemplate(env, currentTemplate, () =>
+    signal.throwIfAborted(),
+  );
+  assert(currentReader, "Current generation reader was not retained");
+  readers.push(currentReader);
+  // Count file replacements at the real checkout boundary, after the copy has
+  // assigned new stat identities. Cold builds start with no retained files.
+  const priorStats = new Map<string, Map<string, Awaited<ReturnType<typeof fs.stat>>>>();
+  const copy = backend.cloneTemplate;
+  backend.cloneTemplate = async (...args) => {
+    await copy(...args);
+    const files = (await git(args[1], "ls-files", "-z")).split("\0").filter(Boolean);
+    priorStats.set(
+      args[1],
+      new Map(
+        await Promise.all(
+          files.map(async (file) => [file, await fs.stat(path.join(args[1], file))] as const),
+        ),
+      ),
+    );
+  };
+  let rewritten = 0;
+  const install = mocks.install.getMockImplementation()!;
+  mocks.install.mockImplementationOnce(async (params) => {
+    for (const file of (await git(params.directory, "ls-files", "-z"))
+      .split("\0")
+      .filter(Boolean)) {
+      const before = priorStats.get(params.directory)?.get(file);
+      const after = await fs.stat(path.join(params.directory, file));
+      if (!before || before.ino !== after.ino || before.mtimeMs !== after.mtimeMs) {
+        rewritten++;
+      }
+    }
+    return install(params);
+  });
   const third = await withWorktreePreparationTiming("managed", () =>
     clone("changed-lock", changedCommit),
   );
+  expect(await read(currentTemplate.path, "pnpm-lock.yaml")).toBe(firstLock);
+  expect(await git(currentTemplate.path, "rev-parse", "HEAD")).toBe(sourceCommit);
   expect(await read(third, dependencyFile)).toBe(secondLock);
   expect(await read(third, "pnpm-lock.yaml")).toBe(secondLock);
   expect(mocks.install).toHaveBeenCalledTimes(3);
-  expect(backend.createTemplate).toHaveBeenCalledTimes(2);
+  expect(rewritten).toBe(3);
+  expect(backend.createTemplate).toHaveBeenCalledOnce();
+  const selected = (await listTemplatesAsync(env)).find(
+    (record) => record.path !== template.path && record.sourceCommit === changedCommit,
+  );
+  assert(selected, "Updated template was not published");
   expect(mocks.preparation.mock.lastCall?.[0].details).toMatchObject({
-    template: "cold",
+    template: "warm",
+    "template.identity": `${selected.backend}:${selected.cacheKey}:${selected.contentKey}`,
     "template.reason": "ready",
     "template.missReason": "commit-changed",
     "template.priorSourceCommit": sourceCommit.slice(0, 12),
@@ -328,9 +392,11 @@ it("refreshes source changes once, isolates clones, and rebuilds changed lockfil
     }
   }
   expect(mocks.install).toHaveBeenCalledTimes(3);
+  expect(await read(template.path, "pnpm-lock.yaml")).toBe(firstLock);
+  expect(await read(template.path, "source.ts")).toBe(sourceText);
   const attributes = await clone("attributes", attributeCommit);
   expect(await read(attributes, "source.ts")).toBe("export const version = 'updated';\r\n");
-  expect(backend.createTemplate).toHaveBeenCalledTimes(3);
+  expect(backend.createTemplate).toHaveBeenCalledTimes(2);
 });
 
 it("retains dependencies without credentials or install debris", async ({ signal }) => {

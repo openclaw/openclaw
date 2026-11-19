@@ -66,6 +66,7 @@ import {
   prepareGatewayConnectOperatorDeviceSource,
   rejectGatewayConnectOperatorAccess,
 } from "./connect-operator-access.js";
+import { attachPublicationReader } from "./connect-publication-reader.js";
 import {
   createGatewayConnectProfileLifecycle,
   resolveGatewayConnectProfileAdmission,
@@ -86,6 +87,10 @@ export async function attachAuthenticatedGatewayConnect(
   context: GatewayConnectPhaseContext,
   state: DeviceAuthorizedGatewayConnect,
 ): Promise<void> {
+  if (state.publicationReader) {
+    await attachPublicationReader(context, state);
+    return;
+  }
   const {
     socket,
     connId,
@@ -397,6 +402,7 @@ export async function attachAuthenticatedGatewayConnect(
   const controlUiAdmin = authenticatedControlUi && scopes.includes(ADMIN_SCOPE);
   const internal: NonNullable<GatewayWsClient["internal"]> = {
     ...(isLocalClient ? { isLocalClient: true as const } : {}),
+    ...(isLocalBackendClient ? { localBackendClient: true as const } : {}),
     ...(context.handler.ingressAttribution.kind === "openclaw-id-tunnel"
       ? { openclawIdPeerKey: context.handler.ingressAttribution.peerKey }
       : {}),

@@ -868,6 +868,8 @@ extension OpenClawChatViewModel {
         decodedMessages: [OpenClawChatMessage]?) -> Bool
     {
         guard self.canApplyHistory(request) else { return false }
+        // A retained/cache-painted transcript is display, not evidence against a fresh empty page.
+        let preservingOptimisticLocalMessages = preservingOptimisticLocalMessages && !self.isShowingCachedTranscript
         self.applyHistoryReasoningLevel(payload.sessionInfo?.reasoningLevel)
         let replacingCanonicalHistory = replacingCanonicalHistory || request.replacingCanonicalHistory
         let isDelta = payload.kind == "delta"
@@ -996,6 +998,7 @@ extension OpenClawChatViewModel {
         // is written through so the next cold open pre-paints current rows.
         self.hasAppliedLiveHistory = true
         self.isShowingCachedTranscript = false
+        self.recordTranscriptPresentationTarget(from: payload, isDelta: isDelta)
         self.syncSessionReactions()
         // An empty post-send refresh is incomplete by contract: reconciliation
         // preserves the visible transcript, so preserve its last canonical cache too.

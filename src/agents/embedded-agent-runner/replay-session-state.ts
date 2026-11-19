@@ -14,12 +14,6 @@ import {
   type ModelSnapshotState,
 } from "./replay-model-snapshot.js";
 
-export {
-  isSameModelSnapshot,
-  MODEL_SNAPSHOT_CUSTOM_TYPE,
-  type ModelSnapshotEntry,
-} from "./replay-model-snapshot.js";
-
 export function createProviderReplaySessionState(sessionManager: SessionManager): {
   state: ProviderReplaySessionStateV2;
   close(): void;

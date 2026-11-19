@@ -177,6 +177,7 @@ device in the latest snapshot), or one device fingerprint (`fp:<hex>`). Payload 
 | `enrollment`             | new device / owner device        | fp / owners | SAS protocol (below)                                                                      |
 | `notice`                 | Gateway                          | owners / fp | none: a hint; the device confirms at the Gateway directly                                 |
 | `member_browser_request` | bound device of a current member | gateway     | current local membership; display-only Inbox metadata, never admission                    |
+| `member_recovery`        | signed-in member with kit        | gateway     | current recovery-only key, same account, add_member_device only                           |
 
 Notice events are `MAILBOX_NOTICE_EVENTS`. `seq_conflict` goes only to the one device fingerprint
 whose `root_statement` the Gateway refused for a stale seq (`noticeRecipientAllowed`); its `ref` is
@@ -193,8 +194,11 @@ must confirm admission from the current membership snapshot rather than treat ma
 submission as a fresh pending request.
 
 The Gateway accepts only `GATEWAY_MAILBOX_KINDS` (`invite_redemption`, `root_statement`,
-`node_redemption`, `revocation`, `member_browser_request`) from the mailbox. **A device-signed MembershipChange that arrives through the
-mailbox is refused**, so an approval can never be forged or replayed by Discovery.
+`node_redemption`, `member_recovery`, `revocation`, `member_browser_request`) from the mailbox. A browsing-device-signed
+MembershipChange through the mailbox is refused. Only a current recovery-only member key
+may add its own account's browser through `member_recovery`; the Gateway checks signature,
+current key listing, claw, target and seq. Discovery checks the payload shape, signed-in account
+and current relationship for routing only. This never admits the recovery key to the relay.
 
 Limits: payload <= 64 KiB, TTL 7 days, long-poll `wait` <= 30 s, rate limits per claw, per
 account and per source address (`rate_limited` with `retry_after`).

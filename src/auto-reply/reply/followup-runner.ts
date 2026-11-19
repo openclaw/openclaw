@@ -33,11 +33,7 @@ import { readCreatedGoalContinuationId } from "./goal-continuation-return.js";
 import { enqueueGoalContinuation, createGoalContinuationReturn } from "./goal-continuation.js";
 import { completeFollowupRunLifecycle, type FollowupRun } from "./queue.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
-import {
-  isFollowupOperatorAuthorityCurrent,
-  isFollowupRunAborted,
-  type QueuedFollowupReplyBatch,
-} from "./queue/types.js";
+import { isFollowupRunAborted, type QueuedFollowupReplyBatch } from "./queue/types.js";
 import {
   prepareReplyAgentTurn,
   type AdmittedFollowupTurn,
@@ -409,7 +405,7 @@ export function createFollowupRunner(
         );
       }
     } catch (error) {
-      const authorityLost = !isFollowupOperatorAuthorityCurrent(queued);
+      const authorityLost = queued.operatorAuthority?.signal?.aborted === true;
       if (
         !authorityLost &&
         ((queued.run.internalEventExecution &&

@@ -181,6 +181,11 @@ describe("Templates discovery", () => {
     const { page, navigate, request } = createPage({ templatesEnabled: true });
     await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));
     expect(page.querySelector(".hub-page-header h1.page-title")?.textContent).toBe("Templates");
+    const subtitle = page.querySelector(".hub-page-header .page-subtitle");
+    expect(subtitle?.textContent).toBe("Ready-made Claws that get the job done Learn more");
+    expect(subtitle?.querySelector("a")?.getAttribute("href")).toBe(
+      "https://docs.openclaw.ai/concepts/agents-and-templates",
+    );
     expect(page.querySelector(".settings-page [data-templates-search]")).not.toBeNull();
     expect(page.querySelector(".settings-page .hub-page-header")).toBeNull();
     expect(page.querySelector(".agents-home__card")).toBeNull();
@@ -194,7 +199,7 @@ describe("Templates discovery", () => {
     });
     expect(request).toHaveBeenCalledWith("templates.catalog.search", {
       overview: true,
-      limit: 8,
+      limit: 4,
     });
   });
 
@@ -464,7 +469,7 @@ describe("Templates discovery", () => {
     await waitForSolid(() =>
       expect(request).toHaveBeenCalledWith("templates.catalog.search", {
         category: "productivity",
-        limit: 8,
+        limit: 4,
       }),
     );
     await waitForSolid(() =>

@@ -294,6 +294,38 @@ it.each([
   expect(fs.readdirSync(staging)).toEqual([]);
 });
 
+// Readers that outlive the last writer keep its frames and live index, as a status reader can.
+function retainedWalFixture() {
+  const fixture = generationFixture("wal");
+  const writer = new DatabaseSync(fixture.file);
+  writer.exec("INSERT INTO receipt VALUES ('retained');");
+  const reader = openReader(fixture.file);
+  writer.close();
+  reader.close();
+  expect(fs.statSync(`${fixture.file}-wal`).size).toBeGreaterThan(32);
+  expect(fs.readFileSync(`${fixture.file}-shm`).readUInt32LE(8)).not.toBe(0);
+  return fixture;
+}
+
+it("binds a WAL index an outside reader rebuilds over retained frames during the read", () => {
+  const { file, staging } = retainedWalFixture();
+  const live = readUpdateDatabaseGenerationPair([file]);
+  let rebuilt: DatabaseSync | undefined;
+  duringGenerationRead(() => {
+    rebuilt = openReader(file);
+  });
+  try {
+    const pair = readUpdateDatabaseGenerationPair([file]);
+    expect(fs.readFileSync(`${file}-shm`).readUInt32LE(8)).toBe(0);
+    expect(pair.committed[file]).not.toBe(live.committed[file]);
+    expect(pair.committed[file]).toBe(live.rebuiltIndexAlternates[file]);
+    expect(readUpdateDatabaseGenerationPair([file]).committed).toEqual(pair.committed);
+  } finally {
+    rebuilt?.close();
+  }
+  expect(fs.readdirSync(staging)).toEqual([]);
+});
+
 it("refuses a generation when a writer commits during the read", () => {
   const { file, staging } = generationFixture("wal-absent");
   const writer = new DatabaseSync(file);
@@ -407,7 +439,7 @@ it("refuses a malformed engine anchor from the captured image and cleans up", as
   const database = new DatabaseSync(file);
   database.exec(
     "CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT);" +
-      "INSERT INTO openclaw_engine_anchor VALUES ('test-store', 'postgres', 'invalid-schema');",
+      "INSERT INTO openclaw_engine_anchor VALUES ('test-store', 'postgres', 'invalid.schema');",
   );
   database.close();
   const before = fs.readFileSync(file);

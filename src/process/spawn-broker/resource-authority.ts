@@ -3,8 +3,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fitsBrokerSocketPath } from "./socket-directory.js";
 
-/** Allocate authority without touching disk; the broker creates its private socket directory. */
-export function createNativeResourceAuthority() {
+export type NativeResourceAuthority = {
+  endpoint: string;
+  /** Private socket directory for the endpoint; undefined when the endpoint needs none. */
+  directory: string | undefined;
+  secret: string;
+};
+
+/**
+ * Allocate authority without touching disk. Whether the endpoint has a private socket directory
+ * is decided only here and forwarded whole to the broker, which creates and removes it. The host
+ * removes it again after readiness in case the broker could not.
+ */
+export function createNativeResourceAuthority(): NativeResourceAuthority {
   const name = `oc-br-${randomBytes(16).toString("hex")}`;
   const preferred = join(tmpdir(), name);
   const directory =

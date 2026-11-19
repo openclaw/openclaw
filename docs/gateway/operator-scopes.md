@@ -57,6 +57,11 @@ is committed. Other people's automations remain read-only; global creation and
 administration still require `operator.admin`. Global scheduler status requires
 `operator.read`.
 
+Fresh authenticated admin chat turns from the Control UI or a native app UI can
+manage automations across conversations. Native UI identity alone is insufficient:
+the connection must hold `operator.admin`. The deployment-level
+`tools.gatewayPolicy.automations.scope: "caller"` restriction still takes precedence.
+
 The **Owner** field under **Agent** shows the human responsible for an automation.
 Its current human owner or an administrator can select another existing profile.
 Transferring ownership pauses the automation, cancels any active occurrence, and
@@ -101,8 +106,11 @@ and session access are checked on every request. Publication always resolves the
 current Git remote again. Unavailable targets do not hide existing shared receipts.
 Reopen the chat or reconnect after the managed workspace changes to refresh its
 options. Personal account discovery and personal receipts still
-require `operator.read` and the authenticated owner. Identity, role, access grant,
-connection, and session visibility are rechecked before returning awaited reads.
+require `operator.read` and the authenticated owner. The request fixes that profile
+and its role and scope ceiling at admission. A reconnect or permission change does
+not revoke an admitted read; the next request uses the new authority. Personal reads
+never follow a profile merge into another person's credentials. Credential-generation,
+session lifecycle, and workspace identity fences still protect the selected target.
 
 With `operator.sessions.write`, a requester can publish ordinary changes from
 sessions they created through the shared GitHub account. Workflow definition
@@ -278,7 +286,7 @@ an access policy supplied by a plugin.
           scopes: ["operator.read", "operator.write", "operator.approvals"],
         },
         guest: {
-          sessions: { others: "view" },
+          sessions: { others: "invited" },
           agents: ["roboclaw"],
           scopes: ["operator.sessions.read", "operator.sessions.write"],
           sandbox: "required",
@@ -322,8 +330,9 @@ with `role: null` exposes the configured mapping or default again.
 `users.list` keeps `role` as the explicit assignment and reports `effectiveRole`
 with `roleSource` (`"assigned"`, `"githubLogin"`, or `"default"`).
 `gateway.roles.default` is optional and must name an existing definition when set.
-Without a default, `definitions` is a role catalog only: sign-in, authorization,
-profile requirements, and session access behave as if `gateway.roles` were absent.
+Without a default, `definitions` is a role catalog only for non-member connections:
+sign-in, authorization, profile requirements, and session access behave as if
+`gateway.roles` were absent.
 Stored explicit assignments do not apply, and `users.list` reports no effective
 role. Assigning a named role requires a default; clearing an assignment remains
 available. Existing configurations with a default keep their behavior unchanged.
@@ -380,6 +389,11 @@ For sessions created by other people, `sessions.others` supports these values:
 - `"none"`: hides foreign sessions from lists and targeted access, filters
   session-level usage to visible sessions, and denies Gateway-wide `usage.cost`
   because its aggregate can include hidden sessions.
+- `"invited"`: shows foreign sessions only while the person is a session member.
+  This applies to lists, direct links, search, history, and live session events,
+  even with broad `operator.read` or `operator.write` scopes. Gateway-wide cost
+  and meeting transcript archives remain unavailable because they can include
+  hidden sessions.
 - `"view"`: allows reading but does not allow mutation, even when a session is
   otherwise shared.
 - `"suggest"`: allows viewing and the existing suggestion flow.
@@ -387,10 +401,23 @@ For sessions created by other people, `sessions.others` supports these values:
   restrictions remain in force.
 
 A person always owns their own sessions. At `"none"`, explicit session membership
-does not grant access to another person's sessions. Membership can raise `"view"`
+does not grant access to another person's sessions. Membership can raise `"invited"` or `"view"`
 or `"suggest"` access for a specific session; `"write"` already permits participation
 without membership. Connections holding `operator.admin` retain their
 administrative session access.
+
+Connection scopes and draft/incognito restrictions remain in force.
+
+To enable invitation-only discovery, set the guest role's `sessions.others` to
+`"invited"` after upgrading. Existing role definitions keep their current behavior.
+Assign the intended profiles to that role, then reconnect them. The creator or an
+admin can add members directly or select a human @mention in an ordinary chat.
+The committed message grants membership to recipients with `"invited"` access.
+Removing a member revokes access; replaying the old message cannot regrant it.
+
+Explicitly published sessions remain readable through their sanitized public
+transcript links. Public access does not grant membership or expose raw history,
+tools, or files. **Shared** visibility alone does not make a session public.
 
 Set `agents: "*"` to allow session creation and agent runs on every agent, list
 agent IDs to allow only those agents, or use an empty array to disallow both.
@@ -408,7 +435,9 @@ an older browser roster cannot restore agents excluded by the current role.
 OpenClaw ID member connections resolve the membership role directly from
 `gateway.roles.definitions`, even without `gateway.roles.default`. The membership
 role takes precedence over any profile assignment; other connection types retain
-their own authorization rules. Its `accessPolicyPlugin`, when set, is required
+their own authorization rules. The connection decides which role applies: the same
+person can have a member role over OpenClaw ID and a different profile role through
+a trusted proxy. Those permissions are not combined. Its `accessPolicyPlugin`, when set, is required
 even without named-role enforcement. `users.setRole` refuses assigning a named role to
 an OpenClaw ID member's profile and directs the owner to **Access**. Clearing a
 profile assignment with `role: null` remains allowed.
@@ -478,6 +507,14 @@ preset does not grant `operator.write` or `operator.admin`.
 Missing role definitions deny member admission across WebSocket, HTTP, the tunnel
 API, and retained/recovered work. Definition changes apply through config reload;
 removed permissions cannot survive in a connected member or its retained work.
+With OpenClaw ID enabled and a role catalog present, `openclaw doctor` checks the
+local claw record even when the Gateway is stopped. It reports missing member
+definitions, missing presets, and unavailable Docker or Podman backends needed
+by members or the named default. Its preset repair requires confirmation (or
+`--fix`/`--yes`), preserves existing definitions, and never sets a default or
+assignments. Doctor also warns when stored profile assignments have no effect
+because the named default is absent.
+
 Owner-device and node authority is independent of member definitions. See
 [OpenClaw ID remote access](/concepts/experimental-features#member-roles).
 
@@ -658,7 +695,8 @@ credential boundary and backend requirements.
 
 <a id="sandbox-exclusions" />
 
-A required sandbox contains the session's exec and file tools. It does not
+A required sandbox contains the session's exec and file tools, not the whole
+Gateway host. It does not
 contain these paths, so configure them before admitting people you do not trust
 with the Gateway host:
 
@@ -718,7 +756,7 @@ reusable device token, and device scope upgrades cannot widen its grant ceiling.
 An administrator-attested [channel identity link](/concepts/user-model#channel-identity-links)
 also lets a sender inherit channel-owner authority from their effective role's
 `operator.admin` scope. This does not require an additional identity-scope grant.
-When roles are absent, channel ownership uses a matching administrative
+When named-role enforcement is off, channel ownership uses a matching administrative
 identity-scope grant instead. Connection scope grants and ceilings are unchanged.
 
 Named roles apply to authenticated durable profiles and their attested channel
@@ -1020,3 +1058,22 @@ callbacks.
 - [Trusted proxy auth](/gateway/trusted-proxy-auth) — how a trusted proxy supplies the operator identity these scopes attach to
 - [Gateway protocol](/gateway/protocol) — the methods these scopes authorize
 - [Cloud Workers](/gateway/cloud-workers) — worker dispatch, whose environment and session calls are authorized against these scopes
+
+### Automation administrator delegation across UI clients
+
+Browser and native UI administrator turns use the same automation delegation
+policy. Authenticated macOS, Linux, iOS, and Android UI administrators retain
+this delegation when their recorded operator source is restored for scheduled
+runs, repair notices, and continuations. Restoration still revalidates the
+original device, profile, scopes, and live authority. Timing-only edits cannot
+upgrade a job's standing delegation. Historical browser grants remain valid;
+historical native sources without recorded delegation are not upgraded.
+
+This does not make native clients browser clients, grant direct-local command
+execution, or equate distinct personal administrators. Authenticated shared-owner native UI
+turns use the same continuation rules as shared-owner browser turns. Native UI
+also retains signed-in requester identity, can acknowledge provider reviews and
+submit human mentions, and can use task suggestions when advertising the required
+capability. Device-backed native reconnects use the same exact-identity custody
+checks. Explicit caller-only automation
+policy and tool restrictions still apply.

@@ -25,7 +25,7 @@ export async function openOwnerInboxAction(
 }
 
 /** Open the signing surface on this owner device; a notice itself grants nothing. */
-export async function openBrowserRequestApproval(
+async function openBrowserRequestApproval(
   client: GatewayBrowserClient | null | undefined,
   remote: boolean,
   current: () => boolean,

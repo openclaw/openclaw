@@ -355,7 +355,18 @@ it("keeps provider authentication and settings after favoriting its only model",
   const onProviderSettings = vi.fn();
   const view = await mount({}, undefined, {
     modelOptions: [modelOption("openai", "large"), modelOption("anthropic", "sonnet")],
-    providerAuth: new Map([["anthropic", { kind: "api", label: "API key", detail: "Configured" }]]),
+    modelAuthStatusResult: {
+      ts: 1,
+      providers: [
+        {
+          provider: "anthropic",
+          displayName: "Anthropic",
+          status: "static",
+          profiles: [],
+          apiKey: { source: "env" },
+        },
+      ],
+    },
     onProviderSettings,
   });
   await selectProvider(view.container, "anthropic");

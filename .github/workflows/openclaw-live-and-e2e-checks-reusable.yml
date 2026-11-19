@@ -2151,7 +2151,8 @@ jobs:
     timeout-minutes: ${{ matrix.group.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
-      max-parallel: 32
+      # Raise only the hosted expanded package-survivor matrix; retain other runner budgets.
+      max-parallel: ${{ inputs.use_github_hosted_runners && inputs.runner_group == '' && needs.validate_selected_ref.outputs.package_artifact_present == 'true' && contains(inputs.docker_lanes, 'published-upgrade-survivor') && !contains(inputs.docker_lanes, 'update-migration') && inputs.published_upgrade_survivor_scenarios != '' && 48 || 32 }}
       matrix:
         group: ${{ fromJson(needs.plan_docker_lane_groups.outputs.groups_json) }}
     env:
@@ -3236,6 +3237,7 @@ jobs:
         if: steps.create_prepublish_plugin_registry.outputs.manifest_sha256 != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: docker-e2e-prepublish-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/prepublish-plugin-registry/
           if-no-files-found: error

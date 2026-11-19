@@ -2,7 +2,6 @@ import type { AgentActivityItem } from "../../../../packages/gateway-protocol/sr
 import { summarizeAgentActivity } from "../../../../src/agents/agent-activity-presentation.js";
 import { t } from "../../i18n/index.ts";
 import { registerChatToolLabelsEnglish } from "../../i18n/locales/en-chat-tool-labels.ts";
-import { resolveToolDisplayIdentity } from "./tool-display-identity.ts";
 
 export { readPreparedActivity, hasVisiblePreparedActivity } from "./prepared-activity.ts";
 
@@ -22,13 +21,30 @@ type ToolGroupOptions = {
   interruptedCalls?: ReadonlySet<string>;
 };
 
-/** Actions named by their purpose rather than counted in a generic category. */
-const SEMANTIC_TOOL_KINDS = {
-  skillSearches: "skills_search",
-  skillReads: "skills_read",
-  waits: "agents_wait",
-  questions: "ask_user",
-} as const;
+const MEMORY_UPDATE_TOOLS = new Set([
+  "knowledge_remember",
+  "knowledge_edit_body",
+  "knowledge_save_page",
+  "knowledge_create_claim",
+]);
+
+// Summary categories describe work across tools. Unknown names share one fallback;
+// display names and identifiers belong to the expanded operation rows.
+const SUMMARY_TOOL_KINDS = new Map([
+  ["skills_read", "reads"],
+  ["skills_search", "searches"],
+  ["memory_search", "searches"],
+  ["knowledge_grep", "searches"],
+  ["memory_get", "memory"],
+  ["knowledge_record", "memory"],
+  ["knowledge_records", "memory"],
+  ["knowledge_lookup", "memory"],
+  ...[...MEMORY_UPDATE_TOOLS].map((name) => [name, "memory"] as const),
+  ["sessions_send", "messages"],
+  ["conversations_send", "messages"],
+  ["agents_wait", "waits"],
+  ["ask_user", "questions"],
+]);
 
 export function describeToolGroup(
   items: readonly AgentActivityItem[],
@@ -47,108 +63,95 @@ export function describeToolGroup(
         .map((item) => [item.toolCallId ?? item.itemId, item]),
     ).values(),
   ];
-  const current = all.filter(
-    (item) => !options.interruptedCalls?.has(item.toolCallId ?? item.itemId),
-  );
   const summary = summarizeAgentActivity(all, options);
-  const semantic = new Map(
-    Object.entries(SEMANTIC_TOOL_KINDS).map(([kind, name]) => [
-      kind,
-      current.filter((item) => !item.hideFromChannelProgress && item.name === name),
-    ]),
+  const groups = new Map<string, AgentActivityItem[]>(
+    [
+      "commands",
+      "reads",
+      "changes",
+      "searches",
+      "fetches",
+      "memory",
+      "messages",
+      "waits",
+      "questions",
+      "cancellations",
+      "other",
+      "subagents",
+      "interrupted",
+    ].map((kind) => [kind, []]),
   );
-  const cancellations = current.filter(
-    (item) =>
-      !item.hideFromChannelProgress &&
-      options.subagentCancellations?.has(item.toolCallId ?? item.itemId),
-  );
-  const semanticItems = new Set([...[...semantic.values()].flat(), ...cancellations]);
-  const ordinary = current.filter((item) => !semanticItems.has(item));
-  const { other, subagents, ...categories } = summarizeAgentActivity(ordinary, options).counts;
-  const counts = {
-    ...categories,
-    ...Object.fromEntries([...semantic].map(([kind, actions]) => [kind, actions.length])),
-    cancellations: cancellations.length,
-    other,
-    subagents,
-    interrupted: all.length - current.length,
-  };
-  const completed = summarizeAgentActivity(
-    ordinary.filter(
-      (item) =>
-        item.status === "completed" ||
-        (item.status !== "blocked" &&
-          item.status !== "skipped" &&
-          options.executedCommands?.has(item.toolCallId ?? item.itemId)),
-    ),
-    options,
-  );
-  const runningKinds = new Set(
-    Object.entries(
-      summarizeAgentActivity(
-        ordinary.filter(
-          (item) =>
-            item.status === "running" ||
-            options.continuingExecutions?.has(item.toolCallId ?? item.itemId),
-        ),
-        options,
-      ).counts,
-    )
-      .filter(([, count]) => count > 0)
-      .map(([kind]) => kind),
-  );
-  const completedKinds = new Set(
-    Object.entries(completed.counts)
-      .filter(([, count]) => count > 0)
-      .map(([kind]) => kind),
-  );
-  const otherTools = counts.other
-    ? [
-        ...new Set(
-          ordinary.flatMap((item) =>
-            item.name &&
-            item.name !== "sessions_spawn" &&
-            summarizeAgentActivity([item], options).counts.other
-              ? [resolveToolDisplayIdentity(item.name).label]
-              : [],
-          ),
-        ),
-      ]
-    : [];
-  const label = Object.entries(counts)
-    .filter(([, count]) => count > 0)
-    .map(([kind], index) => {
+  for (const item of all) {
+    const key = item.toolCallId ?? item.itemId;
+    if (options.interruptedCalls?.has(key)) {
+      groups.get("interrupted")!.push(item);
+      continue;
+    }
+    if (item.hideFromChannelProgress) {
+      continue;
+    }
+    const name = item.name?.trim().toLowerCase() ?? "";
+    const kind = options.subagentCancellations?.has(key)
+      ? "cancellations"
+      : item.commandBearing
+        ? "commands"
+        : (SUMMARY_TOOL_KINDS.get(name) ??
+          Object.entries(summarizeAgentActivity([item], options).counts).find(
+            ([, count]) => count > 0,
+          )![0]);
+    groups.get(kind === "edits" || kind === "writes" ? "changes" : kind)!.push(item);
+  }
+  const isRunning = (item: AgentActivityItem) =>
+    item.status === "running" || options.continuingExecutions?.has(item.toolCallId ?? item.itemId);
+  const isCompleted = (item: AgentActivityItem) =>
+    item.status === "completed" ||
+    (item.status !== "blocked" &&
+      item.status !== "skipped" &&
+      options.executedCommands?.has(item.toolCallId ?? item.itemId));
+  const label = [...groups]
+    .filter(([, actions]) => actions.length > 0)
+    .map(([kind, actions], index) => {
       const continuation = index > 0 ? "Continuation" : "";
-      const actions = semantic.get(kind);
-      if (actions) {
-        const phase = actions.some((item) => item.status === "running")
-          ? "Running"
-          : actions.some((item) => item.status === "completed")
-            ? "Summary"
-            : "Pending";
-        return t(`chat.toolCards.activity.${kind}${phase}${continuation}`);
-      }
       if (kind === "interrupted") {
         return t("chat.toolCards.activity.interrupted" + continuation);
       }
       if (kind === "cancellations") {
-        const phase = cancellations.some((item) => item.status === "running")
+        const phase = actions.some(isRunning)
           ? "Running"
-          : cancellations.some((item) =>
+          : actions.some((item) =>
                 options.subagentCancellations?.get(item.toolCallId ?? item.itemId),
               )
             ? "Summary"
             : "Pending";
         return t("chat.toolCards.activity.cancellations" + phase + continuation);
       }
-      return kind === "other" && otherTools.length
-        ? t(
-            `chat.toolCards.activity.${runningKinds.has(kind) ? "callingTools" : "calledTools"}${continuation}`,
-            { tools: otherTools.join(", ") },
-          )
-        : t(
-            `chat.toolCards.activity.${kind}${runningKinds.has(kind) && kind !== "subagents" ? "Running" : completedKinds.has(kind) ? "Summary" : "Pending"}${continuation}`,
-          );
+      if (kind === "memory") {
+        const reads = actions.filter(
+          (item) => !MEMORY_UPDATE_TOOLS.has(item.name?.trim().toLowerCase() ?? ""),
+        );
+        const updates = actions.filter((item) =>
+          MEMORY_UPDATE_TOOLS.has(item.name?.trim().toLowerCase() ?? ""),
+        );
+        const key = updates.some(isRunning)
+          ? "memoryUpdatesRunning"
+          : reads.some(isRunning)
+            ? "memoryReadsRunning"
+            : updates.some(isCompleted)
+              ? reads.some(isCompleted)
+                ? "memoryReadUpdatesSummary"
+                : "memoryUpdatesSummary"
+              : reads.some(isCompleted)
+                ? "memoryReadsSummary"
+                : "memoryPending";
+        return t(`chat.toolCards.activity.${key}${continuation}`);
+      }
+      const phase =
+        kind !== "subagents" && actions.some(isRunning)
+          ? "Running"
+          : actions.some(isCompleted)
+            ? "Summary"
+            : "Pending";
+      return t(`chat.toolCards.activity.${kind}${phase}${continuation}`);
     })
     .join(", ");
   // Attempt outcomes remain on their rows. They do not establish the result

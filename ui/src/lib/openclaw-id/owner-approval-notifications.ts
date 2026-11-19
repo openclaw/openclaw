@@ -65,11 +65,15 @@ export function bindOwnerApprovalNotifications(gateway: ApplicationGateway) {
             durationMs: 30_000,
             onAction: () => openDevices(client),
           }),
-        () =>
+        (use) =>
           showToast({
             severity: "info",
-            message: t("openclawId.memberDeviceAddedNotice"),
-            description: t("openclawId.memberDeviceAddedNoticeBody"),
+            message: use
+              ? t("openclawId.memberKitUsedNotice", { name: use.memberName })
+              : t("openclawId.memberDeviceAddedNotice"),
+            description: use
+              ? t("openclawId.memberKitUsedNoticeBody", { device: use.deviceLabel })
+              : t("openclawId.memberDeviceAddedNoticeBody"),
             durationMs: 30_000,
           }),
       );

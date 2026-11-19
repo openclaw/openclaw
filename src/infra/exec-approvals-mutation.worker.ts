@@ -1,9 +1,7 @@
 import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
-import {
-  normalizeExecApprovalsInternal,
-  stripExecApprovalsSocketCredentials,
-} from "./exec-approvals-config.js";
+import { normalizeExecApprovalsInternal } from "./exec-approvals-config.js";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./exec-approvals-core.js";
+import { stripExecApprovalsSocketCredentials } from "./exec-approvals-core.js";
 import {
   applyExecApprovalsUpdate,
   type ExecApprovalsUpdate,

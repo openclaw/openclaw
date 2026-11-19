@@ -10,7 +10,7 @@ installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
-it("checks Incognito sends and Stop against the process-local active path", async () => {
+it("checks Incognito sends against the process-local active path; Stop needs no view", async () => {
   await using fixture = await createBrowserFollowupFixture({
     active: false,
     persistDuringDispatch: true,
@@ -49,9 +49,7 @@ it("checks Incognito sends and Stop against the process-local active path", asyn
       expectedLeafEntryId,
     });
 
-  expectLeafChanged(await stop("obsolete-leaf"));
-
-  expect((await stop("current-leaf")).mock.calls[0]?.[0]).toBe(true);
+  expect((await stop("obsolete-leaf")).mock.calls[0]?.[0]).toBe(true);
   expectLeafChanged(await send({ ...fixture.params, expectedLeafEntryId: "obsolete-leaf" }));
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 
