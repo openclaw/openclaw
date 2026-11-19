@@ -31,6 +31,7 @@ import {
 } from "../command-owner-authority.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import { normalizeVerboseLevel } from "../thinking.js";
+import type { ReplyPayload } from "../types.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import { buildPreflightCompactionFailureText } from "./agent-runner-failure-reply.js";
 import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
@@ -61,7 +62,6 @@ import {
   retainReplySourceAfterFailedPreflight,
 } from "./reply-source-admission.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
-import type { AdmittedFollowupTurn } from "./reply-turn-admission.types.js";
 import type { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import type { TypingController } from "./typing.js";
@@ -77,6 +77,28 @@ export type FollowupRunnerParams = {
   storePath?: string;
   defaultModel: string;
   toolProgressDetail?: "explain" | "raw";
+};
+
+type FollowupSessionOwner = {
+  current: () => SessionEntry | undefined;
+  publish(entry: SessionEntry | undefined): void;
+} & ({ kind: "detached" } | { kind: "session"; key: string; storePath?: string });
+
+export type AdmittedFollowupTurn = {
+  readonly runId: string;
+  queued: InternalFollowupRun;
+  operation: ReplyOperation;
+  config: OpenClawConfig;
+  session: FollowupSessionOwner;
+  sessionStore?: Record<string, SessionEntry>;
+  sendPolicy: "allow" | "deny";
+  preflightCompactionApplied: boolean;
+  /** Deferred while observing; the execution gate must prepare an approved reply. */
+  prepareForExecution?: () => Promise<void>;
+  memoryFlushAttempted?: boolean;
+  preflightFailurePayload?: ReplyPayload;
+  preflightError?: Error;
+  releaseSourceAdmission?: () => Promise<void>;
 };
 
 type PrepareReplyAgentTurnParams<TConfigured> = {
@@ -374,7 +396,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
         sessionKey: replySessionKey,
         sessionStore: params.defaults.sessionStore,
       });
-      const session: AdmittedFollowupTurn["session"] = {
+      const session: FollowupSessionOwner = {
         ...(replySessionKey
           ? { kind: "session" as const, key: replySessionKey, storePath: params.defaults.storePath }
           : { kind: "detached" as const }),

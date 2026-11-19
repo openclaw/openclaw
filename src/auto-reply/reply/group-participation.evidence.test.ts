@@ -33,6 +33,7 @@ it("does not classify a textless source as a negative attention judgment", async
 });
 
 it("uses ordinary generation when newly adopted media cannot be assessed", async () => {
+  fixture.config.agents!.defaults!.model = { primary: "test-provider/test-model" };
   models.decision.mockImplementation(async (batch) => judgment(batch, { attention: "none" }));
   models.embedded.mockResolvedValue({
     payloads: [{ text: "Ordinary media reply." }],
@@ -72,6 +73,7 @@ it("uses ordinary generation when newly adopted media cannot be assessed", async
 });
 
 it("restores an ordinary required reply for an adopted participation-bypass source", async () => {
+  fixture.config.agents!.defaults!.model = { primary: "test-provider/test-model" };
   const groupId = "-10116";
   models.decision.mockImplementation(async (batch) => {
     const operation = getSessionControllerOperation("agent:main:telegram:group:" + groupId);

@@ -37,6 +37,7 @@ beforeEach(async () => {
   models.embedded.mockReset();
   models.cli.mockReset();
   models.decision.mockReset();
+  fixture.config.agents!.defaults!.experimental = { decisionAssistance: true };
   const registry = createTestRegistry();
   registry.cliBackends.push({
     pluginId: "synthetic-cli",

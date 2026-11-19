@@ -37,14 +37,15 @@ async function refreshObservation(
     return;
   }
   // Positive decisions also expire when the accepted conversation or config changes.
-  if (!participation.isCurrent()) {
+  const assessedRevision = participation.snapshot?.revision;
+  if (assessedRevision === undefined || !participation.isCurrent(assessedRevision)) {
     await participation.refresh();
   }
   if (!participation.isObserving) {
     return;
   }
   const recorder = params.followupRun.userTurnTranscriptRecorder;
-  if (recorder && !recorder.hasPersisted()) {
+  if (participation.isObserving && recorder && !recorder.hasPersisted()) {
     const persisted = await recorder.persistApproved(
       params.sessionKey
         ? {
@@ -68,7 +69,8 @@ async function refreshObservation(
   params.replyOperation?.abortSignal.throwIfAborted();
   // Persistence can yield to a consent/config change or accepted group input.
   // Silence is valid only while the assessed conversation still owns it.
-  if (!participation.isCurrent()) {
+  const revision = participation.snapshot?.revision;
+  if (revision === undefined || !participation.isCurrent(revision)) {
     // The owner restores ordinary policy only if assistance is unavailable.
     await participation.refresh();
   }

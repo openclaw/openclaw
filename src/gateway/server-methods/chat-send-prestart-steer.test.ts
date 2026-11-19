@@ -63,17 +63,10 @@ const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const runtime = vi.hoisted(() => ({ execute: vi.fn<typeof executeAgentTurn>() }));
 registerAgentSessionLoopTestLifecycle();
 
-vi.mock("../../auto-reply/reply/agent-runner-execution.js", async (importOriginal) => {
-  const { runAgentTurnWithOutcome } =
-    await import("../../auto-reply/reply/agent-runner-execution-outcome.js");
-  return {
-    ...(await importOriginal<typeof import("../../auto-reply/reply/agent-runner-execution.js")>()),
-    executeAgentTurn: (params: Parameters<typeof executeAgentTurn>[0]) =>
-      runAgentTurnWithOutcome(params, expectDefined(params.opts?.runId, "run ID"), () =>
-        runtime.execute(params),
-      ),
-  };
-});
+vi.mock("../../auto-reply/reply/agent-runner-execution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../auto-reply/reply/agent-runner-execution.js")>()),
+  executeAgentTurn: runtime.execute,
+}));
 
 function createRequestClients() {
   const profile = ensureGatewayOwnerProfile("Gateway Owner");

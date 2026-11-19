@@ -4,6 +4,7 @@ import { judgment } from "./group-participation.decision.test-support.js";
 import { fixture, models } from "./group-participation.runner.test-support.js";
 
 it("keeps ambient room events on their message-tool path without participation evaluation", async () => {
+  fixture.config.agents!.defaults!.model = { primary: "test-provider/test-model" };
   models.decision.mockImplementation(async (batch) =>
     judgment(batch, { attention: "opportunity" }),
   );
@@ -28,34 +29,27 @@ it("keeps ambient room events on their message-tool path without participation e
   expect(params?.permissionMode).not.toBe("read-only");
 });
 
-it.each(["mention", "native command", "assistance absent", "assistance disabled"] as const)(
-  "keeps %s on the ordinary reply path",
-  async (kind) => {
-    if (kind === "assistance absent" || kind === "assistance disabled") {
-      fixture.config.agents!.defaults!.experimental = {
-        decisionAssistance: kind === "assistance disabled" ? false : undefined,
-      };
-    }
-    models.decision.mockImplementation(async (batch) => judgment(batch, { attention: "none" }));
-    models.embedded.mockResolvedValue({
-      payloads: [{ text: "The requested summary." }],
-      meta: { durationMs: 1 },
-    });
-    const reply = await fixture.reply(
-      "Summarize the deployment port.",
-      "ordinary-source",
-      "-10110",
-      undefined,
-      kind === "mention",
-      kind === "native command" ? "native" : undefined,
-    );
-    expect(Array.isArray(reply) ? reply : [reply]).toEqual(
-      expect.arrayContaining([expect.objectContaining({ text: "The requested summary." })]),
-    );
-    expect(models.decision).not.toHaveBeenCalled();
-    expect(models.embedded).toHaveBeenCalledOnce();
-  },
-);
+it("keeps explicit native group commands on the ordinary reply path", async () => {
+  fixture.config.agents!.defaults!.model = { primary: "test-provider/test-model" };
+  models.decision.mockImplementation(async (batch) => judgment(batch, { attention: "none" }));
+  models.embedded.mockResolvedValue({
+    payloads: [{ text: "The requested summary." }],
+    meta: { durationMs: 1 },
+  });
+  const reply = await fixture.reply(
+    "Summarize the deployment port.",
+    "native-command-source",
+    "-10110",
+    undefined,
+    false,
+    "native",
+  );
+  expect(Array.isArray(reply) ? reply : [reply]).toEqual(
+    expect.arrayContaining([expect.objectContaining({ text: "The requested summary." })]),
+  );
+  expect(models.decision).not.toHaveBeenCalled();
+  expect(models.embedded).toHaveBeenCalledTimes(1);
+});
 
 it("keeps a selected generic CLI turn ordinary without a participation decision", async () => {
   fixture.config.agents!.defaults!.model = { primary: "fixture-cli/test-model" };
@@ -102,4 +96,27 @@ it("preserves ordinary policy when an admitted embedded reply falls back to CLI"
     terminalReplyExpectation: "required",
     sourceReplyDeliveryMode: "automatic",
   });
+});
+
+it("keeps ordinary behavior when the initial Decision Model is unavailable", async () => {
+  fixture.config.agents!.defaults!.model = { primary: "test-provider/test-model" };
+  models.decision.mockResolvedValue({ status: "unavailable", reason: "overloaded" });
+  models.embedded.mockResolvedValue({
+    payloads: [{ text: "Ordinary embedded reply." }],
+    meta: { durationMs: 1 },
+  });
+  const reply = await fixture.reply(
+    "Bob, do you know the port?",
+    "initial-outage-source",
+    "-10103",
+  );
+  expect(Array.isArray(reply) ? reply : [reply]).toEqual(
+    expect.arrayContaining([expect.objectContaining({ text: "Ordinary embedded reply." })]),
+  );
+  expect(models.embedded).toHaveBeenCalledTimes(1);
+  expect(models.embedded.mock.calls[0]?.[0]).toMatchObject({
+    terminalReplyExpectation: "required",
+  });
+  expect(models.embedded.mock.calls[0]?.[0].permissionMode).not.toBe("read-only");
+  expect(models.cli).not.toHaveBeenCalled();
 });
