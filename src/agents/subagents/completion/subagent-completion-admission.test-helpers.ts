@@ -169,6 +169,7 @@ export function requesterWakeDriver(inputs: ReturnType<typeof records>[]) {
         retireObligations: vi.fn(async () => {}),
         getRunsForChildSession: () => [],
         getRunsForCollectorGroup: () => [],
+        info: vi.fn(),
         warn,
       });
       const settleRootWork = observeRootWork();
