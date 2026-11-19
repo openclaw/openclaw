@@ -1,4 +1,4 @@
-/** Tests ACP prompt cwd redaction, timeout metadata, and provenance fallback. */
+/** Tests ACP prompt cwd redaction, timeout metadata, provenance fallback, and deliver subscriptions. */
 import os from "node:os";
 import path from "node:path";
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
@@ -93,5 +93,25 @@ describe("acp prompt metadata", () => {
     const retry = payload(request, 1);
     expect(retry.systemInputProvenance).toBeUndefined();
     expect(retry.systemProvenanceReceipt).toBeUndefined();
+  });
+
+  it("subscribes to session messages before a deliver prompt and releases them on close", async () => {
+    const { agent, request } = fixture();
+    for (const deliver of [false, true]) {
+      await expect(
+        agent.prompt(createPromptRequest(sessionId, "hello", { deliver })),
+      ).rejects.toThrow("stop-after-send");
+    }
+    await agent.closeSession({ sessionId });
+    const subscription = { key: sessionKey, subscriptionId: `acp:${sessionId}` };
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "chat.send",
+      "sessions.messages.subscribe",
+      "chat.send",
+      "sessions.messages.unsubscribe",
+    ]);
+    expect(request.mock.calls[1]?.[1]).toEqual(subscription);
+    expect(payload(request, 2).deliver).toBe(true);
+    expect(request.mock.calls[3]?.[1]).toEqual(subscription);
   });
 });
