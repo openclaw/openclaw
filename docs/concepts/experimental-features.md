@@ -396,7 +396,9 @@ OpenClaw ID members use their membership role's definition in
 When OpenClaw ID turns on, and at Gateway start when it is already on, the Gateway
 writes any missing presets without overwriting owner-edited definitions. Installing
 presets uses the standard config writer: it rewrites the config file as JSON and
-removes JSON5 comments.
+removes JSON5 comments. When plugin policy blocks the Access page, startup and
+watcher reconciliation leave the config file unchanged; repair the plugin policy
+with Doctor first.
 
 The presets are:
 

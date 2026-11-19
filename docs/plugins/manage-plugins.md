@@ -529,16 +529,7 @@ Package specs use ClawHub by default, with bare plugin-id shortcuts
 described in [Install plugins](/cli/plugins/install). Use `npm:`
 to install from npm, or `clawhub:` to select ClawHub explicitly.
 
-## Related
-
-- [Plugins](/tools/plugin) - install, configure, reload, and troubleshoot
-- [`openclaw plugins`](/cli/plugins) - full CLI reference
-- [Community plugins](/plugins/community) - public discovery and ClawHub publishing
-- [ClawHub](/clawhub/cli) - registry CLI operations
-- [Building plugins](/plugins/building-plugins) - create a plugin package
-- [Plugin manifest](/plugins/manifest) - manifest and package metadata
-
-### OpenClaw ID Access page
+## OpenClaw ID Access page
 
 The bundled `openclaw-id-access` plugin is enabled by default when OpenClaw ID is
 on, subject to plugin policy. Activating OpenClaw ID through Labs, the config CLI,
@@ -551,3 +542,12 @@ enable OpenClaw ID by editing the config file and the allowlist blocks Access,
 the Gateway warns without repairing the file. Run `openclaw doctor` to approve
 adding the plugin to the allowlist. Doctor never removes denies or enables
 explicitly disabled entries. Read-only files require their owner's write access.
+
+## Related
+
+- [Plugins](/tools/plugin) - install, configure, reload, and troubleshoot
+- [`openclaw plugins`](/cli/plugins) - full CLI reference
+- [Community plugins](/plugins/community) - public discovery and ClawHub publishing
+- [ClawHub](/clawhub/cli) - registry CLI operations
+- [Building plugins](/plugins/building-plugins) - create a plugin package
+- [Plugin manifest](/plugins/manifest) - manifest and package metadata
