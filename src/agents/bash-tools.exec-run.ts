@@ -430,6 +430,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           storeEnv: host === "gateway" ? storeEnv.env : undefined,
           storeSecretEnv: useSecretEgress ? storeEnv.secretSentinels : undefined,
           ...preparedRunEnvironment,
+          scratchEnv: await requestPreparation.prepareScratchEnv(host),
           warnings,
         });
 
