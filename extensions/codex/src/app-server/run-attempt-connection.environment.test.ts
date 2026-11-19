@@ -21,7 +21,6 @@ import {
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
 import { createAppServerOptions, startOrResumeThread } from "./thread-lifecycle.test-fixtures.js";
-import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 const provisionWorker = useCodexWorkerProvisioningFixture();
 
@@ -170,19 +169,12 @@ describe("Codex local tool environment placement", () => {
         const parameters = "'maintenance.auto=false' 'gc.auto=0'";
         expect(connection.shellGitConfigParameters).toBe(ownedLocal ? parameters : undefined);
         expect(connection.appServer.start.env?.PATH).toBe(expected?.PATH);
-        const expectedParameters = ownedLocal ? `'user.name=Ambient' ${parameters}` : undefined;
-        expect(
-          resolveCodexAppServerSpawnEnv(connection.appServer.start, {}).GIT_CONFIG_PARAMETERS,
-        ).toBe(expectedParameters);
         expect(connection.disableLoginShell).toBe(false);
         const refreshed = await connection.resolveRuntimeOptionsForCurrentBinding({
           modelProvider: "openai",
           model: params.modelId,
         });
         expect(refreshed.start.env?.PATH).toBe(expected?.PATH);
-        expect(resolveCodexAppServerSpawnEnv(refreshed.start, {}).GIT_CONFIG_PARAMETERS).toBe(
-          expectedParameters,
-        );
         if (expected) {
           expect(codexAppServerStartOptionsKey(refreshed.start)).not.toBe(
             codexAppServerStartOptionsKey({

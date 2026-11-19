@@ -4,6 +4,8 @@ export type DoctorOptions = {
   /** The executable's own Doctor reports a stalled exit; embedded recovery keeps running. */
   watchExitAfterComplete?: boolean;
   modelReplacements?: readonly DoctorModelReplacement[];
+  /** Internal copy-and-swap handoff; credential reads and repairs still use the private copy. */
+  stateUpgradeLiveStateDir?: string;
   workspaceSuggestions?: boolean;
   yes?: boolean;
   nonInteractive?: boolean;

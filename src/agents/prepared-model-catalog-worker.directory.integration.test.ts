@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { threadId } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
+import { applyLoggingConfig, getLogger, resetLogger } from "../logging/logger.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
@@ -27,6 +28,9 @@ const { makeTempDir, retireAfterTest } = usePreparedCatalogWorkerFixtures();
 it.each(["Gateway", "standalone"])("%s isolates and releases custom directories", async (owner) => {
   vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-directory-empty-codex-"));
   const fixture = await createCatalogFixture(makeTempDir, 0);
+  vi.stubEnv("TSLOG_SOURCE_MAPS", undefined);
+  // Match Gateway startup before catalog workers capture the environment.
+  applyLoggingConfig(undefined);
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
   vi.stubEnv("OPENCLAW_STATE_DIR", fixture.env.OPENCLAW_STATE_DIR);
   const observations = path.join(fixture.root, "directory-catalog.jsonl");
@@ -153,6 +157,9 @@ module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
     inheritedAuthDir: entries.foreign.agentDir,
   };
   const beforeRejection = readObservations();
+  // A first logger build after catalog work must not change wrapper identity.
+  resetLogger();
+  getLogger();
   for (const [input, actual, requested] of [
     [{ agentId: undefined }, "alpha", "custom-owner"],
     [foreign, "foreign", "alpha"],

@@ -111,7 +111,7 @@ export function AppsPage(props: { appSearch?: string }) {
         when={appRoute()}
         fallback={
           <>
-            <HubPageHeader active="apps" wide docsUrl="https://docs.openclaw.ai/platforms" />
+            <HubPageHeader active="apps" docsUrl="https://docs.openclaw.ai/platforms" />
             <SettingsWorkspace>
               <Apps
                 onNavigate={(route) => context.navigate(route)}

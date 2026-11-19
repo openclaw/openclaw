@@ -45,7 +45,7 @@ export function parseMdItemKeyValue(text: string): AstItem["kv"] {
 
 export function parseMd(raw: string): MdAst {
   const withoutBom = raw.startsWith(BOM) ? raw.slice(BOM.length) : raw;
-  const lines = withoutBom.split(/\r?\n/);
+  const lines = withoutBom.split(/\r\n?|\n/);
 
   const fm = detectFrontmatter(lines);
   const bodyStartIdx = fm === null ? 0 : fm.endLine + 1;

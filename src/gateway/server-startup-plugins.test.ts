@@ -1,8 +1,11 @@
 /**
  * Gateway startup plugin bootstrap tests.
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createInfoWarnErrorDebugLogger as createLog } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -282,6 +285,44 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
     );
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("synthetic-pairing.json"));
   });
+
+  it.skipIf(process.platform === "win32")(
+    "repairs this installation's launcher an earlier updater left in its removed stage",
+    async () => {
+      const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
+      const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "gateway-launcher-")));
+      onTestFinished(() => fs.rmSync(home, { recursive: true, force: true }));
+      // The Gateway resolves its own package root; point it at a fixture installation.
+      const root = path.join(home, "global", "openclaw");
+      fs.mkdirSync(root, { recursive: true });
+      fs.writeFileSync(path.join(root, "openclaw.mjs"), "");
+      resolveOpenClawPackageRootSync.mockReturnValueOnce(root);
+      vi.stubEnv("PATH", home);
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
+      });
+      // The published shim names a stage beside this installation that no longer exists.
+      const stage = path.join(home, "global", ".openclaw-update-native-AbC123");
+      const launcher = path.join(home, "openclaw");
+      fs.writeFileSync(
+        launcher,
+        `#!/bin/sh\nbasedir=$(dirname "$0")\nexec node  "$basedir"/'global/.openclaw-update-native-AbC123/openclaw.mjs' "$@"\n# cmd-shim-target=${path.join(root, "openclaw.mjs")}\n`,
+      );
+      const log = createLog();
+      await runGatewayPostReadyStartupMaintenance({
+        getConfig: () => ({}),
+        getPluginRegistry: createEmptyPluginRegistry,
+        databases: [],
+        signal: new AbortController().signal,
+        log,
+      });
+      expect(log.info).toHaveBeenCalledWith(
+        `Repaired the openclaw launcher ${launcher}: it still pointed at the removed update stage ${stage}.`,
+      );
+      expect(fs.readFileSync(launcher, "utf8")).not.toContain(".openclaw-update-native-");
+      expect(log.warn).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not start maintenance after its Gateway lifetime closes", async () => {
     const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");

@@ -101,7 +101,6 @@ openclaw-new-session-page,
   color: var(--session-header-control-active-color);
 }
 
-.new-session-page__draft-toggle-label,
 .new-session-page__incognito-toggle-label {
   font-size: 12px;
 }
@@ -137,8 +136,16 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 .new-session-page .agent-chat__welcome-identity-copy {
+  position: relative;
   gap: 6px;
   max-width: 100%;
+}
+
+.new-session-page .agent-chat__welcome-identity-copy > h2:not(.sr-only) {
+  /* Match the interactive name slot before the agent roster arrives. */
+  display: grid;
+  align-items: center;
+  min-height: 44px;
 }
 
 /* Reuse the existing agent menu at the identity, without a second small avatar. */
@@ -321,10 +328,6 @@ span.new-session-page__select {
   border-radius: var(--radius-full);
   background: transparent;
   font-family: inherit;
-}
-
-.new-session-page__trigger::-webkit-details-marker {
-  display: none;
 }
 
 .new-session-page__trigger:hover:not(:disabled),
@@ -579,8 +582,16 @@ span.new-session-page__select {
   );
 }
 
+/* Branch names run long; give them more room than the field and fade what
+   still overflows instead of scrolling the whole list sideways. */
 .oc-popover.new-session-page__branch-popup {
-  width: anchor-size(width);
+  --oc-overlay-max-width: min(380px, calc(100dvw - 24px));
+  --oc-overlay-max-height: 320px;
+
+  display: flex;
+  flex-direction: column;
+  width: max(anchor-size(width), var(--oc-overlay-max-width));
+  overflow: hidden;
 }
 
 .new-session-page__project-error {
@@ -641,9 +652,50 @@ span.new-session-page__select {
   width: 100%;
 }
 
+/* The list scrolls inside the panel so its edges can fade without fading the surface. */
 .new-session-page__branch-suggestions {
   display: grid;
   gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* Keyboard-highlighted rows stop clear of the edge fades. */
+  scroll-padding-block: 28px;
+}
+
+@supports (animation-timeline: scroll()) {
+  .new-session-page__branch-suggestions {
+    animation: new-session-branch-list-edges linear both;
+    animation-timeline: scroll(self block);
+  }
+}
+
+@keyframes new-session-branch-list-edges {
+  0% {
+    mask-image: linear-gradient(black calc(100% - 28px), transparent);
+  }
+  0.01%,
+  99.99% {
+    mask-image: linear-gradient(transparent, black 28px, black calc(100% - 28px), transparent);
+  }
+  100% {
+    mask-image: linear-gradient(transparent, black 28px);
+  }
+}
+
+/* A dense list of one-line names: compact rows with the menu's pill gap. The
+   popup renders inside the checkout picker, so it opts out of that picker's
+   44px touch rows; a phone still shows a useful run of branches. */
+.oc-popover.new-session-page__branch-popup .session-menu__item {
+  min-width: 0;
+  min-height: 30px;
+  margin: 0;
+}
+
+@media (pointer: coarse) {
+  .oc-popover.new-session-page__branch-popup .session-menu__item {
+    min-height: 34px;
+  }
 }
 
 .new-session-page__branch-suggestions [aria-selected="true"] {
@@ -816,7 +868,8 @@ span.new-session-page__select {
   );
 }
 
-.new-session-page__composer::after {
+/* Tint the message surface without taking dictation’s ::after border. */
+.new-session-page__composer > .agent-chat__input::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -828,7 +881,7 @@ span.new-session-page__select {
   transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 
-.new-session-page__composer[data-attachment-drop-active]::after {
+.new-session-page__composer[data-attachment-drop-active] > .agent-chat__input::before {
   opacity: 0.1;
 }
 
@@ -1053,7 +1106,7 @@ span.new-session-page__select {
   /* No taller floor here: the surface rests at its own one-line minimum, where
      the touch row's clearance already reads as one empty line under the prompt. */
   .new-session-page__composer .new-session-page__message {
-    max-height: min(10lh, 34svh);
+    max-height: min(10lh, var(--new-session-draft-height-limit, 34svh));
   }
 
   .new-session-page__incognito-notice:not(.new-session-page__incognito-notice--visible) {
@@ -1066,10 +1119,32 @@ span.new-session-page__select {
     position-area: bottom span-all;
     justify-self: center;
   }
+
+  /* The wider branch list cannot hang off a mid-row field either. Center it
+     across the screen on whichever side of the field has more visible room,
+     and shrink it to that room so it never covers the field or the keyboard. */
+  .oc-popover.new-session-page__branch-popup {
+    position-area: top span-all;
+    position-try-fallbacks: --new-session-branch-below;
+    position-try-order: most-height;
+    justify-self: center;
+    max-height: min(320px, calc(100% - max(12px, env(safe-area-inset-top) + 8px)));
+    margin: 0 0 var(--oc-overlay-distance, 4px);
+  }
+}
+
+@position-try --new-session-branch-below {
+  position-area: bottom span-all;
+  /* The layout viewport keeps its height under an iOS keyboard; stop at the visible edge. */
+  inset-block-end: calc(100dvh - var(--shell-visible-height, 100dvh));
+  margin: var(--oc-overlay-distance, 4px) 0 0;
 }
 
 /* Keep the keyboard's visible canvas separate from its panned layout extent. */
 :root[data-shell-keyboard] .new-session-page__scroll {
+  /* Even a roomy keyboard canvas needs space for the identity, tray, and Send. */
+  --new-session-draft-height-limit: 25cqh;
+
   container: new-session / size;
   max-height: var(--shell-visible-height);
   margin-top: auto;
@@ -1107,13 +1182,9 @@ span.new-session-page__select {
     min-height: 0;
   }
 
-  .new-session-page__composer .agent-chat__composer-combobox {
-    min-height: 0;
-  }
-
   .new-session-page__composer .new-session-page__message {
     min-height: 48px;
-    max-height: min(10lh, max(48px, 25cqh));
+    max-height: min(10lh, 25cqh);
   }
 
   .new-session-page .agent-chat__welcome-identity {
@@ -1137,10 +1208,6 @@ span.new-session-page__select {
 
   /* No room for a hint here, so the status line floats under the name instead
      of adding a row to the identity. */
-  .new-session-page .agent-chat__welcome-identity-copy {
-    position: relative;
-  }
-
   .new-session-page--incognito .agent-chat__hint {
     position: absolute;
     top: 100%;
@@ -1429,6 +1496,13 @@ span.new-session-page__select {
   color: var(--muted);
 }
 
+/* Descriptions have no text-hint slot; floating the status cannot recenter the identity. */
+.new-session-page .agent-chat__hint:has(> .new-session-page__welcome-hint--floating) {
+  position: absolute;
+  inset-block-start: calc(100% + 6px);
+  inset-inline: 0;
+}
+
 /* Docked layout only: the hint's slot says Incognito is on and keeps the note a
    tap away, so turning Incognito on or off moves nothing on the page. */
 .new-session-page__incognito-status {
@@ -1538,7 +1612,8 @@ span.new-session-page__select {
 
   /* The picker holds the track while its chip hugs the label. Anchor the
      chevron beside the actions so background catalog names do not move it. */
-  .new-session-page .chat-controls__model-picker > .chat-controls__model-trigger {
+  .new-session-page .chat-controls__model-picker > .chat-controls__model-trigger,
+  .new-session-page [data-chat-model-setup] {
     display: flex;
     width: fit-content;
     margin-inline-start: auto;
@@ -1547,6 +1622,37 @@ span.new-session-page__select {
   .new-session-page .chat-controls__trigger-provider-icon {
     display: none;
   }
+}
+
+/* Keep the model and effort slots in place while their labels are unknown. */
+[data-model-pending] .chat-controls__inline-select-chevron,
+[data-model-pending] .chat-controls__effort-picker--reserved > summary {
+  visibility: hidden;
+}
+
+[data-model-pending] .chat-controls__effort-picker--reserved {
+  position: relative;
+  display: block;
+  visibility: visible;
+}
+
+[data-model-pending] .chat-controls__effort-picker--reserved::after {
+  position: absolute;
+  inset: calc(50% - 4px) 25% auto;
+}
+
+[data-model-pending] .chat-controls__inline-select-label:empty,
+[data-model-pending] .chat-controls__effort-picker--reserved::after,
+.new-session-page__trigger[aria-busy="true"] > .new-session-page__trigger-label::before {
+  display: block;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  content: "";
+}
+
+[data-model-pending] .chat-controls__inline-select-label:empty {
+  width: 6ch;
 }
 
 /* The context tray tucks behind the composer; each picker anchors its own menu. */
@@ -1649,7 +1755,7 @@ span.new-session-page__select {
 }
 
 .new-session-page__context-tray .new-session-page__trigger-label {
-  min-width: 0;
+  min-inline-size: 8ch;
   max-width: 300px;
 }
 
@@ -1727,9 +1833,7 @@ span.new-session-page__select {
 }
 
 .new-session-page__context-tray .new-session-page__picker-popover input,
-.new-session-page__context-tray .new-session-page__picker-popover input:hover,
-.new-session-page__context-tray .new-session-page__picker-popover input:focus,
-.new-session-page__context-tray .new-session-page__picker-popover input:focus-visible {
+.new-session-page__context-tray .new-session-page__picker-popover input:is(:hover, :focus) {
   /* A field stands a touch taller than the rows it sits with. */
   height: calc(var(--picker-row-height) + 2px);
   padding-inline: var(--picker-row-inset);
@@ -1741,8 +1845,7 @@ span.new-session-page__select {
   box-shadow: none;
 }
 
-.new-session-page__context-tray .new-session-page__picker-popover input:focus,
-.new-session-page__context-tray .new-session-page__picker-popover input:focus-visible {
+.new-session-page__context-tray .new-session-page__picker-popover input:focus {
   background: color-mix(in srgb, var(--chat-composer-surface) 60%, var(--new-session-tray-surface));
 }
 
@@ -1762,24 +1865,6 @@ span.new-session-page__select {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--text) 20%, transparent) transparent;
   scroll-padding-block: 28px 4px;
-}
-
-.new-session-page__picker-popover .new-session-page__picker-root::-webkit-scrollbar,
-.new-session-page__picker-popover .new-session-page__environment-list::-webkit-scrollbar {
-  width: 10px;
-  background: transparent;
-}
-
-.new-session-page__picker-popover .new-session-page__picker-root::-webkit-scrollbar-track,
-.new-session-page__picker-popover .new-session-page__environment-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.new-session-page__picker-popover .new-session-page__picker-root::-webkit-scrollbar-thumb,
-.new-session-page__picker-popover .new-session-page__environment-list::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--text) 20%, transparent) padding-box;
 }
 
 .new-session-page__project-popover .new-session-page__picker-root {
@@ -2068,6 +2153,7 @@ span.new-session-page__select {
   }
 
   .new-session-page__context-tray .new-session-page__trigger-label {
+    min-inline-size: 0;
     max-width: none;
   }
 
@@ -2076,7 +2162,6 @@ span.new-session-page__select {
     flex: 0 0 14px;
     width: 14px;
     height: 14px;
-    margin-inline-start: auto;
     color: var(--muted);
     stroke-width: 1.5px;
   }
@@ -2096,7 +2181,18 @@ span.new-session-page__select {
   }
 }
 
+.new-session-page__checkout-skeleton > .new-session-page__skeleton-bar {
+  animation: new-session-placeholder-pulse 1.4s ease-in-out infinite;
+}
+
+@media (width > 768px) {
+  span.new-session-page__select.new-session-page__checkout-loading {
+    display: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .new-session-page__checkout-skeleton > .new-session-page__skeleton-bar,
   .new-session-page__skeleton-row {
     animation: none;
   }

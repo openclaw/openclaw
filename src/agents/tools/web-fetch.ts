@@ -14,6 +14,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type, type Static } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import type { GuardedFetchResult } from "../../infra/net/fetch-guard.js";
 import { SsrFBlockedError, type LookupFn } from "../../infra/net/ssrf.js";
 import { logWarn } from "../../logger.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
@@ -652,12 +653,11 @@ export function createWebFetchTool(options?: {
             });
           }
 
-          let res: Response;
-          let release: () => Promise<void>;
+          let directFetch: GuardedFetchResult;
           let finalUrl = url;
           try {
             const { fetchWithWebToolsNetworkGuard } = await loadWebGuardedFetch();
-            const result = await fetchWithWebToolsNetworkGuard({
+            directFetch = await fetchWithWebToolsNetworkGuard({
               url,
               maxRedirects,
               timeoutSeconds,
@@ -676,9 +676,7 @@ export function createWebFetchTool(options?: {
                 },
               },
             });
-            res = result.response;
-            finalUrl = result.finalUrl;
-            release = result.release;
+            finalUrl = directFetch.finalUrl;
           } catch (error) {
             if (error instanceof SsrFBlockedError || signal?.aborted) {
               throw error;
@@ -690,6 +688,7 @@ export function createWebFetchTool(options?: {
             throw error;
           }
 
+          const { response: res, release, signal: extractionSignal = signal } = directFetch;
           try {
             if (!res.ok) {
               throwIfFetchAborted(signal);
@@ -754,6 +753,7 @@ export function createWebFetchTool(options?: {
                 url: finalUrl,
                 extractMode,
                 config,
+                signal: extractionSignal,
               });
               if (!extracted?.text) {
                 let payload: Record<string, unknown> | null = null;

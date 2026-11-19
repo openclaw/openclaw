@@ -565,12 +565,12 @@ export async function updateGitCheckout(params: {
         }
       };
       runtimeRetained = true;
-      const promotion = promotedRuntime;
       await opts.onTransaction(
         createGitRuntimeTransaction({
           root: gitRoot,
+          activation: { sha: preflight.candidateSha, previousBuildId: beforeBuildId },
           promotion: {
-            backupRoot: promotion.backupRoot,
+            backupRoot: promotedRuntime.backupRoot,
             cleanup: async (assertCurrent) => {
               if (!(await cleanupCandidateRuntime(assertCurrent))) {
                 return steps.findLast(
@@ -580,7 +580,7 @@ export async function updateGitCheckout(params: {
                       cleanupStep.name === "git-target-inspection-cleanup"),
                 );
               }
-              return await promotion.cleanup(assertCurrent);
+              return await promotedRuntime.cleanup(assertCurrent);
             },
           },
           assertRollbackSafe,

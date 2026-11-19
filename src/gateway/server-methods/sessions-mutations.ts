@@ -145,6 +145,7 @@ function createSessionPatchHandler(
         signal,
         diagnostics,
         operatorAuthority: preparingOperator,
+        followSharingRegistration: sessionMutationAuthorization?.followRegistration,
         onCreatedSessionCommitted: request.many
           ? undefined
           : sessionMutationAuthorization?.recordCreatedSession,

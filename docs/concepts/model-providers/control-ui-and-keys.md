@@ -29,6 +29,8 @@ the saved key remains; follow the reported recovery step. Removing a stored key
 keeps model defaults and provider connection settings. See
 [Auth profiles](/cli/models#auth-profiles) for the matching CLI commands.
 
+Use **Remove provider** to delete a provider's Gateway settings and configured model list, even if the provider is offline. If one card groups several configured entries, choose the exact entry to remove. This leaves model defaults and models on the provider's server untouched. To remove credentials instead, use **Remove saved access**.
+
 Configured global model defaults remain available while provider details load.
 Provider and installed-app details keep their initial loading view until
 credentials, the model catalog, configuration, and the installed-app inventory

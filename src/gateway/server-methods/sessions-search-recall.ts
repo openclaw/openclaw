@@ -89,6 +89,15 @@ export async function searchRecallSessionTranscripts(params: {
         );
         const now = Date.now();
         const subagentRuns = read.state.rowContext.subagentRuns.atTime(now);
+        // Share list selection and presentation across this admitted candidate batch.
+        const { prepared, presentation, filters } = prepareProjectedSessionList({
+          projection,
+          candidateKeys: new Set(keys),
+          now,
+          client: params.client,
+          opts: { archived: "all", includeGlobal: true },
+        });
+        const visibleKeys = new Set(filterSessionEntries(filters).entries.map(([key]) => key));
         return keys.map((key) => {
           if (isIncognitoSessionKey(key) || key === "unknown") {
             return false;
@@ -105,18 +114,6 @@ export async function searchRecallSessionTranscripts(params: {
               return false;
             }
           }
-          // The list owner applies sharing, federation, cron and phantom exclusions to this key only.
-          const { prepared, presentation, filters } = prepareProjectedSessionList({
-            projection,
-            key,
-            now,
-            client: params.client,
-            opts: {
-              archived: "all",
-              includeGlobal: true,
-              ...(key === "global" ? { agentId: target.agentId } : {}),
-            },
-          });
           // Global has no agent prefix: authorize the physical transcript owner, not
           // another store's federated copy of the same sentinel.
           const globalRow = key === "global" ? read.describe({ ...target, key }) : undefined;
@@ -128,7 +125,7 @@ export async function searchRecallSessionTranscripts(params: {
             globalRow
               ? params.client !== undefined &&
                 !presentation.sharing.canReadTarget(toProjectedSessionSharingTarget(globalRow))
-              : filterSessionEntries(filters).entries.length === 0
+              : !visibleKeys.has(key)
           ) {
             return false;
           }

@@ -177,6 +177,8 @@ export type AuthenticatedGatewayConnect = {
   role: GatewayRole;
   scopes: string[];
   hasRequestedScopes: boolean;
+  /** Original reserved claim before ordinary unbound-scope clearing. */
+  publicationReadScopes?: readonly string[];
   isControlUi: boolean;
   isBrowserOperatorUi: boolean;
   isWebchat: boolean;
@@ -203,6 +205,7 @@ export type AuthenticatedGatewayConnect = {
 };
 
 export type DeviceAuthorizedGatewayConnect = AuthenticatedGatewayConnect & {
+  publicationReader?: import("../../publication-reader.js").PublicationReaderAdmission;
   deviceToken: DeviceAuthToken | null;
   bootstrapDeviceTokens: Array<{
     deviceToken: string;

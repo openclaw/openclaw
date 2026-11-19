@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/web-readability-plugin",
-  "version": "2026.11.4",
+  "version": "2026.11.5",
   "private": true,
   "description": "OpenClaw local Readability web extraction plugin",
   "type": "module",
@@ -12,6 +12,11 @@
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
+    "build": {
+      "workerEntries": [
+        "./web-content-extractor.worker.ts"
+      ]
+    },
     "extensions": [
       "./index.ts"
     ]

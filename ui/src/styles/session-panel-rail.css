@@ -155,11 +155,9 @@
 }
 
 .session-panel-rail
-  .session-panel-rail__button:is(
-    :hover,
-    :focus-visible,
-    [aria-expanded="true"]:not(.session-panel-rail__toggle)
-  ):not(:disabled):not([aria-disabled="true"]) {
+  .session-panel-rail__button:is(:hover, :focus-visible, [aria-expanded="true"]):not(:disabled):not(
+    [aria-disabled="true"]
+  ) {
   background: var(--session-rail-hover, var(--bg-hover));
   color: var(--text);
 }

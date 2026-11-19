@@ -48,7 +48,10 @@ import {
   reconcileProvisionalSubagentKill,
 } from "./subagent-registry-sweep-kill.js";
 import { orderSubagentSweepEntries } from "./subagent-registry-sweep-order.js";
-import { settleUnreachableYieldedSubagentRun } from "./subagent-registry-sweep-settle.js";
+import {
+  settleRestartInterruptedSubagentRun,
+  settleUnreachableYieldedSubagentRun,
+} from "./subagent-registry-sweep-settle.js";
 import { SUBAGENT_SESSION_RUN_TTL_MS } from "./subagent-registry-work-index.js";
 import type {
   ContextEngineSubagentEndedParams,
@@ -344,7 +347,15 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         if (typeof entry.execution.endedAt !== "number") {
-          // A row without a live execution is retained history, not a restart obligation.
+          // A running row from an earlier process never resumes; its requester still
+          // needs a terminal outcome. Any other unended row is retained history.
+          await settleRestartInterruptedSubagentRun({
+            runId,
+            entry,
+            readScope,
+            complete: params.completeSubagentRunWithRecovery,
+            now,
+          });
           continue;
         }
 
@@ -433,7 +444,7 @@ export function createSubagentRegistrySweeper(params: {
               typeof current.cleanupCompletedAt === "number" &&
               now - current.cleanupCompletedAt > SUBAGENT_SESSION_RUN_TTL_MS &&
               !hasRequiredRequesterReceipt(current),
-            () => null,
+            null,
           );
           if (deleted === null) {
             params.clearPendingLifecycleError(runId);
@@ -479,7 +490,7 @@ export function createSubagentRegistrySweeper(params: {
             current.archiveAtMs !== undefined &&
             current.archiveAtMs <= now &&
             !(current.collect && current.collectorCompletion),
-          () => null,
+          null,
         );
         if (deleted !== null) {
           continue;
@@ -613,7 +624,7 @@ export function createSubagentRegistrySweeper(params: {
               removalReason: "retention",
             };
           },
-          { runs },
+          { runs, deleteOnly: true },
         );
         if (deleted) {
           for (const [runId] of groupEntries) {

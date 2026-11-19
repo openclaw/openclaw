@@ -362,7 +362,7 @@ suite.define(() => {
 
       // The visible desktop control follows the same focus handoff contract.
       await openSessionMenu();
-      await sidebarToggle.click();
+      await sidebar.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
       await expectDesktopCollapsed();
       await expect.poll(() => sessionMenu.count()).toBe(0);
       await sidebarToggle.click();
