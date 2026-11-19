@@ -225,6 +225,31 @@ beforeAll(async () => {
 
 registerPluginCompilerLifecycleTests(activateFixture);
 
+it("discovers only active repository sources without browser assets or custom UI activation", async () => {
+  const registry = createEmptyPluginRegistry();
+  const source = {
+    id: "repositories",
+    label: "Example repositories",
+    searchMethod: "example.search",
+  };
+  const record = createPluginRecord({ id: "repository-example", repositorySources: [source] });
+  registry.plugins.push(
+    record,
+    createPluginRecord({ id: "disabled-source", enabled: false, repositorySources: [source] }),
+    createPluginRecord({ id: "failed-source", status: "error", repositorySources: [source] }),
+  );
+  setActivePluginRegistry(registry);
+  const catalog = await listControlUiPluginCatalog();
+  expect(catalog.plugins).toEqual([]);
+  expect(catalog.repositorySources).toEqual([{ ...source, pluginId: "repository-example" }]);
+  expect(catalog.diagnostics).toEqual([]);
+
+  record.enabled = false;
+  const disabled = await listControlUiPluginCatalog();
+  expect(disabled.repositorySources).toEqual([]);
+  expect(disabled.revision).not.toBe(catalog.revision);
+});
+
 it("omits settings-only presentations from activation while keeping ordinary plugins", async () => {
   const fixture = activateFixture();
   expect((await listControlUiPluginCatalog()).plugins.map((plugin) => plugin.pluginId)).toEqual([

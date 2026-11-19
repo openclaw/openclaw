@@ -45,6 +45,17 @@ it.each([
   preference(
     {
       remoteProject: {
+        sourceId: "forge/repositories",
+        identity: "acme/project",
+        cloneUrl: "https://forge.example/acme/project.git",
+      },
+      baseRef: "main",
+    },
+    { baseRef: "main" },
+  ),
+  preference(
+    {
+      remoteProject: {
         identity: "acme/private-repo",
         cloneUrl: "https://ghe.example.test/acme/private-repo.git",
         defaultBranch: "main",

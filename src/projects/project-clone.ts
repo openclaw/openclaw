@@ -11,12 +11,14 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import type { GitOperationStarter } from "../infra/git-network-retry.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   withOpenClawStateLeaseAsync,
   type OpenClawStateAsyncLeaseContext,
 } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { ManagedProjectOptions, ManagedProjectSourceV1 } from "./managed-project-source.js";
 import { resolveProjectDirectory, withProjectCheckoutLifecycle } from "./project-checkout.js";
 import { warnIfProjectCloneShallow } from "./project-clone-preparation.runtime.js";
 import {
@@ -68,10 +70,13 @@ async function existingCanonicalProject(
   cfg: OpenClawConfig,
   canonicalUrl: string,
   options: OpenClawStateDatabaseOptions,
+  source?: Pick<ManagedProjectSourceV1, "resolveUrl">,
 ): Promise<ProjectRegistryRecord | undefined> {
   return (await listProjectRegistry(cfg, options)).find((project) => {
     const origin = project.originUrl
-      ? parseProjectGitUrl(project.originUrl, resolveConfiguredGitHubHost(cfg))
+      ? source
+        ? source.resolveUrl(project.originUrl)
+        : parseProjectGitUrl(project.originUrl, resolveConfiguredGitHubHost(cfg))
       : null;
     return origin?.url === canonicalUrl;
   });
@@ -87,14 +92,21 @@ export async function materializeProjectClone(
     assertCurrent?: () => void;
     startRun?: GitOperationStarter;
   } = {},
+  source?: Pick<
+    ManagedProjectSourceV1,
+    "resolveUrl" | "invalidUrlMessage" | "clone" | "ensureCommit"
+  >,
 ): Promise<ProjectRegistryRecord> {
   const { cfg, gitUrl, name, requiredCommit } = input;
   const { signal, timeoutMs, token, assertCurrent, startRun } = options;
-  const parsed = parseProjectGitUrl(gitUrl, resolveConfiguredGitHubHost(cfg));
+  const parsed = source
+    ? source.resolveUrl(gitUrl)
+    : parseProjectGitUrl(gitUrl, resolveConfiguredGitHubHost(cfg));
   if (!parsed) {
     throw new ProjectCloneError(
       "invalid_url",
-      "Use a GitHub HTTPS or git@github.com repository URL. Local paths and file URLs are not accepted.",
+      source?.invalidUrlMessage ??
+        "Use a GitHub HTTPS or git@github.com repository URL. Local paths and file URLs are not accepted.",
     );
   }
   const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
@@ -121,7 +133,7 @@ export async function materializeProjectClone(
       // Keep clone as the outer lease and take one candidate checkout lease at a time. A row that
       // moves roots while we wait must be retried under its new root instead of returned stale.
       while (true) {
-        const candidate = await existingCanonicalProject(cfg, parsed.url, databaseOptions);
+        const candidate = await existingCanonicalProject(cfg, parsed.url, databaseOptions, source);
         assertCloneCurrent();
         if (!candidate) {
           break;
@@ -130,7 +142,12 @@ export async function materializeProjectClone(
           candidate.repoRoot,
           { context, signal: lease.signal },
           async (checkoutLease) => {
-            const current = await existingCanonicalProject(cfg, parsed.url, databaseOptions);
+            const current = await existingCanonicalProject(
+              cfg,
+              parsed.url,
+              databaseOptions,
+              source,
+            );
             assertCloneCurrent();
             await checkoutLease.assertOwned();
             if (current?.repoRoot !== candidate.repoRoot) {
@@ -150,7 +167,7 @@ export async function materializeProjectClone(
               });
             }
             if (requiredCommit) {
-              await ensureProjectCheckoutCommit(
+              await (source?.ensureCommit ?? ensureProjectCheckoutCommit)(
                 { url: parsed.url, target: current.repoRoot, commit: requiredCommit },
                 {
                   env,
@@ -176,17 +193,49 @@ export async function materializeProjectClone(
       const displayName = name?.trim() || parsed.name;
       const directoryName = slugifyWorktreeTitle(displayName) ?? "project";
       const target = path.join(resolveStateDir(env), "projects", fingerprint, directoryName);
-      await cloneProjectCheckout(
-        { url: parsed.url, target, requiredCommit },
-        {
-          env,
-          signal: lease.signal,
-          timeoutMs,
-          token,
-          assertCurrent: assertCloneCurrent,
-          startRun: startCloneRun,
-        },
-      );
+      const cloneInput = { url: parsed.url, target, requiredCommit };
+      const cloneOptions = {
+        env,
+        signal: lease.signal,
+        timeoutMs,
+        token,
+        assertCurrent: assertCloneCurrent,
+        startRun: startCloneRun,
+      };
+      if (!source) {
+        await cloneProjectCheckout(cloneInput, cloneOptions);
+      } else {
+        if (
+          await fs.lstat(target).then(
+            () => true,
+            () => false,
+          )
+        ) {
+          throw new ProjectCloneError(
+            "target_exists",
+            "A managed checkout already exists for this repository. Register or remove it before retrying.",
+          );
+        }
+        // Attempt-private staging can be cleaned after caller cancellation without
+        // deleting a canonical checkout another lease holder might have adopted.
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        const staging = await fs.mkdtemp(path.join(path.dirname(target), ".clone-"));
+        let cleanupUncertain = false;
+        try {
+          const checkout = path.join(staging, "checkout");
+          await source.clone({ ...cloneInput, target: checkout }, cloneOptions);
+          await lease.assertOwned();
+          assertCloneCurrent();
+          await fs.rename(checkout, target);
+        } catch (error) {
+          cleanupUncertain = hasCommandProcessCleanupError(error);
+          throw error;
+        } finally {
+          if (!cleanupUncertain) {
+            await fs.rm(staging, { recursive: true, force: true }).catch(() => {});
+          }
+        }
+      }
       await lease.assertOwned();
       const repoRoot = await resolveProjectDirectory(target);
       await lease.assertOwned();
@@ -242,11 +291,15 @@ export async function materializeProjectClone(
 export async function refreshProjectClone(
   project: ProjectRegistryRecord,
   options: ProjectCloneOperationOptions = {},
+  source?: ManagedProjectSourceV1,
 ): Promise<void> {
   if (project.source !== "cloned") {
     return;
   }
-  await withCurrentProjectClone(project, options, refreshProjectCheckout);
+  const { token } = options;
+  await withCurrentProjectClone(project, options, (input, admitted) =>
+    (source?.refresh ?? refreshProjectCheckout)(input, { ...admitted, token }),
+  );
 }
 
 /** Pin the current remote default through the same authenticated checkout owner as refresh. */
@@ -254,15 +307,34 @@ export async function prepareProjectCloneDefaultBase(
   project: ProjectRegistryRecord,
   options: ProjectCloneOperationOptions,
 ): Promise<{ baseRef: string; baseCommit: string }> {
-  return await withCurrentProjectClone(project, options, prepareProjectCheckoutDefaultBase);
+  const { token } = options;
+  return await withCurrentProjectClone(project, options, (input, admitted) =>
+    prepareProjectCheckoutDefaultBase(input, { ...admitted, token }),
+  );
+}
+
+/** Source transport resolves facts only while the host owns the exact managed checkout. */
+export async function resolveProjectCloneBase(
+  project: ProjectRegistryRecord,
+  ref: string | undefined,
+  options: ProjectCloneOperationOptions,
+  source: ManagedProjectSourceV1,
+) {
+  return await withCurrentProjectClone(project, options, (input, admitted) =>
+    source.resolveBase({ ...input, ref }, admitted),
+  );
 }
 
 async function withCurrentProjectClone<T>(
   project: ProjectRegistryRecord,
   options: ProjectCloneOperationOptions,
   run: (
-    source: { target: string; url: string },
-    options: ProjectCloneOperationOptions,
+    input: { target: string; url: string },
+    options: ManagedProjectOptions & {
+      env: NodeJS.ProcessEnv;
+      assertCurrent: () => void;
+      startRun: GitOperationStarter;
+    },
   ) => Promise<T>,
 ): Promise<T> {
   const selectedProject: ProjectRegistryIdentity = {
@@ -271,7 +343,7 @@ async function withCurrentProjectClone<T>(
     source: project.source,
     originUrl: project.originUrl,
   };
-  const { signal, timeoutMs, token, assertCurrent, startRun } = options;
+  const { signal, timeoutMs, assertCurrent, startRun } = options;
   const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
   const context = captureOpenClawStateWorkerContext({ path: options.path, env });
   return await withProjectCheckoutLifecycle(
@@ -325,7 +397,6 @@ async function withCurrentProjectClone<T>(
           env,
           signal: lease.signal,
           timeoutMs,
-          token,
           assertCurrent: assertCheckoutCurrent,
           startRun: startCheckoutRun,
         },
