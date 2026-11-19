@@ -464,7 +464,22 @@ async function runPublicationCli(
     });
     fixture.executionPlan.sha256 = releaseExecutionPlanSha256(fixture.executionPlan);
   }
-  const responses: Record<string, unknown> = {};
+  const waiverSource = JSON.stringify({
+    schema: "openclaw.release-validation-waivers/v1",
+    waivers: [],
+  });
+  const responses: Record<string, unknown> = {
+    ["repos/" + REPOSITORY + "/contents/scripts/lib/release-validation-waivers.json?ref=" + SHA]: {
+      type: "file",
+      path: "scripts/lib/release-validation-waivers.json",
+      encoding: "base64",
+      size: Buffer.byteLength(waiverSource),
+      content: Buffer.from(waiverSource).toString("base64"),
+      sha: createHash("sha1")
+        .update("blob " + Buffer.byteLength(waiverSource) + "\0" + waiverSource)
+        .digest("hex"),
+    },
+  };
   const endpoint = (path: string) => `repos/${REPOSITORY}/${path}`;
   const artifactLists = new Map<number, unknown[]>();
   async function artifact(
@@ -645,7 +660,7 @@ if (legacy && args[0] === "run" && args[1] === "download" && args[2] === "77") {
   fs.copyFileSync(decision ? "legacy-decision.json" : "legacy-plan.json", join(args[args.indexOf("--dir") + 1], decision ? "full-release-decision.json" : "full-release-execution-plan.json"));
   process.exit(0);
 }
-if (args[0] !== "api" || (!legacy && (!args.includes("GET") || !args.includes("github.com"))) || (${args[0] !== "watch"} && !args.includes("Cache-Control: max-age=0"))) reject();
+if (args[0] !== "api" || (!legacy && (!args.includes("GET") || !args.includes("github.com"))) || (${args[0] !== "watch"} && !args.includes("Cache-Control: max-age=0") && !args.some(arg => arg === "repos/${REPOSITORY}/contents/scripts/lib/release-validation-waivers.json?ref=${SHA}"))) reject();
 if (!legacy && (args.includes("--include") || args.includes("--paginate"))) reject();
 let path = args.find(a => a.startsWith("repos/"));
 if (legacy && path.endsWith("/jobs?per_page=100")) path += "&page=1";
@@ -1864,6 +1879,69 @@ describe("publication status real CLI", () => {
     ]);
     expect(result.stderr).toContain("stopped on blocker");
     expect(result.stderr).toContain("continue --failed --dry-run --run 77");
+    expect(result.calls.flat()).not.toContain("POST");
+  });
+
+  it.each([
+    ["current grant", true, false],
+    ["removed grant", false, false],
+    ["unrelated failure", true, true],
+  ])("status reports current-Q blockers with %s", async (_label, granted, unrelated) => {
+    const fixture = publicationFixture();
+    fixture.executionPlan.targetVersion = "2099.1.1";
+    fixture.root.conclusion = "failure";
+    const result = await runPublicationCli(
+      fixture,
+      ["status", "--run", "77", "--json"],
+      (responses) => {
+        const prefix = "repos/" + REPOSITORY + "/";
+        const source = JSON.stringify({
+          schema: "openclaw.release-validation-waivers/v1",
+          waivers: granted
+            ? [
+                {
+                  targetVersion: "2099.1.1",
+                  childRole: "normalCi",
+                  jobName: "synthetic failure",
+                  reason: "Synthetic Q status grant",
+                  aggregates: [],
+                  evidence: { runId: "101", runAttempt: 1 },
+                },
+              ]
+            : [],
+        });
+        responses[prefix + "contents/scripts/lib/release-validation-waivers.json?ref=" + SHA] = {
+          type: "file",
+          path: "scripts/lib/release-validation-waivers.json",
+          encoding: "base64",
+          size: Buffer.byteLength(source),
+          content: Buffer.from(source).toString("base64"),
+          sha: createHash("sha1")
+            .update("blob " + Buffer.byteLength(source) + "\0" + source)
+            .digest("hex"),
+        };
+        Object.assign(responses[prefix + "actions/runs/101"] as object, { conclusion: "failure" });
+        responses[prefix + "actions/runs/101/attempts/1/jobs?per_page=100&page=1"] = {
+          jobs: [
+            job("synthetic failure", "failure"),
+            ...(unrelated ? [job("unrelated failure", "failure")] : []),
+          ],
+        };
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const status = JSON.parse(result.stdout);
+    expect(
+      status.children.find((entry: { key: string }) => entry.key === "normalCi"),
+    ).toMatchObject({
+      conclusion: "failure",
+      status: granted && !unrelated ? "passed" : "failed",
+    });
+    expect(
+      status.blockers
+        .filter((entry: { owner: string }) => entry.owner === "normalCi")
+        .map((entry: { job: string }) => entry.job),
+    ).toEqual(unrelated ? ["unrelated failure"] : granted ? [] : ["synthetic failure"]);
     expect(result.calls.flat()).not.toContain("POST");
   });
 

@@ -79,6 +79,7 @@ jobs:
       toJSON(inputs.runner_label))) || (vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',       toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' &&       'ubuntu-24.04' || 'blacksmith-2vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'       && 'ubuntu-24.04' || 'blacksmith-2vcpu-ubuntu-2404')) }}
     timeout-minutes: 720
     env:
+      OPENCLAW_RELEASE_WAIVERS_PATH: ${{ github.workspace }}/scripts/lib/release-validation-waivers.json
       RELEASE_STATE_SCRIPT: ${{ inputs.qualification_workflow_sha != '' && format('{0}/qualification-verifier/scripts/full-release-validation-state.mjs', github.workspace) || format('{0}/scripts/full-release-validation-state.mjs', github.workspace) }}
     outputs:
       state: ${{ steps.state.outputs.state }}
@@ -91,7 +92,6 @@ jobs:
       performance_conclusion: ${{ steps.state.outputs.productPerformance_conclusion }}
     steps:
       - name: Checkout release state tooling
-        if: ${{ inputs.qualification_workflow_sha == '' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}

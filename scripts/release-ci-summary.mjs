@@ -79,6 +79,8 @@ import {
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
   evaluateReleaseChildPolicy,
+  parseReleaseValidationWaivers,
+  RELEASE_VALIDATION_WAIVERS_PATH,
   validateReleaseWaiverAggregates,
 } from "./lib/release-validation-waivers.mjs";
 import {
@@ -1322,7 +1324,9 @@ export function validateParentManifest(value, expected) {
       "Runtime waiver inputs are no longer accepted; run Full Release Validation under checked-in release-tooling policy.",
     );
   }
-  const advisoryJobs = validateReleaseManifestAdvisoryJobs(value);
+  const advisoryJobs = validateReleaseManifestAdvisoryJobs(value, {
+    deferWaiverPolicy: expected.deferWaiverPolicy,
+  });
   const childRuns = value.childRuns;
   if (!childRuns || typeof childRuns !== "object" || Array.isArray(childRuns)) {
     throw new Error("release validation manifest childRuns is invalid");
@@ -2159,6 +2163,7 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
           ".github/workflows/plugin-npm-release.yml",
           ".github/workflows/ci.yml",
           ".github/workflows/plugin-prerelease.yml",
+          RELEASE_VALIDATION_WAIVERS_PATH,
           ".github/workflows/openclaw-release-checks.yml",
         ].includes(sourceWorkflowPath)
       ) {
@@ -2317,6 +2322,7 @@ async function loadValidatedParentEvidence({
   const manifest = validateParentManifest(manifestEvidence.manifest, {
     runAttempt: parentRun.run_attempt,
     runId,
+    deferWaiverPolicy: true,
     workflowRef: parentRun.head_branch,
     workflowSha: parentRun.head_sha,
   });
@@ -2362,6 +2368,7 @@ async function validateStrictChildRun({
   repository,
   runId,
   expectedRunAttempts,
+  waiverPolicy,
 }) {
   const reused = childReuse
     ? await client.validateChildReuse(childReuse, {
@@ -2498,11 +2505,16 @@ async function validateStrictChildRun({
   };
   const targetVersion = parentEvidence.manifest.validationInputs?.targetVersion;
   const targetSha = parentEvidence.manifest.targetSha;
-  const policy = evaluateReleaseChildPolicy({ child: policyChild, targetVersion, targetSha });
+  const policy = evaluateReleaseChildPolicy({
+    child: policyChild,
+    targetVersion,
+    targetSha,
+    waiverPolicy,
+  });
   if (
     run.repository?.full_name !== repository ||
     run.head_sha !== (plannedChild?.workflowSha ?? parentEvidence.manifest.workflowSha) ||
-    !terminalPolicyPass(policyChild, targetVersion, targetSha)
+    !terminalPolicyPass(policyChild, targetVersion, targetSha, waiverPolicy)
   ) {
     throw new Error(`manifest child run does not pass release policy: ${child.name}`);
   }
@@ -3113,6 +3125,12 @@ export async function validateReleaseRunEvidence(
   });
   // The fixed child set bounds concurrent reads (at most seven). Each child
   // walks its attempts/pages serially; drain all reads before returning or failing.
+  const waiverPolicy = parseReleaseValidationWaivers(
+    await evidenceClient.getWorkflowSource(
+      qualificationReuse?.qualificationSha ?? currentEvidence.manifest.workflowSha,
+      RELEASE_VALIDATION_WAIVERS_PATH,
+    ),
+  );
   const childResults = await Promise.allSettled(
     childEntries.map(({ child, runId: childRunId }) =>
       validateStrictChildRun({
@@ -3128,6 +3146,7 @@ export async function validateReleaseRunEvidence(
         repository: normalizedRepository,
         runId: childRunId,
         expectedRunAttempts: remainingExpectedRunAttempts,
+        waiverPolicy,
       }),
     ),
   );

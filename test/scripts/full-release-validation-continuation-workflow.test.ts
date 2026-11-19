@@ -277,8 +277,9 @@ describe("full release same-parent recovery workflow", () => {
           verifierCheckedOut ? verifierSha : "",
         );
       }
-      expect(evaluate(step("watch", "Checkout release state tooling").if ?? "true")).toBe(
-        !verifierCheckedOut,
+      expect(evaluate(step("watch", "Checkout release state tooling").if ?? "true")).toBe(true);
+      expect(watcher.jobs.watch.env?.OPENCLAW_RELEASE_WAIVERS_PATH).toBe(
+        "${{ github.workspace }}/scripts/lib/release-validation-waivers.json",
       );
       for (const jobName of ["watch", "summary", "release_execution_plan", "evidence_reuse"]) {
         const job = jobName === "watch" ? watcher.jobs.watch : workflow.jobs[jobName];
@@ -296,6 +297,14 @@ describe("full release same-parent recovery workflow", () => {
         for (const entry of job.steps) {
           const env = entry.env as Record<string, unknown> | undefined;
           if (env?.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR) {
+            expect(
+              env.OPENCLAW_RELEASE_WAIVERS_PATH ?? job.env?.OPENCLAW_RELEASE_WAIVERS_PATH,
+              jobName,
+            ).toBe(
+              jobName === "evidence_reuse"
+                ? "${{ github.workspace }}/workflow/scripts/lib/release-validation-waivers.json"
+                : "${{ github.workspace }}/scripts/lib/release-validation-waivers.json",
+            );
             const root =
               jobName === "evidence_reuse" && !verifierCheckedOut
                 ? "/workspace/workflow"

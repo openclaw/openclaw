@@ -1,10 +1,13 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   terminalPolicyPass,
   validateReleaseManifestAdvisoryJobs,
 } from "../../scripts/full-release-validation-policy.mjs";
 import {
+  decodeReleaseValidationWaivers,
   evaluateReleaseChildPolicy,
+  parseReleaseValidationWaivers,
   releaseQualificationExemptions,
   validateReleaseWaiverAggregates,
 } from "../../scripts/lib/release-validation-waivers.mjs";
@@ -901,7 +904,6 @@ describe("beta.1 release-scoped FRV16/17 grants", () => {
       ).rejects.toThrow("differs from reviewed evidence");
     }
     // Exercise digest validation with synthetic bytes; live original-log proof is separate.
-    const { createHash } = await import("node:crypto");
     const reviewedLog = "synthetic exact original aggregate log";
     const exactPolicy = {
       ...policy,
@@ -977,4 +979,64 @@ it("binds the repaired 2026.11.6 trajectory exception to its exact candidate and
       child: { ...child, jobs: [{ ...leaf, conclusion: "cancelled" }] },
     }).waivers,
   ).toEqual([]);
+});
+
+describe("immutable Q waiver policy", () => {
+  const entry = (jobName: string, cause: string) => ({
+    targetVersion: "2099.1.1",
+    childRole: "normalCi",
+    jobName,
+    reason: "Synthetic approval",
+    aggregates: [{ jobName: "gate", stepName: "check", causes: [cause], exactCauses: true }],
+  });
+  it("unions only current failures without mutating policy for subsequent evaluations", () => {
+    const source = JSON.stringify({
+      schema: "openclaw.release-validation-waivers/v1",
+      waivers: [entry("first", "first failed"), entry("second", "second failed")],
+    });
+    const policy = parseReleaseValidationWaivers(source);
+    const evaluate = (names: string[]) =>
+      evaluateReleaseChildPolicy({
+        targetVersion: "2099.1.1",
+        waiverPolicy: policy,
+        child: {
+          key: "normalCi",
+          jobs: names.map((name) => ({ name, status: "completed", conclusion: "failure" })),
+        },
+      });
+    expect(evaluate(["first", "second"]).aggregates[0]?.causes).toEqual([
+      "first failed",
+      "second failed",
+    ]);
+    expect(evaluate(["first"]).aggregates[0]?.causes).toEqual(["first failed"]);
+    expect(
+      JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: policy }),
+    ).toBe(source);
+  });
+  it("authenticates the exact Q policy blob and rejects changed content or schema", () => {
+    const bytes = Buffer.from(
+      JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: [] }),
+    );
+    const payload = {
+      path: "scripts/lib/release-validation-waivers.json",
+      type: "file",
+      encoding: "base64",
+      content: bytes.toString("base64"),
+      size: bytes.length,
+      sha: createHash("sha1")
+        .update("blob " + bytes.length + "\0")
+        .update(bytes)
+        .digest("hex"),
+    };
+    expect(decodeReleaseValidationWaivers(payload)).toEqual([]);
+    expect(() =>
+      decodeReleaseValidationWaivers({
+        ...payload,
+        content: Buffer.alloc(bytes.length).toString("base64"),
+      }),
+    ).toThrow("blob mismatch");
+    expect(() => parseReleaseValidationWaivers('{"schema":"unknown","waivers":[]}')).toThrow(
+      "Invalid release waiver policy",
+    );
+  });
 });

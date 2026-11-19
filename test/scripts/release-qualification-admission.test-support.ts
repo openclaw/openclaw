@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   buildQualificationAdmissionRequest,
   produceQualificationAdmission,
@@ -110,7 +111,7 @@ export function fixture(
   const authority = {
     permission: "write",
     ancestry: "ahead",
-    qualificationAncestry: "ahead",
+    qualificationAncestry: "diverged",
     tagSha: admissionSha,
   };
   const policy = options.policy ?? {
@@ -140,6 +141,10 @@ export function fixture(
             .map((key) => "      " + key + ":\n        type: string\n")
             .join("") +
           "jobs:\n  untrusted:\n    run: NEVER_EXECUTE_Q\n",
+      [qualificationSha + ":scripts/lib/release-validation-waivers.json"]: readFileSync(
+        "scripts/lib/release-validation-waivers.json",
+        "utf8",
+      ),
       [qualificationSha + ":scripts/lib/release-qualification-coverage.json"]:
         JSON.stringify(policy),
       [sourceSha + ":package.json"]: JSON.stringify({

@@ -103,6 +103,94 @@ function npmProducer(f: ReturnType<typeof candidatePublicationFixture>) {
 }
 
 describe("candidate-owned publish consumer chain", () => {
+  it("evaluates raw failed evidence against Q data rather than the verifier checkout", async () => {
+    const f = candidatePublicationFixture({
+      candidateVersion: "2099.1.1-beta.1",
+      qualificationSha: "c".repeat(40),
+    });
+    const selected = f.plan.children.find((child) => child.key === "normalCi");
+    assert(selected);
+    const originalJobs = await f.client.getRunAttemptJobs(selected.runId);
+    const gate = originalJobs.find((job) => job.name === "openclaw/ci-gate");
+    assert(gate);
+    const jobs = [
+      ...originalJobs.filter((job) => job !== gate),
+      { ...gate, id: 1598, name: "synthetic leaf", conclusion: "failure" },
+      {
+        ...gate,
+        id: 1599,
+        conclusion: "failure",
+        steps: [{ name: "Verify selected CI lanes", conclusion: "failure" }],
+      },
+    ];
+    const policy = [
+      {
+        targetVersion: "2099.1.1-beta.1",
+        targetSha: f.c,
+        childRole: "normalCi",
+        jobName: "synthetic leaf",
+        reason: "Synthetic approval",
+        aggregates: [
+          {
+            jobName: gate.name,
+            stepName: "Verify selected CI lanes",
+            causes: ["synthetic failure"],
+            exactCauses: true,
+          },
+        ],
+      },
+    ];
+    const composite = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
+      effectiveRunAttempt: 1,
+      plannedRunAttempt: 1,
+    });
+    assert(f.manifest.childEvidence.normalCi);
+    Object.assign(f.manifest.childEvidence.normalCi, {
+      jobs: composite.jobs,
+      compositeJobsSha256: composite.sha256,
+    });
+    Object.assign(f.manifest, {
+      waivers: evaluateReleaseChildPolicy({
+        child: { key: "normalCi", jobs },
+        targetVersion: "2099.1.1-beta.1",
+        targetSha: f.c,
+        waiverPolicy: policy,
+      }).waivers.map((waiver) =>
+        Object.assign({}, waiver, { runId: selected.runId, runAttempt: 1 }),
+      ),
+    });
+    let grants = policy;
+    const client = {
+      ...f.client,
+      getWorkflowSource: (sha: string, path?: string) => {
+        if (path === "scripts/lib/release-validation-waivers.json") {
+          expect(sha).toBe(f.q);
+          return JSON.stringify({
+            schema: "openclaw.release-validation-waivers/v1",
+            waivers: grants,
+          });
+        }
+        return f.client.getWorkflowSource(sha, path);
+      },
+      getRunAttemptJobs: async (id: string) =>
+        id === selected.runId ? jobs : f.client.getRunAttemptJobs(id),
+      getRun: async (id: string) => ({
+        ...(await f.client.getRun(id)),
+        ...(id === selected.runId ? { conclusion: "failure" } : {}),
+      }),
+      getJobLog: async (id: number) =>
+        id === 1599 ? "##[error]synthetic failure" : f.client.getJobLog(id),
+    };
+    const before = JSON.stringify(f.manifest.childEvidence);
+    await expect(validateReleaseRunEvidence(verifier(f), client)).resolves.toMatchObject({
+      waivers: [expect.objectContaining({ jobName: "synthetic leaf" })],
+    });
+    expect(JSON.stringify(f.manifest.childEvidence)).toBe(before);
+    grants = [];
+    await expect(validateReleaseRunEvidence(verifier(f), client)).rejects.toThrow(
+      "does not pass release policy",
+    );
+  });
   it("verifies independent Q through the immutable plan, npm and Docker consumers", async () => {
     const f = candidatePublicationFixture({ qualificationSha: "c".repeat(40) });
     const evidence = await validateReleaseRunEvidence(verifier(f), f.client);
