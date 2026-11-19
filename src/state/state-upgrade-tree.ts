@@ -375,18 +375,39 @@ export function normalizeSqliteText(db: DatabaseSync): void {
 // The start's pre-migration images: taken under its exclusive custody before a database
 // changes, and put back when the upgraded config is refused.
 
+/** The error and every cause and aggregated error under it, each once. */
+function causes(error: unknown): unknown[] {
+  const found: unknown[] = [];
+  const visit = (value: unknown) => {
+    if (value === undefined || value === null || found.includes(value)) {
+      return;
+    }
+    found.push(value);
+    if (value instanceof AggregateError) {
+      value.errors.forEach(visit);
+    }
+    if (value instanceof Error) {
+      visit(value.cause);
+    }
+  };
+  visit(error);
+  return found;
+}
+
+/** A full disk or I/O failure, also when a copy or SQLite layer wraps it. */
 export function isMachineFailure(error: unknown): boolean {
-  // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
-  const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
-  const message = (error as Error | undefined)?.message ?? "";
-  return (
-    code === "ENOSPC" ||
-    code === "EIO" ||
-    code === "EDQUOT" ||
-    code === "EROFS" ||
-    /SQLITE_FULL|database or disk is full|disk I\/O error/iu.test(message)
-  );
+  return causes(error).some((cause) => {
+    // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
+    const code = (cause as NodeJS.ErrnoException).code;
+    const message = cause instanceof Error ? cause.message : "";
+    return (
+      code === "ENOSPC" ||
+      code === "EIO" ||
+      code === "EDQUOT" ||
+      code === "EROFS" ||
+      /SQLITE_FULL|database or disk is full|disk I\/O error/iu.test(message)
+    );
+  });
 }
 
 const PRE_IMAGE_RESERVE_BYTES = 64 * 1024 * 1024;
@@ -449,8 +470,9 @@ export async function takeStateUpgradePreImage(
     });
   } catch (error) {
     fs.rmSync(partial, { force: true });
-    if (error instanceof PreImageSpaceError) {
-      return { skipped: error.message };
+    const space = causes(error).find((cause) => cause instanceof PreImageSpaceError);
+    if (space instanceof PreImageSpaceError) {
+      return { skipped: space.message };
     }
     if (isMachineFailure(error)) {
       // SAFETY: node:fs throws Error instances; only the message is read.

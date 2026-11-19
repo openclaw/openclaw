@@ -413,6 +413,7 @@ export async function upgradeStateDirectory(params: {
   // An interrupted in-place run's record: kept until this run has written its own.
   const interruptedDirs: string[] = [];
   let priorInventory: Set<string> | undefined;
+  const priorOutdated = new Set<string>();
   for (const entry of fs.readdirSync(stateDir)) {
     if (!entry.startsWith(WORK_PREFIX)) {
       continue;
@@ -439,8 +440,12 @@ export async function upgradeStateDirectory(params: {
       interruptedDirs.push(dir);
       try {
         const text = fs.readFileSync(path.join(dir, INVENTORY_FILE), "utf8");
-        const listed = JSON.parse(text) as string[]; // SAFETY: only this module writes the inventory.
-        priorInventory = new Set([...(priorInventory ?? []), ...listed]);
+        // SAFETY: only this module writes the inventory.
+        const record = JSON.parse(text) as { files: string[]; outdated: string[] };
+        priorInventory = new Set([...(priorInventory ?? []), ...record.files]);
+        for (const file of record.outdated) {
+          priorOutdated.add(file);
+        }
       } catch {
         // Killed before the inventory was written: nothing had changed yet.
       }
@@ -451,13 +456,15 @@ export async function upgradeStateDirectory(params: {
   const { targets, retainedAgentDirectories } = discoverDatabases(stateDir);
   excludedRoots.push(...retainedAgentDirectories);
   let outdated = outdatedDatabases(targets);
-  // Finish an interrupted chain on every database it imaged, current or not: their images
-  // stay the baseline, and a refusal or fallback must cover all of them together.
+  // Finish an interrupted chain on every database it started on, current or not, imaged or
+  // not: the images stay the baseline, and a refusal or fallback covers all of them together.
   if (interruptedChain) {
-    const imaged = targets.filter(
-      (target) => target.version > 0 && fs.existsSync(`${target.path}.pre-${generation()}`),
+    const started = targets.filter(
+      (target) =>
+        target.version > 0 &&
+        (priorOutdated.has(target.path) || fs.existsSync(`${target.path}.pre-${generation()}`)),
     );
-    outdated = [...outdated, ...imaged.filter((target) => !outdated.includes(target))];
+    outdated = [...outdated, ...started.filter((target) => !outdated.includes(target))];
     if (outdated.length === 0) {
       outdated = targets.filter((target) => target.version > 0);
     }
@@ -527,8 +534,10 @@ export async function upgradeStateDirectory(params: {
       ) {
         const partial = `${configPath}${suffix}.partial-${process.pid}`;
         try {
-          // A symlinked config is copied through its link: the image holds the bytes.
-          fs.copyFileSync(configPath, partial);
+          // A symlinked config is read through its link: the image holds the bytes, and
+          // it is private like the config whatever mode the link's target has.
+          fs.rmSync(partial, { force: true });
+          fs.writeFileSync(partial, fs.readFileSync(configPath), { mode: 0o600, flag: "wx" });
           fsyncPath(partial);
           fs.renameSync(partial, `${configPath}${suffix}`);
         } catch (error) {
@@ -542,9 +551,11 @@ export async function upgradeStateDirectory(params: {
       }
       // The inventory before Doctor runs; a resumed run keeps the interrupted one's.
       const listed = priorInventory ?? listFiles(stateDir, skip);
-      fs.writeFileSync(path.join(workDir, INVENTORY_FILE), JSON.stringify([...listed]), {
-        mode: 0o600,
-      });
+      fs.writeFileSync(
+        path.join(workDir, INVENTORY_FILE),
+        JSON.stringify({ files: [...listed], outdated: outdated.map((target) => target.path) }),
+        { mode: 0o600 },
+      );
       // This run's record holds the inventory now; the interrupted ones it replaces can go.
       for (const dir of interruptedDirs) {
         fs.rmSync(dir, { recursive: true, force: true });
@@ -592,41 +603,27 @@ export async function upgradeStateDirectory(params: {
         // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
         `State upgrade chain failed at ${failedStep}: ${(error as Error).message}. Rebuilding the outdated databases with the generic copy; the previous files are kept and pinned.`,
       );
-      // The rebuild reads the pre-image when one exists, else the database as the chain
-      // left it (each at its old or new version), and replaces only those files.
+      // The rebuild reads each outdated database as the chain left it (each at its old or
+      // new version, with whatever Doctor already imported), never its image: nothing
+      // Doctor committed is dropped, and the image stays the rollback baseline.
       await inCustody(async () => {
-        // An imaged database is rebuilt from its image and its live file is replaced, so its
-        // live WAL must not survive the swap beside the standalone image. No writer runs.
+        // The swap preserves a live WAL beside the database's preserved name, where the
+        // standalone image already sits: fold it in first, or stop with nothing deleted.
         for (const live of images.keys()) {
-          try {
-            checkpointShadowDatabases([live]);
-          } catch {
-            for (const companion of ["-wal", "-shm", "-journal"]) {
-              fs.rmSync(`${live}${companion}`, { force: true });
-            }
-          }
+          foldLiveWal(live);
         }
-        const sources = outdated.map((target) => ({
-          ...target,
-          path: images.get(target.path) ?? target.path,
-        }));
-        const out = (source: string) =>
-          path.join(
-            workDir,
-            "fallback",
-            path.relative(stateDir, outdated[sources.findIndex((s) => s.path === source)]!.path),
-          );
-        const fallback = buildFallback(sources, out, workDir);
+        const out = (live: string) => path.join(workDir, "fallback", path.relative(stateDir, live));
+        const fallback = buildFallback(outdated, out, workDir);
         warnings.push(...fallback.foldInFailures);
         for (const report of fallback.reports) {
           setAside.push({ report, rows: report.setAside });
           mismatches.push(...report.conservationMismatches.map((t) => `${report.label}:${t}`));
         }
-        checkpointShadowDatabases(sources.map((source) => out(source.path)));
+        checkpointShadowDatabases(outdated.map((target) => out(target.path)));
         ops = outdated.map((target) => ({
           kind: "replace" as const,
           live: target.path,
-          next: out(images.get(target.path) ?? target.path),
+          next: out(target.path),
         }));
       });
     }
@@ -695,7 +692,7 @@ export async function upgradeStateDirectory(params: {
         pinned,
       );
       if (ops.length > 0) {
-        ops.push(...companionRemovals(ops));
+        ops.push(...companionRemovals(ops), ...applied.filter((op) => op.kind === "add"));
         for (const op of ops) {
           if (op.next && fs.statSync(op.next, { throwIfNoEntry: false })?.isFile()) {
             fsyncPath(op.next);
@@ -706,7 +703,10 @@ export async function upgradeStateDirectory(params: {
         planWritten = true;
         applyPlan({ appVersion: generation(), ops });
       }
-      retainAppliedPlan(stateDir, { appVersion: generation(), ops: applied });
+      retainAppliedPlan(stateDir, {
+        appVersion: generation(),
+        ops: ops.length > 0 ? ops : applied,
+      });
       keepChainLog();
       finish(
         stateDir,
@@ -759,6 +759,41 @@ export function explainMachineFailure(error: unknown, stateDir: string): unknown
         { cause: error },
       )
     : error;
+}
+
+/**
+ * Fold an imaged live database's WAL into it under custody, through SQLite only. A
+ * checkpoint another connection blocks, or a mode SQLite will not switch, stops the
+ * fallback with every file in place; the next start retries.
+ */
+function foldLiveWal(file: string): void {
+  const refuse = (cause?: unknown) =>
+    new Error(
+      `State upgrade could not fold the write-ahead log of ${file} into it; nothing was removed, and the next start retries.`,
+      { cause },
+    );
+  let folded = false;
+  try {
+    const db = openNodeSqliteDatabase(file);
+    try {
+      // SAFETY: SQLite fixes these pragmas' result columns.
+      const checkpoint = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as
+        | { busy: number }
+        | undefined;
+      // SAFETY: SQLite fixes these pragmas' result columns.
+      const mode = db.prepare("PRAGMA journal_mode = DELETE").get() as
+        | { journal_mode: string }
+        | undefined;
+      folded = checkpoint?.busy === 0 && mode?.journal_mode === "delete";
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    throw refuse(error);
+  }
+  if (!folded) {
+    throw refuse();
+  }
 }
 
 /** Another process holds the state when the chain hands custody back; it continues. */

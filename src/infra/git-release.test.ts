@@ -24,7 +24,7 @@ async function release(
   prefix: string,
   version: string,
   entry: string,
-  schemaVersions?: { state: number; agent: number },
+  schemaVersions: { state: number; agent: number } | null = { state: 1000, agent: 1000 },
 ) {
   const root = (await createGitReleaseDirs(prefix)).releaseRoot;
   await fs.mkdir(path.join(root, "dist"), { recursive: true });
@@ -44,6 +44,15 @@ async function setup() {
   const stateDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "git-release-")));
   roots.push(stateDir);
   return { stateDir, prefix: path.join(stateDir, "git-install") };
+}
+
+/** A real SQLite image the launcher can read; returns its bytes for comparison. */
+async function sqliteImage(file: string, version = 1): Promise<Buffer> {
+  {
+    using db = new DatabaseSync(file);
+    db.exec(`PRAGMA journal_mode = DELETE; PRAGMA user_version = ${version}; CREATE TABLE w (v)`);
+  }
+  return await fs.readFile(file);
 }
 
 const startGateway = (prefix: string, env: NodeJS.ProcessEnv = {}) =>
@@ -66,7 +75,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       await publishGitRelease({ prefix, releaseRoot: bad, trial: true });
       // The new release's boot upgraded state by copy and swap before crashing:
       // the WAL had a predecessor, the trial created SHM and seal files from scratch.
-      await fs.writeFile(`${db}.pre-2.0.0`, "old schema");
+      const oldSchema = await sqliteImage(`${db}.pre-2.0.0`);
       await fs.writeFile(`${db}-wal.pre-2.0.0`, "old wal");
       await fs.writeFile(db, "new schema");
       await fs.writeFile(`${db}-wal`, "new wal");
@@ -108,7 +117,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         `old ${path.join(gitReleaseSlot(prefix), "dist", "index.js")}`,
       );
       expect(third.stderr).toContain("failed to start twice");
-      expect(await fs.readFile(db, "utf8")).toBe("old schema");
+      expect(await fs.readFile(db)).toEqual(oldSchema);
       expect(await fs.readFile(`${db}-wal`, "utf8")).toBe("old wal");
       await expect(fs.access(`${db}-shm`)).rejects.toThrow();
       await expect(fs.access(`${db}.seal`)).rejects.toThrow();
@@ -196,7 +205,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       const db = path.join(stateDir, "state", "openclaw.sqlite");
       await fs.mkdir(db, { recursive: true });
       await fs.writeFile(path.join(db, "blocker"), "");
-      await fs.writeFile(`${db}.pre-2.0.0`, "old schema");
+      const oldSchema = await sqliteImage(`${db}.pre-2.0.0`);
       // The predecessor's WAL holds committed transactions of its own.
       await fs.writeFile(`${db}-wal.pre-2.0.0`, "old wal");
       await fs.writeFile(`${db}-wal`, "new wal");
@@ -212,7 +221,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       const resumed = startGateway(prefix);
 
       expect(resumed.stdout).toContain("old");
-      expect(await fs.readFile(db, "utf8")).toBe("old schema");
+      expect(await fs.readFile(db)).toEqual(oldSchema);
       expect(await fs.readFile(`${db}-wal`, "utf8")).toBe("old wal");
       expect(await fs.readlink(slot)).not.toBe(target);
     });
@@ -227,7 +236,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       await fs.mkdir(path.dirname(db), { recursive: true });
       // The previous rollback recorded the family, restored the WAL, then stopped.
       await fs.writeFile(`${db}-wal`, "old wal");
-      await fs.writeFile(`${db}.pre-2.0.0`, "old schema");
+      const oldSchema = await sqliteImage(`${db}.pre-2.0.0`);
       await fs.writeFile(db, "new schema");
       const trialFile = path.join(prefix, "releases", GIT_RELEASE_TRIAL);
       const trial = JSON.parse(await fs.readFile(trialFile, "utf8"));
@@ -241,7 +250,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       );
 
       expect(startGateway(prefix).stdout).toContain("old");
-      expect(await fs.readFile(db, "utf8")).toBe("old schema");
+      expect(await fs.readFile(db)).toEqual(oldSchema);
       expect(await fs.readFile(`${db}-wal`, "utf8")).toBe("old wal");
     });
 
@@ -327,12 +336,21 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
 
     describe("after a committed schema migration", () => {
       /** The previous release opens state 36 and agent 38; the trial migrated past it. */
-      async function migratedTrial(options: { preImage?: number; liveVersion: number }) {
+      async function migratedTrial(options: {
+        preImage?: number;
+        liveVersion: number;
+        contentVersion?: number;
+        previousSchemas?: { state: number; agent: number } | null;
+      }) {
         const { stateDir, prefix } = await setup();
-        const good = await release(prefix, "1.0.0", 'console.log("old");\n', {
-          state: 36,
-          agent: 38,
-        });
+        const good = await release(
+          prefix,
+          "1.0.0",
+          'console.log("old");\n',
+          options.previousSchemas === undefined
+            ? { state: 36, agent: 38 }
+            : options.previousSchemas,
+        );
         await publishGitRelease({ prefix, releaseRoot: good, trial: false });
         const previousLink = await fs.readlink(gitReleaseSlot(prefix));
         const bad = await release(prefix, "2.0.0", 'throw new Error("boot");\n', {
@@ -352,6 +370,13 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           write(`${db}.pre-2.0.0`, options.preImage);
         }
         write(db, options.liveVersion);
+        if (options.contentVersion !== undefined) {
+          // A deferred publication: newer shared content behind an older header.
+          using handle = new DatabaseSync(db);
+          handle.exec(
+            `CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT); INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${options.contentVersion}')`,
+          );
+        }
         const slot = gitReleaseSlot(prefix);
         return { prefix, db, slot, target: await fs.readlink(slot), previous: good, previousLink };
       }
@@ -371,10 +396,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         expect(third.status).not.toBe(0);
         expect(third.stdout).not.toContain("old");
         expect(third.stderr).toContain(
-          `openclaw: release ${target} failed to start twice, but its database migration has committed and no pre-migration image restores a schema the previous release opens (state/openclaw.sqlite schema 40 (`,
-        );
-        expect(third.stderr).toContain(
-          `supports 36)). ${previousLink} cannot open this state, so the service stays on ${target}. Fix forward: run openclaw triage, or openclaw update once a fixed release is available.`,
+          `openclaw: release ${target} failed to start twice, but switching back is not proven safe: state/openclaw.sqlite schema 40 (${previousLink} supports 36). The service stays on ${target} rather than revert onto ${previousLink}, which may refuse this state. Fix forward: run openclaw triage, or openclaw update once a fixed release is available.`,
         );
         expect(await fs.readlink(slot)).toBe(target);
         expect(witness(db)).toEqual({ v: 40 });
@@ -413,6 +435,112 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         expect(await fs.readlink(slot)).toBe(target);
         expect(witness(db)).toEqual({ v: 40 });
         expect(witness(`${db}.pre-2.0.0`)).toEqual({ v: 38 });
+      });
+
+      it("stays forward when the shared content version is newer behind an older header", async () => {
+        const { prefix, db, slot, target } = await migratedTrial({
+          liveVersion: 36,
+          contentVersion: 40,
+        });
+
+        startGateway(prefix);
+        startGateway(prefix);
+        const third = startGateway(prefix);
+
+        expect(third.stdout).not.toContain("old");
+        expect(third.stderr).toContain("state/openclaw.sqlite schema 40 (");
+        expect(await fs.readlink(slot)).toBe(target);
+        expect(witness(db)).toEqual({ v: 36 });
+      });
+
+      it("stays forward when the previous release declares no schemas", async () => {
+        const { prefix, slot, target, previousLink } = await migratedTrial({
+          preImage: 36,
+          liveVersion: 40,
+          previousSchemas: null,
+        });
+
+        startGateway(prefix);
+        startGateway(prefix);
+        const third = startGateway(prefix);
+
+        expect(third.stderr).toContain(
+          `not proven safe: ${previousLink} declares no schema versions.`,
+        );
+        expect(await fs.readlink(slot)).toBe(target);
+      });
+
+      it("stays forward when a database it would leave cannot be read", async () => {
+        const { prefix, db, slot, target } = await migratedTrial({ preImage: 36, liveVersion: 40 });
+        await fs.writeFile(`${db}.pre-2.0.0`, "not a database");
+
+        startGateway(prefix);
+        startGateway(prefix);
+        const third = startGateway(prefix);
+
+        expect(third.stderr).toContain("could not read the schema of state/openclaw.sqlite");
+        expect(await fs.readlink(slot)).toBe(target);
+      });
+
+      it.each([true, false])(
+        "reverts only when the upgraded config has its image (image: %s)",
+        async (imaged) => {
+          const { prefix, db, slot, target } = await migratedTrial({
+            preImage: 36,
+            liveVersion: 40,
+          });
+          const config = path.join(path.dirname(path.dirname(db)), "openclaw.json");
+          await fs.writeFile(config, "upgraded config");
+          if (imaged) {
+            await fs.writeFile(`${config}.pre-2.0.0`, "previous config");
+          }
+          const trialFile = path.join(prefix, "releases", GIT_RELEASE_TRIAL);
+          const trial = JSON.parse(await fs.readFile(trialFile, "utf8"));
+          await fs.writeFile(trialFile, JSON.stringify({ ...trial, config }));
+
+          startGateway(prefix);
+          startGateway(prefix);
+          const third = startGateway(prefix);
+
+          if (imaged) {
+            expect(third.stdout).toContain("old");
+            expect(await fs.readFile(config, "utf8")).toBe("previous config");
+          } else {
+            expect(third.stderr).toContain(
+              "not proven safe: the config has no pre-migration image.",
+            );
+            expect(await fs.readlink(slot)).toBe(target);
+            expect(await fs.readFile(config, "utf8")).toBe("upgraded config");
+          }
+        },
+      );
+
+      it("reverts when the only newer database is one the revert removes", async () => {
+        const { prefix, db, slot, previous } = await migratedTrial({
+          preImage: 36,
+          liveVersion: 40,
+        });
+        const stateDir = path.dirname(path.dirname(db));
+        // The upgrade created this agent's database with no predecessor.
+        const created = path.join(stateDir, "agents", "new", "agent", "openclaw-agent.sqlite");
+        await fs.mkdir(path.dirname(created), { recursive: true });
+        {
+          using handle = new DatabaseSync(created);
+          handle.exec("PRAGMA user_version = 43");
+        }
+        await fs.writeFile(
+          path.join(stateDir, ".upgraded-2.0.0.json"),
+          JSON.stringify({ appVersion: "2.0.0", ops: [{ kind: "add", live: created }] }),
+        );
+
+        startGateway(prefix);
+        startGateway(prefix);
+        const third = startGateway(prefix);
+
+        expect(third.stdout).toContain("old");
+        expect(path.resolve(path.dirname(slot), await fs.readlink(slot))).toBe(previous);
+        expect(witness(db)).toEqual({ v: 36 });
+        await expect(fs.access(created)).rejects.toThrow();
       });
 
       it("switches back when the state never moved past the previous release", async () => {
