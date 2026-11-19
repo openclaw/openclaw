@@ -81,7 +81,7 @@ async function send(
   let sent: unknown[] | undefined;
   const transport = (streamModel: Model, context: Context) => {
     if (streamModel.api !== "openai-completions") {
-      sent = JSON.parse(JSON.stringify(context.messages)) as unknown[];
+      sent = structuredClone(context.messages);
       return createFakeStream({ events: [], resultMessage: reply("done", 9) }) as never;
     }
     return streamOpenAICompletions(streamModel as Model<"openai-completions">, context, {
@@ -130,9 +130,12 @@ describe("prompt updates on routes without in-history system messages", () => {
       const previous = await send(route, history);
       const next = await send(route, [...history, reply("OK one", 0), ...nextTurn]);
       expect(JSON.stringify(next.slice(0, previous.length))).toBe(JSON.stringify(previous));
-      expect(Object.keys(expectDefined(previous.at(-1), "update")).toSorted()).toEqual(
-        route.api === "openai-completions" ? ["content", "role"] : ["content", "role", "timestamp"],
-      );
+      // The provider sees only the plain user fields; the marker never serializes.
+      expect(previous.at(-1)).toStrictEqual({
+        role: "user",
+        content: expect.anything(),
+        ...(route.api === "openai-completions" ? {} : { timestamp: expect.any(Number) }),
+      });
     });
 
     it(`${route.family} still merges unmarked consecutive user text`, async () => {
