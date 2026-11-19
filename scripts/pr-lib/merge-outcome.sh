@@ -190,6 +190,17 @@ merge_outcome_load_local() {
         (.prId | type == "string" and length > 0) and (.head | oid) and (.main | oid) and
         (if has("localHead") then (.localHead | oid) else true end) and
         (.attempt | attempt) and recovery and
+        (if has("pendingProofAcceptance") then . as $record |
+          (.pendingProofAcceptance |
+            keys == ["findings","headSha","kind","reviewOid","treeOid","version"] and
+            .version == 1 and .kind == "maintainer-accepted-pending-proof" and
+            .headSha == $record.head and .headSha == $record.localHead and
+            (.reviewOid | oid) and (.treeOid | oid) and
+            (.findings | type == "array" and length > 0 and
+              all(.[]; keys == ["id","reason"] and (.id | test("^[A-Za-z0-9_.-]+$")) and
+                (.reason | type == "string" and test("\\S"))) and
+              (map(.id) | length == (unique | length))))
+         else true end) and
         (if has("workflowAdmission") then
           (.workflowAdmission | keys == ["binding","from","to"] and all(.[]; oid))
          else true end) and

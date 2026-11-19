@@ -224,4 +224,85 @@ describePosix("correction authority through native merge admission", () => {
     expectExit(f.run());
     expect(f.state().mutations).toBe(1);
   });
+
+  it("retains the pending proof reasons in the native intent and does not replay the merge", () => {
+    const f = correctionFixture();
+    f.bindWorkflow();
+    const incoming = incomingHead(f);
+    const tree = f.git(["rev-parse", `${f.head}^{tree}`]);
+    const review = JSON.parse(readLocal(f, "correction-review.json"));
+    review.recommendation = "NEEDS WORK";
+    review.findings = JSON.parse(readLocal(f, "review.json")).findings;
+    review.correction.resolvedFindings[0].resolution = "";
+    writeLocal(f, "correction-review.json", JSON.stringify(review));
+    expect(f.run(true).output).toContain("needs an independent READY review");
+    expect(f.state().mutations).toBe(0);
+
+    const workflowBinding = f.git(["rev-parse", "refs/openclaw/pr-workflow-bindings/123"]);
+    const workflowSource = JSON.parse(f.git(["show", `${workflowBinding}:binding.json`])).source;
+    review.correction.proofPublication = {
+      version: 1,
+      kind: "published-candidate-proof",
+      headSha: f.head,
+      treeOid: tree,
+      workflowSource,
+      workflowBinding,
+      expectedHostedHead: incoming,
+      pendingFindings: [{ id: "I1", evidence: "Run the exact published artifact on macOS." }],
+    };
+    const reviewBytes = JSON.stringify(review);
+    writeLocal(f, "correction-review.json", reviewBytes);
+    const reviewOid = f.git([
+      "hash-object",
+      "--no-filters",
+      localPath(f, "correction-review.json"),
+    ]);
+    // The publication fixture exercises the real producer. This fixture starts
+    // at merge admission with its retained evidence and a protected writer.
+    writeLocal(
+      f,
+      "prepare-push-result.env",
+      [
+        `PUSH_PREP_HEAD_SHA=${f.head}`,
+        `PUSH_LOCAL_PREP_HEAD_SHA=${f.head}`,
+        `PUSHED_FROM_SHA=${incoming}`,
+        "PUSH_REPLACED_HOSTED_ANCESTRY=false",
+        `PR_HEAD_SHA_AFTER_PUSH=${f.head}`,
+        "PUSH_PURPOSE=proof",
+        `PUSH_REVIEW_OID=${reviewOid}`,
+        "PUSH_PENDING_FINDINGS=I1",
+        "",
+      ].join("\n"),
+    );
+    const acceptance = {
+      version: 1,
+      kind: "maintainer-accepted-pending-proof",
+      headSha: f.head,
+      treeOid: tree,
+      reviewOid,
+      findings: [{ id: "I1", reason: "The maintainer accepted the unavailable runner risk." }],
+    };
+    writeLocal(f, "pending-proof-acceptance.json", `${JSON.stringify(acceptance, null, 2)}\n`);
+    pendingGates(f, f.head);
+    const state = f.state();
+    Object.assign(state, {
+      mode: "pending",
+      gates: "pending",
+      requiredCheckName: "openclaw/ci-gate",
+    });
+    state.pr.mergeStateStatus = "BLOCKED";
+    f.save(state);
+    expectExit(f.run(true));
+    expect(f.record()).toMatchObject({
+      phase: "intent",
+      accepted: true,
+      head: f.head,
+      pendingProofAcceptance: acceptance,
+    });
+    expect(readLocal(f, "correction-review.json")).toBe(reviewBytes);
+    rmSync(localPath(f, "pending-proof-acceptance.json"));
+    expectExit(f.run(true));
+    expect(f.record().pendingProofAcceptance).toEqual(acceptance);
+    expect(f.state().mutations).toBe(1);
+  });
 });

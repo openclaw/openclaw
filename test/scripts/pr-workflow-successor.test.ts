@@ -1,5 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -542,9 +549,6 @@ describePosix("maintainer acceptance of pending proof", () => {
     const accept = (value: typeof acceptance) => f.writeLocal(name, JSON.stringify(value));
     const gates = () => f.run("prepare-gates", [], { OPENCLAW_PR_GATES_REMOTE: "github" });
 
-    const missing = gates();
-    expectExit(missing, 1);
-    expect(missing.stderr).toContain("needs an independent READY review");
     accept(acceptance);
     expectExit(gates(), 0);
     const stamp = f.readLocal("gates.env").toString();
@@ -573,11 +577,22 @@ describePosix("maintainer acceptance of pending proof", () => {
       { ...acceptance, findings: [{ id: "I1", reason: "  " }] },
     ]) {
       accept(invalid);
-      const refused = gates();
+      const refused = verifyPublishedMerge(f, f.head);
       expectExit(refused, 1);
       expect(refused.stderr).toContain("Pending proof acceptance");
-      expect(f.readLocal("gates.env").toString()).toBe(stamp);
     }
+    unlinkSync(f.local(name));
+    const missing = verifyPublishedMerge(f, f.head);
+    expectExit(missing, 1);
+    expect(missing.stderr).toContain("needs an independent READY review");
+
+    f.review.findings[0].severity = "BLOCKER";
+    f.writeReview();
+    accept({ ...acceptance, reviewOid: f.reviewOid() });
+    const blocker = verifyPublishedMerge(f, f.head);
+    expectExit(blocker, 1);
+    expect(blocker.stderr).toContain("BLOCKER findings remain blocking");
+    expect(f.readLocal("gates.env").toString()).toBe(stamp);
   });
 });
 
