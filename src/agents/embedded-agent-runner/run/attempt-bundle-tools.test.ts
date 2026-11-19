@@ -246,6 +246,19 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
       }),
   );
 
+  it("keeps an unavailable message tool listed when the session lists one fixed set", async () => {
+    // A cron turn without a delivery route must not freeze a series without `message`.
+    const input = createInput([], [createStubTool("message")]);
+    input.preparedToolBase = {
+      ...input.preparedToolBase,
+      messageToolAvailable: false,
+      toolSearchControlsEnabledForRun: true,
+      toolSearchConfig: { enabled: true, mode: "tools", searchDefaultLimit: 8, maxSearchLimit: 20 },
+    } as typeof input.preparedToolBase;
+    const result = await prepare(input);
+    expect(toolNames(result.uncompactedEffectiveTools)).toContain("message");
+  });
+
   it.each([
     { runtime: undefined, publicationAllowed: true },
     { runtime: ["sessions_spawn", "server__read"], publicationAllowed: false },

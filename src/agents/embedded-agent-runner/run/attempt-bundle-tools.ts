@@ -19,6 +19,7 @@ import {
   withRuntimeToolSchemaQuarantine,
   type RuntimeToolSchemaQuarantineRecorder,
 } from "../../tool-schema-quarantine.js";
+import { listsFixedToolSet } from "../../tool-search-config.js";
 import { captureFinalEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool-creator-cap.js";
 import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
 import { log } from "../logger.js";
@@ -263,8 +264,11 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         sessionId: params.attempt.sessionId,
       });
       // Presentation-only absence must not become a delegated capability denial.
-      // Capture after final policy/quarantine, then omit from the model surface.
-      return !params.preparedToolBase.messageToolAvailable
+      // Capture after final policy/quarantine, then omit from the model surface,
+      // unless the session lists one fixed set (the call then fails visibly).
+      const { toolSearchConfig, toolSearchControlsEnabledForRun } = params.preparedToolBase;
+      return !params.preparedToolBase.messageToolAvailable &&
+        !listsFixedToolSet(toolSearchConfig, toolSearchControlsEnabledForRun)
         ? schemaProjection.tools.filter((tool) => tool.name !== "message")
         : schemaProjection.tools;
     };
