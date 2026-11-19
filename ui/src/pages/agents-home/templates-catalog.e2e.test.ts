@@ -640,7 +640,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     },
   );
 
-  it("shows disabled automation declarations in details and the inline preview", async () => {
+  it("opens an automation's schedule and instructions from its row and the inline preview", async () => {
     const { page, gateway } = await fixture();
     await gateway.setMethodResponse("templates.catalog.detail", {
       detail: {
@@ -652,24 +652,51 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
           skills: [],
           integrations: [],
           automations: [
-            { name: "Weekly brief", schedule: "0 9 * * 1", timezone: "UTC", enabled: false },
+            {
+              name: "Weekly brief",
+              schedule: "0 9 * * 1",
+              timezone: "UTC",
+              enabled: false,
+              message: "Summarize last week's work.\n\nList anything still waiting on a decision.",
+            },
+            {
+              name: "Midweek nudge",
+              schedule: "0 21 * * 3",
+              timezone: "UTC",
+              enabled: false,
+              message: "Remind me of anything due before Friday.",
+            },
           ],
         },
       },
     });
     const detail = await openDetail(page);
-    const automation = detail.locator(".plugin-capabilities").filter({ hasText: "Weekly brief" });
-    await capture(page, "paused-automation-detail", automation);
-    expect.soft(await automation.textContent()).toContain("Disabled");
+    const automations = detail.locator(".plugin-capabilities").filter({ hasText: "Weekly brief" });
+    const row = automations.getByRole("button", { name: /Weekly brief/ });
+    await row.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
+    await capture(page, "paused-automation-detail", automations);
+    expect(await automations.locator("details").count()).toBe(0);
+    await row.click();
+    const dialog = page.getByRole("dialog", { name: "Weekly brief", exact: true });
+    await dialog.getByText("List anything still waiting on a decision.").waitFor();
+    await dialog.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
+    await capture(page, "paused-automation-dialog", dialog);
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
+    await dialog.waitFor({ state: "hidden" });
+    await automations.getByRole("button", { name: /Midweek nudge/ }).click();
+    await page
+      .getByRole("dialog", { name: "Midweek nudge", exact: true })
+      .getByText("Wednesday at 9:00 PM · UTC · Disabled", { exact: true })
+      .waitFor();
     await page.goto(`${server.baseUrl}chat/main`);
     await page.locator("a.markdown-template-link").first().click();
     const shell = page.getByRole("dialog", { name: "Template details", exact: true });
     await shell.getByRole("button", { name: /Automations/ }).click();
-    const row = shell.getByRole("button", { name: /Weekly brief/ });
-    expect.soft(await row.textContent()).toContain("Disabled");
-    await row.click();
+    const previewRow = shell.getByRole("button", { name: /Weekly brief/ });
+    await previewRow.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
+    await previewRow.click();
+    await shell.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
     await capture(page, "paused-automation-preview", shell);
-    expect.soft(await shell.textContent()).toContain("Disabled");
     expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
   });
 

@@ -1,5 +1,7 @@
-import { Errored, For, Loading, Show } from "solid-js";
+import { createSignal, Errored, For, Loading, Show } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
+import { ModalDialog } from "../../components/modal-dialog.tsx";
+import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
@@ -13,6 +15,7 @@ import {
   renderPublisherIdentity,
 } from "../plugins/overview.tsx";
 import { TemplateArtwork } from "./template-artwork.tsx";
+import { createTemplateAutomationSummary } from "./template-automation-summary.ts";
 import type { TemplateCatalogDetail, TemplateCatalogEntry } from "./templates-catalog-client.ts";
 import "../../styles/templates-catalog.css";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
@@ -89,6 +92,10 @@ function renderTemplateTrustWarning(warning: string) {
 
 function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
   const contents = () => props.view.readDetail()!.contents;
+  const automationSummary = createTemplateAutomationSummary();
+  const [automation, setAutomation] = createSignal<
+    TemplateCatalogDetail["contents"]["automations"][number] | null
+  >(null);
   return (
     <>
       <TemplateWorkspaceFiles
@@ -148,23 +155,34 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
         t("templatesCatalog.automations"),
         contents().automations.map((item) => ({
           name: item.name,
-          description: `${item.schedule} · ${item.timezone} · ${t(item.enabled ? "templatesCatalog.automationEnabled" : "templatesCatalog.automationDisabled")}`,
-          details: (
-            <p>
-              {item.schedule} · {item.timezone}
-              {" · "}
-              {t(
-                item.enabled
-                  ? "templatesCatalog.automationEnabled"
-                  : "templatesCatalog.automationDisabled",
-              )}
-            </p>
-          ),
+          description: automationSummary(item),
+          onOpen: () => setAutomation(item),
         })),
         () => (
           <Icon name="clock" />
         ),
       )}
+      <Show when={automation()}>
+        {(item) => (
+          <ModalDialog label={item().name} open onModal-cancel={() => setAutomation(null)}>
+            <article class="oc-dialog">
+              <header class="template-automation-dialog__header">
+                <span class="plugin-capability__icon" aria-hidden="true">
+                  <Icon name="clock" />
+                </span>
+                <DialogHeader
+                  title={item().name}
+                  description={automationSummary(item())}
+                  onClose={() => setAutomation(null)}
+                />
+              </header>
+              <div class="oc-dialog__body">
+                <p class="template-automation-dialog__message">{item().message}</p>
+              </div>
+            </article>
+          </ModalDialog>
+        )}
+      </Show>
     </>
   );
 }

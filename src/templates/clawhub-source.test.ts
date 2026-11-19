@@ -436,7 +436,7 @@ describe("public ClawHub Template catalog", () => {
       scheduledJobs: 1,
       contents: {
         skills: [{ excerpt: "Citation check" }],
-        automations: [{ name: "Daily briefing", enabled: false }],
+        automations: [{ name: "Daily briefing", enabled: false, message: "Prepare the briefing" }],
       },
     });
   });

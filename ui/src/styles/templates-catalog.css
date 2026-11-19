@@ -37,6 +37,24 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   }
 }
 
+/* The automation's row icon leads the shared dialog header, which keeps its close inset. */
+.template-automation-dialog__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 12px 0 0 var(--overlay-modal-padding);
+  & > .oc-dialog__header {
+    flex: 1;
+    min-width: 0;
+    padding: 0 12px 0 0;
+  }
+}
+.template-automation-dialog__message {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 /* Keep the existing row controls local without repeating their selectors. */
 .templates-workspace-file {
   position: relative;
