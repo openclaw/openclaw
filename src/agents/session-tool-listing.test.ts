@@ -8,6 +8,7 @@ import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { isAgentToolExecutionAvailable } from "./agent-tool-availability.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
+import { listSessionForkTools } from "./embedded-agent-runner/session-fork-request.js";
 import {
   clearEmbeddedSessionPromptStates,
   prepareSessionToolSurface,
@@ -83,6 +84,25 @@ const turns: Record<string, ToolOptions> = {
     },
   },
   steer: { ...session, ...owner, runId: "steer", sourceReplyDeliveryMode: "message_tool_only" },
+  // A queued follow-up or cross-session event that carries its own run allowlist.
+  allowlisted: {
+    ...session,
+    ...owner,
+    runId: "allowlisted",
+    trigger: "user",
+    runtimeToolAllowlist: ["read", "tool_search", "tool_describe", "dispatch_action"],
+  },
+};
+
+const groupConfig: OpenClawConfig = {
+  ...config,
+  tools: { ...config.tools, toolsBySender: { "id:guest": { deny: ["exec", "write"] } } },
+};
+const group = {
+  ...session,
+  config: groupConfig,
+  sessionKey: "agent:main:telegram:group:g1",
+  sessionId: "group-listing",
 };
 
 function mcpTool(): AnyAgentTool {
@@ -104,7 +124,7 @@ function mcpTool(): AnyAgentTool {
 
 type SessionPromptState = ReturnType<typeof retainEmbeddedSessionPromptState>["state"];
 
-/** The tool list one turn sends to the provider: assembly, Tool Search catalog, session pin. */
+/** One turn's own tool list (before the session pin) and what it sends after the pin. */
 function send(
   state: SessionPromptState,
   options: ToolOptions,
@@ -125,14 +145,17 @@ function send(
     codeModeControlsEnabled: false,
     toolSearchConfig: resolveToolSearchConfig(config),
   });
-  return prepareSessionToolSurface({
+  const sent = prepareSessionToolSurface({
     state,
     routeKey: "listing-route",
     toolPolicy: "listing-policy",
     entries: [],
     historyBoundaryCount: 0,
     tools: compacted.tools,
+    // The production default for a fixed listing: a later turn never extends the pin.
+    admitNewTools: false,
   });
+  return Object.assign(sent, { built: compacted.tools });
 }
 
 function definitions(tools: AnyAgentTool[]) {
@@ -164,16 +187,44 @@ afterEach(() => {
 it("sends one tool list across user, cron, exec-wake, subagent and steer turns", () => {
   // One retained session state across the turns, like an active chat.
   using chat = retainEmbeddedSessionPromptState(sessionId);
-  const sent = [
+  const turnsSent = [
     send(chat.state, turns.cron!),
     send(chat.state, turns.user!, { node: true, mcp: true }),
     send(chat.state, turns.execWake!),
     send(chat.state, turns.subagent!, { mcp: true }),
     send(chat.state, turns.steer!, { node: true }),
+    send(chat.state, turns.allowlisted!),
     send(chat.state, turns.user!),
     send(chat.state, turns.cron!, { node: true, mcp: true }),
-  ].map(definitions);
+  ];
+  // Each turn builds the same tool set itself; the pin is not what makes them equal. Only the
+  // computer definition follows live node facts, and the pin holds it.
+  const built = turnsSent.map((turn) => turn.built.map((tool) => tool.name));
+  expect(built).toEqual(built.map(() => built[0]));
+  const sent = turnsSent.map(definitions);
   expect(sent).toEqual(sent.map(() => sent[0]));
+});
+
+it("builds one tool list for every sender of a group chat", () => {
+  setRuntimeConfigSnapshot(groupConfig);
+  using chat = retainEmbeddedSessionPromptState("group-listing");
+  onTestFinished(() => clearEmbeddedSessionPromptStates(["group-listing"]));
+  const guest = send(chat.state, { ...group, runId: "guest", senderId: "guest" });
+  const ownerTurn = send(chat.state, { ...group, ...owner, runId: "owner" });
+  expect(definitions(guest.built)).toEqual(definitions(ownerTurn.built));
+  const guestExec = guest.built.find((tool) => tool.name === "exec");
+  expect(guestExec && isAgentToolExecutionAvailable(guestExec)).toBe(false);
+});
+
+it("lets a fork send the source's tool list unchanged", () => {
+  setRuntimeConfigSnapshot(groupConfig);
+  using chat = retainEmbeddedSessionPromptState("group-fork");
+  onTestFinished(() => clearEmbeddedSessionPromptStates(["group-fork"]));
+  // The source series starts on a guest turn; the fork builds an owner turn's tools.
+  const pinned = send(chat.state, { ...group, sessionId: "group-fork", senderId: "guest" });
+  const fork = send(chat.state, { ...group, ...owner, sessionId: "group-fork" }).built;
+  const pin = { prefix: "system", tools: pinned };
+  expect(definitions(listSessionForkTools(pin, fork))).toEqual(definitions(pinned));
 });
 
 it("lets a later user turn send with message in a series a cron turn started", async () => {
