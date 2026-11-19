@@ -163,6 +163,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/openai-compatible-agent-run.test.ts",
   "src/gateway/openclaw-id/claw-store.persistence.test.ts",
   "src/gateway/openclaw-id/member-profiles.persistence.test.ts",
+  "src/gateway/openclaw-id/member-source-role-upgrade.test.ts",
   "src/gateway/openclaw-id/remote-signout.test.ts",
   "src/gateway/openclaw-id/scheduled-source.persistence.test.ts",
   "src/gateway/openresponses-session-store.test.ts",

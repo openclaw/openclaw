@@ -74,6 +74,7 @@ export type SessionEntryCanonicalReplacement = SessionEntryReplacement & {
 };
 
 type ReplacementProjectionOptions = {
+  memberSourceRoleImport?: SessionEntryReplacementCommit["memberSourceRoleImport"];
   creationOperation?: SessionEntryReplacementCommit["creationOperation"];
   fieldPatch?: SessionEntryReplacementCommit["fieldPatch"];
   onCommittedEntries?: SessionEntryWorkerLifecycle["onCommittedEntries"];
@@ -520,6 +521,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
               },
             );
             const input: SessionEntryReplacementCommit = {
+              memberSourceRoleImport: params.memberSourceRoleImport,
               creationOperation: params.creationOperation,
               fieldPatch: params.fieldPatch,
               expectedRows,
@@ -666,6 +668,7 @@ export async function applySessionEntryCreationReplacement(
 }
 
 export async function applySessionEntryExactReplacements<T>(params: {
+  memberSourceRoleImport?: SessionEntryReplacementCommit["memberSourceRoleImport"];
   consumePendingReset?: boolean;
   assertCommitAllowed?: () => void;
   activeSessionKey?: string;

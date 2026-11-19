@@ -156,30 +156,31 @@ it("migrates shared source owners without SQL on the host, stale inventories, or
         resolveCronJobConfigRevision(after.jobs.find((job) => job.id === "valid")!),
       );
       const afterJobs = jobRows();
-      expect(afterJobs.map(({ job_json, grant_definition_revision, ...row }) => row)).toEqual(
-        beforeJobs.map(({ job_json, grant_definition_revision, ...row }) => row),
+      expect(
+        afterJobs.map(({ job_json: _job, grant_definition_revision: _grant, ...row }) => row),
+      ).toEqual(
+        beforeJobs.map(({ job_json: _job, grant_definition_revision: _grant, ...row }) => row),
       );
       expect(grantRows()).toEqual(
         beforeGrants.map((row) =>
           row.cron_job_id === "valid"
-            ? {
-                ...row,
+            ? Object.assign({}, row, {
                 job_config_revision: resolveCronJobConfigRevision(
                   after.jobs.find((job) => job.id === "valid")!,
                 ),
-              }
+              })
             : row,
         ),
       );
       for (let index = 0; index < jobs.length; index += 1) {
         const job = after.jobs.find((entry) => entry.id === jobs[index]!.id)!;
-        const revision = resolveCronJobConfigRevision(job);
+        const jobRevision = resolveCronJobConfigRevision(job);
         const result = await validateCronStandingGrant({
           agentId: "main",
           cronJobId: job.id,
           operationBinding: "retained-operation",
-          jobConfigRevision: revision,
-          handle: { ...handles[index]!, configRevision: revision },
+          jobConfigRevision: jobRevision,
+          handle: { ...handles[index]!, configRevision: jobRevision },
           nowMs: 20,
         });
         expect(result.outcome).toBe(
@@ -232,6 +233,7 @@ it("refuses stale preparation and leaves unsupported or malformed stored sources
       ).rejects.toThrow("import commit changed");
       expect(stages).toContain("transaction");
       expect(stages).toContain("commit");
+      fence.mockRestore();
     }
     expect((await loadCronJobsStore(storePath)).jobs[0]!.operatorSource).toEqual(
       job.operatorSource,

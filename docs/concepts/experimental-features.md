@@ -487,9 +487,12 @@ connect. Clearing a role with `null` exposes a configured GitHub mapping or defa
 if present. Owner devices and nodes are unchanged.
 
 On upgrade, an existing member with no explicit profile assignment receives their
-current membership role once. Existing explicit assignments are preserved. The
-Gateway persists that migration per member, so clearing an assignment is not undone
-on restart or reconnect. A fresh invitation assigns its selected role again.
+current membership role once. Existing explicit assignments are preserved. Saved
+automation and recovery sources receive the imported assignment only when their
+captured membership policy matches the role definition; their grants and restrictions
+are unchanged. Mismatched sources remain refused. The Gateway persists that migration
+per member, so clearing an assignment is not undone on restart or reconnect. A fresh
+invitation assigns its selected role again.
 
 A preset-write failure is logged and reported in OpenClaw ID service status;
 undefined member roles remain refused and owners retain access. Nothing is written
