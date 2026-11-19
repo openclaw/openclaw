@@ -92,6 +92,7 @@ import {
   type CodexNativeSubagentNotification,
 } from "./native-subagent-notification.js";
 import {
+  releaseNativeParentThreadIfChildrenSettled,
   canNativeParentConsumeCompletion,
   readNativeSubagentObservations,
   listNativePendingChildren,
@@ -193,6 +194,7 @@ class Monitor {
       children: this.childStates,
       parents: this.parentStates,
       retiredParents: this.retiredParentStates,
+      isParentThreadRetained: (parentThreadId) => this.parentThreadRetentions.has(parentThreadId),
       unregisterChild: (child) => this.unregisterChild(child),
       abandon: (state, child, assertCurrent) =>
         this.assignments.abandon(state, child, assertCurrent),
@@ -2340,20 +2342,13 @@ class Monitor {
   }
 
   private releaseParentThreadIfChildrenSettled(parentThreadId: string): void {
-    for (const childState of this.childStates.values()) {
-      if (
-        childState.parentThreadId === parentThreadId &&
-        !childState.terminal &&
-        !childState.settledWithoutCompletion
-      ) {
-        return;
-      }
-    }
-    // Pending completion delivery keeps its own custody, but must not block
-    // the parent from resuming to receive those results.
-    const releaseParentThread = this.parentThreadRetentions.get(parentThreadId);
-    this.parentThreadRetentions.delete(parentThreadId);
-    releaseParentThread?.();
+    releaseNativeParentThreadIfChildrenSettled({
+      parentThreadId,
+      children: this.childStates,
+      retentions: this.parentThreadRetentions,
+      parents: this.parentStates,
+      deliverDetached: (state) => this.completionDelivery.deliverDetached(state),
+    });
   }
 
   private hasChildrenForParent(parentThreadId: string): boolean {

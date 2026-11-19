@@ -511,3 +511,34 @@ export function listNativeRequesterParents(
       ),
   );
 }
+
+/** Release a settled sibling cohort before re-driving its held completion deliveries. */
+export function releaseNativeParentThreadIfChildrenSettled(params: {
+  parentThreadId: string;
+  children: ReadonlyMap<string, ChildState>;
+  retentions: Map<string, () => void>;
+  parents: ReadonlyMap<string, ParentState>;
+  deliverDetached: (state: ParentState) => void;
+}): void {
+  const { parentThreadId, children, retentions, parents, deliverDetached } = params;
+  for (const child of children.values()) {
+    if (
+      child.parentThreadId === parentThreadId &&
+      !child.terminal &&
+      !child.settledWithoutCompletion
+    ) {
+      return;
+    }
+  }
+  // Pending delivery keeps its own custody, but must not block the parent's subscription.
+  const release = retentions.get(parentThreadId);
+  if (!release) {
+    return;
+  }
+  retentions.delete(parentThreadId);
+  release();
+  const state = parents.get(parentThreadId);
+  if (state) {
+    deliverDetached(state);
+  }
+}
