@@ -44,8 +44,7 @@ type Send = {
   sessionKey: string;
   targetAgentId: string;
   storePath: string;
-  targetTask?: SessionsSendToolOptions["expectedTargetTask"];
-  targetRun: SessionsSendToolOptions["expectedTargetRun"];
+  hadTask: boolean;
   requesterParentOwned: boolean;
 };
 type HeldSend = {
@@ -349,8 +348,7 @@ export function createSelfHeldSendRetainer(
                   assertSourceCurrent: assertCurrent,
                   idempotencyKey: item.send.runId,
                   expectedTargetStorePath: item.send.storePath,
-                  expectedTargetTask: item.send.targetTask,
-                  expectedTargetRun: item.send.targetRun,
+                  expectTargetTask: item.send.hadTask,
                   retainedReplay: true,
                 },
                 {
@@ -419,20 +417,10 @@ export function createSelfHeldSendRetainer(
       toolCallId: string;
       readTarget: () => { storePath: string };
     }) {
-      const original = getLatestLiveSubagentRunByChildSessionKey(
-        input.sessionKey,
-        undefined,
-        input.targetAgentId,
+      const hadTask = Boolean(
+        getLatestLiveSubagentRunByChildSessionKey(input.sessionKey, undefined, input.targetAgentId),
       );
-      const targetRun = original
-        ? {
-            runId: original.runId,
-            taskRunId: original.taskRunId,
-            generation: original.generation,
-            createdAt: original.createdAt,
-          }
-        : null;
-      return (proof: Refusal, mode: Send["mode"], targetTask?: Send["targetTask"]) => {
+      return (proof: Refusal, mode: Send["mode"]) => {
         return retain(
           proof,
           {
@@ -445,8 +433,7 @@ export function createSelfHeldSendRetainer(
                 ? { ...input.args, timeoutSeconds: 0, watch: undefined }
                 : input.args,
             mode,
-            targetRun,
-            targetTask,
+            hadTask,
             storePath: input.readTarget().storePath,
           },
           input.toolCallId,
