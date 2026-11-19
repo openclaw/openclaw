@@ -7,6 +7,7 @@ import {
   createGitReleaseDirs,
   gitReleaseId,
   publishGitRelease,
+  findVerifiedGitRelease,
   readGitReleasePlacement,
   verifiesAsGitRelease,
   supersedeUnservedGitRelease,
@@ -291,25 +292,42 @@ export async function updateGitRelease(params: {
   if (placement?.unsafeFallback && unserved) {
     const { previous, reason, commit } = placement.unsafeFallback;
     const lost = `Release ${gitReleaseId(unserved.root)} on the release link never passed its trial, and its fallback ${gitReleaseId(path.resolve(path.dirname(slot), previous))} ${reason === "missing" ? "no longer exists" : "does not verify as a complete build"}.`;
-    const rebuilt = commit
-      ? await buildRelease((release, common, retainCleanup) =>
-          runGitCandidatePreflight({
-            ...common,
-            release,
-            retainCleanup,
-            targetRevision: commit,
-            beforeRuntimeVerified: false,
-            validateCandidate: async () => [],
-            beforeCandidate: async () => {},
-          }),
-        )
-      : undefined;
+    // An earlier attempt's rebuild of the same commit is reused, so retries keep one copy.
+    const earlier = commit
+      ? await findVerifiedGitRelease({
+          prefix,
+          commit,
+          exclude: [unserved.root, placement.fallback],
+        })
+      : null;
+    const rebuilt = earlier
+      ? {
+          status: "ok" as const,
+          candidateSha: commit!,
+          selectedDevUpstream: null,
+          selectedDevSource: null,
+          localDevBranchExists: null,
+          releaseRoot: earlier,
+        }
+      : commit
+        ? await buildRelease((release, common, retainCleanup) =>
+            runGitCandidatePreflight({
+              ...common,
+              release,
+              retainCleanup,
+              targetRevision: commit,
+              beforeRuntimeVerified: false,
+              validateCandidate: async () => [],
+              beforeCandidate: async () => {},
+            }),
+          )
+        : undefined;
     const verified =
       rebuilt?.status === "ok" &&
       (await verifyGitUpdateRecovery({ root: rebuilt.releaseRoot, sha: rebuilt.candidateSha }))
         .serviceRestartSafe;
     if (!verified || rebuilt?.status !== "ok") {
-      if (rebuilt?.status === "ok") {
+      if (rebuilt?.status === "ok" && !earlier) {
         await fs.rm(path.resolve(rebuilt.releaseRoot, "../../.."), {
           recursive: true,
           force: true,
@@ -330,7 +348,7 @@ export async function updateGitRelease(params: {
       };
     }
     await reportPlacement(
-      `${lost} This update rebuilt the commit it was built from (${commit!.slice(0, 12)}) as release ${gitReleaseId(rebuilt.releaseRoot)}, which becomes the fallback when the update switches.`,
+      `${lost} ${earlier ? "An earlier attempt rebuilt" : "This update rebuilt"} the commit it was built from (${commit!.slice(0, 12)}) as release ${gitReleaseId(rebuilt.releaseRoot)}, which becomes the fallback when the update switches.`,
       false,
     );
     // Selected only at the normal switch, after the target passed its checks.
@@ -411,6 +429,14 @@ export async function updateGitRelease(params: {
     !previousRelease &&
     unserved !== undefined
   ) {
+    // The caller's mutation check runs before the link, trial or placed release change.
+    await prepareGitMutation({
+      runCommand,
+      root: gitRoot,
+      revision: runningSha,
+      timeoutMs,
+      beforeGitMutation: opts.beforeGitMutation,
+    });
     await supersedeUnserved();
   }
   if (target.status !== "ok" && (!previousRelease || target.reason !== "already-current")) {
@@ -448,22 +474,21 @@ export async function updateGitRelease(params: {
           ? "It is the target; the next service start activates it."
           : "It is the target, so this update finishes activating it instead of rebuilding it.",
       );
-      // Its armed trial falls back to the incomplete release; re-arm it on the rebuilt one.
-      if (rebuiltFallback && placement) {
+      // Its armed trial falls back to the incomplete release; re-arm it on the rebuilt one,
+      // but only while it is still never started: a counted start belongs to the launcher.
+      const current = readPackageReleaseSlotSync(slot);
+      const fresh = current ? (await readGitReleasePlacement(current)).unserved : undefined;
+      if (rebuiltFallback && placement && fresh?.root === releaseRoot && fresh.selected) {
         await publishGitRelease({ prefix, releaseRoot: placement.fallback, trial: false });
       }
     }
-    // A placed release the link still names on trial keeps that trial and its fallback.
-    const current = readPackageReleaseSlotSync(slot);
-    const armed = current && (await readGitReleasePlacement(current)).unserved;
-    if (!armed || !armed.selected || armed.root !== releaseRoot) {
-      await publishGitRelease({
-        prefix,
-        releaseRoot,
-        trial: true,
-        pending: opts.deferReleaseActivation,
-      });
-    }
+    // A release the link already names keeps its trial and fallback; the publisher leaves it.
+    await publishGitRelease({
+      prefix,
+      releaseRoot,
+      trial: true,
+      pending: opts.deferReleaseActivation,
+    });
   }
   const collected = await collectGitReleases({
     prefix,

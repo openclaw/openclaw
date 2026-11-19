@@ -1611,22 +1611,28 @@ trial's previous release, the one that last served:
 - If the target is newer, the link goes back to the serving release. The new release
   goes on trial with the serving release as its fallback, and the superseded release is
   removed.
-- If the serving release is the target, the link goes back to it and the update reports
-  that the installation is current.
+- If the serving release is the target, the update runs the caller's mutation check, puts
+  the link back on the serving release, and reports that the installation is current.
 
 Only a release the launcher never started and no process holds counts as never started.
 A trial that started stays under the launcher, which owns its state rollback. If the
 release starts, or its trial ends, while the update builds, the update leaves the link
-and trial alone.
+and trial alone. A trial never falls back to its own target, and arming a trial for the
+release the link already names keeps that release's existing trial.
 
 A fallback must be present, and its build must verify against the commit it was built
 from. If the trial's fallback is incomplete, the update rebuilds that commit, which is
 what serves, as a new release. It switches to the rebuilt release only at the normal
-switch point, after the target passed its checks. If the fallback is gone or no longer
+switch point, after the target passed its checks. A later attempt reuses that rebuild
+instead of building another copy. If the fallback is gone or no longer
 readable as a Git release, the commit that serves is not known. The update then changes
 nothing and fails with `git-release-fallback-unavailable`, and the Gateway keeps
 serving. Do not restart it into the release link. Run `openclaw triage` so an agent can
 rebuild a fallback from the serving commit, then run `openclaw update` again.
+
+The link text is computed between real paths and must resolve to the chosen release before
+the old link is replaced, so a state directory reached through a symlink (macOS `/tmp` is
+`/private/tmp`) never gets a dangling link.
 
 The update result includes a `git-release-placement` note that names the releases
 involved and says what the update did. This runs in the installed updater, the

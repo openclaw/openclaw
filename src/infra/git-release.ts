@@ -51,6 +51,12 @@ export const gitReleaseId = (releaseRoot: string) =>
 /**
  * Select `releaseRoot` with one rename. With `trial`, the launcher switches back
  * after two failed starts and the Gateway clears the record once it is ready.
+ *
+ * The link text is computed between real paths, because the filesystem resolves it from
+ * the link's real directory (a state directory under macOS `/tmp` is really under
+ * `/private/tmp`), and it must resolve to `releaseRoot` before the old link is replaced.
+ * Arming a trial for the release the link already names changes nothing: its trial, if
+ * any, keeps its own fallback, and a trial never falls back to its own target.
  */
 export async function publishGitRelease(params: {
   prefix: string;
@@ -61,7 +67,17 @@ export async function publishGitRelease(params: {
   assertCurrent?: () => void;
 }): Promise<{ previous: string | null; target: string }> {
   const slot = gitReleaseSlot(params.prefix);
-  const target = packageReleaseLinkTarget(slot, params.releaseRoot);
+  const globalRoot = path.dirname(slot);
+  await fs.mkdir(globalRoot, { recursive: true });
+  const realGlobalRoot = await fs.realpath(globalRoot);
+  const releaseRoot = await fs.realpath(params.releaseRoot);
+  const target = packageReleaseLinkTarget(path.join(realGlobalRoot, "openclaw"), releaseRoot);
+  const resolved = await fs.realpath(path.resolve(realGlobalRoot, target)).catch(() => null);
+  if (resolved !== releaseRoot) {
+    throw new Error(
+      `The release link text ${target} does not resolve to ${releaseRoot}; the installation was left unchanged.`,
+    );
+  }
   const trialFile = gitReleaseTrialFile(params.prefix);
   await writeGitReleaseLauncher(params.prefix);
   const existing = await fs.lstat(slot).catch(ignoreMissingPath);
@@ -70,6 +86,12 @@ export async function publishGitRelease(params: {
     const capture = await capturePackageReleaseSlot(slot);
     if (capture.kind !== "link") {
       throw new Error(`${slot} is not a release link; the installation was left unchanged.`);
+    }
+    const selected = await fs
+      .realpath(path.resolve(realGlobalRoot, capture.target))
+      .catch(() => null);
+    if (params.trial && selected === releaseRoot) {
+      return { previous: null, target };
     }
     previous = capture.target;
     // A stale trial must not switch the next release back.
@@ -83,8 +105,6 @@ export async function publishGitRelease(params: {
       });
     }
   } else {
-    const globalRoot = path.dirname(slot);
-    await fs.mkdir(globalRoot, { recursive: true });
     await sweepPackageReleaseTemporaryLinks(globalRoot);
     const temporary = path.join(globalRoot, `.openclaw.release-link-${process.pid}-${Date.now()}`);
     await fs.symlink(target, temporary);
@@ -93,11 +113,11 @@ export async function publishGitRelease(params: {
     await syncDirectoryIfSupported(globalRoot);
   }
   if (params.trial && previous) {
-    const buildId = await readBuiltGatewayBuildId(params.releaseRoot);
+    const buildId = await readBuiltGatewayBuildId(releaseRoot);
     const record: GitReleaseTrial = {
       target,
       previous,
-      version: (await readPackageVersion(params.releaseRoot)) ?? "unknown",
+      version: (await readPackageVersion(releaseRoot)) ?? "unknown",
       ...(buildId ? { buildId } : {}),
       // The update admits only a service whose config selection matches this process.
       config: resolveConfigPath(process.env),
@@ -167,6 +187,35 @@ async function readReleaseHead(root: string): Promise<string | null> {
 export async function verifiesAsGitRelease(root: string): Promise<boolean> {
   return (await verifyGitUpdateRecovery({ root, sha: await readReleaseHead(root) }))
     .serviceRestartSafe;
+}
+
+/** A verified release built from `commit`, other than `exclude`, if one is on disk. */
+export async function findVerifiedGitRelease(params: {
+  prefix: string;
+  commit: string;
+  exclude: readonly string[];
+}): Promise<string | null> {
+  const releasesDir = path.join(params.prefix, PACKAGE_RELEASES_DIR);
+  const excluded = new Set(
+    await Promise.all(params.exclude.map((root) => fs.realpath(root).catch(() => root))),
+  );
+  for (const id of await fs.readdir(releasesDir).catch(() => [] as string[])) {
+    if (id.startsWith(".")) {
+      continue;
+    }
+    const root = await fs
+      .realpath(path.join(packageReleaseGlobalRoot(path.join(releasesDir, id)), "openclaw"))
+      .catch(() => null);
+    if (
+      root &&
+      !excluded.has(root) &&
+      (await readReleaseHead(root)) === params.commit &&
+      (await verifiesAsGitRelease(root))
+    ) {
+      return root;
+    }
+  }
+  return null;
 }
 
 /**

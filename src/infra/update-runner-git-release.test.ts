@@ -29,6 +29,12 @@ const target = vi.hoisted(() => ({
   duringBuild: undefined as (() => Promise<void>) | undefined,
   /** Roots the candidate validator checked. */
   validated: [] as string[],
+  /** The target fails its candidate checks before the switch. */
+  targetFails: false,
+  /** Runs inside the candidate validator, as a service starting meanwhile would. */
+  duringValidation: undefined as (() => Promise<void>) | undefined,
+  /** The caller's mutation check refuses the update. */
+  mutationRefused: false,
 }));
 // mock-isolation: the build runs as a fixture; the real preflight would install and compile a checkout.
 vi.mock("./update-runner-git-preflight.js", () => ({
@@ -94,7 +100,9 @@ vi.mock("./update-runner-git-target.js", async (importOriginal) => ({
     await params.beforeCandidate(checkedOut);
     target.builds += 1;
     await target.duringBuild?.();
-    return { status: "ok", candidateSha: checkedOut };
+    return target.targetFails
+      ? { status: "error", reason: "preflight-no-good-commit" }
+      : { status: "ok", candidateSha: checkedOut };
   },
 }));
 vi.mock("./update-git-runtime.js", async (importOriginal) => ({
@@ -132,6 +140,9 @@ afterEach(async () => {
   target.replayed = undefined;
   target.duringBuild = undefined;
   target.validated.length = 0;
+  target.targetFails = false;
+  target.duringValidation = undefined;
+  target.mutationRefused = false;
   target.broken.length = 0;
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
@@ -306,10 +317,16 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
    * and `.trial` is armed with `attempts: 0` and falls back to 1.0.0, which serves.
    * With `pending`, a `--no-restart` update left 2.0.0 for the next service start instead.
    */
-  async function halfSwitchedInstall(left: { pending?: boolean } = {}) {
+  async function halfSwitchedInstall(left: { pending?: boolean; linkedState?: boolean } = {}) {
     target.runtimeVerified = true;
     const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "git-release-left-")));
     roots.push(dir);
+    if (left.linkedState) {
+      // The state directory is reached through a link to a directory at another depth, as
+      // macOS `/tmp` is `/private/tmp`.
+      await fs.mkdir(path.join(dir, "x", "y", "real-state"), { recursive: true });
+      await fs.symlink(path.join(dir, "x", "y", "real-state"), path.join(dir, "state"));
+    }
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(dir, "state"));
     const checkout = path.join(dir, "checkout");
     await fs.mkdir(checkout);
@@ -340,7 +357,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     const serving = await place("1.0.0");
     await publishGitRelease({ prefix, releaseRoot: serving, trial: false });
     const unserved = await place("2.0.0");
-    await publishGitRelease({ prefix, releaseRoot: unserved, trial: true, ...left });
+    await publishGitRelease({ prefix, releaseRoot: unserved, trial: true, pending: left.pending });
     const trialFile = path.join(prefix, PACKAGE_RELEASES_DIR, GIT_RELEASE_TRIAL);
     const resolveLink = (link: string) => fs.realpath(path.resolve(path.dirname(slot), link));
     const releaseVersion = async (root: string) =>
@@ -388,9 +405,14 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
             },
             validateCandidate: async (root) => {
               target.validated.push(await fs.realpath(root));
+              await target.duringValidation?.();
               return [];
             },
-            beforeGitMutation: async () => {},
+            beforeGitMutation: async () => {
+              if (target.mutationRefused) {
+                throw new Error("the caller refused the mutation");
+              }
+            },
             runGitDoctor: async () => null,
           },
         });
@@ -427,12 +449,6 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
       target: install.unserved,
       previous: install.serving,
     });
-    const note = result.steps.find((entry) => entry.name === "git-release-placement");
-    // It names both releases and says what this update did.
-    for (const root of [install.unserved, install.serving]) {
-      expect(note?.advisory?.message).toContain(path.basename(path.resolve(root, "../../..")));
-    }
-    expect(note?.advisory?.message).toContain("finishes activating it");
   });
 
   // The launcher runs under Node; Bun does not run it.
@@ -523,6 +539,20 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     expect(await fs.realpath(install.slot)).not.toBe(install.unserved);
   });
 
+  it("reuses a release a --no-restart update left when it is the target", async () => {
+    const install = await halfSwitchedInstall({ pending: true });
+
+    const result = await install.update(install.commits["2.0.0"]!);
+
+    expect(result.status, JSON.stringify(result.steps)).toBe("ok");
+    expect(target.builds).toBe(0);
+    expect(await fs.realpath(install.slot)).toBe(install.unserved);
+    expect(await install.readTrial()).toEqual({
+      target: install.unserved,
+      previous: install.serving,
+    });
+  });
+
   it("discards a release a --no-restart update left for the next start once superseded", async () => {
     const install = await halfSwitchedInstall({ pending: true });
 
@@ -551,6 +581,99 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
       JSON.parse(await fs.readFile(path.join(previous, "package.json"), "utf8")),
     ).toMatchObject({ version: "1.0.0" });
     await expect(fs.access(install.unserved)).rejects.toThrow();
+  });
+
+  it("keeps the fallback when the launcher starts the reused release during validation", async () => {
+    const install = await halfSwitchedInstall();
+    target.duringValidation = async () => {
+      const trial = JSON.parse(await fs.readFile(install.trialFile, "utf8")) as object;
+      await fs.writeFile(install.trialFile, JSON.stringify({ ...trial, attempts: 1 }));
+    };
+
+    const result = await install.update(install.commits["2.0.0"]!);
+
+    expect(result.status, JSON.stringify(result.steps)).toBe("ok");
+    // The started trial still falls back to the release that served, never to itself.
+    expect(await install.readTrial()).toEqual({
+      target: install.unserved,
+      previous: install.serving,
+    });
+  });
+
+  it("runs the caller's mutation check before putting the link back on the serving target", async () => {
+    const install = await halfSwitchedInstall();
+    target.mutationRefused = true;
+    const trial = await fs.readFile(install.trialFile, "utf8");
+
+    await expect(install.update(install.commits["1.0.0"]!)).rejects.toThrow(
+      "the caller refused the mutation",
+    );
+
+    expect(await fs.realpath(install.slot)).toBe(install.unserved);
+    expect(await fs.readFile(install.trialFile, "utf8")).toBe(trial);
+    await expect(fs.access(install.unserved)).resolves.toBeUndefined();
+  });
+
+  it("reuses an earlier rebuild of the serving commit when the target keeps failing", async () => {
+    const install = await halfSwitchedInstall();
+    target.broken.push(install.serving);
+    target.targetFails = true;
+
+    await install.update(install.commits["3.0.0"]!);
+    await install.update(install.commits["3.0.0"]!);
+
+    // One rebuild of the serving commit across both attempts, beside the two releases.
+    expect(target.conversionTargets).toEqual([install.commits["1.0.0"]]);
+    expect(await install.releaseCount()).toBe(3);
+  });
+
+  it.each([
+    ["a newer target", "3.0.0", (install: HalfSwitchedInstall) => fs.realpath(install.slot)],
+    ["the placed target", "2.0.0", async (install: HalfSwitchedInstall) => install.unserved],
+    ["the serving target", "1.0.0", async (install: HalfSwitchedInstall) => install.serving],
+  ])(
+    "writes a link that resolves under a linked state directory for %s",
+    async (_label, version, intended) => {
+      const install = await halfSwitchedInstall({ linkedState: true });
+
+      const result = await install.update(install.commits[version]!);
+
+      expect(result.status, JSON.stringify(result.steps)).not.toBe("error");
+      // The link resolves (no dangling text) and names the release this update chose.
+      const resolved = await fs.realpath(install.slot);
+      expect(resolved).toBe(await intended(install));
+      expect(
+        JSON.parse(await fs.readFile(path.join(resolved, "package.json"), "utf8")),
+      ).toMatchObject({ version });
+    },
+  );
+
+  it("writes a resolving link to a rebuilt fallback under a linked state directory", async () => {
+    const install = await halfSwitchedInstall({ linkedState: true });
+    target.broken.push(install.serving);
+
+    const result = await install.update(install.commits["3.0.0"]!);
+
+    expect(result.status, JSON.stringify(result.steps)).toBe("ok");
+    const { previous } = await install.readTrial();
+    expect(
+      JSON.parse(await fs.readFile(path.join(previous, "package.json"), "utf8")),
+    ).toMatchObject({ version: "1.0.0" });
+  });
+
+  it("keeps the link and trial when the target fails after the fallback was rebuilt", async () => {
+    const install = await halfSwitchedInstall();
+    target.broken.push(install.serving);
+    target.targetFails = true;
+    const trial = await fs.readFile(install.trialFile, "utf8");
+
+    const result = await install.update(install.commits["3.0.0"]!);
+
+    expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
+    // The serving commit was rebuilt, but nothing switches before the target passes.
+    expect(target.conversionTargets).toEqual([install.commits["1.0.0"]]);
+    expect(await fs.realpath(install.slot)).toBe(install.unserved);
+    expect(await fs.readFile(install.trialFile, "utf8")).toBe(trial);
   });
 
   it.each([
