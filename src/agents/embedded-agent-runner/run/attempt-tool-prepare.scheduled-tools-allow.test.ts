@@ -175,11 +175,11 @@ const isGated = (value: unknown) =>
   (value as { details?: { gated?: unknown } } | undefined)?.details?.gated === true;
 
 /** Runs a call far enough to see a refusal; an allowed tool fails validation or times out. */
-async function settle(run: () => Promise<unknown>): Promise<unknown> {
+async function settle(run: () => Promise<unknown>, ms = 300): Promise<unknown> {
   return Promise.race([
     run().catch(() => undefined),
     new Promise((resolve) => {
-      setTimeout(resolve, 1500);
+      setTimeout(resolve, ms);
     }),
   ]);
 }
@@ -505,6 +505,12 @@ it("fails loudly when only refused tools remain", async () => {
     withSenderPolicy({ deny: ["exec"] }),
   );
   expect(refusedOnly.emptyAllowlistError).toContain("No callable tools remain");
+});
+
+it("keeps today's verdict for an allowlist naming an owner-only tool on a non-owner turn", async () => {
+  // Owner authority gates the call, as on main; the allowlist did match a tool.
+  const run = await prepareTools({ runId: "o2", trigger: "user", toolsAllow: ["automations"] });
+  expect(run.emptyAllowlistError).toBeUndefined();
 });
 
 it("refuses what sender allow and deny policies removed, including MCP tools", async () => {

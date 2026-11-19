@@ -327,6 +327,9 @@ export function prepareSessionPublicationToolListing(
   );
 }
 
+// Once per series and tool set: a node that attaches mid-series would otherwise log every turn.
+const loggedUnsentTools = new WeakMap<object, string>();
+
 /** The series' first request pins tools and definitions; unbuilt pinned tools refuse calls. */
 export function prepareSessionToolSurface(
   params: ToolSurfaceInput & { admitNewTools?: boolean },
@@ -364,7 +367,9 @@ export function prepareSessionToolSurface(
   const unsent = params.tools
     .filter((tool) => !pinnedNames.has(tool.name))
     .map((tool) => tool.name);
-  if (unsent.length > 0) {
+  const unsentKey = `${historyId}:${unsent.join(",")}`;
+  if (unsent.length > 0 && loggedUnsentTools.get(params.state) !== unsentKey) {
+    loggedUnsentTools.set(params.state, unsentKey);
     log.warn(
       `tools built after the session pin wait for the next prompt series: ${unsent.join(", ")}`,
     );

@@ -111,7 +111,7 @@ export function resolveTurnToolSurface(params: {
           })
         : gated;
     // A run allowlist or sender/group policy refusal: main removed these from the list.
-    const runPolicy = !turnTool && !ownerOnly && params.outsideTurnReason !== undefined;
+    const runPolicy = !turnTool && params.outsideTurnReason !== undefined;
     return markAgentToolExecutionUnavailable(copyAgentToolMetadata(tool, target), runPolicy);
   });
   return {
