@@ -20,11 +20,7 @@ or when a deployment points `appServer.command` at a different Codex binary.
 Availability can also be account-scoped. Use `/codex models` on a running
 gateway to see the live catalog for that harness and account.
 
-The OpenAI provider's ChatGPT subscription list is separate. OpenClaw lists as
-the newest stable `@openai/codex` published on npm, refreshed every six hours
-and never older than the bundled version. If the registry cannot be reached,
-OpenClaw uses the bundled version. This lets newly launched models appear
-without waiting for an OpenClaw release.
+The OpenAI provider's ChatGPT subscription list is separate. It sends the same OpenClaw version used by Responses requests as client_version. Calendar versions with a four-digit year of 2026 or later retain prerelease and build suffixes; unavailable, development, or invalid versions use 99.0.0. Listing does not query npm or depend on the bundled or installed Codex version.
 
 A model in that list can require a newer Codex than the binary running a
 Codex-harness turn. A ChatGPT model-version rejection then names the running
