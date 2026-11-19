@@ -141,6 +141,83 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("offers one sign-in action before drafting is complete and opens review without chat or publish", async () => {
+  let approved = false;
+  const call = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+    if (method === "templates.drafts.signIn") {
+      expect(params).toMatchObject({
+        agentId: target.agentId,
+        draftId: target.draftId,
+        sourceSessionKey: target.sessionKey,
+      });
+      if (params?.action === "status") {
+        return { status: "required" };
+      }
+      if (params?.action === "start") {
+        return {
+          status: "pending",
+          requestId: "request-1",
+          verificationUrl: "https://clawhub.example/cli/device",
+          pollAfterMs: 20,
+          expiresAt: Date.now() + 60_000,
+        };
+      }
+      expect(params).toMatchObject({ action: "poll", requestId: "request-1" });
+      approved = true;
+      return { status: "connected" };
+    }
+    if (method === "templates.drafts.read") {
+      return {
+        revision: approved ? "ready" : "drafting",
+        content: JSON.stringify({ scope: approved ? reviewed.scope : {} }),
+      };
+    }
+    if (method === "templates.drafts.review") {
+      expect(approved).toBe(true);
+      expect(params).toEqual({ agentId: target.agentId, draftId: target.draftId });
+      return reviewed;
+    }
+    throw new Error("Unexpected " + method);
+  });
+  const context = createContext(call, {
+    scopes: ["operator.admin"],
+    methods: ["templates.drafts.create", "chat.send", "templates.drafts.signIn"],
+    runtimeConfig: createRuntimeConfigStub({
+      sourceConfig: { gateway: { controlUi: { experimental: { templates: true } } } },
+    }),
+  });
+  const open = vi.spyOn(window, "open").mockReturnValue(null);
+  const page = mountSolid(() => (
+    <TemplateCreatorInlineReview
+      context={context}
+      payload={target}
+      sessionKey={target.sessionKey}
+      agentId={target.agentId}
+    />
+  ));
+  try {
+    await vi.advanceTimersByTimeAsync(1);
+    await waitForSolid(() => expect(page.getByRole("button", { name: "Sign in" })).toBeTruthy());
+    expect(page.getAllByRole("button")).toHaveLength(1);
+    fireEvent.click(page.getByRole("button", { name: "Sign in" }));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(page.getByRole("link", { name: "Open ClawHub" })).toBeTruthy();
+    await vi.advanceTimersByTimeAsync(30);
+    await waitForSolid(() => expect(page.getByRole("button", { name: "Publish" })).toBeTruthy());
+    expect(call.mock.calls.filter(([method]) => method === "templates.drafts.review")).toHaveLength(
+      1,
+    );
+    expect(
+      call.mock.calls.some(
+        ([method]) => method === "chat.send" || method === "templates.drafts.publish",
+      ),
+    ).toBe(false);
+  } finally {
+    page.unmount();
+    open.mockRestore();
+  }
+});
+
 it.each(["skill", "plugin"] as const)("previews pinned and bundled %s", async (kind) => {
   for (const bundled of [false, true]) {
     const review = structuredClone(reviewed);

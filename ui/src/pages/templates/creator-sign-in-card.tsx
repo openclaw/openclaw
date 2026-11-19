@@ -3,6 +3,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import clawHubLogo from "./clawhub-logo.png";
 import type { TemplateCreator } from "./creator-publication.ts";
 import type { TemplateSignInPresentation } from "./creator-sign-in.ts";
+import "../../styles/chat/clawhub-card.css";
 
 export function TemplateCreatorSignInCard(props: {
   state: TemplateSignInPresentation;
@@ -25,50 +26,54 @@ export function TemplateCreatorSignInCard(props: {
     }
   };
   return (
-    <div class="card chat-clawhub-card template-creator__sign-in">
-      <div class="chat-clawhub-card__listing">
-        <span class="chat-clawhub-card__icon" aria-hidden="true">
-          <img src={clawHubLogo} alt="" />
-        </span>
-        <span class="chat-clawhub-card__identity">
-          <strong class="card-title chat-clawhub-card__name">ClawHub</strong>
-          <span class="chat-clawhub-card__status muted" role="status">
-            {t(status())}
+    <openclaw-chat-clawhub-card>
+      <div class="card chat-clawhub-card template-creator__sign-in">
+        <div class="chat-clawhub-card__listing">
+          <span class="chat-clawhub-card__icon" aria-hidden="true">
+            <img src={clawHubLogo} alt="" />
           </span>
-        </span>
-      </div>
-      <div class="chat-clawhub-card__actions">
-        <Show
-          when={pending()}
-          fallback={
-            <button
-              type="button"
-              class="btn primary"
-              disabled={props.state.status === "starting"}
-              aria-busy={props.state.status === "starting"}
-              onClick={() => props.flow.startClawHubSignIn()}
-            >
-              {t("templatesDraft.signIn")}
-            </button>
-          }
-        >
-          {(request) => (
-            <>
-              <button type="button" class="btn" onClick={() => props.flow.cancelClawHubSignIn()}>
-                {t("common.cancel")}
-              </button>
-              <a
+          <span class="chat-clawhub-card__identity">
+            <strong class="card-title chat-clawhub-card__name">
+              {t("templatesDraft.clawHub")}
+            </strong>
+            <span class="chat-clawhub-card__status muted" role="status">
+              {t(status())}
+            </span>
+          </span>
+        </div>
+        <div class="chat-clawhub-card__actions">
+          <Show
+            when={pending()}
+            fallback={
+              <button
+                type="button"
                 class="btn primary"
-                href={request().verificationUrl}
-                target="_blank"
-                rel="noopener noreferrer"
+                disabled={props.state.status === "starting"}
+                aria-busy={props.state.status === "starting" ? "true" : undefined}
+                onClick={() => props.flow.startClawHubSignIn()}
               >
-                {t("templatesDraft.signInOpen")}
-              </a>
-            </>
-          )}
-        </Show>
+                {t("templatesDraft.signIn")}
+              </button>
+            }
+          >
+            {(request) => (
+              <>
+                <button type="button" class="btn" onClick={() => props.flow.cancelClawHubSignIn()}>
+                  {t("common.cancel")}
+                </button>
+                <a
+                  class="btn primary"
+                  href={request().verificationUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  {t("templatesDraft.signInOpen")}
+                </a>
+              </>
+            )}
+          </Show>
+        </div>
       </div>
-    </div>
+    </openclaw-chat-clawhub-card>
   );
 }

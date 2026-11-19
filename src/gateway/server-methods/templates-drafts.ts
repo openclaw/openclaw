@@ -64,18 +64,23 @@ const signInOwners = new WeakMap<
 >();
 
 function personalClawHubTarget(options: GatewayRequestHandlerOptions) {
-  return {
-    // Shared-secret owner sockets have the same owner identity across reconnects.
-    profileId: options.client?.authenticatedUserProfile?.profileId ?? GATEWAY_OWNER_PROFILE_ID,
-    baseUrl: resolveClawHubBaseUrl(),
-  };
+  const profileId = options.client?.authenticatedUserProfile?.profileId;
+  if (!profileId) {
+    throw new TemplateProjectError(
+      "human_required",
+      "Connect with a personal Gateway profile to sign in to ClawHub.",
+    );
+  }
+  return { profileId, baseUrl: resolveClawHubBaseUrl() };
 }
 
 async function templateClawHubConnection(options: GatewayRequestHandlerOptions) {
   const target = personalClawHubTarget(options);
-  // Preserve existing administrator-configured credentials until this person signs in.
+  // The legacy environment/CLI credential belongs to the Gateway owner, never
+  // to another administrator who happens to connect to the same Gateway.
   const token =
-    (await readPersonalTemplateClawHubToken(target)) ?? (await resolveClawHubAuthToken());
+    (await readPersonalTemplateClawHubToken(target)) ??
+    (target.profileId === GATEWAY_OWNER_PROFILE_ID ? await resolveClawHubAuthToken() : undefined);
   return { token, baseUrl: target.baseUrl };
 }
 

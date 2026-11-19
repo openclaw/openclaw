@@ -91,6 +91,7 @@ const enTemplateCreator = {
     registryFailed: "ClawHub did not publish this package ({reason}). Review it before retrying.",
     invalidTarget: "This Template review does not belong to the current conversation.",
     retryReview: "Retry review",
+    clawHub: "ClawHub",
     signIn: "Sign in",
     signInExplanation: "Sign in to review and publish this template.",
     signInWaiting: "Approve sign-in in your browser. Review will open here automatically.",

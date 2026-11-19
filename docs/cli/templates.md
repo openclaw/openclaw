@@ -123,8 +123,11 @@ source workspace, memories, or raw conversations. Known private paths and
 credential-like text are rejected. Review the remaining text for personal facts
 and private context.
 
-Sign in with `clawhub login` on the Gateway host. **Publish** uploads the exact
-reviewed artifact using that account. An agent turn cannot authorize publication.
+If you are not signed in to ClawHub, select **Sign in** on the card and approve
+OpenClaw in your browser. You do not need the ClawHub CLI. The same conversation
+opens the review when your draft is ready. Cancelling or letting sign-in expire
+leaves the draft private. Only **Publish** uploads the reviewed artifact using
+your account; signing in or asking the agent to draft does not publish it.
 The card stays in the conversation and shows **Pending** while ClawHub checks
 the submission; **View submission** opens its ClawHub page. Once the registry
 confirms publication, the card shows **Published** and offers **Copy link**.

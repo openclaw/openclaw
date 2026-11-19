@@ -78,7 +78,7 @@ const defaultDependencies = {
     writeTextAtomic(credentialPath(target), token, {
       mode: 0o600,
       dirMode: 0o700,
-      beforeRename: target.assertCurrent,
+      beforeRename: async () => target.assertCurrent(),
     }),
 };
 
