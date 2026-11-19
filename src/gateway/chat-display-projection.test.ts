@@ -708,6 +708,9 @@ it.each([false, true])(
     });
     expect(projectChatDisplayMessages(projected.messages)).toEqual(projected.messages);
     expect(input).toEqual(original);
+    for (const token of ["NO_REPLY", "HEARTBEAT_OK"]) {
+      expect(projectStable([assistant([...reasoning.content, text(token)], {})])).toEqual([]);
+    }
   },
 );
 

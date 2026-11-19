@@ -1,0 +1,3 @@
+# Extend the existing public history regression with silence/heartbeat controls
+# and preserve reasoning-only heartbeat pair suppression. Exact net test growth.
+5

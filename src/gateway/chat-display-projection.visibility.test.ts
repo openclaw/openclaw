@@ -230,6 +230,8 @@ it("hides heartbeat prompt and ok acknowledgements from visible history", () => 
         __openclaw: { seq: 2 },
       },
       userTextMessage(HEARTBEAT_PROMPT, 3),
+      { role: "assistant", content: [{ type: "thinking", thinking: "Nothing needs attention." }] },
+      userTextMessage(HEARTBEAT_PROMPT, 3),
       answer,
     ],
     [{ ...answer, __openclaw: { seq: 4, turnBoundary: true } }],
