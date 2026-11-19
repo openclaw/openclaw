@@ -54,6 +54,7 @@ export type ControlUiPluginCapability = {
       dispose: () => void;
     }>;
   };
+  readonly repositorySources: readonly import("./control-ui-metadata.ts").ControlUiRepositorySourceContribution[];
   readonly errors: readonly PluginControlUiDiagnostic[];
   readonly hasPlugins: boolean;
   /** Advances before notifications, including plugin-owned presentation mutations. */

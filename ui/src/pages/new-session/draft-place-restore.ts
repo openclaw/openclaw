@@ -172,6 +172,7 @@ export function restoreDraftPlacePreferences(params: {
   const activeRemote = browser.remoteProject;
   if ((savedRemote || activeRemote) && browser.projectsReady && browser.githubHost) {
     const matchesHost = (project: DraftRemoteProject) =>
+      Boolean(project.sourceId) ||
       parseProjectGitUrl(project.cloneUrl, browser.githubHost) !== null;
     const staleSaved = savedRemote && !matchesHost(savedRemote);
     const staleActive = activeRemote && !matchesHost(activeRemote);

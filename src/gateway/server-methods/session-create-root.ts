@@ -185,11 +185,21 @@ export async function prepareSessionForkFilesystemRoot(params: {
 
 /** Existing sessions keep their accepted workspace source across keyed create retries. */
 export function sessionWorkspaceReuseError(
-  params: Pick<SessionsCreateParams, "deviceFolder" | "repository">,
+  params: Pick<SessionsCreateParams, "deviceFolder" | "repository" | "repositorySource">,
   automaticEmptyWorkspace: boolean,
   existingTargetEntry: InternalSessionEntry | undefined,
 ): ErrorShape | undefined {
   const { deviceFolder, repository } = params;
+  if (
+    existingTargetEntry &&
+    params.repositorySource &&
+    existingTargetEntry.repositorySourceId !== params.repositorySource
+  ) {
+    return errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "A session's repository source cannot be changed; create a new session.",
+    );
+  }
   if (existingTargetEntry?.deviceFolder && !deviceFolder) {
     return errorShape(
       ErrorCodes.INVALID_REQUEST,

@@ -181,10 +181,14 @@ function normalizePreference(value: unknown): NewSessionPreference | null {
     const identity = normalizeOptionalString(value.remoteProject.identity)?.slice(0, 200);
     const cloneUrl = normalizeOptionalString(value.remoteProject.cloneUrl)?.slice(0, 2048);
     const defaultBranch = normalizeOptionalString(value.remoteProject.defaultBranch)?.slice(0, 255);
+    const sourceId = normalizeOptionalString(value.remoteProject.sourceId);
     if (identity && cloneUrl) {
       preference.remoteProject = {
         identity,
         cloneUrl,
+        ...(sourceId && /^[a-z0-9][a-z0-9._-]{0,127}\/[a-z0-9][a-z0-9._-]{0,127}$/u.test(sourceId)
+          ? { sourceId }
+          : {}),
         ...(defaultBranch ? { defaultBranch } : {}),
       };
     }

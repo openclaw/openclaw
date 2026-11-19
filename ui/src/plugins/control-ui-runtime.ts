@@ -37,6 +37,7 @@ import type {
   ControlUiPluginCapability,
   ControlUiRegistration,
 } from "./control-ui-capability.ts";
+import { repositorySources } from "./control-ui-metadata.ts";
 
 export type ControlUiPluginOwner = {
   descriptor: PluginControlUiModule;
@@ -71,6 +72,8 @@ const UI_CAPABILITY_BY_CONTRIBUTION = {
 const CONTRIBUTION_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 const ACTIVATION_TIMEOUT_MS = 15_000;
 
+type ControlUiRepositorySourceCatalog = NonNullable<PluginsControlUiCatalog["repositorySources"]>;
+
 export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   private readonly inlineLabels = new Map<string, string>();
   private readonly owners = new Map<string, ControlUiPluginOwner>();
@@ -89,10 +92,18 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   private disposed = false;
   private readonly settingsLifetimes = new Set<AbortController>();
   private firstConnection = true;
+  // Catalog facts belong to the client that loaded them.
+  private catalogClient: GatewayBrowserClient | null = null;
+  private catalogRepositorySources: ControlUiRepositorySourceCatalog = [];
   private diagnostics: PluginControlUiDiagnostic[] = [];
   private grantTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly getContext: () => ApplicationContext) {}
+
+  get repositorySources() {
+    const current = this.getContext().gateway.snapshot.client === this.catalogClient;
+    return repositorySources(current ? this.catalogRepositorySources : []);
+  }
 
   get errors(): readonly PluginControlUiDiagnostic[] {
     // Warnings belong to live registrations, so ordinary catalog refreshes retain
@@ -284,6 +295,8 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
         );
       }
       this.diagnostics = catalog.diagnostics;
+      this.catalogRepositorySources = catalog.repositorySources ?? [];
+      this.catalogClient = client;
       this.catalogStatus = "complete";
       const installed = new Set(catalog.plugins.map((plugin) => plugin.pluginId));
       this.loadingCatalog = installed;

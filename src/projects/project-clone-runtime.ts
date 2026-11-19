@@ -2,12 +2,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ProjectCloneFailureCause } from "../../packages/gateway-protocol/src/index.js";
 import { fetchRemoteDefault } from "../agents/worktrees/base-fetch.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import {
   executeGitCommand,
-  gitNullConfigPath,
   requireGitCommandOutput,
   type GitCommandOptions,
 } from "../infra/git-exec.js";
@@ -15,14 +13,18 @@ import { withGitNetworkRetry, type GitOperationStarter } from "../infra/git-netw
 import { withGitObjectStoreTransport } from "../infra/git-object-store-transport.js";
 import { withGitRepositoryRepair } from "../infra/git-repository-repair.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  CommandProcessCleanupError,
-  hasCommandProcessCleanupError,
-  readCommandProcessFailure,
-  type SpawnResult,
-} from "../process/exec-result.js";
+import { hasCommandProcessCleanupError, type SpawnResult } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { withGitProcessOperation } from "../process/spawn-diagnostics.js";
+import {
+  PROJECT_MAINTENANCE_CONFIG,
+  projectCheckoutGitEnvironment,
+  runProjectGitCommand,
+} from "./project-checkout-maintenance.js";
+import { ProjectCloneError } from "./project-clone-contract.js";
+
+export { configureProjectCheckoutMaintenance } from "./project-checkout-maintenance.js";
+export { ProjectCloneError } from "./project-clone-contract.js";
 
 const PROJECT_CLONE_TIMEOUT_MS = 10 * 60_000;
 type ProjectCloneOptions = {
@@ -37,70 +39,12 @@ type ProjectCloneOptions = {
 const PROJECT_FETCH_TIMEOUT_MS = 60_000;
 const log = createSubsystemLogger("projects/clone");
 const PROJECT_REF_INVENTORY_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
-const PROJECT_MAINTENANCE_CONFIG = [
-  ["maintenance.auto", "false"],
-  ["gc.auto", "0"],
-  ["pack.threads", "1"],
-  ["pack.windowMemory", "64m"],
-] as const;
-
-/** The checkout lifecycle owner adopts existing managed clones before reuse. */
-export async function configureProjectCheckoutMaintenance(
-  target: string,
-  options: ProjectCloneOptions,
-): Promise<void> {
-  for (const [key, value] of PROJECT_MAINTENANCE_CONFIG) {
-    requireGitCommandOutput(
-      "git config managed maintenance",
-      await runProjectCheckoutGit({ target }, options, [
-        "config",
-        "--local",
-        "--replace-all",
-        key,
-        value,
-      ]),
-    );
-  }
-}
-
-export class ProjectCloneError extends Error {
-  constructor(
-    readonly failure: ProjectCloneFailureCause,
-    message: string,
-  ) {
-    super(message);
-    this.name = "ProjectCloneError";
-  }
-}
-
 function cloneCommandEnv(
   repositoryUrl: string | undefined,
   token: string | undefined,
   env: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
-  const gitEnv: NodeJS.ProcessEnv = {
-    ...env,
-    GIT_TERMINAL_PROMPT: "0",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: gitNullConfigPath(),
-    GIT_TEMPLATE_DIR: "",
-    GIT_EDITOR: "",
-    GIT_SEQUENCE_EDITOR: "",
-    GIT_EXTERNAL_DIFF: "",
-    GIT_ASKPASS: undefined,
-    SSH_ASKPASS: undefined,
-    GIT_DIR: undefined,
-    GIT_WORK_TREE: undefined,
-    GIT_COMMON_DIR: undefined,
-    GIT_INDEX_FILE: undefined,
-    GIT_OBJECT_DIRECTORY: undefined,
-    GIT_ALTERNATE_OBJECT_DIRECTORIES: undefined,
-    GIT_NAMESPACE: undefined,
-    GIT_EXEC_PATH: undefined,
-    GIT_SSH: undefined,
-    GIT_SSH_COMMAND: undefined,
-    GIT_SSL_NO_VERIFY: undefined,
-  };
+  const gitEnv = projectCheckoutGitEnvironment(env);
   if (token && repositoryUrl) {
     const origin = new URL(repositoryUrl).origin;
     gitEnv.GIT_CONFIG_COUNT = "1";
@@ -187,24 +131,6 @@ function projectGitDiagnosticFailure(
     "clone_failed",
     `Git could not ${phrase}. Send again; if it fails, give the operator Diagnostic ID: ${diagnosticId}.`,
   );
-}
-
-async function runProjectGitCommand<T extends SpawnResult>(run: () => Promise<T>): Promise<T> {
-  try {
-    const result = await run();
-    if (result.cleanup === "uncertain") {
-      throw new CommandProcessCleanupError();
-    }
-    return result;
-  } catch (error) {
-    if (
-      !hasCommandProcessCleanupError(error) &&
-      readCommandProcessFailure(error)?.cleanup === "uncertain"
-    ) {
-      throw new CommandProcessCleanupError({ cause: error });
-    }
-    throw error;
-  }
 }
 
 /** Clones one already-validated source into an unoccupied managed target. */
