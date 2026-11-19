@@ -15,9 +15,9 @@ import {
   validateGenericReplayTurns,
 } from "./replay-history-generic.js";
 import { finishGenericReplayHistory } from "./replay-history-invariants.js";
+import { MODEL_SNAPSHOT_CUSTOM_TYPE } from "./replay-model-snapshot.js";
 import {
   createProviderReplaySessionState,
-  MODEL_SNAPSHOT_CUSTOM_TYPE,
   readModelSnapshotState,
 } from "./replay-session-state.js";
 

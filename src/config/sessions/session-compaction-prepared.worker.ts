@@ -13,7 +13,7 @@ import {
   finalizePreparedCompaction,
 } from "../../agents/embedded-agent-runner/prepared-compaction-plan.js";
 import { prepareNativeCompactionReplay } from "../../agents/embedded-agent-runner/prepared-compaction-replay.js";
-import { readModelSnapshotStateFromEntries } from "../../agents/embedded-agent-runner/replay-session-state.js";
+import { readModelSnapshotStateFromEntries } from "../../agents/embedded-agent-runner/replay-model-snapshot.js";
 import type { SessionEntry, SessionHeader } from "../../agents/sessions/session-manager-types.js";
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { readSessionTranscriptCompactionPlan } from "./session-accessor.sqlite-active-context.js";

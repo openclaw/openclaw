@@ -14,7 +14,7 @@ import {
   validateGenericReplayTurns,
 } from "./replay-history-generic.js";
 import { finishGenericReplayHistory } from "./replay-history-invariants.js";
-import { readModelSnapshotStateFromEntries } from "./replay-session-state.js";
+import { readModelSnapshotStateFromEntries } from "./replay-model-snapshot.js";
 import type { ModelSnapshotState } from "./replay-session-state.types.js";
 
 /** The same generic replay owners run worker-local; callbacks retain the session adapter. */

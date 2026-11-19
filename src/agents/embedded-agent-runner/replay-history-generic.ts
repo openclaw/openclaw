@@ -61,7 +61,7 @@ import {
   type UsageLike,
 } from "../usage.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "./empty-assistant-turn.js";
-import { isSameModelSnapshot } from "./replay-session-state.js";
+import { isSameModelSnapshot } from "./replay-model-snapshot.js";
 import type { ModelSnapshotEntry, ModelSnapshotState } from "./replay-session-state.types.js";
 import {
   dropReasoningFromHistory,

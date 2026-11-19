@@ -10,7 +10,7 @@ import type {
   SessionHeader,
 } from "../sessions/session-manager-types.js";
 import type { PreparedCompactionMetadataFacts } from "./prepared-compaction-metadata.types.js";
-import { isSameModelSnapshot, MODEL_SNAPSHOT_CUSTOM_TYPE } from "./replay-session-state.js";
+import { isSameModelSnapshot, MODEL_SNAPSHOT_CUSTOM_TYPE } from "./replay-model-snapshot.js";
 import type { ModelSnapshotEntry } from "./replay-session-state.types.js";
 
 /** Initialize before planning; true means the captured source must be refreshed. */
