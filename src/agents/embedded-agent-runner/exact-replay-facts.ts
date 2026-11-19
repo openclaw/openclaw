@@ -46,6 +46,7 @@ import { sanitizeContentBlocksImages } from "../tool-images.js";
 import { normalizeUserMessageContent } from "./compaction-duplicate-user-messages.js";
 import {
   isBareDeliveryMirrorCandidate,
+  isVisibleSilentReply,
   normalizeReplayMessage,
 } from "./replay-history-sanitization.js";
 import type { PreparedCompactionReplayOptions } from "./replay-history.types.js";
@@ -130,6 +131,7 @@ export type ExactReplaySourceFact<S> = {
   rawPairing?: ToolPairingMessageFact;
   normalized: ReplayMessageFact<S> | null;
   recovery: ReplayMessageFact<S> | null;
+  silentReply?: true;
   deferredCheckpoint?: true;
 };
 
@@ -396,6 +398,7 @@ export function collectExactReplaySourceFact<S>(
     rawPairing: collectToolPairingMessageFact(annotated),
     normalized: normalized ? collectMessage(normalized, source, annotated, options) : null,
     recovery,
+    ...(isVisibleSilentReply(annotated) ? { silentReply: true as const } : {}),
     ...(!options && message.role === "assistant" && message.providerReplay
       ? { deferredCheckpoint: true as const }
       : {}),

@@ -273,6 +273,7 @@ describe("exact detached compaction replay", () => {
       (await replay(messages, config, { builtinGoogleReplay: true, googleMarkerPresent: true }))
         .needsGoogleTurnOrderingMarker,
     ).toBe(false);
+    // A silent reply before a user turn stays in replay, so it still leads the history.
     expect(
       (
         await replay([assistant([text("NO_REPLY")]), user("question")], config, {
@@ -280,7 +281,7 @@ describe("exact detached compaction replay", () => {
           builtinGoogleReplay: true,
         })
       ).needsGoogleTurnOrderingMarker,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("carries a Responses checkpoint without re-running a no-op content replacement", async () => {

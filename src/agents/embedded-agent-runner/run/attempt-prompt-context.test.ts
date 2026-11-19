@@ -558,7 +558,11 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
         content: [{ type: "text", text: "NO_REPLY" }],
         timestamp: 11,
       }),
-      { role: "user", content: [{ type: "text", text: "Follow-up" }], timestamp: 12 },
+      // A silent reply is dropped only before another assistant turn.
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "Follow-up answer" }],
+        timestamp: 12,
+      }),
     ];
     const fixture = createInput({ messages: rawHistory });
 

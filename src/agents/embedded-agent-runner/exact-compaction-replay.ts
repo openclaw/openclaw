@@ -399,6 +399,7 @@ export async function prepareExactCompactionReplay<S>(
       normalize: (handle) =>
         handle.source.normalized ? { ...handle, value: handle.source.normalized } : null,
       role: (handle) => handle.value?.role ?? handle.source.role,
+      silentReply: (handle) => handle.source.silentReply === true,
       sourceContentWasString: (handle) => handle.source.normalized?.sourceContentWasString ?? false,
       mirrorCandidate: (handle) => handle.value!.mirrorCandidate,
       hasCalls: (handle) => {

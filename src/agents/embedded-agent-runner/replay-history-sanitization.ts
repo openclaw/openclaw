@@ -180,10 +180,6 @@ function normalizeAssistantReplayMessage(
     return null;
   }
   const replayContent = message.content;
-  // Hidden transcript rows still belong to model context, including tool-call/result pairs.
-  if (asOptionalRecord(message)?.display !== false && isSilentAssistantTranscriptMessage(message)) {
-    return null;
-  }
   if (typeof replayContent === "string") {
     const strippedText = stripInternalMetadataForDisplay(replayContent);
     const trimmed = strippedText.trim();
@@ -230,9 +226,19 @@ export function normalizeReplayMessage(message: AgentMessage): AgentMessage | nu
   return normalized;
 }
 
+/** Hidden transcript rows still belong to model context, including tool-call/result pairs. */
+export function isVisibleSilentReply(message: AgentMessage): boolean {
+  return (
+    message.role === "assistant" &&
+    asOptionalRecord(message)?.display !== false &&
+    isSilentAssistantTranscriptMessage(message)
+  );
+}
+
 export type ReplayNormalizationAdapter<T, B> = {
   normalize(message: T): T | null;
   role(message: T): string | undefined;
+  silentReply(message: T): boolean;
   sourceContentWasString(message: T): boolean;
   mirrorCandidate(message: T): boolean;
   hasCalls(message: T): boolean;
@@ -255,13 +261,22 @@ export function* normalizeReplaySequence<T, B>(
 ): Generator<readonly [T, T], T[], boolean> {
   let touched = false;
   const out: T[] = [];
-  for (const message of messages) {
+  for (const [index, message] of messages.entries()) {
     const role = adapter.role(message);
     if (role !== "user" && role !== "assistant") {
       out.push(message);
       continue;
     }
     let normalized = adapter.normalize(message);
+    // A silent reply stays: dropping it leaves two user turns adjacent, and role-alternating
+    // transports merge the later turn into an already-sent one. It is dropped only before
+    // another assistant turn, which never merges into it (#99620).
+    if (normalized && role === "assistant" && adapter.silentReply(message)) {
+      const next = messages.slice(index + 1).find((later) => adapter.role(later) !== "custom");
+      if (next !== undefined && adapter.role(next) === "assistant") {
+        normalized = null;
+      }
+    }
     const previous = out.at(-1);
     if (
       normalized &&
@@ -314,6 +329,7 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
     {
       normalize: normalizeReplayMessage,
       role: (message) => message?.role,
+      silentReply: isVisibleSilentReply,
       sourceContentWasString: (message) =>
         "content" in message && typeof message.content === "string",
       mirrorCandidate: (message) =>

@@ -7,6 +7,7 @@ import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { textToolResult } from "../../test-helpers/sparse-transcript.test-support.js";
 import { transformTransportMessages } from "../../transport-message-transform.js";
+import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import { createFakeStream } from "./attempt-stream.test-helpers.js";
 import {
   sanitizeReplayToolCallIdsForStream,
@@ -366,6 +367,35 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       },
     ]);
   });
+
+  it.each(["bedrock-converse-stream", "openai-completions"])(
+    "keeps the %s request append-only after a silent reply",
+    (api) => {
+      // Seed-1 step 22 of the randomized prefix suite: the turn after a silent reply.
+      const turn = (role: "user" | "assistant", text: string): AgentMessage =>
+        role === "user"
+          ? { role, content: [{ type: "text", text }], timestamp: 1 }
+          : ({ role, content: [{ type: "text", text }], stopReason: "stop" } as AgentMessage);
+      const silentTurn = [turn("user", "first"), turn("assistant", "ok"), turn("user", "quiet")];
+      const baseFn = captureStream();
+      const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, undefined, {
+        validateAnthropicTurns: true,
+        validateGeminiTurns: api === "openai-completions",
+        preserveSignatures: api !== "openai-completions",
+        dropThinkingBlocks: false,
+        appendOnlyRuntimeContext: true,
+      });
+      const send = (messages: AgentMessage[]) =>
+        void wrapped(
+          { api } as never,
+          { messages: normalizeMessagesForLlmBoundary(messages) } as never,
+        );
+      send(silentTurn);
+      send([...silentTurn, turn("assistant", "NO_REPLY"), turn("user", "next")]);
+      const first = forwardedMessages(baseFn, 0);
+      expect(forwardedMessages(baseFn, 1).slice(0, first.length)).toEqual(first);
+    },
+  );
 
   it("repairs OpenAI Responses pairing even when replay inputs do not change", () => {
     const messages: AgentMessage[] = [

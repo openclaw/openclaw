@@ -153,8 +153,10 @@ describe("normalizeAssistantReplayContent", () => {
         stopReason: kind === "silent" ? "stop" : "error",
       });
       suppressOpenAIResponsesCompaction(source, model, undefined, undefined, "repair-anchor");
-      const normalized = normalize([source]);
-      expect(normalized).toHaveLength(1);
+      // A silent row is discarded only before another assistant turn.
+      const next = assistant([textBlock("answer")], "stop");
+      const normalized = normalize(kind === "silent" ? [source, next] : [source]);
+      expect(normalized).toHaveLength(kind === "silent" ? 2 : 1);
       expect(normalized[0]).toMatchObject({ content: [], providerReplay: source.providerReplay });
       expect(source.content).toEqual(content);
     },
@@ -485,18 +487,38 @@ describe("normalizeAssistantReplayContent", () => {
   });
 
   it.each(["NO_REPLY", "no_reply", "No_Reply"])(
-    "drops standalone %s assistant replay text",
+    "keeps standalone %s replay text before the next user turn",
     (text) => {
-      expectReplayDrop("first", assistant(text), "second");
+      // Dropping it would make two user turns adjacent, and role-alternating transports
+      // would merge them, which rewrites an already-sent turn.
+      const messages = [user("first"), assistant([textBlock(text)], "stop"), user("second")];
+      expect(normalize(messages)).toEqual(messages);
     },
   );
 
-  it("drops silent replies with redacted reasoning (#99620)", () => {
-    const kept = user("hi");
-    const reasoning = { type: "redacted_thinking", data: "redacted-yield" };
-    expect(normalize([kept, assistant([reasoning, textBlock("NO_REPLY")], "stop")])).toStrictEqual([
-      kept,
+  it("drops standalone silent replay text before another assistant turn", () => {
+    const next = assistant([textBlock("answer")], "stop");
+    expect(normalize([user("first"), assistant("NO_REPLY"), next])).toEqual([user("first"), next]);
+  });
+
+  it("keeps a silent reply stable as later turns are appended", () => {
+    const silent = assistant([textBlock("NO_REPLY")], "stop");
+    const newest = normalize([user("first"), silent]);
+    const later = normalize([
+      user("first"),
+      silent,
+      user("second"),
+      assistant("ok"),
+      user("third"),
     ]);
+    expect(newest).toEqual([user("first"), silent]);
+    expect(later.slice(0, newest.length)).toEqual(newest);
+  });
+
+  it("keeps silent replies with redacted reasoning until another assistant turn follows (#99620)", () => {
+    const reasoning = { type: "redacted_thinking", data: "redacted-yield" };
+    const messages = [user("hi"), assistant([reasoning, textBlock("NO_REPLY")], "stop")];
+    expect(normalize(messages)).toEqual(messages);
   });
 
   it("drops silent thinking residue before a follow-up tool turn (#99620)", () => {
