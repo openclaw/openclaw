@@ -638,7 +638,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       respondError(
         respond,
         ErrorCodes.INVALID_REQUEST,
-        `No transcript found for session: ${resolved.key}`,
+        `No chat history found for session: ${resolved.key}`,
       );
       return;
     }

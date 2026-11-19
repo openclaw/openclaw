@@ -7,17 +7,12 @@ import { isPathInside } from "../../infra/path-guards.js";
 import { MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS } from "../../shared/sandbox-workspace-paths.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
+import type { ReadOnlyWorkspaceSkillMount } from "./fs-bridge.types.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import { normalizeContainerPathCore } from "./path-utils.js";
 import type { SandboxWorkspaceAccess } from "./types.js";
 
 export const SANDBOX_MOUNT_FORMAT_VERSION = 4;
-
-/** Managed skill directory projected read-only into the sandbox workspace. */
-export type ReadOnlyWorkspaceSkillMount = {
-  hostPath: string;
-  containerPath: string;
-};
 
 type WorkspaceSkillMountParams = {
   workspaceDir: string;
@@ -134,7 +129,6 @@ export async function ensureReadOnlyWorkspaceSkillMountSources(
     const directory = await createWorkspaceRoot(ancestor, {
       mutationSymlinks: "reject",
       assertBeforeMutation: () => {
-        assertCurrent?.();
         if (
           resolveSandboxHostPathViaExistingAncestor(path.resolve(mount.rootDir)) !==
             canonicalRoot ||
@@ -145,6 +139,7 @@ export async function ensureReadOnlyWorkspaceSkillMountSources(
             `Sandbox skill mount source changed during preparation: ${mount.hostPath}`,
           );
         }
+        assertCurrent?.();
       },
     });
     await directory.mkdir(path.relative(ancestor, canonicalSource));
@@ -243,7 +238,8 @@ export function resolveSandboxMountSelection(
     readOnlyResourceMounts?: readonly ReadOnlyWorkspaceSkillMount[];
   },
 ) {
-  const readOnlyWorkspaceSkillMounts = resolveReadOnlyWorkspaceSkillMounts(params);
+  const readOnlyWorkspaceSkillMounts =
+    params.readOnlyWorkspaceSkillMounts ?? resolveReadOnlyWorkspaceSkillMounts(params);
   const managed = resolveWorkspaceMounts({ ...params, readOnlyWorkspaceSkillMounts });
   const resources = params.readOnlyResourceMounts ?? [];
   const protectedTargets = new Set(

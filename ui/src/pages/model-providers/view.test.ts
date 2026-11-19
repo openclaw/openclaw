@@ -217,10 +217,9 @@ describe("renderModelProviders", () => {
   });
 
   it("surfaces a provider-usage failure on the provider list", () => {
-    const container = document.createElement("div");
-    mount(props({ providerUsageFailed: true }), container);
-
+    const container = mount(props({ cards: [], providerUsageFailed: true }));
     expect(container.textContent).toContain("Couldn’t load provider usage. Refresh to try again.");
+    expect(container.textContent).toContain(t("modelProviders.emptyTitle"));
   });
 
   it.each([

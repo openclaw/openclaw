@@ -1316,7 +1316,7 @@ describe("diagnostics-otel service", () => {
     "openclaw.toolName": "process",
     "openclaw.loop.level": "critical",
     "openclaw.loop.action": "block",
-    "openclaw.loop.detector": "known_poll_no_progress",
+    "openclaw.loop.detector": "tool_repeat",
     "openclaw.loop.count": 20,
     "openclaw.loop.paired_tool": "read",
   };
@@ -1438,7 +1438,7 @@ describe("diagnostics-otel service", () => {
         toolName: "process",
         level: "critical",
         action: "block",
-        detector: "known_poll_no_progress",
+        detector: "tool_repeat",
         count: 20,
         message: "CRITICAL: repeated secret-bearing tool output",
         pairedToolName: "read",
@@ -1447,7 +1447,7 @@ describe("diagnostics-otel service", () => {
       span: {
         name: "openclaw.tool.loop",
         attributes: loopAttributes,
-        status: { code: 2, message: "known_poll_no_progress:block" },
+        status: { code: 2, message: "tool_repeat:block" },
         omittedText: ["session-key", "secret-bearing"],
       },
     },

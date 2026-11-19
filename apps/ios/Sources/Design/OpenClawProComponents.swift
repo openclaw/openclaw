@@ -194,14 +194,49 @@ struct OpenClawSidebarHeaderAction {
     let systemName: String
     let accessibilityLabel: OpenClawTextValue
     var accessibilityIdentifier: String?
+    /// Set for a drawer's reveal control. The action stays non-nil while the drawer is
+    /// presented, so a toggle does not rebuild the destination; readers of `isShown`
+    /// hide the control instead.
+    var drawerPresentation: RootSidebarPresentation?
     let action: () -> Void
+
+    /// A presented drawer covers the destination, so its reveal control leaves the header.
+    /// Read this only in small views and modifiers: the reader re-evaluates on every toggle.
+    var isShown: Bool {
+        self.drawerPresentation?.isPresented != true
+    }
+}
+
+/// Builds `content` only while the sidebar reveal control is shown.
+struct OpenClawSidebarRevealContent<Content: View>: View {
+    let action: OpenClawSidebarHeaderAction?
+    @ViewBuilder let content: (OpenClawSidebarHeaderAction) -> Content
+
+    var body: some View {
+        if let action = self.action, action.isShown {
+            self.content(action)
+        }
+    }
+}
+
+/// Sets navigation bar visibility from whether the sidebar reveal control is shown.
+struct OpenClawSidebarRevealToolbarVisibility: ViewModifier {
+    let action: OpenClawSidebarHeaderAction?
+    let visibility: (_ isRevealShown: Bool) -> Visibility
+
+    func body(content: Content) -> some View {
+        content.toolbar(self.visibility(self.action?.isShown == true), for: .navigationBar)
+    }
 }
 
 struct OpenClawSidebarControlButton: View {
     let action: OpenClawSidebarHeaderAction
 
     var body: some View {
-        self.identified(self.button.buttonStyle(.plain))
+        if self.action.isShown {
+            self.identified(self.button.buttonStyle(.plain))
+                .transition(.opacity)
+        }
     }
 
     private var button: some View {
@@ -245,10 +280,12 @@ struct OpenClawSidebarToolbarItem: ToolbarContent {
 
     @ToolbarContentBuilder
     var body: some ToolbarContent {
-        if #available(iOS 27.1, *) {
-            self.item.axisBehavior(.verticalPreferred).visibilityPriority(.high)
-        } else {
-            self.item
+        if self.action.isShown {
+            if #available(iOS 27.1, *) {
+                self.item.axisBehavior(.verticalPreferred).visibilityPriority(.high)
+            } else {
+                self.item
+            }
         }
     }
 

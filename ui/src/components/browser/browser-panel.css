@@ -27,6 +27,10 @@ openclaw-browser-panel {
     font-size: 11px;
   }
 
+  .bp-toolbar[data-mobile="false"] {
+    padding-block: 8px;
+  }
+
   .bp-toolbar[data-mobile="true"] {
     display: flex;
     flex: none;

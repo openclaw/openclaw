@@ -1,0 +1,2 @@
+# Tool descriptor identity across sessions, metadata changes, schema replacement, and mutable input isolation.
+27

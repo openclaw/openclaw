@@ -163,7 +163,6 @@
     .chat-pr.chat-pr--summary .chat-pr__link,
     .chat-pr.chat-pr--summary .chat-pr__title,
     .chat-pr__branch,
-    .chat-pr__repo,
     .session-progress-card__step,
     .session-progress-card__step-text
   ) {
@@ -188,8 +187,6 @@
     .chat-details-subagents__status,
     .chat-details-subagents__counts,
     .chat-details-subagents__count,
-    .chat-pr__number,
-    .chat-pr__state,
     .chat-pr__stale,
     .chat-details__muted,
     .chat-outputs__status,

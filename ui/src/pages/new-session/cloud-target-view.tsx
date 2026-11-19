@@ -165,14 +165,6 @@ export function SessionMenuItem(props: { item: NativeSessionMenuItem; submitting
         ) : undefined}
         {description() ? <span class="session-menu__description">{description()}</span> : undefined}
       </span>{" "}
-      {accessibleBlocker() ? (
-        <span class="new-session-page__unavailable-status">
-          <span aria-hidden="true">
-            <Icon name="alertTriangle" />
-          </span>
-          {t("newSession.environmentUnavailable")}
-        </span>
-      ) : undefined}
       {!props.item.compact && props.item.sub ? (
         <span class="session-menu__sub">{props.item.sub}</span>
       ) : undefined}

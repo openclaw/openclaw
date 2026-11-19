@@ -30,14 +30,13 @@ function diagnostic(kind: string, addon = false) {
   const owner = addon ? "plugin.node" : "node";
   const value = addon ? "plugin_value" : "runtime_value";
   const messages: Record<string, string> = {
+    loader: addon ? "" : "dyld[123]: Library not loaded: /fixture/libsimdutf.36.dylib",
     symbol: `node: symbol lookup error: /fixture/${addon ? owner : "libnode.so"}: undefined symbol: ${value}`,
     "dyld-symbol": `dyld: lazy symbol binding failed: Symbol not found: _${value}`,
     musl: `Error loading shared library ${addon ? "libaddon.so" : "libnode.so"}: No such file or directory (needed by /fixture/${owner})`,
     version: `node: /fixture/${addon ? "libstdc++.so.6" : "libc.so.6"}: version '${addon ? "GLIBCXX_3.4.29" : "GLIBC_2.28"}' not found (required by /fixture/${owner})`,
   };
-  const message =
-    messages[kind] ?? (addon ? "" : "dyld[123]: Library not loaded: /fixture/libsimdutf.36.dylib");
-  return message ? `echo "${message}" >&2` : "";
+  return messages[kind] ?? "";
 }
 
 const session = () =>
@@ -48,7 +47,7 @@ const session = () =>
     argv: [],
     retainLifetime: false,
     requestArgs: () => [],
-    readBudget: () => ({ timeoutMs: 5_000, size: "fixture" }),
+    readBudget: async () => ({ timeoutMs: 5_000, size: "fixture" }),
     deadlineOwnedByCaller: () => true,
     timeoutError: () => new Error("unexpected timeout"),
     closeTimeoutMs: 5_000,
@@ -80,7 +79,7 @@ it
     await runtime(
       'if [ "$1" = "--version" ]; then echo v26.12.0; exit 0; fi\n' +
         // Admit the request before exiting so the control observes a worker crash, not EPIPE.
-        `${diagnostic(kind, true)}\ndd bs=1 count=1 <&3 >/dev/null 2>&1\nexit ${ordinaryExit}`,
+        `echo "${diagnostic(kind, true)}" >&2\ndd bs=1 count=1 <&3 >/dev/null 2>&1\nexit ${ordinaryExit}`,
     );
     await expect(runWorker()).rejects.toThrow(
       `SQLite read-only worker exited with code ${ordinaryExit}`,
@@ -88,7 +87,7 @@ it
     expect([readChildRuntimeViability().available, readiness().ready]).toEqual([true, true]);
 
     const brokenExit = kind === "symbol" || kind === "musl" ? 127 : kind === "version" ? 1 : 134;
-    const executable = await runtime(`${diagnostic(kind)}\nexit ${brokenExit}`);
+    const executable = await runtime(`echo "${diagnostic(kind)}" >&2\nexit ${brokenExit}`);
     if (kind === "removed") {
       await fs.unlink(executable);
     } else if (kind === "permission") {
@@ -96,15 +95,15 @@ it
     }
     await expect(runWorker()).rejects.toMatchObject({
       code: "NODE_RUNTIME_UNAVAILABLE",
-      message: `The Node.js runtime this Gateway started with (${executable}) can no longer start worker processes, likely because it was upgraded or removed. Restart the Gateway.`,
+      message: expect.stringContaining(diagnostic(kind) || "Restart the Gateway."),
     });
     expect(readChildRuntimeViability()).toEqual({ execPath: executable, available: false });
     expect(readiness()).toMatchObject({ ready: false, failing: ["child-runtime"] });
-    expect(() => session()).toThrow("Restart the Gateway.");
+    expect(() => session()).toThrow(diagnostic(kind) || "Restart the Gateway.");
   },
 );
 
-it("publishes a removed runtime observed by readiness before another worker spawn", async () => {
+it("publishes a removed runtime from explicit preparation before another worker spawn", async () => {
   const { registerChildRuntimeRecovery } = await import("./child-runtime-viability.js");
   const executable = await runtime("echo v26.12.0");
   const recover = vi.fn(async () => ({ status: "report-only" as const, reason: "test service" }));
@@ -113,6 +112,9 @@ it("publishes a removed runtime observed by readiness before another worker spaw
   const readiness = readinessChecker();
   expect(readiness().ready).toBe(true);
   await fs.unlink(executable);
+  expect(readiness().ready).toBe(true);
+  const prepared = await readiness.prepare();
+  expect(prepared.publish()).toMatchObject({ ready: false, failing: ["child-runtime"] });
   expect(readiness()).toMatchObject({ ready: false, failing: ["child-runtime"] });
   await Promise.resolve();
   expect(recover).toHaveBeenCalledTimes(1);
@@ -128,15 +130,16 @@ it.skipIf(process.platform === "win32").for([false, true])(
     );
     const entered = createDeferred();
     const resume = createDeferred();
-    const access = fs.access;
+    const stat = fs.stat;
     let held = false;
-    using _ = vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
-      await access(file, mode);
+    using _ = vi.spyOn(fs, "stat").mockImplementation(async (file) => {
+      const info = await stat(file);
       if (!held && file === executable) {
         held = true;
         entered.resolve();
         await resume.promise;
       }
+      return info;
     });
     const controller = new AbortController();
     const reason = new Error("reader cancelled during runtime diagnosis");

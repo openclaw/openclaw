@@ -11,7 +11,8 @@ const enChatToolWidgets = {
       copyAsImage: "Copy as image",
       downloadAsImage: "Download as image",
       widgetExportRerender: "Render this widget again to export it as an image.",
-      widgetExportHtmlFallback: "Image unavailable. Downloaded the widget as HTML instead.",
+      widgetExportHtmlFallback:
+        "Image unavailable. HTML download started instead. Check your browser downloads.",
       widgetExportFailed: "Couldn’t export this widget. Try again.",
       pinToDashboard: "Pin to dashboard",
       pinToDashboardPending: "Pinning…",

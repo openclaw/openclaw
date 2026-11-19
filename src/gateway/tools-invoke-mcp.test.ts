@@ -44,8 +44,6 @@ vi.mock("../agents/openclaw-tools.js", () => ({
       }),
   ],
 }));
-// mock-isolation: Tool construction helpers stay inert outside the invocation path.
-vi.mock("../agents/agent-tools.js", () => ({ resolveToolLoopDetectionConfig: () => ({}) }));
 // mock-isolation: Hooks pass arguments through so policy, not hooks, decides each case.
 vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: async ({ params }: { params: Record<string, unknown> }) => ({

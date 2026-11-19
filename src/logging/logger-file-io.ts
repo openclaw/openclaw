@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { appendRegularFile } from "@openclaw/fs-safe/advanced";
+import { appendRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
@@ -139,7 +139,9 @@ export async function executeFileLogIO(
           : "failed"
         : "none";
       try {
-        await appendRegularFile({ filePath: request.file, content: request.payload });
+        // Worker termination can orphan an in-flight asynchronous open. Raw sync
+        // descriptors are tracked by Node and closed when the worker exits.
+        appendRegularFileSync({ filePath: request.file, content: request.payload });
         return { rotation, appended: true };
       } catch {
         return { rotation, appended: false };

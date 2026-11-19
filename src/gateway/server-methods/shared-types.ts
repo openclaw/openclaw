@@ -26,7 +26,7 @@ import type {
 } from "../../infra/system-agent-approvals.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRuntimeCore } from "../../plugins/runtime/types-core.js";
-import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
+import type { SystemAgentOperatorProposal } from "../../system-agent/operation-types.js";
 import type { WizardSession } from "../../wizard/session.js";
 import type { AgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import type { InternalAgentTurnFacadeFactory } from "../agent-turn/internal-facade.types.js";
@@ -152,7 +152,7 @@ export type GatewaySystemAgentSession = {
     seedHistory: (turns: readonly SystemAgentHistoryTurn[]) => void;
     historyLength: () => number;
     historySince: (index: number) => SystemAgentHistoryTurn[];
-    getPendingOperatorProposal: () => { operation: SystemAgentOperation; hash: string } | null;
+    getPendingOperatorProposal: () => SystemAgentOperatorProposal | null;
     resolveOperatorApproval: (
       decision: "allow-once" | "allow-always" | "deny" | null,
       proposalHash: string,
@@ -230,12 +230,7 @@ type GatewayKernelContext = {
   forwardSystemAgentApprovalRequest?: (request: SystemAgentApprovalRequest) => Promise<boolean>;
   forwardSystemAgentApprovalResolved?: (resolved: SystemAgentApprovalResolved) => Promise<void>;
   execApprovalIosPushDelivery?: {
-    handleRequested?: (
-      request: ExecApprovalRequest,
-      opts?: {
-        isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
-      },
-    ) => Promise<boolean>;
+    handleRequested?: (record: ExecApprovalRecord) => Promise<boolean>;
     handleResolved?: (resolved: ExecApprovalResolved) => Promise<void>;
     handleExpired?: (request: ExecApprovalRequest) => Promise<void>;
   };
@@ -246,10 +241,7 @@ type GatewayKernelContext = {
   };
   pluginApprovalIosPushDelivery?: {
     handleRequested?: (
-      request: PluginApprovalRequest,
-      opts?: {
-        isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
-      },
+      record: ExecApprovalRecord<PluginApprovalRequestPayload>,
     ) => Promise<boolean>;
     handleExpired?: (request: PluginApprovalRequest) => Promise<void>;
   };

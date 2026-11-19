@@ -6,7 +6,9 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   recordAgentCleanupFailure,
   createAgentCleanupScope,
+  runAgentCleanupStep,
 } from "../agents/run-cleanup-timeout.js";
+import { resetConfigRuntimeState } from "../config/runtime-snapshot.js";
 import {
   deleteSessionEntryLifecycle,
   replaceSessionEntry,
@@ -25,6 +27,7 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { runAgentExecWithMock as runExec } from "./agent-exec.test-helpers.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -41,7 +44,7 @@ afterEach(() => {
     vi.restoreAllMocks();
   }
 });
-const success = () => ({ payloads: [{ text: "done" }], meta: { durationMs: 1 } });
+const success = () => ({ payloads: [{ text: "done", mediaUrl: null }], meta: { durationMs: 1 } });
 function stateFixture() {
   return { stateDir: tempDirs.make("openclaw-agent-exec-lock-") };
 }
@@ -55,6 +58,54 @@ async function expectOwner(stateDir: string, held: boolean) {
   const owner = await readActiveGatewayLockIdentity({ env, includeEmbedded: true });
   expect(owner?.pid).toBe(held ? process.pid : undefined);
 }
+
+it.each([false, true])(
+  "keeps local CLI custody only when automatic cleanup is uncertain (uncertain: %s)",
+  async (uncertain) => {
+    const { stateDir } = stateFixture();
+    const configPath = path.join(stateDir, "openclaw.json");
+    const { config } = createCanonicalAgentConfigFixture({
+      agents: { defaults: { workspace: path.join(stateDir, "workspace") } },
+    });
+    await fs.writeFile(configPath, JSON.stringify(config));
+    const { agentCommand } = await import("./agent.js");
+    const { agentCliCommand } = await import("./agent-via-gateway.js");
+    const command = vi.mocked(agentCommand);
+    const log = { warn: vi.fn() };
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    resetConfigRuntimeState();
+    try {
+      command.mockReset().mockImplementationOnce(async () => {
+        await expectOwner(stateDir, true);
+        await runAgentCleanupStep({
+          runId: "local-cleanup-proof",
+          sessionId: "local-cleanup-proof",
+          step: "owned-resource",
+          log,
+          cleanup: async () => {
+            if (uncertain) {
+              throw new Error("synthetic cleanup failure");
+            }
+          },
+        });
+        return success();
+      });
+      await expect(
+        agentCliCommand(
+          { local: true, sessionKey: "agent:main:cleanup-proof", message: "inspect" },
+          createTestRuntime(),
+        ),
+      ).resolves.toEqual(success());
+      expect(log.warn).toHaveBeenCalledTimes(uncertain ? 1 : 0);
+      await expectOwner(stateDir, uncertain);
+    } finally {
+      command.mockReset();
+      resetConfigRuntimeState();
+      vi.unstubAllEnvs();
+    }
+  },
+);
 
 describe("agent exec retained-state ownership", () => {
   it.each([false, true])(

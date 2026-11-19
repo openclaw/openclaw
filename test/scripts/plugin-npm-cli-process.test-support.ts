@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -19,7 +19,6 @@ import { createPluginPublicationArtifact } from "../../scripts/plugin-publicatio
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
-import { addRecoveryGraph } from "./plugin-npm-cli-recovery.test-support.mjs";
 import { packNpmFixture } from "./plugin-npm-publication-readback.test-support.js";
 
 const digest = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -43,13 +42,7 @@ type RequestRecord = {
 
 // Materialize external GitHub responses before starting any consumer. The
 // subprocess never imports fixture clients or receives an authenticated owner.
-// The recovery graph retains the original Q receipts under a distinct P seal.
-export async function createNpmCliProcessFixture(
-  root: string,
-  plugins = "",
-  packageCount = 2,
-  receiptRecovery = true,
-) {
+export async function createNpmCliProcessFixture(root: string, plugins = "", packageCount = 2) {
   const f = candidatePublicationFixture();
   const responses: Record<string, ResponseBytes> = {};
   const json = (route: string, value: unknown) => {
@@ -335,6 +328,9 @@ export async function createNpmCliProcessFixture(
       }
     }
   }
+  for (const [path, text] of f.qualificationSources) {
+    source(path, f.q, text);
+  }
   json("actions/runs/" + f.runId + "/artifacts?per_page=100&page=1", {
     total_count: 2,
     artifacts: [artifacts.get(91), artifacts.get(92)],
@@ -355,10 +351,12 @@ export async function createNpmCliProcessFixture(
   const packageArtifacts = [...artifacts.values()].filter(
     (entry) => entry.workflow_run.id === 5001,
   );
-  json("actions/runs/5001/artifacts?per_page=100&page=1", {
-    total_count: packageArtifacts.length,
-    artifacts: packageArtifacts,
-  });
+  for (let offset = 0; offset < packageArtifacts.length; offset += 100) {
+    json("actions/runs/5001/artifacts?per_page=100&page=" + (offset / 100 + 1), {
+      total_count: packageArtifacts.length,
+      artifacts: packageArtifacts.slice(offset, offset + 100),
+    });
+  }
   const carrierRun = {
     ...packageRun,
     id: 800,
@@ -387,24 +385,7 @@ export async function createNpmCliProcessFixture(
   for (const [id, artifact] of artifacts) {
     json("actions/artifacts/" + id, artifact);
   }
-  const ordinaryResponses = { ...responses };
-  const recovery = addRecoveryGraph({
-    f,
-    producer,
-    packages,
-    artifacts,
-    json,
-    bytes,
-    source,
-    metadata,
-  });
-  if (!receiptRecovery) {
-    for (const key of Object.keys(responses)) {
-      delete responses[key];
-    }
-    Object.assign(responses, ordinaryResponses);
-  }
-  const responseFile = join(root, "responses.json");
+  const responseDirectory = join(root, "responses");
   const log = join(root, "requests.jsonl");
   const gh = join(root, "gh");
   writeFileSync(
@@ -416,7 +397,14 @@ export async function createNpmCliProcessFixture(
       ";\nrunGh(process.argv.slice(2));\n",
     { mode: 0o755 },
   );
-  const save = () => writeFileSync(responseFile, JSON.stringify(responses));
+  const save = () => {
+    // Every CLI call is synchronous, so no reader remains while the fixture changes.
+    rmSync(responseDirectory, { recursive: true, force: true });
+    mkdirSync(responseDirectory);
+    for (const [route, response] of Object.entries(responses)) {
+      writeFileSync(join(responseDirectory, digest(route) + ".json"), JSON.stringify(response));
+    }
+  };
   save();
   const env = {
     ...process.env,
@@ -433,14 +421,14 @@ export async function createNpmCliProcessFixture(
     PREPARED_NPM_PARENT_RUN_ID: "700",
     PREPARED_NPM_PARENT_RUN_ATTEMPT: "1",
     PREPARED_NPM_ARTIFACT: JSON.stringify(producer),
-    PREPARED_NPM_FRV_RUN_ID: receiptRecovery ? recovery.runId : f.runId,
+    PREPARED_NPM_FRV_RUN_ID: f.runId,
     PREPARED_NPM_FRV_RUN_ATTEMPT: "1",
     PREPARED_NPM_SELECTION_MODE: plugins ? "selected" : "all-publishable",
     PREPARED_NPM_PLUGINS: plugins,
     PREPARED_NPM_DIST_TAG: "default",
     PREPARED_NPM_EVIDENCE_ID: "",
     PREPARED_NPM_EVIDENCE_DIGEST: "",
-    NPM_CLI_RESPONSES: responseFile,
+    NPM_CLI_RESPONSES_DIR: responseDirectory,
     NPM_CLI_REQUEST_LOG: log,
     NPM_CLI_ENTRYPOINT: cli,
   };
@@ -480,7 +468,6 @@ export async function createNpmCliProcessFixture(
   let carrierDigest = "";
   return {
     f,
-    recovery,
     packages,
     previewManifest: join(root, "preview-manifest.json"),
     records,

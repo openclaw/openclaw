@@ -309,6 +309,8 @@ export interface ToolCall {
    * `toolcall_end` or terminal cleanup; it never appears in final messages or transcripts.
    */
   partialJson?: string;
+  /** Provider argument bytes paired with their normalized value for exact replay. */
+  argumentsSignature?: { value: string; raw: string };
   thoughtSignature?: string; // Google-specific: opaque signature for reusing thought context
   executionMode?: "sequential" | "parallel";
 }
@@ -554,6 +556,8 @@ export interface AssistantMessage {
   endTurn?: boolean;
   errorMessage?: string;
   errorCode?: string;
+  /** Transport-owned repair outcome; execution owns whether a deferred request can replay. */
+  itemConflictRecovery?: "deferred" | "recovered" | "failed";
   errorType?: string;
   errorBody?: string;
   /** Provider retry floor before diagnostic clipping; null means too large to represent. */

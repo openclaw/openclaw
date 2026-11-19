@@ -354,7 +354,8 @@ export async function captureCronCreatorSession(
   const legacyActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
   const createdActor = callerScope
     ? attributeDelegatedSessionCreator(
-        legacyActor,
+        legacyActor ??
+          (callerScope.creatorProfileId ? { type: "agent", id: callerScope.agentId } : undefined),
         callerScope.creatorProfileId,
         callerScope.agentId,
       )

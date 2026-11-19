@@ -27,6 +27,7 @@ import {
   selectStoredProjectRegistry,
 } from "../projects/project-registry.js";
 import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { collectProjectCloneShapeHealthFindings } from "./doctor-project-clone-shape.js";
 
@@ -141,10 +142,14 @@ describe("doctor project clone shape", () => {
           return;
         }
         if (shape === "shallow") {
-          await withProjectCheckoutLifecycle(clone, {}, async () => {
-            expect((await repair())[0]?.message).toContain("busy; skipped");
-            expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe("true");
-          });
+          await withProjectCheckoutLifecycle(
+            clone,
+            { context: captureOpenClawStateWorkerContext() },
+            async () => {
+              expect((await repair())[0]?.message).toContain("busy; skipped");
+              expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe("true");
+            },
+          );
           const foreignLock = path.join(clone, ".git", "shallow.lock");
           await fs.writeFile(foreignLock, "another fetch");
           expect((await repair())[0]?.message).toContain("unshallow failed");

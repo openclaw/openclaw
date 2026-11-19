@@ -1,4 +1,6 @@
+import type { CyberAccessProgram } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
+import { resolveCyberAccessProgramForProvider } from "../../agents/model-catalog-access-programs.js";
 import { resolvePreparedSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import type { CronRuntimeAuthority } from "../runtime-authority.js";
 
@@ -86,4 +88,17 @@ export function assertCronCandidateSandboxPlacement(params: {
   throw new AgentHarnessPreflightError(
     `This automation belongs to a sandboxed session, but resolved execution provider ${params.executionProvider} runs on the host and cannot honor the sandbox. Override agents.entries.<id>.subagents.model, agents.defaults.subagents.model, or the automation payload model with an API-backed provider (and clear any pinned CLI runtime override), or change the agent's sandbox policy explicitly.`,
   );
+}
+
+/** A saved OpenAI Access choice must not silently fall through to CLI defaults. */
+export function assertCronCliAccessProgram(
+  program: CyberAccessProgram | undefined,
+  provider: string,
+): void {
+  const resolved = resolveCyberAccessProgramForProvider(program, provider).program;
+  if (resolved !== undefined && resolved !== "standard") {
+    throw new Error(
+      "Daybreak access is unsupported by this CLI runtime. Select Standard or use the OpenClaw or native Codex runtime.",
+    );
+  }
 }

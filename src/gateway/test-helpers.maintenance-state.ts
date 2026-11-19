@@ -20,7 +20,10 @@ export function createGatewayMaintenanceStateForTest(params?: {
   presenceVersion?: number;
   restartRunningChannels?: (shouldContinue: () => boolean) => Promise<boolean>;
 }) {
-  const config: OpenClawConfig = {};
+  // Fake-clock timer fixtures must not dispatch transcript database maintenance.
+  const config: OpenClawConfig = {
+    session: { maintenance: { coldStorage: { enabled: false } } },
+  };
   const chatRunState = createChatRunState();
   const worktreeGcResult = new WorktreeGcProgress().result;
   const worktreeGc = vi.spyOn(managedWorktrees, "gc").mockResolvedValue(worktreeGcResult);

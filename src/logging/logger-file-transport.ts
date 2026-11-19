@@ -95,7 +95,9 @@ function prepareTarget(
     .then(() => {
       target.prepared = true;
     })
-    .catch(() => undefined));
+    .catch(() => {
+      target.ready = undefined;
+    }));
 }
 
 // Keep burst memory bounded while one equally bounded batch is in flight.

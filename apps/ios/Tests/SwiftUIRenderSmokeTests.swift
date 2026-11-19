@@ -179,6 +179,10 @@ struct SwiftUIRenderSmokeTests {
                 contextWindowTokens: nil,
                 userMessageExpanded: false,
                 onToggleUserMessageExpanded: {},
+                inlineWidgetScope: ChatInlineWidgetScope(
+                    modelID: ObjectIdentifier(Self.self),
+                    sessionTarget: OpenClawChatSessionTarget(sessionKey: "main", agentID: nil),
+                    sessionGeneration: 0),
                 inlineWidgetResolverReady: true,
                 inlineWidgetResourceResolver: { _, _ in nil },
                 mediaArtifactResolverReady: false,
@@ -239,6 +243,10 @@ struct SwiftUIRenderSmokeTests {
             contextWindowTokens: nil,
             userMessageExpanded: false,
             onToggleUserMessageExpanded: {},
+            inlineWidgetScope: ChatInlineWidgetScope(
+                modelID: ObjectIdentifier(Self.self),
+                sessionTarget: OpenClawChatSessionTarget(sessionKey: "main", agentID: nil),
+                sessionGeneration: 0),
             inlineWidgetResolverReady: true,
             inlineWidgetResourceResolver: { _, _ in nil },
             mediaArtifactResolverReady: true,
@@ -321,6 +329,10 @@ struct SwiftUIRenderSmokeTests {
                 contextWindowTokens: 1_000_000,
                 userMessageExpanded: false,
                 onToggleUserMessageExpanded: {},
+                inlineWidgetScope: ChatInlineWidgetScope(
+                    modelID: ObjectIdentifier(Self.self),
+                    sessionTarget: OpenClawChatSessionTarget(sessionKey: "main", agentID: nil),
+                    sessionGeneration: 0),
                 inlineWidgetResolverReady: true,
                 inlineWidgetResourceResolver: { _, _ in nil },
                 mediaArtifactResolverReady: false,

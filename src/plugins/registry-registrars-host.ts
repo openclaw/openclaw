@@ -352,16 +352,19 @@ export function createHostRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `agent event subscription already registered: ${id}`);
       return;
     }
-    registry.agentEventSubscriptions.push(
-      createRegistration(record, {
-        subscription: {
-          ...subscription,
-          id,
-          ...(streams !== undefined ? { streams } : {}),
-          ...(phases !== undefined ? { phases } : {}),
-        },
-      }),
-    );
+    const registration = createRegistration(record, {
+      subscription: {
+        ...subscription,
+        id,
+        ...(streams !== undefined ? { streams } : {}),
+        ...(phases !== undefined ? { phases } : {}),
+      },
+    });
+    registry.agentEventSubscriptions.push({
+      ...registration,
+      // Normalized filters are host data; their array methods must not enter plugin scope.
+      subscription: { ...registration.subscription, streams, phases },
+    });
   };
 
   const registerSessionSchedulerJob = (

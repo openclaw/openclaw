@@ -1,10 +1,7 @@
 // @vitest-environment node
 import { beforeEach, expect, it } from "vitest";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
-import {
-  inlineActivityDisclosureCalls,
-  readInlineToolExpansion,
-} from "./chat-activity-segments.ts";
+import { readInlineToolExpansion } from "./chat-activity-segments.ts";
 import { message } from "./chat-thread-fixtures.test-support.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import {
@@ -14,7 +11,7 @@ import {
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
 
-const inlineCommands = { inlineActivityDisclosureCalls };
+const inlineCommands = { readInlineToolExpansion };
 
 beforeEach(() => resetChatThreadState());
 

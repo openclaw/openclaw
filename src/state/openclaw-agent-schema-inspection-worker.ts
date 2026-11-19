@@ -19,10 +19,10 @@ import {
   readSqliteDatabaseCleanClose,
 } from "../infra/sqlite-database-admission.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import {
   isSqliteInspectionDeadlineOwnedByCaller,
   readSqliteInspectionBudget,
-  resolveSqliteInspectionSignal,
   sqliteInspectionTimeoutError,
 } from "../infra/sqlite-readonly-worker.js";
 import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
@@ -140,8 +140,10 @@ export function createAgentSchemaInspectionWorker() {
           if (!existsSync(snapshotPath ?? input.pathname)) {
             return null;
           }
-          const { readBackupEngine, readBackupEngineImage } =
-            await import("../infra/database-engine/physical-store.js");
+          const [{ readBackupEngine }, { readBackupEngineImage }] = await Promise.all([
+            import("../infra/database-engine/physical-store.js"),
+            import("../infra/database-engine/physical-store-inspection.js"),
+          ]);
           const physical = snapshotPath
             ? readBackupEngineImage(snapshotPath, input.pathname)
             : readBackupEngine(input.pathname);

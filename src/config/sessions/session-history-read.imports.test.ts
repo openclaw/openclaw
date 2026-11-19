@@ -10,6 +10,11 @@ const configIO = paths("src/config/", "io io.runtime");
 const aiTransports = "packages/ai/src/transports.ts";
 
 it.each([
+  [
+    "canonical entry parsing",
+    sessions("entry-json"),
+    ["src/channels/bundled-channel-catalog-read.ts"],
+  ],
   ["transport", sessions("transcript-worker-runtime"), configIO],
   [
     "title and topology",
@@ -42,7 +47,10 @@ it.each([
     "lazy runtime",
     gateway("session-history-worker-reader"),
     [
-      ...gateway("session-utils-store-sources"),
+      ...gateway(
+        "session-utils-store-sources session-utils-store-candidates chat-history-reply-messages current-user-profile-display",
+      ),
+      ...paths("src/cron/store/", "job-name.kernel paths"),
       ...sessions("store-target-inventory"),
       "src/config/runtime-source-projection.ts",
       "src/agents/bash-tools.process-schema.ts",
