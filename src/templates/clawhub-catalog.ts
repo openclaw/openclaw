@@ -12,6 +12,7 @@ import type {
   ClawHubTemplateCatalogEntry,
   ClawHubTemplateCatalogOverview,
 } from "./clawhub-catalog-types.js";
+import { fetchRankedTemplatePage, LEGACY_TEMPLATE_CURSOR_PREFIX } from "./clawhub-ranked-page.js";
 import { ClawHubSourceError } from "./clawhub-source-artifact.js";
 import { clawHubTemplateRef, isCanonicalClawHubPackageName } from "./schema-portability.js";
 const CATALOG_PAGE_SIZE = 20;
@@ -163,7 +164,7 @@ const MAX_LEGACY_CATEGORY_PAGES = 20;
 function projectionPage(params: CatalogSearchParams, max: number) {
   const limit = params.limit ?? CATALOG_PAGE_SIZE;
   const prefix =
-    "template-page:" +
+    LEGACY_TEMPLATE_CURSOR_PREFIX +
     JSON.stringify([params.query?.trim() ?? "", params.category ?? "", limit]) +
     ":";
   const offset = !params.cursor ? 0 : Number(params.cursor.slice(prefix.length));
@@ -240,6 +241,22 @@ export async function searchClawHubTemplates(
   params: CatalogSearchParams = {},
 ): Promise<{ entries: ClawHubTemplateCatalogEntry[]; nextCursor?: string | null }> {
   const query = params.query?.trim();
+  if (
+    (query || (params.category && !params.featured)) &&
+    !params.cursor?.startsWith(LEGACY_TEMPLATE_CURSOR_PREFIX)
+  ) {
+    const page = await fetchRankedTemplatePage({
+      ...params,
+      query,
+      limit: params.limit ?? CATALOG_PAGE_SIZE,
+    });
+    if (page) {
+      return {
+        entries: projectPublicEntries(page.items, params.baseUrl),
+        nextCursor: page.nextCursor,
+      };
+    }
+  }
   if (!query) {
     return await listPublicPage(params);
   }
