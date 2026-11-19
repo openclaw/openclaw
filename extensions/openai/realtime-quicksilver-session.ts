@@ -74,7 +74,7 @@ type OpenAIQuicksilverSessionRequest = {
       gaSession: Record<string, unknown> & { model: string };
       gaSideband: {
         createBridge: (params: {
-          apiKey: string;
+          auth: OpenAIQuicksilverAuth;
           callId: string;
           onTerminal: () => void;
         }) => RealtimeVoiceBridge;
@@ -415,25 +415,21 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
       const gaSideband = offer.request.gaSideband;
       const publicApi = isOpenAIGptLiveApiModel(offer.request.model);
       const adoptAllocatedCall = (callId: string) => {
-        const hangup = publicApi ? hangupOpenAILiveCall : hangupOpenAIRealtimeCall;
         session = activeSessionLease.adopt(token, {
           ...(publicApi ? { retire: reportTerminal } : {}),
-          dispose: () =>
-            hangup(
-              {
-                apiKey: offer.auth.token,
-                callId,
-                signal: AbortSignal.timeout(OPENAI_QUICKSILVER_UPSTREAM_TIMEOUT_MS),
-                fetchImpl: params.fetchImpl,
-              },
-              context,
-            ),
+          dispose: () => {
+            const hangup = {
+              callId,
+              signal: AbortSignal.timeout(OPENAI_QUICKSILVER_UPSTREAM_TIMEOUT_MS),
+              fetchImpl: params.fetchImpl,
+            };
+            return publicApi
+              ? hangupOpenAILiveCall({ ...hangup, apiKey: offer.auth.token }, context)
+              : hangupOpenAIRealtimeCall({ ...hangup, auth: offer.auth }, context);
+          },
         });
         activeSessionLease.expireIn(session, OPENAI_QUICKSILVER_SESSION_TTL_MS);
       };
-      if (gaSideband && offer.auth.type !== "api-key") {
-        throw new Error("OpenAI Realtime Gateway control requires a Platform API key");
-      }
       const callStartedAt = gaSideband ? Date.now() : 0;
       const call = await createOpenAIQuicksilverCall(
         {
@@ -457,7 +453,7 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
         const callCreatedAt = Date.now();
         lifecycleSignal.throwIfAborted();
         const bridge = gaSideband.createBridge({
-          apiKey: offer.auth.token,
+          auth: offer.auth,
           callId: call.callId,
           onTerminal: () => {
             if (activeSessions.get(token) === active) {

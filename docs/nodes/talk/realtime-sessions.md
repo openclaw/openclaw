@@ -70,10 +70,20 @@ Status and list are read-only. Setting a voice requires the message-channel owne
 Client-owned realtime Talk normally forwards provider tool calls through `talk.client.toolCall` instead of calling `chat.send` directly. GPT-Live WebRTC sessions delegate on a Gateway-owned sideband, and the Gateway binds each delegation to the browser or Gateway-relay Talk session that owns it. Backend WebSocket bridges use the normal relay consult path. While a realtime consult is active, clients can call `talk.client.steer` or `talk.session.steer` to classify spoken input as `status`, `steer`, `cancel`, or `followup`; this includes GPT-Live delegations. Accepted steering enters the active session turn; rejected steering returns a reason such as `no_active_run` or `injection_unavailable`. A newer GPT-Live spoken task also supersedes the running delegation.
 
 Thin audio clients can request `gateway-control-v1` in
-`talk.client.create.capabilities`. OpenAI GA Realtime requires a Platform API
-key for this mode. The released GPT-Live route keeps its existing ChatGPT OAuth
-or Platform authentication; unlisted routes require Platform authentication.
-Requesting Gateway control does not switch the selected model.
+`talk.client.create.capabilities`. OpenAI GA Realtime uses Platform
+credentials first and falls back to a ChatGPT OAuth profile, like ordinary
+browser Talk; a configured Platform credential that cannot be resolved fails
+instead of falling back. The released GPT-Live route keeps its existing ChatGPT
+OAuth or Platform authentication; unlisted routes require Platform
+authentication. Requesting Gateway control does not switch the selected model.
+
+With `talk.realtime.consultRouting: "force-agent-consult"`, a Gateway-controlled
+GA session disables provider auto-responses. After each final user transcript
+that is not a spoken control such as "status" or "cancel", the Gateway waits
+briefly for a native `openclaw_agent_consult` call, then runs one agent consult
+itself and speaks its answer. A native call for a consult that already started
+receives an "already delivered" result instead of a second run. GPT-Live
+delegates natively, so forced routing with GPT-Live fails visibly.
 
 Success returns `clientControl: { owner: "gateway" }`, a 60-second single-use
 `clientSecret`, and the relative offer URL `/plugins/openai/realtime/calls`.
@@ -82,8 +92,8 @@ The Gateway attaches the provider's server sideband and owns tools or native
 agent delegation, transcripts, steering, cancellation, and call cleanup while
 media continues directly between the client and OpenAI. Negotiated sessions
 share a two-session limit per client connection, including pending offers.
-Unsupported combinations, including GA with OAuth only, fail visibly instead
-of falling back to client-owned control. Existing browser clients omit this
+Unsupported combinations, including GA without any usable credential, fail
+visibly instead of falling back to client-owned control. Existing browser clients omit this
 capability and keep their data channel and client transcript reporting.
 
 A ready Gateway-controlled client can call `talk.client.say` with its

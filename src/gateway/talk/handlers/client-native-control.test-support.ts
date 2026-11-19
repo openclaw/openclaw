@@ -202,6 +202,9 @@ export async function withNativePlugin(
       const capabilityCatalogContext = {
         ...resolvePluginCapabilityCatalogContext(),
         isProviderAuthProfileConfigured: nativeUpstream.authConfigured,
+        isProviderAuthProfileConfiguredAsync: async (
+          ...args: Parameters<typeof nativeUpstream.authConfigured>
+        ) => nativeUpstream.authConfigured(...args),
         resolveProviderAuthProfileApiKey: nativeUpstream.resolveAuth,
       };
       const previousRegistry = captureActivePluginRegistrySnapshot();

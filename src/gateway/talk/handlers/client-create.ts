@@ -121,6 +121,9 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
     const wantsCameraFrames = params.capabilities?.includes("camera-frame") === true;
     const wantsGatewayControl = params.capabilities?.includes("gateway-control-v1") === true;
     const clientControl = wantsGatewayControl ? { owner: "gateway" as const } : undefined;
+    // Client-owned sessions keep provider replies; only Gateway control can force consults.
+    const forceAgentConsult =
+      wantsGatewayControl && realtimeConfig.consultRouting === "force-agent-consult";
     const transportError = resolveTalkClientLaunchError({
       mode,
       brain,
@@ -157,6 +160,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
       agentId,
       defaultModel: realtimeConfig.model,
       surface: "browser-session",
+      ...(forceAgentConsult ? { autoRespondToAudio: false } : {}),
       requiredCapabilities: { supportsVideoFrames: wantsCameraFrames },
       clientControl,
     });
@@ -166,6 +170,11 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
         ErrorCodes.UNAVAILABLE,
         `Realtime provider "${resolution.provider.id}" does not support gateway-control-v1 with its configured authentication`,
       );
+    }
+    if (forceAgentConsult && providerCapabilities?.handlesAgentConsult === true) {
+      const message = `Realtime provider "${resolution.provider.id}" delegates to the agent natively and cannot use forced agent consult routing; select a GA realtime model or set talk.realtime.consultRouting to "provider-direct"`;
+      context.logGateway.warn(`talk client rejected: ${message}`);
+      return rejectRequest(ErrorCodes.INVALID_REQUEST, message);
     }
     if (wantsCameraFrames && providerCapabilities?.supportsVideoFrames !== true) {
       return rejectRequest(
@@ -313,6 +322,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
         voiceSessionId: activeVoiceSessionId,
         providerId: resolution.provider.id,
         controlSource,
+        forceAgentConsultOnFinalTranscript: forceAgentConsult,
         supportsToolCalls: providerCapabilities?.supportsToolCalls,
         sessionTarget: target,
         connId: ownerConnId,
@@ -434,6 +444,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
         instructions,
         initialItems,
         runAgentConsult: gatewayControlOwner.runAgentConsult,
+        ...(forceAgentConsult ? { autoRespondToAudio: false } : {}),
         ...controlRequest,
         ...(tools.length > 0 ? { tools } : {}),
         ...launchOptions,

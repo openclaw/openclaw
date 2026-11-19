@@ -191,25 +191,32 @@ export function reserveLiveSession(realtime: TestBroker, overrides: LiveSessionO
   });
 }
 
+type BrokerAuth = Parameters<TestBroker["broker"]["createBrowserSession"]>[1];
+
 export function reserveGaSession(
   realtime: TestBroker,
   createBridge: (params: {
-    apiKey: string;
+    auth: BrokerAuth;
     callId: string;
     onTerminal: () => void;
   }) => RealtimeVoiceBridge,
   gatewayControl: RealtimeVoiceGatewayControl = { bindBridge: vi.fn() },
   ownerConnId?: string,
+  auth?: BrokerAuth,
 ) {
-  return reserveSession(realtime, {
-    providerConfig: {},
-    model: "gpt-realtime-2.1",
-    gaSession: { type: "realtime", model: "gpt-realtime-2.1" },
-    gaSideband: { createBridge },
-    clientControl: { owner: "gateway" },
-    gatewayControl,
-    ...(ownerConnId ? { ownerConnId } : {}),
-  });
+  return reserveSession(
+    realtime,
+    {
+      providerConfig: {},
+      model: "gpt-realtime-2.1",
+      gaSession: { type: "realtime", model: "gpt-realtime-2.1" },
+      gaSideband: { createBridge },
+      clientControl: { owner: "gateway" },
+      gatewayControl,
+      ...(ownerConnId ? { ownerConnId } : {}),
+    },
+    auth,
+  );
 }
 
 export async function postOffer(realtime: TestBroker, params: Parameters<typeof createRequest>[0]) {

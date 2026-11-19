@@ -23,6 +23,7 @@ import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import { buildOpenAIQuicksilverInstructions } from "./realtime-quicksilver-instructions.js";
 import type { OpenAIQuicksilverBrowserSessionBroker } from "./realtime-quicksilver-session.js";
+import type { OpenAIQuicksilverAuth } from "./realtime-quicksilver-wire.js";
 import {
   OPENAI_QUICKSILVER_CAPABILITIES,
   isOpenAIGptLiveModel,
@@ -287,15 +288,39 @@ export function buildOpenAIRealtimeVoiceProvider(
         normalizeOpenAIRealtimeVoice(req.voice) ??
         normalizeOpenAIRealtimeVoice(config.voice) ??
         "alloy";
+      // Platform credentials keep precedence. A configured Platform credential that
+      // cannot be resolved blocks the session instead of falling through to OAuth.
+      const resolveGaAuth = async (): Promise<OpenAIQuicksilverAuth> => {
+        const platformAuth = await resolveOpenAIRealtimePlatformAuth(authParams, context);
+        if (platformAuth) {
+          return { type: "api-key", token: platformAuth };
+        }
+        if (!(await hasOpenAIRealtimePlatformAuthInputAsync(authParams, context))) {
+          const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth(
+            {
+              cfg: req.cfg,
+              agentDir: req.cfg ? resolveAgentDir(req.cfg, req.agentId) : undefined,
+            },
+            context,
+          );
+          if (subscriptionAuth) {
+            return subscriptionAuth;
+          }
+        }
+        throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
+      };
       if (req.clientControl) {
         if (!quicksilverBroker) {
           throw new Error("OpenAI realtime browser session broker is unavailable");
         }
-        const auth = await requireOpenAIRealtimePlatformAuth(authParams, context);
+        const auth = await resolveGaAuth();
+        // Forced consult routing keeps barge-in like gateway-relay while the Gateway owns replies.
+        const interruptResponseOnInputAudio = config.interruptResponseOnInputAudio ?? true;
         const sessionConfig = buildOpenAIRealtimeGaSessionPolicy({
           audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+          autoRespondToAudio: req.autoRespondToAudio,
           instructions: req.instructions,
-          interruptResponseOnInputAudio: config.interruptResponseOnInputAudio,
+          interruptResponseOnInputAudio,
           inputTranscriptionModel: config.inputTranscriptionModel,
           model,
           noiseReduction: { type: "near_field" },
@@ -316,13 +341,14 @@ export function buildOpenAIRealtimeVoiceProvider(
             gatewayControl,
             gaSession: sessionConfig,
             gaSideband: {
-              createBridge: ({ apiKey, callId, onTerminal }) => {
+              createBridge: ({ auth: callAuth, callId, onTerminal }) => {
                 const bridge = new OpenAIRealtimeBridge(
                   {
                     cfg: req.cfg,
                     agentId: req.agentId,
                     providerConfig: req.providerConfig,
-                    apiKey,
+                    apiKey: callAuth.token,
+                    ...(callAuth.type === "oauth" ? { chatgptAccountId: callAuth.accountId } : {}),
                     callId,
                     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
                     gaSessionPolicy: sessionConfig,
@@ -330,7 +356,8 @@ export function buildOpenAIRealtimeVoiceProvider(
                     voice,
                     instructions: req.instructions,
                     tools: req.tools,
-                    interruptResponseOnInputAudio: config.interruptResponseOnInputAudio,
+                    autoRespondToAudio: req.autoRespondToAudio,
+                    interruptResponseOnInputAudio,
                     reasoningEffort: req.reasoningEffort ?? config.reasoningEffort,
                     vadThreshold: req.vadThreshold ?? config.vadThreshold,
                     silenceDurationMs: req.silenceDurationMs ?? config.silenceDurationMs,
@@ -362,7 +389,7 @@ export function buildOpenAIRealtimeVoiceProvider(
               },
             },
           },
-          { type: "api-key", token: auth },
+          auth,
         );
       }
       const tools = normalizeOpenAIRealtimeTools(req.tools, context.warn);
@@ -397,21 +424,8 @@ export function buildOpenAIRealtimeVoiceProvider(
       if (reasoningEffort) {
         session.reasoning = { effort: reasoningEffort };
       }
-      const auth = await resolveOpenAIRealtimePlatformAuth(authParams, context);
-      if (!auth) {
-        if (await hasOpenAIRealtimePlatformAuthInputAsync(authParams, context)) {
-          throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
-        }
-        const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth(
-          {
-            cfg: req.cfg,
-            agentDir: req.cfg ? resolveAgentDir(req.cfg, req.agentId) : undefined,
-          },
-          context,
-        );
-        if (!subscriptionAuth) {
-          throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
-        }
+      const auth = await resolveGaAuth();
+      if (auth.type === "oauth") {
         if (!quicksilverBroker) {
           throw new Error("OpenAI realtime browser session broker is unavailable");
         }
@@ -422,13 +436,13 @@ export function buildOpenAIRealtimeVoiceProvider(
             voice,
             gaSession: session,
           },
-          subscriptionAuth,
+          auth,
         );
       }
 
       const clientSecret = await createOpenAIRealtimeClientSecret(
         {
-          authToken: auth,
+          authToken: auth.token,
           auditContext: "openai-realtime-browser-session",
           session,
           authRejectedMessage: OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED,
@@ -506,13 +520,15 @@ export function buildOpenAIRealtimeVoiceProvider(
           });
         return projectGptLiveCapabilities(effectiveModel, supportsGatewayControl);
       }
+      // GA Gateway control accepts Platform auth or a ChatGPT OAuth profile; Platform keeps precedence at launch.
       return {
         ...OPENAI_REALTIME_CAPABILITIES,
         ...(options?.quicksilverBrowserSessionBroker !== undefined &&
-        hasOpenAIRealtimePlatformAuthInput(
+        (hasOpenAIRealtimePlatformAuthInput(
           { configuredApiKey: config.apiKey, cfg, agentId },
           context,
-        )
+        ) ||
+          hasOpenAIChatGptSubscriptionAuthInput({ cfg, agentId }, context))
           ? { supportsGatewayControl: true }
           : {}),
       };
@@ -543,10 +559,11 @@ export function buildOpenAIRealtimeVoiceProvider(
       return {
         ...OPENAI_REALTIME_CAPABILITIES,
         ...(options?.quicksilverBrowserSessionBroker !== undefined &&
-        (await hasOpenAIRealtimePlatformAuthInputAsync(
+        ((await hasOpenAIRealtimePlatformAuthInputAsync(
           { configuredApiKey: config.apiKey, cfg, agentId },
           context,
-        ))
+        )) ||
+          (await hasOpenAIChatGptSubscriptionAuthInputAsync({ cfg, agentId }, context)))
           ? { supportsGatewayControl: true }
           : {}),
       };

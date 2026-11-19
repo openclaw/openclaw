@@ -3,10 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { getActiveNativeAttempt } from "../../../agents/embedded-agent-runner/run-state.js";
 import * as workspace from "../../../agents/workspace.js";
 import { readSessionTranscriptMessageEvents } from "../../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { getRpcSourceIdentity } from "../../../sessions/session-controller.rpc-sources.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
@@ -579,5 +581,105 @@ describe("native Talk through the public OpenAI plugin registration", () => {
       );
       expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
     });
+  });
+});
+
+const GA_AUDIO_SDP = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
+
+// ChatGPT OAuth only: the fixture's auth mock reports no Platform profile.
+function oauthOnlyForcedConsult(config: OpenClawConfig) {
+  const realtime = config.talk!.realtime!;
+  realtime.providers = { openai: {} };
+  realtime.consultRouting = "force-agent-consult";
+}
+
+function createGatewayControlledTalk(
+  invokeResponse: Parameters<Parameters<typeof withNativePlugin>[0]>[0]["invokeResponse"],
+) {
+  return invokeResponse("talk.client.create", {
+    sessionKey: SESSION_KEY,
+    mode: "realtime",
+    transport: "webrtc",
+    brain: "agent-consult",
+    capabilities: ["gateway-control-v1"],
+  });
+}
+
+describe("Gateway-controlled GA Talk over ChatGPT OAuth", () => {
+  installNativePluginTestHooks();
+
+  it("forces one agent consult per final transcript and speaks its answer", async () => {
+    upstream.fetch.mockImplementation(async (url) =>
+      typeof url === "string" && url.endsWith("/hangup")
+        ? new Response(null, { status: 200 })
+        : new Response("v=ga-answer\r\n", {
+            status: 201,
+            headers: { Location: "/v1/realtime/calls/rtc_forced" },
+          }),
+    );
+    upstream.runEmbeddedAgent.mockImplementation(nativeConsult("You have two meetings today."));
+    await withNativePlugin(
+      async ({ invokeResponse, offer }) => {
+        const [ok, result, error] = await createGatewayControlledTalk(invokeResponse);
+        expect({ ok, error }).toEqual({ ok: true, error: undefined });
+        const created = result as Record<string, unknown>;
+        expect(created.clientControl).toEqual({ owner: "gateway" });
+
+        const { handling, response } = offer(requireString(created, "clientSecret"), GA_AUDIO_SDP);
+        await expect.poll(() => upstream.sockets.length).toBe(1);
+        const socket = upstream.sockets[0]!;
+        expect(socket.url).toBe("wss://api.openai.com/v1/realtime?call_id=rtc_forced");
+        expect(socket.options?.headers).toMatchObject({
+          Authorization: expect.stringMatching(/^Bearer /),
+          "chatgpt-account-id": "native-test",
+        });
+        const [callUrl, callInit] = upstream.fetch.mock.calls[0]!;
+        expect(callUrl).toBe("https://api.openai.com/v1/realtime/calls");
+        expect(new Headers(callInit?.headers).get("chatgpt-account-id")).toBe("native-test");
+        socket.open();
+        const update = JSON.parse(
+          await socket.waitForSent((frame) => frame.includes('"session.update"')),
+        );
+        expect(update.session.model).toBe("gpt-realtime-2.1");
+        expect(update.session.audio.input.turn_detection).toMatchObject({
+          create_response: false,
+          interrupt_response: true,
+        });
+        socket.serverEvent({ type: "session.updated", session: update.session });
+        await handling;
+        expect(response.res.statusCode).toBe(201);
+
+        socket.serverEvent({
+          type: "conversation.item.input_audio_transcription.completed",
+          item_id: "item_user_1",
+          transcript: "What is on my calendar today?",
+        });
+        const spoken = JSON.parse(
+          await socket.waitForSent((frame) => frame.includes("You have two meetings today.")),
+        );
+        expect(spoken).toMatchObject({ type: "conversation.item.create" });
+        await socket.waitForSent((frame) => frame.includes('"response.create"'));
+        expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
+        expect(upstream.runEmbeddedAgent.mock.calls[0]?.[0].prompt).toContain(
+          "What is on my calendar today?",
+        );
+      },
+      { model: "gpt-realtime-2.1", configure: oauthOnlyForcedConsult },
+    );
+  });
+
+  it("rejects forced consult routing for GPT-Live, which delegates natively", async () => {
+    await withNativePlugin(
+      async ({ invokeResponse }) => {
+        const [ok, , error] = await createGatewayControlledTalk(invokeResponse);
+        expect(ok).toBe(false);
+        expect(error).toMatchObject({
+          code: ErrorCodes.INVALID_REQUEST,
+          message: expect.stringContaining("cannot use forced agent consult routing"),
+        });
+        expect(upstream.fetch).not.toHaveBeenCalled();
+      },
+      { model: "gpt-live-1-codex", configure: oauthOnlyForcedConsult },
+    );
   });
 });

@@ -24,6 +24,7 @@ import type {
   RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceCloseDisposition,
   RealtimeVoiceToolCallEvent,
+  RealtimeVoiceToolResultOptions,
 } from "../../talk/provider-types.js";
 import {
   createRealtimeVoiceSessionHarness,
@@ -37,6 +38,10 @@ import type {
   GatewayControlOwner,
   TalkAgentConsultRequest,
 } from "./client-agent-consult.types.js";
+import {
+  createTalkGatewayForcedConsultRouter,
+  type TalkConsultOutcome,
+} from "./client-gateway-control-forced-consult.js";
 import { createTalkRealtimeRunControlOwner, createTalkRunCancel } from "./realtime-run-control.js";
 import { resolveOwnedActiveTalkRunTarget } from "./run-ownership.js";
 import { registerTalkConnectionCleanup } from "./session-registry.js";
@@ -142,12 +147,18 @@ export function createTalkClientGatewayControlOwner(
     }
     commands = nextCommands;
   };
-  const submit = async (callId: string, result: unknown): Promise<void> => {
+  const submit = async (
+    callId: string,
+    result: unknown,
+    options?: RealtimeVoiceToolResultOptions,
+  ): Promise<void> => {
     assertActive();
     if (!commands?.submitToolResult) {
       throw new Error("Realtime voice tool control is not available");
     }
-    await commands.submitToolResult(callId, result);
+    await (options
+      ? commands.submitToolResult(callId, result, options)
+      : commands.submitToolResult(callId, result));
   };
   const rejectToolCall = (callId: string, message: string) => {
     void submit(callId, { error: message }).catch((error: unknown) => {
@@ -198,34 +209,84 @@ export function createTalkClientGatewayControlOwner(
   };
 
   const runConsult = async (
-    event: RealtimeVoiceToolCallEvent,
+    consultId: string,
+    args: unknown,
     controller: AbortController,
     reservedInput: SessionControllerInput | Promise<SessionControllerInput>,
+    deliver: (result: unknown, outcome: TalkConsultOutcome) => void | Promise<void>,
   ): Promise<void> => {
     let input: SessionControllerInput | undefined;
     try {
       input = await reservedInput;
-      const result = await admitConsult(params.runToolAgentConsult, event.args, input);
+      const result = await admitConsult(params.runToolAgentConsult, args, input);
       if (signal.aborted) {
         return;
       }
-      await submit(event.callId, { result: result.text });
+      await deliver({ result: result.text }, "completed");
     } catch (error) {
       if (signal.aborted) {
         return;
       }
-      const result =
-        (input?.abortSignal ?? controller.signal).aborted || readErrorName(error) === "AbortError"
-          ? buildRealtimeVoiceAgentCancelProviderResult()
-          : { error: formatError(error) };
-      await submit(event.callId, result);
+      if (
+        (input?.abortSignal ?? controller.signal).aborted ||
+        readErrorName(error) === "AbortError"
+      ) {
+        await deliver(buildRealtimeVoiceAgentCancelProviderResult(), "cancelled");
+      } else {
+        await deliver({ error: formatError(error) }, "failed");
+      }
     } finally {
       retireUnadoptedReplySource(input);
-      if (consultControllers.get(event.callId)?.controller === controller) {
-        consultControllers.delete(event.callId);
+      if (consultControllers.get(consultId)?.controller === controller) {
+        consultControllers.delete(consultId);
       }
     }
   };
+
+  /** Admits one Gateway-run consult; false when this call's consult queue is full. */
+  const startConsult = (
+    consultId: string,
+    args: unknown,
+    deliver: (result: unknown, outcome: TalkConsultOutcome) => void | Promise<void>,
+  ): boolean => {
+    if (consultAdmissionSealed || consults.size >= MAX_ACCEPTED_TALK_CONSULTS) {
+      consultAdmissionSealed = true;
+      return false;
+    }
+    const controller = new AbortController();
+    const admissionSignal = AbortSignal.any([signal, controller.signal]);
+    assertActive();
+    admissionSignal.throwIfAborted();
+    const input = reserveSessionControllerSource(params.sessionTarget.canonicalKey, {
+      policy: { mode: "followup" },
+      target: captureSessionTarget({
+        storeScope: params.sessionTarget.storePath,
+        sessionKey: params.sessionTarget.canonicalKey,
+        agentId: params.sessionTarget.agentId,
+      }),
+      adapter: { signal: controller.signal },
+    });
+    // Provider callbacks can arrive outside the originating RPC's async scope.
+    bindGatewayContextResolver(input, params.context.resolveGatewayContext);
+    consultControllers.set(consultId, { controller, closeDisposition: "abort" });
+    const consult = runConsult(consultId, args, controller, input, deliver)
+      .catch((error: unknown) => {
+        warn(`talk Gateway control consult failed: ${formatError(error)}`);
+      })
+      .finally(() => consults.delete(consult));
+    consults.add(consult);
+    return true;
+  };
+
+  const forcedConsults = params.forceAgentConsultOnFinalTranscript
+    ? createTalkGatewayForcedConsultRouter({
+        forcedConsults: harness.forcedConsults,
+        startConsult,
+        speak: (text) => owner.sendSpeech(text),
+        isClosed: () => signal.aborted,
+        warn,
+      })
+    : undefined;
 
   const runControl = createTalkRealtimeRunControlOwner({
     controlSource: params.controlSource,
@@ -331,37 +392,16 @@ export function createTalkClientGatewayControlOwner(
         });
         return;
       }
-      if (consultAdmissionSealed || consults.size >= MAX_ACCEPTED_TALK_CONSULTS) {
-        consultAdmissionSealed = true;
-        rejectToolCall(event.callId, "Realtime Talk consult queue is full");
+      const duplicate = forcedConsults?.claimNativeConsult(event.args, event.callId);
+      if (duplicate) {
+        void submit(event.callId, duplicate, { suppressResponse: true }).catch((error: unknown) => {
+          warn(`talk Gateway control duplicate consult result failed: ${formatError(error)}`);
+        });
         return;
       }
-      const controller = new AbortController();
-      const admissionSignal = AbortSignal.any([signal, controller.signal]);
-      const reserve = () => {
-        assertActive();
-        admissionSignal.throwIfAborted();
-        const input = reserveSessionControllerSource(params.sessionTarget.canonicalKey, {
-          policy: { mode: "followup" },
-          target: captureSessionTarget({
-            storeScope: params.sessionTarget.storePath,
-            sessionKey: params.sessionTarget.canonicalKey,
-            agentId: params.sessionTarget.agentId,
-          }),
-          adapter: { signal: controller.signal },
-        });
-        // Provider callbacks can arrive outside the originating RPC's async scope.
-        bindGatewayContextResolver(input, params.context.resolveGatewayContext);
-        return input;
-      };
-      const input = reserve();
-      consultControllers.set(event.callId, { controller, closeDisposition: "abort" });
-      const consult = runConsult(event, controller, input)
-        .catch((error: unknown) => {
-          warn(`talk Gateway control consult failed: ${formatError(error)}`);
-        })
-        .finally(() => consults.delete(consult));
-      consults.add(consult);
+      if (!startConsult(event.callId, event.args, (result) => submit(event.callId, result))) {
+        rejectToolCall(event.callId, "Realtime Talk consult queue is full");
+      }
       return;
     }
     if (event.name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
@@ -414,8 +454,12 @@ export function createTalkClientGatewayControlOwner(
       transcriptReadiness.fail(error);
       warn(`talk Gateway control transcript failed: ${formatError(error)}`);
     });
-    if (role === "user" && !signal.aborted) {
-      runControl.handleSpoken(text, params.flushTranscript);
+    if (
+      role === "user" &&
+      !signal.aborted &&
+      !runControl.handleSpoken(text, params.flushTranscript)
+    ) {
+      forcedConsults?.scheduleForFinalTranscript(text.trim());
     }
   };
 

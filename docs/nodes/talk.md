@@ -189,7 +189,9 @@ configured realtime API key, an `openai` API-key profile, then
 ChatGPT OAuth profile and exchanges SDP through the Gateway's single-use offer
 broker, so the OAuth token never reaches the browser. A configured Platform
 credential that cannot be resolved blocks the request instead of silently falling
-through to OAuth.
+through to OAuth. Gateway-controlled WebRTC (`gateway-control-v1`) with these GA
+models uses the same credential order and OAuth fallback; the Gateway attaches
+the call's server sideband with the same credential.
 
 iOS client-owned WebRTC and GA Gateway relay, including Android GA realtime,
 remain Platform-key-only. GA browser Talk keeps the existing client-owned data channel
@@ -221,7 +223,7 @@ Platform-key-only.
 | `realtime.model`                         | provider default                            | Realtime voice model. Overrides `realtime.providers.<id>.model` when both are set — the same precedence `talk.client.create` applies at session time.                                                                                                          |
 | `realtime.transport`                     | -                                           | `webrtc`: OpenAI WebRTC on iOS, in the browser, and on Watch with Gateway control. `provider-websocket`: browser-owned, stays on Gateway relay on iOS. `gateway-relay`: keeps provider audio on the Gateway; Android uses realtime only with this transport.   |
 | `realtime.brain`                         | -                                           | `agent-consult` routes realtime tool calls through Gateway policy; `direct-tools` is legacy direct-tool compatibility; `none` is for transcription/external orchestration.                                                                                     |
-| `realtime.consultRouting`                | -                                           | `provider-direct` preserves the provider's direct reply when it skips `openclaw_agent_consult`; `force-agent-consult` routes finalized user transcripts through OpenClaw instead.                                                                              |
+| `realtime.consultRouting`                | -                                           | `provider-direct` preserves the provider's direct reply when it skips `openclaw_agent_consult`; `force-agent-consult` routes finalized user transcripts through OpenClaw instead, on Gateway relay and Gateway-controlled WebRTC. GPT-Live rejects it.         |
 | `realtime.instructions`                  | -                                           | Appends provider-facing system instructions to OpenClaw's built-in realtime prompt.                                                                                                                                                                            |
 
 Realtime Talk reads `talk.realtime`. If an older installation inherited realtime

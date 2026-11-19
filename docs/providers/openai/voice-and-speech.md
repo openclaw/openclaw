@@ -234,8 +234,10 @@ sidebarTitle: "Voice and speech"
     browser's SDP, and returns only the answer SDP. An explicitly configured but
     unavailable Platform credential fails instead of falling back to OAuth.
 
-    Gateway-controlled GA relay, iOS client-owned WebRTC, GA Voice Call, direct
-    backend sockets, and GA Discord realtime voice require Platform auth.
+    Gateway-controlled GA WebRTC (`gateway-control-v1`) follows the same order
+    and OAuth fallback; the Gateway attaches the call's server sideband with the
+    same credential. GA Gateway relay, iOS client-owned WebRTC, GA Voice Call,
+    direct backend sockets, and GA Discord realtime voice require Platform auth.
 
     #### GPT-Live API
 

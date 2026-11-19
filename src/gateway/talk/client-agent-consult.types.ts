@@ -79,6 +79,8 @@ export type TalkClientGatewayControlOptions = {
   providerId?: string;
   supportsToolCalls?: boolean;
   controlSource?: "delegation" | "transcript";
+  /** Run one agent consult for each final user transcript the provider does not route itself. */
+  forceAgentConsultOnFinalTranscript?: boolean;
   sessionTarget: PreparedTalkSessionTarget;
   connId: string;
   context: Pick<GatewayRequestContext, "broadcastToConnIds" | "logGateway"> & TalkRunCancelContext;
