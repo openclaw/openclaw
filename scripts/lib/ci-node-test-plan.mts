@@ -5400,7 +5400,7 @@ function createCompactNodeTestShardBundles(
     const usesBlacksmithRunner = usesBlacksmithCapacity(groups[0].runner);
     // Admit the final groups with their shared prerequisite. Rebalancing after
     // this check can break build sharing and exceed a bin's admitted cap.
-    // Retry over-cap hybrid plans with Gateway first; leave successful cost-first
+    // Retry over-cap plans with Gateway first; leave successful cost-first
     // placement and its runtime recipients intact.
     const sortedGroups = groups
       .flatMap((group) => expandCompactGroup(group, options.runnerBackend))
@@ -5931,7 +5931,11 @@ function createCompactNodeTestShardBundles(
         )
       : finalJobs;
   if (measuredJobs.length > compactJobCap) {
-    if (options.runnerBackend === "hybrid" && !prioritizeSerialGateway) {
+    if (
+      (options.runnerBackend === "hybrid" ||
+        (options.runnerBackend === "github" && options.mainValidation)) &&
+      !prioritizeSerialGateway
+    ) {
       // Rebuild from source so the alternate order passes every admission and
       // runtime-placement check before any rows are published.
       return createCompactNodeTestShardBundles(
