@@ -1,22 +1,75 @@
 // @vitest-environment jsdom
+import type { JSX } from "@solidjs/web";
 import { createSignal, Show } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { ApplicationContext } from "../../app/context-types.ts";
+import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { PluginsHubHeader } from "./plugins-hub-header.tsx";
 import type { PluginsHubTab } from "./plugins-hub.ts";
 
+function templatesFlag(templates: boolean) {
+  const context = {
+    runtimeConfig: {
+      state: {
+        configForm: null,
+        configSnapshot: { config: { gateway: { controlUi: { experimental: { templates } } } } },
+      },
+      subscribe: () => () => undefined,
+    },
+  } as unknown as ApplicationContext;
+  return {
+    wrapper: (props: { children: JSX.Element }) => (
+      <ApplicationProvider value={context}>{props.children}</ApplicationProvider>
+    ),
+  };
+}
+
+// The tabs show only in the native apps, which have no Customize sidebar.
+beforeEach(() => {
+  Object.assign(window, { __OPENCLAW_NATIVE_EMBED__: { platform: "ios", formFactor: "phone" } });
+});
+afterEach(() => {
+  Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_EMBED__");
+});
+
+it("leaves the Customize pages to the sidebar outside the native apps", () => {
+  Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_EMBED__");
+  const view = mountSolid(
+    () => <PluginsHubHeader active="plugins" onSelect={() => {}} />,
+    templatesFlag(true),
+  );
+  expect(view.getByRole("heading", { level: 1 }).textContent).toBe("Plugins");
+  expect(view.queryAllByRole("tab")).toEqual([]);
+});
+
+it("lists Templates as a Customize tab only while its experimental flag is on", () => {
+  const tabs = (templates: boolean) =>
+    mountSolid(
+      () => <PluginsHubHeader active="plugins" onSelect={() => {}} />,
+      templatesFlag(templates),
+    )
+      .getAllByRole("tab")
+      .map((tab) => tab.textContent);
+  expect(tabs(true)).toEqual(["Plugins", "Skills", "Skill workshop", "Templates"]);
+  expect(tabs(false)).toEqual(["Plugins", "Skills", "Skill workshop"]);
+});
+
 it("keeps Plugins hub tabs and actions live in the shared hub header", () => {
   const [active, setActive] = createSignal<PluginsHubTab>("plugins");
   const onSelect = vi.fn();
   const onSettings = vi.fn();
-  const view = mountSolid(() => (
-    <PluginsHubHeader
-      active={active()}
-      onSelect={onSelect}
-      secondaryAction={{ label: "Manage plugins", onClick: onSettings }}
-    />
-  ));
+  const view = mountSolid(
+    () => (
+      <PluginsHubHeader
+        active={active()}
+        onSelect={onSelect}
+        secondaryAction={{ label: "Manage plugins", onClick: onSettings }}
+      />
+    ),
+    templatesFlag(false),
+  );
 
   expect(view.container.querySelector(".plugins-hub-header.hub-page-header h1")?.textContent).toBe(
     "Plugins",
@@ -37,11 +90,14 @@ it("keeps Plugins hub tabs and actions live in the shared hub header", () => {
 
 it("restores keyboard focus to the destination tab when its route replaces the header", async () => {
   const [active, setActive] = createSignal<PluginsHubTab>("skills");
-  const view = mountSolid(() => (
-    <Show when={active()} keyed>
-      {(tab) => <PluginsHubHeader active={tab} onSelect={setActive} />}
-    </Show>
-  ));
+  const view = mountSolid(
+    () => (
+      <Show when={active()} keyed>
+        {(tab) => <PluginsHubHeader active={tab} onSelect={setActive} />}
+      </Show>
+    ),
+    templatesFlag(false),
+  );
   const workshop = view.getByRole("tab", { name: "Skill workshop" });
   workshop.focus();
   workshop.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));

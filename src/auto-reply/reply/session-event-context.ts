@@ -83,7 +83,7 @@ export async function stageSessionEventInput(
     !(await recorder.stageApproved({
       runId,
       assertCurrent,
-      // Only this live policy retry can reclaim its cancelled attempt.
+      // Only this live admission retry can reclaim its cancelled attempt.
       retryCancelled: readmissionAttempt > 0,
     }))
   ) {
@@ -241,7 +241,7 @@ export function buildSessionEventContext(params: {
       skillLibrarySelections: automation.job.skillLibrarySelections,
     };
   }
-  const operatorAuthority = automation?.controlUiAdmin
+  const operatorAuthority = automation?.automationAdmin
     ? automation.operatorAuthority
     : options.source === "plugin" ||
         options.source === "tool_handoff" ||
@@ -253,7 +253,7 @@ export function buildSessionEventContext(params: {
   const requesterOwnerCheck = readSessionEventTargetRequesterOwner(target)?.assertCurrent;
   if (
     operatorAuthority &&
-    (automation?.controlUiAdmin ||
+    (automation?.automationAdmin ||
       (options.source === "restart"
         ? operatorAuthority.scopes.includes("operator.admin")
         : readSessionEventTargetOwnerContinuation(target)))

@@ -579,16 +579,36 @@ export async function removeStateAndLinkedPaths(
   }
 }
 
+type WorkspaceRemovalOptions = {
+  dryRun?: boolean;
+  preserveWorkspace?: boolean;
+  removeStateRows?: boolean;
+  removeWorkspace?: (workspace: string) => Promise<boolean>;
+  retainedState?: Pick<CleanupResolvedPaths, "configPath" | "stateDir">;
+};
+
 /** Remove all workspace directories selected by the cleanup plan. */
 export async function removeWorkspaceDirs(
   workspaceDirs: readonly string[],
   runtime: RuntimeEnv,
-  opts?: {
-    dryRun?: boolean;
-    preserveWorkspace?: boolean;
-    removeStateRows?: boolean;
-    removeWorkspace?: (workspace: string) => Promise<boolean>;
-  },
+  opts?: WorkspaceRemovalOptions,
+): Promise<string[]> {
+  if (!opts?.retainedState || opts.dryRun) {
+    return removeWorkspaceEntries(workspaceDirs, runtime, opts);
+  }
+  // A missing service is not proof that the workspace's Gateway has stopped.
+  const lock = await acquireStateCleanupOwnership(opts.retainedState);
+  try {
+    return await lock.run(() => removeWorkspaceEntries(workspaceDirs, runtime, opts));
+  } finally {
+    await lock.release();
+  }
+}
+
+async function removeWorkspaceEntries(
+  workspaceDirs: readonly string[],
+  runtime: RuntimeEnv,
+  opts?: WorkspaceRemovalOptions,
 ): Promise<string[]> {
   const failures = new Set<string>();
   const attempt = async <T>(label: string, action: () => T | Promise<T>) => {

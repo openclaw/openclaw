@@ -16,7 +16,6 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import {
   expectCurrent,
-  expectRevoked,
   recoveryFixture,
   restoreFixture,
 } from "./operator-run-recovery.test-support.js";
@@ -31,7 +30,7 @@ describe("recovered access policy", () => {
     "unavailable",
     "unavailable publication",
   ] as const)(
-    "resumes the original access grant once and fences retained recovery through %s",
+    "keeps its admitted access grant through %s and rechecks a fresh restoration",
     (revocation) =>
       withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const original = { pluginId: "recovery-access", grantId: "original-accepted-grant" };
@@ -115,7 +114,7 @@ describe("recovered access policy", () => {
             if (revocation === "unavailable publication") {
               publishOperatorRoleConfigChange(fixture.context);
             }
-            expect(restored.authority.assertCurrent).toThrow(GatewayOperatorAccessUnavailableError);
+            expect(restored.authority.assertCurrent).not.toThrow();
             expect(restored.authority.signal?.aborted).toBe(false);
             unavailable = false;
             expectCurrent(restored.authority);
@@ -123,7 +122,7 @@ describe("recovered access policy", () => {
           }
           if (revocation === "signal") {
             controller.abort(new Error("Original grant revoked"));
-            expect(restored.authority.signal?.aborted).toBe(true);
+            expect(restored.authority.signal?.aborted).toBe(false);
           } else if (revocation === "assertion") {
             permitted = false;
           } else if (revocation === "policy callback") {
@@ -138,7 +137,8 @@ describe("recovered access policy", () => {
           } else {
             additionalApplicable = true;
           }
-          expectRevoked(restored.authority);
+          expectCurrent(restored.authority);
+          await expect(fixture.restore()).rejects.toThrow();
         } finally {
           restoreActivePluginRegistrySnapshot(previous);
         }

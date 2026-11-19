@@ -47,8 +47,9 @@ tools include a bounded expected input signature when one can be rendered,
 plus the received type at the rejected field. Short scalar previews can show
 serialization mistakes such as `"10"` instead of `10`. Sensitive fields and
 registered secrets are redacted; arbitrary text and container contents are
-withheld. Diagnostics are bounded, and invalid arguments still fail before
-the target tool executes.
+withheld. If the signature omits a field, follow the error’s `tool_describe`
+reference for the exact tool ID and input schema. Invalid arguments still fail
+before the target tool executes.
 If a call mistakes an admitted skill name for a tool ID, the error points back
 to the skill’s complete instructions instead of sending the model through tool search.
 
@@ -106,6 +107,15 @@ run:
 
 At execution time every real tool call returns to OpenClaw, where the normal
 policy, approval, hook, logging, and result handling still apply.
+
+Network-backed results use the active model's normal tool-result budget, including
+the external-content wrapper and sanitization overhead. Tool Search does not
+apply a separate 20,000-character ceiling.
+
+If a complete network result cannot fit, Tool Search omits the payload rather than
+showing a partial page with a misleading continuation cursor. For a read-only
+operation, request a smaller page from the same starting position. The original
+operation has already run; do not repeat a mutation just to recover its output.
 
 ## Modes
 

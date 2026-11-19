@@ -41,6 +41,62 @@ Publishing and searching Templates through ClawHub use the separate registry
 surface. The Control UI can browse official and community Templates from **Pages → Templates** at `/templates`
 when **Templates** is enabled in **Settings → Labs**.
 
+## Add an unpublished local project to a running Gateway
+
+```bash
+openclaw templates add ./incident-triage --json
+```
+
+When a local Gateway owns the state directory, Add forwards the canonical local
+project directory to that Gateway's existing installation owner. No publication
+or Gateway restart is required. The path must be accessible on the Gateway host;
+this is not a browser upload or a remote file transfer. Online Add requires
+operator-admin authority and a canonical project accepted by `templates validate`.
+Online Add selects the workspace on the Gateway and rejects `--workspace`.
+Offline Add retains its existing local-source behavior.
+
+The Gateway builds a snapshot containing only declared project files, reviews its
+exact artifact integrity, and retains that artifact before installation. A project
+changed between preview and apply must be reviewed again. Local content is not
+published to or scanned by ClawHub; dependencies still use their existing registry
+verification and consent checks. Online plugin installation requires
+`--accept-capabilities`; dependency trust warnings additionally require
+`--acknowledge-clawhub-risk`. Review dependencies before passing these flags.
+
+API clients can preview with `templates.add.plan` and apply with
+`templates.add.apply`, using `source: { kind: "local", path: "/absolute/project" }`.
+Pass the returned `planIntegrity` and any required dependency acknowledgements to
+apply. Paths refer to directories on the Gateway host, not the caller's machine.
+
+## Import a Template archive in the Control UI
+
+With Templates enabled, open **Pages → Templates**, click **+ Import** (the Import
+icon in the header on mobile), and select a `.tgz` built with
+`openclaw templates build`. The file is read from your
+browser's computer, not from a path on the Gateway. Uploads are limited to 1 MiB
+compressed, 8 MiB extracted, and 4,096 archive entries. Unsafe paths, links,
+malformed archives, and invalid projects are rejected before installation.
+
+The native file picker opens on your computer. After selecting an archive,
+review its proposed agent, workspace files, skills, plugins, MCP servers,
+automations, and required dependency consent in the shared Template card, then
+confirm **Import**. Use Back to return from an item, or Cancel to choose another
+archive. Choosing a file
+does not install it. The exact archive bytes bind the review to installation
+through the existing live Add owner; no publication or restart is needed. The
+origin and ClawHub scan status of a local file are unverified. Current operator-admin authority is required. Canceling,
+leaving the page, or changing the connection drops the browser's pending archive.
+After an uncertain installation result, inspect the agent before uploading again.
+
+For API clients, the same `templates.add.plan` and `templates.add.apply` methods
+accept `source: { kind: "upload", archiveBase64: "..." }`. Reuse the exact payload
+and the returned `planIntegrity`, with the normal dependency acknowledgements,
+for apply. No permanent upload registry is created.
+
+Template Add logs record a correlation ID, operation stage, outcome, and duration
+without archive bytes or Template contents. Use the correlation ID when
+investigating an unsuccessful import.
+
 ## Create with an agent
 
 Ask the agent, “create a new template from this agent.” The bundled
@@ -333,6 +389,35 @@ Package and workspace paths must stay inside the package root. Manifests are
 limited to 1 MiB, package metadata to 256 KiB, and workspace files have
 per-file and aggregate limits. Selected files become package content, so
 review them for secrets before building or publishing.
+
+### Welcome description and conversation starters
+
+A Template may set optional `agent.description` and `agent.recommendedPrompts`
+metadata for the installed agent’s main/new-chat welcome page:
+
+```yaml
+agent:
+  id: project-briefing
+  description: Follows your repositories and briefs you on meaningful changes.
+  recommendedPrompts:
+    - Set up a repository
+    - Brief me on recent changes
+    - Show my tracked projects
+```
+
+When no recent chats are available, a nonempty list replaces the default welcome
+prompts. An unset or empty list keeps the defaults. Recent chats, incognito,
+phone layout, and model setup keep their existing display rules. The Template
+page, Add flow, and bootstrap instructions are unchanged.
+
+Prompts use the shared metadata limits: at most three nonempty strings, each at
+most 128 Unicode code points after whitespace normalization. Declare them in
+`CLAW.md`, not in `profiles/openclaw.yml`.
+
+**Compatibility:** this field requires a build with agent welcome prompt support.
+OpenClaw 2026.11.4 and older reject it because Template agent schemas are strict.
+Keep `schemaVersion: 1`; omit `recommendedPrompts` when supporting those versions.
+See [agent welcome settings](/gateway/config-agents/entries-and-multi-agent#chat-welcome).
 
 <a id="inspect-and-preview"></a>
 

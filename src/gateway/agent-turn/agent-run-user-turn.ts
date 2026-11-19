@@ -35,7 +35,10 @@ import {
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript-admission.js";
 import { retainsUserTurnTranscriptMedia } from "../../sessions/user-turn-transcript-media.js";
-import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
+import {
+  completeUserTurnProcessing,
+  settleUserTurnPendingInput,
+} from "../../sessions/user-turn-transcript-processing.js";
 import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
@@ -270,7 +273,10 @@ export async function prepareAgentRunUserTurn(params: {
         "Private completion requires an exact internal requester turn with delivery disabled",
       );
     }
-    const trackRequesterCompletion = params.privateCompletion || settleWakeReplay !== undefined;
+    const trackRequesterCompletion =
+      params.privateCompletion ||
+      settleWakeReplay !== undefined ||
+      Boolean(params.subagentCompletions?.length);
     const suppressPromptPersistence =
       !params.privateCompletion && params.requestedPromptPersistenceSuppression;
     if (
@@ -529,6 +535,7 @@ export async function prepareAgentRunUserTurn(params: {
     const failure = await releasePreparedAgentRunUserTurnAfterFailure(
       { recorder, claimedExecApprovalFollowupHandoffId, execApprovalFollowupHandoffClaimId },
       error,
+      params.abortSignal,
     );
     if (!mediaRetained) {
       await Promise.allSettled(createdMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
@@ -581,14 +588,22 @@ export async function releasePreparedAgentRunUserTurn(
     | "execApprovalFollowupHandoffClaimId"
   >,
   disposition: "cancelled" | "interrupted" = "cancelled",
-  userInitiated?: true,
+  signal?: AbortSignal,
+  failure?: unknown,
+  accepted = true,
 ): Promise<void> {
   try {
     prepared.releaseProcessingAbortObserver?.();
-    prepared.recorder?.finishPendingInput?.(disposition, userInitiated);
   } finally {
     try {
-      await prepared.recorder?.waitForPendingInputSettlement?.();
+      await settleUserTurnPendingInput(
+        prepared.recorder,
+        signal,
+        failure,
+        false,
+        disposition,
+        accepted,
+      );
     } finally {
       releaseExecApprovalFollowupRuntimeHandoff({
         handoffId: prepared.claimedExecApprovalFollowupHandoffId,
@@ -612,10 +627,11 @@ export class AgentRunUserTurnCleanupError extends AggregateError {
 export async function releasePreparedAgentRunUserTurnAfterFailure(
   prepared: Parameters<typeof releasePreparedAgentRunUserTurn>[0],
   error: unknown,
-  disposition: "cancelled" | "interrupted" = "cancelled",
+  signal: AbortSignal | undefined,
+  accepted = false,
 ): Promise<unknown> {
   try {
-    await releasePreparedAgentRunUserTurn(prepared, disposition);
+    await releasePreparedAgentRunUserTurn(prepared, "cancelled", signal, error, accepted);
     return error;
   } catch (cleanupError) {
     return new AgentRunUserTurnCleanupError(error, cleanupError);

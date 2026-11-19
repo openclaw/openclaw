@@ -297,12 +297,12 @@ remain omitted.
 ## Image generation
 
 The bundled `google` image-generation provider defaults to
-`google/gemini-3.1-flash-image`.
+`google/gemini-nano-banana-2.1`.
 
-- Also supports `google/gemini-3-pro-image`
+- Also supports `google/gemini-3.1-flash-image` and `google/gemini-3-pro-image`
 - Generate: up to 4 images per request
-- Edit mode: enabled, up to 5 input images
-- Geometry controls: `size`, `aspectRatio`, and `resolution`
+- Edit mode: enabled, up to 5 input images (up to 14 reference images on `google/gemini-nano-banana-2.1`)
+- Geometry controls: `size`, `aspectRatio` (including `1:4`, `4:1`, `1:8`, and `8:1` on `google/gemini-nano-banana-2.1`), and `resolution` (`1K`, `2K`, `4K`)
 
 To use Google as the default image provider:
 
@@ -312,7 +312,7 @@ To use Google as the default image provider:
     defaults: {
       mediaModels: {
         image: {
-          primary: "google/gemini-3.1-flash-image",
+          primary: "google/gemini-nano-banana-2.1",
         },
       },
     },

@@ -5,8 +5,12 @@ import type { AgentActivityItem } from "../../../../packages/gateway-protocol/sr
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ToolCard } from "../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { ownSessionLaunchCalls, resolveSpawnedSubagent } from "./chat-spawned-subagent.ts";
 import { indexRecordedSubagentStopNames } from "./chat-subagent-history.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
+import { renderChatInto } from "./chat-view.test-helpers.ts";
 import { selectActivityHeadline } from "./components/chat-activity-headline-selection.ts";
 import { createActivityGroupHarness } from "./components/chat-message-native.test-support.tsx";
 import {
@@ -19,6 +23,10 @@ import {
 } from "./components/chat-message.test-support.ts";
 import { ChatToolCard } from "./components/chat-tool-cards.solid.tsx";
 import { settleToolBridges } from "./components/chat-tool-render.test-support.ts";
+import {
+  installTranscriptDomMocks,
+  resetTranscriptTestDom,
+} from "./components/chat-transcript.test-support.ts";
 
 const parentKey = "agent:main:dashboard:11111111-1111-4111-8111-111111111111";
 const label = "Write a six-line robot story";
@@ -503,4 +511,69 @@ it("keeps parent interruption visible for an unrecorded lifecycle call without r
       expect(text).toContain(result ? settled : "interrupted");
     }
   }
+});
+
+it("opens a grouped child chat through the full view navigation action", async () => {
+  installTranscriptDomMocks();
+  onTestFinished(() => {
+    resetChatViewState();
+    resetTranscriptTestDom();
+  });
+  const container = createComposerContainer();
+  const childKey = "agent:research:dashboard:notes";
+  const onOpenSessionLink = vi.fn();
+  renderChatInto(container, {
+    sessionKey: parentKey,
+    onOpenSessionLink,
+    messages: [
+      { role: "user", content: "Read the source and open a notes chat.", timestamp: 1 },
+      createAssistantMessage(
+        [
+          ...pair("read", "read", { path: "/repo/source.ts" }, "Source loaded."),
+          ...pair("child", "sessions_spawn", { label: "Notes", visible: true }, accepted(childKey)),
+          ...pair("write", "write", { path: "/repo/result.ts", content: "Ready." }, "Written."),
+        ],
+        { runId: "parent", timestamp: 2 },
+      ),
+      {
+        role: "assistant",
+        runId: "parent",
+        content: "Notes are ready.",
+        phase: "final_answer",
+        timestamp: 3,
+      },
+    ],
+  });
+  await waitForSolid(() => {
+    expect(
+      container.querySelector(".chat-work-group > .chat-activity-group__summary"),
+    ).not.toBeNull();
+  });
+  container
+    .querySelector<HTMLButtonElement>(".chat-work-group > .chat-activity-group__summary")!
+    .click();
+  await waitForSolid(() => {
+    expect(
+      container.querySelector(
+        ".chat-activity-group:not(.chat-work-group) > .chat-activity-group__summary",
+      ),
+    ).not.toBeNull();
+  });
+  container
+    .querySelector<HTMLButtonElement>(
+      ".chat-activity-group:not(.chat-work-group) > .chat-activity-group__summary",
+    )!
+    .click();
+  await waitForSolid(() => {
+    expect(container.textContent).toContain("Opened child chat");
+  });
+  const link = [
+    ...container.querySelectorAll<HTMLButtonElement>(".chat-tool-row__subagent-link"),
+  ].find((button) => button.textContent === "Notes");
+  expect(link).toBeDefined();
+  link!.click();
+  expect(onOpenSessionLink).toHaveBeenCalledExactlyOnceWith({
+    sessionKey: childKey,
+    agentId: "research",
+  });
 });

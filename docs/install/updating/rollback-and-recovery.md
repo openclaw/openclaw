@@ -63,6 +63,17 @@ separate recovery mechanisms: cleanup does not manage package or Git runtime
 backups, and retained migration originals are not a full pre-update backup.
 Preserve every recovery location named in the update report until you have
 verified the installation.
+
+A verified update that cannot remove an obsolete package backup still succeeds
+with a warning that names the backup it could not remove. This includes the npm
+link to a dev checkout that a switch to a package moved aside, when the
+filesystem refuses to remove that unchanged link; see
+[replacing the package directory](/cli/update/how-updates-run#replacing-the-package-directory)
+for how to remove that link safely. A backup link that was replaced or cannot be
+read, and a backup directory that another writer replaced, still fail the
+update. See [status and history](/cli/update/status-and-history) for the
+warning.
+
 If a launcher backup cannot be restored, the update error names the affected
 launcher and the retained backup path.
 
@@ -204,7 +215,9 @@ Snapshots taken while a Gateway may still be writing are available for
 manual recovery only until verified successful activation, even if it exits later.
 Migrated files are kept as
 `<database>.migrated-<runId>` for inspection, and the report names the snapshots
-and displaced files. See [Recovery limits](/cli/update/how-updates-run#recovery-limits)
+and displaced files. A `<database>.migrated-<runId>.receipt.json` beside them records
+which files the rollback moved; the next verified successful update deletes them (see
+[what automatic cleanup deletes](/cli/update/repair-and-recovery#what-automatic-cleanup-deletes)). See [Recovery limits](/cli/update/how-updates-run#recovery-limits)
 for disk requirements and the lifecycle checks.
 
 Database restoration preserves current update history, including failure details

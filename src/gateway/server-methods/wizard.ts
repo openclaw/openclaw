@@ -141,6 +141,9 @@ export const wizardHandlers: GatewayRequestHandlers = {
     await startGatewayWizard({
       request,
       sessionId,
+      // A lost start reply leaves the modal without a session id to cancel.
+      // Retire abandoned channel input without interrupting in-flight writes.
+      closeInputOnDisconnect: flow === "channels",
       lockSetupTarget: flow === "setup",
       createSession,
       respondStarted: async (session) => {

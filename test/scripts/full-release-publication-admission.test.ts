@@ -436,7 +436,7 @@ async function fixture(
     qualification?: "valid" | "wrong-input" | "wrong-archive" | "expired";
     legacyGhArchive?: boolean;
     toolingFullRef?: string;
-    androidPin?: string;
+    androidPin?: string | null;
     legacyPlatforms?: "absent-helper" | "dormant-helper";
     registry?:
       | "healthy"
@@ -506,7 +506,9 @@ async function fixture(
   const androidVersion = JSON.stringify({
     version: options.androidPin ?? version.split("-")[0],
   });
-  write(target, "apps/android/version.json", androidVersion);
+  if (options.androidPin !== null) {
+    write(target, "apps/android/version.json", androidVersion);
+  }
   const writePlugins = (directory: string) => {
     for (let index = 0; index < (options.pluginCount ?? 1); index += 1) {
       const plugin = writePublishablePluginFixture(directory, {
@@ -842,7 +844,9 @@ globalThis.fetch = async (input, init = {}) => {
     const manifest = readJson(join(tooling, "package.json"));
     writeJson(tooling, "package.json", { ...manifest, version, dependencies: { yaml: "2.9.1" } });
     writePlugins(tooling);
-    write(tooling, "apps/android/version.json", androidVersion);
+    if (options.androidPin !== null) {
+      write(tooling, "apps/android/version.json", androidVersion);
+    }
   }
   let toolingSha = commit(tooling);
   let toolingFullRef = options.toolingFullRef ?? "refs/heads/main";
@@ -2320,6 +2324,7 @@ describe("FRV publication source admission", () => {
   );
 
   publicationIt.concurrent.for([
+    { version: stable, pin: null, core: true, selected: false },
     { version: stable, pin: stable, core: true, selected: true },
     { version: "2026.9.9-1", pin: stable, core: true, selected: true },
     { version: stable, pin: "2026.8.1", core: true, selected: false },

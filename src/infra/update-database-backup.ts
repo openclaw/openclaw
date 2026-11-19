@@ -251,7 +251,6 @@ export async function createUpdateDatabaseBackupInProcess(
   const { warnings } = await checkUpdateDatabaseBackupSpace(
     directory,
     await measureUpdateStateFiles(inventory.present),
-    input,
   );
   const { identities, checkpointed } = await prepareRestorableDatabaseFiles(
     inventory.present,
@@ -459,7 +458,7 @@ export async function createUpdateDatabaseBackupInProcess(
               sourceGenerations[sourcePath] = after.generation;
             } else {
               warnings.push(
-                `Database changed during capture; its snapshot requires manual recovery: ${sourcePath}`,
+                `Database write generation changed or could not be confirmed during capture (the running Gateway may have written to it); automatic rollback keeps the live database instead of this snapshot: ${sourcePath}`,
               );
             }
           }

@@ -160,6 +160,25 @@ describe("nested compaction attempts", () => {
     expect(watchdog.snapshot().executionDeadlineAtMs).toBe(100);
     watchdog.close();
   });
+
+  it("lets quiet compaction outlast the stall window while Stop still cancels it", async () => {
+    const { operation, cancel } = running();
+    operation.watchdog.attachAttempt({ assertCurrent() {} });
+    const compaction = operation.watchdog.attachAttempt({ nested: true, assertCurrent() {} });
+    compaction.setExecutionDeadline(10 * 60_000); // compaction.timeoutSeconds: 600
+    const summaryAt = 7 * 60_000;
+    await tickAt(operation.watchdog, summaryAt);
+    expect(cancel).not.toHaveBeenCalled();
+    compaction.close(); // The summary arrived; the turn resumes from here.
+    await tickAt(operation.watchdog, summaryAt + abortMs - 1);
+    expect(cancel).not.toHaveBeenCalled();
+
+    const next = operation.watchdog.attachAttempt({ nested: true, assertCurrent() {} });
+    next.setExecutionDeadline(summaryAt + abortMs + 10 * 60_000);
+    operation.abort();
+    expect(operation.abortSignal.aborted).toBe(true);
+    expect(next.isCurrent()).toBe(false);
+  });
 });
 
 describe("execution deadline recovery", () => {
@@ -174,6 +193,7 @@ describe("execution deadline recovery", () => {
         (await effect.recoverExecutionDeadline?.()) ? "resumed" : "blocked",
     });
     const attempt = watchdog.attachAttempt({ assertCurrent() {} });
+    attempt.beginTool({ toolName: "exec", toolCallId: "recovered-tool" });
     attempt.setExecutionDeadline(10);
     watchdog.beginExecution(() => 10, recover);
     watchdog.beginExecution(() => 20, laterRecovery);
@@ -181,6 +201,7 @@ describe("execution deadline recovery", () => {
     expect(recover).toHaveBeenCalledOnce();
     expect(laterRecovery).not.toHaveBeenCalled();
     expect(watchdog.snapshot().recovery).toBeUndefined();
+    expect(watchdog.describeStop().error).toMatchObject({ pendingTools: [] });
     watchdog.close();
   });
 
@@ -596,6 +617,7 @@ describe("operation-owned watchdog through controller admission", () => {
     const pendingTools = Array.from({ length: 5 }, (_, index) => ({
       toolName: `host_tool_${index}`,
       toolCallId: `host-call-${index}`,
+      explicitDeadline: false,
       elapsedMs: SESSION_WATCHDOG_QUIET_TOOL_MS,
     }));
     const started = createDeferredCore();

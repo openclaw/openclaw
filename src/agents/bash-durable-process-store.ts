@@ -29,7 +29,6 @@ export type DurableProcessRecord = Pick<
   sandboxed?: true;
   agentId: string;
   sessionKey: string;
-  sessionId: string;
   unitName: string;
   command: string;
   logPath: string;

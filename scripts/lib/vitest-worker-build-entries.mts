@@ -418,6 +418,8 @@ export const vitestWorkerBuildEntries = {
   // The journaled kill sweep seals the built recovery helper, which only a compiled graph has.
   "infra/package-update-release-switch.process.test-support":
     "src/infra/package-update-release-switch.process.test-support.ts",
+  // The killed updater claims its lease and opens state through the same compiled workers.
+  "infra/update-run-kill.process.test-support": "src/infra/update-run-kill.process.test-support.ts",
   // Keep provider preparation in the same compiled graph as payload rendering;
   // a source-injected plugin would miss duplicated registry scope state.
   "plugins/provider-hook-runtime": "src/plugins/provider-hook-runtime.ts",

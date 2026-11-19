@@ -469,9 +469,8 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   },
   ...[
     "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",
-    "src/agents/embedded-agent-runner/run/attempt-prompt-submit.runtime-replay.test.ts",
+    "src/agents/embedded-agent-runner/run/attempt-prompt-submit.foreground.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-stream-custody.test.ts",
-    "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.orphan.test.ts",
     "src/agents/embedded-agent-runner/transcript-rewrite-plugin-reads.test.ts",
     "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
     "src/agents/subagents/spawn/subagent-spawn.preparation-authority.test.ts",
@@ -1278,6 +1277,11 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/infra/sqlite-readonly-location.worker.ts",
       "src/infra/update-candidate-state.worker.ts",
     ],
+  },
+  {
+    // The rollback fixture loads this worker through factory-created descriptors.
+    testFile: "src/cli/update-cli/update-command-database-rollback.test.ts",
+    watchGlobs: ["src/infra/update-physical-database-generations.ts"],
   },
   {
     testFile: "src/node-host/node-worker-workspace-retention.test.ts",

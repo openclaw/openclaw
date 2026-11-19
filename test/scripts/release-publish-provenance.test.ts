@@ -9,7 +9,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sourceSha = "a".repeat(40);
 const toolingSha = "b".repeat(40);
 
-it.each(["ordinary", "historical", "reused", "wrong producer", "unbound producer"])(
+it.each(["ordinary", "historical", "recovery", "wrong producer", "unbound producer"])(
   "projects authenticated publication artifacts: %s",
   (scenario) => {
     const workflow = parse(readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"));
@@ -33,41 +33,29 @@ it.each(["ordinary", "historical", "reused", "wrong producer", "unbound producer
       workflowPath: ".github/workflows/plugin-npm-release.yml",
       workflowEvent: "workflow_dispatch",
       workflowHeadBranch: "release-ci/aaaaaaaaaaaa-100",
-      workflowSha:
-        scenario === "unbound producer" || scenario === "wrong producer" ? sourceSha : toolingSha,
+      workflowSha: scenario === "ordinary" ? toolingSha : sourceSha,
       artifactId: 500,
       artifactName: `plugin-npm-prepared-${sourceSha}-300-1`,
       artifactDigest: `sha256:${"c".repeat(64)}`,
       artifactSizeBytes: 100,
     };
+    if (scenario === "wrong producer") {
+      artifact.workflowSha = toolingSha;
+    }
     const manifest = {
       targetSha: sourceSha,
       workflowSha: toolingSha,
       runId: "200",
       runAttempt: "1",
       publicationArtifacts: scenario === "historical" ? {} : { pluginNpm: artifact },
-      ...(scenario === "reused" || scenario === "wrong producer"
+      ...(scenario === "recovery" || scenario === "wrong producer"
         ? {
-            sourceAdmission: {
-              candidateSha: sourceSha,
-              runId: "200",
-              workflow: { sha: toolingSha },
-              qualificationAdmission: {},
-            },
-            evidenceReuse: {
-              policy: "exact-target-full-validation-v1",
-              changedPaths: [],
-              runId: "100",
-              selectedRunId: "100",
-              evidenceSha: sourceSha,
-              publication: {
-                sourceAdmission: {
-                  candidateSha: sourceSha,
-                  runId: "100",
-                  workflow: { sha: toolingSha, ref: "release-ci/bbbbbbbbbbbb-100" },
-                  qualificationAdmission: {},
-                },
-              },
+            sourceAdmission: { candidateSha: sourceSha, runId: "200" },
+            receiptRecovery: {
+              schema: "openclaw.full-release-receipt-recovery/v1",
+              candidateBinding: { request: { targetSha: sourceSha, toolingSha: sourceSha } },
+              originalParent: { runId: "100" },
+              children: { normalCi: { workflowRef: "release-ci/aaaaaaaaaaaa-100" } },
             },
           }
         : {}),

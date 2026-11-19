@@ -273,6 +273,15 @@ jobs:
             exit 1
           fi
 
+      - name: Checkout trusted approval verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted-workflow
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: scripts
+
       - name: Validate release publish approval run
         env:
           GH_TOKEN: ${{ github.token }}
@@ -301,16 +310,7 @@ jobs:
             export EXPECTED_WORKFLOW_FULL_REF="refs/heads/${EXPECTED_WORKFLOW_BRANCH}"
           fi
           RUN_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_PUBLISH_RUN_ID}" --jq '{workflowName: .name, headBranch: .head_branch, headSha: .head_sha, event, status, conclusion, url: .html_url, runAttempt: .run_attempt, repository: .repository.full_name, path}')"
-          printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
-
-      - name: Checkout trusted approval verifier
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.workflow_sha }}
-          path: trusted-workflow
-          fetch-depth: 1
-          persist-credentials: false
-          sparse-checkout: scripts
+          printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node trusted-workflow/scripts/validate-release-publish-approval.mjs
 
       - name: Verify release approval receipt
         id: receipt
@@ -431,15 +431,17 @@ jobs:
           persist-credentials: false
           sparse-checkout: scripts
 
-      - name: Download full release validation manifest
+      - name: Acquire authenticated publication manifest
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ inputs.full_release_validation_run_attempt }}
-          path: full-release-validation
-          repository: ${{ github.repository }}
-          run-id: ${{ inputs.full_release_validation_run_id }}
-          github-token: ${{ github.token }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
+          PUBLICATION_MANIFEST_DIR: full-release-validation
+        run: |
+          set -euo pipefail
+          mkdir -p "${PUBLICATION_MANIFEST_DIR}"
+          node trusted-workflow/scripts/release-ci-summary.mjs --acquire-publication-manifest "${FULL_RELEASE_VALIDATION_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --expected-run-attempts-json "$(printf '{"%s":%s}' "${FULL_RELEASE_VALIDATION_RUN_ID}" "${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}")" > "${PUBLICATION_MANIFEST_DIR}/full-release-validation-manifest.json"
 
       - name: Verify full release validation evidence
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}

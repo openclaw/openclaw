@@ -584,6 +584,7 @@ class AgentDatabaseStartupAdmission {
                     if (preparation.recoverInputs) {
                       this.observation.registerInputRecovery(agentId, {
                         sessions: preparation.recoverInputs.sessions,
+                        deferred: preparation.recoverInputs.deferred,
                         completion: inputReady.promise,
                       });
                     }
