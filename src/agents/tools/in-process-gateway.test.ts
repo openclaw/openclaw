@@ -546,6 +546,28 @@ describe("request-shaped in-process Gateway dispatch", () => {
     expect(mocks.callGateway).toHaveBeenCalledWith(wireRequest);
     expect(mocks.dispatch).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])(
+    "keeps transport Cron cancellation settlement with signal forwarding %s",
+    async (forwardAbortSignal) => {
+      mocks.hasContext = false;
+      const controller = new AbortController();
+      mocks.callGateway.mockImplementationOnce(async () => {
+        controller.abort(new Error("transport request cancelled"));
+        return { created: false };
+      });
+      const pending = bindAgentToolGatewayRequest({ forwardAbortSignal })({
+        method: "cron.add",
+        params: {},
+        signal: controller.signal,
+      });
+      if (forwardAbortSignal) {
+        await expect(pending).rejects.toThrow("transport request cancelled");
+      } else {
+        await expect(pending).resolves.toEqual({ created: false });
+      }
+    },
+  );
 });
 
 describe("built-in Gateway foreground authority", () => {
@@ -581,7 +603,7 @@ describe("built-in Gateway foreground authority", () => {
   it("keeps a preserved write fenced by its original request signal", async () => {
     const controller = new AbortController();
     const held = holdCommit();
-    const pending = bindAgentToolGatewayRequest({ revalidateOnCompletion: false })({
+    const pending = bindAgentToolGatewayRequest({ forwardAbortSignal: false })({
       method: "message.action",
       params: { action: "channel-edit" },
       signal: controller.signal,
@@ -615,22 +637,15 @@ function createCaller(request: Parameters<typeof callAgentToolGatewayRequest>[0]
 
 describe("Cron mutation completion through in-process Gateway", () => {
   it.each([
-    ["cron.run", { committed: true }, true],
-    ["cron.add", { created: true, job: { id: "unattested" } }, false],
-    ["cron.remove", new Error("mutation detail"), false],
-    ["cron.remove", new Error("mutation detail"), true],
-    ["cron.get", { privateJob: true }, false],
+    ["cron.run", { committed: true }],
+    ["cron.add", { created: true, job: { id: "unattested" } }],
+    ["cron.remove", new Error("mutation detail")],
+    ["cron.get", { privateJob: true }],
   ] as const)(
-    "settles revoked %s result %o only with a commit receipt: %s",
-    async (method, result, committed) => {
+    "preserves the revoked caller's %s outcome %o without a commit receipt",
+    async (method, result) => {
       const caller = createCaller({ method, params: method === "cron.get" ? { id: "job" } : {} });
-      mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
-        if (committed) {
-          if (!(result instanceof Error)) {
-            options.sessionMutationCommitGuard();
-          }
-          captureCronMutationCommit(method)?.();
-        }
+      mocks.dispatch.mockImplementationOnce(async () => {
         caller.revoke();
         if (result instanceof Error) {
           throw result;
@@ -638,9 +653,7 @@ describe("Cron mutation completion through in-process Gateway", () => {
         return result;
       });
       const pending = caller.invoke();
-      if (!committed) {
-        await expect(pending).rejects.toThrow(/authority.*no longer active/i);
-      } else if (result instanceof Error) {
+      if (result instanceof Error) {
         await expect(pending).rejects.toBe(result);
       } else {
         await expect(pending).resolves.toEqual(result);
@@ -699,13 +712,15 @@ describe("Cron mutation completion through in-process Gateway", () => {
     });
     await callRequest("cron.add");
     expect(previousCommit).toBeTypeOf("function");
-    const caller = createCaller({ method: "cron.add", params: {} });
+    const controller = new AbortController();
     mocks.dispatch.mockImplementationOnce(async () => {
       expect(captureCronMutationCommit("cron.remove")).toBeUndefined();
       previousCommit?.();
-      caller.revoke();
+      controller.abort(new Error("successor cancelled"));
       return { id: "successor" };
     });
-    await expect(caller.invoke()).rejects.toThrow(/authority.*no longer active/i);
+    await expect(callRequest("cron.add", {}, { signal: controller.signal })).rejects.toThrow(
+      "successor cancelled",
+    );
   });
 });

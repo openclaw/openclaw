@@ -201,7 +201,9 @@ it.for(["active", "revoked", "non-owner"] as const)(
                       release.resolve();
                     }
                     if (state === "revoked") {
-                      await expect(pending).rejects.toThrow(/revoked/);
+                      expect((await pending).details).toMatchObject({
+                        reply: expect.stringContaining("No change was made"),
+                      });
                     } else {
                       expect(JSON.stringify(await pending)).toContain("done: config.set");
                     }

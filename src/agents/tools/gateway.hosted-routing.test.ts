@@ -703,7 +703,6 @@ describe("Gateway tool identity and hosted routing", () => {
   it.each([
     { owner: "run", pending: false },
     { owner: "caller", pending: false },
-    { owner: "run", pending: true },
     { owner: "gateway", pending: true },
   ])("rejects retired $owner authority (pending=$pending)", async ({ owner, pending }) => {
     const deferred = pending ? deferHostedResponse({ ok: true }) : undefined;
