@@ -16,8 +16,10 @@ import {
   REQUIRED_PARAM_GROUPS,
   assertRequiredParams,
   getToolParamsRecord,
+  isDailyMemoryReadPath,
   normalizeFileToolPathParam,
   normalizeFileToolPathParamsFromKeys,
+  prepareReadToolParams,
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
 import {
@@ -716,6 +718,7 @@ export function createOpenClawReadTool(
   const modelBudget = resolveToolResultBudget(options?.modelContextWindowTokens);
   return {
     ...base,
+    prepareArguments: prepareReadToolParams,
     execute: async (toolCallId, params, signal) => {
       const record = getToolParamsRecord(params);
       const normalizedRecord = record
@@ -724,12 +727,9 @@ export function createOpenClawReadTool(
       assertRequiredParams(normalizedRecord, REQUIRED_PARAM_GROUPS.read, base.name);
       const filePath =
         typeof normalizedRecord?.path === "string" ? normalizedRecord.path : "<unknown>";
-      const dailyMemoryPath =
-        process.platform === "win32" ? filePath.replace(/\\/g, "/") : filePath;
       // Daily journals may not exist yet; let the concrete reader own filesystem errors.
       const implicitlyOptional =
-        normalizedRecord?.optional === undefined &&
-        /^(?:\.\/)*memory\/\d{4}-\d{2}-\d{2}\.md$/u.test(dailyMemoryPath);
+        normalizedRecord?.optional === undefined && isDailyMemoryReadPath(filePath);
       const result = await executeReadWithAdaptivePaging({
         base,
         toolCallId,
