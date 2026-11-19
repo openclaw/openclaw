@@ -75,7 +75,6 @@ export function prepareExecExitNotification(
   const caller = getGatewayToolCallerIdentity();
   return captureSessionEventTarget(owner, targetKey, {
     operatorAuthority: caller?.operatorAuthority,
-    ownerContinuationSessionBound: true,
     ...(senderIsOwner && caller?.agentId === owner && caller.sessionKey === targetKey
       ? { ownerContinuation: true as const }
       : {}),

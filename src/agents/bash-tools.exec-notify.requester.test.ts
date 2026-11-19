@@ -69,11 +69,6 @@ it.each([
       });
       const assertion = captureCommandOwnerAssertion(ctx);
       expect(Boolean(assertion)).toBe(owner);
-      target.sessionId = "reset-channel";
-      expect(readSessionEventTargetCommandOwner(target)).toBeUndefined();
-      if (owner) {
-        expect(() => assertion?.()).toThrow("authority changed");
-      }
     });
   },
 );
@@ -126,28 +121,6 @@ it.each([
           owner && sameSession && source === "exec",
         );
       }
-      let adoptedSessionId = target.sessionId;
-      const queuedContext = buildSessionEventContext({
-        cfg: { agents: { entries: { main: {} } } },
-        agentId: "main",
-        sessionKey,
-        text: "queued completion",
-        options: { source: "exec" },
-        target,
-        occurrenceId: "queued",
-        readSessionId: () => adoptedSessionId,
-        assertCurrent() {},
-      });
-      const queuedOwner = captureCommandOwnerAssertion(queuedContext);
-      adoptedSessionId = "reset-transcript";
-      if (owner && sameSession) {
-        expect(() => queuedOwner?.()).toThrow("authority changed");
-      }
-      target.sessionId = "reset-transcript";
-      if (owner && sameSession) {
-        expect(() => queuedOwner?.()).toThrow("authority changed");
-      }
-      expect(readSessionEventTargetOwnerContinuation(target)).toBe(false);
     });
   },
 );

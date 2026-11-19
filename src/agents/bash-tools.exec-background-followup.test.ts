@@ -654,9 +654,25 @@ test("wakes the same conversation after its session id rotates while the command
   const release = path.join(state.workspaceDir, "release-rotated-waiter");
   const started = runningSession(
     (
-      await backgroundExec(sessionKey, { agentId: "main" })(
-        "rotated-waiter",
-        waitForRelease(release),
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey,
+          operatorAuthority: createAdmittedRunOperatorAuthority({
+            profileId: "owner",
+            scopes: ["operator.admin"],
+            assertCurrent() {},
+            modelPolicy: {
+              models: [{ provider: "mock-openai", model: "gpt-5.6-luna" }],
+              allows: () => true,
+            },
+          }),
+        },
+        () =>
+          backgroundExec(sessionKey, { agentId: "main", senderIsOwner: true })(
+            "rotated-waiter",
+            waitForRelease(release),
+          ),
       )
     ).details,
   );
@@ -670,6 +686,7 @@ test("wakes the same conversation after its session id rotates while the command
   await withinTest(waitForExecScope(sessionKey), signal);
   await completion(signal);
   const [prompt] = expectDefined(model.mock.calls.at(-1), "rotated wake turn");
+  expect(prompt.senderIsOwner).toBe(true);
   expect(prompt.sessionId).toBe("rotated-session");
   expect(prompt.prompt).toContain(`Exec completed (${started.sessionId.slice(0, 8)}`);
 });
