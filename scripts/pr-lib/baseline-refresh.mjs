@@ -443,6 +443,7 @@ const retiredNames = [
   "correction-review.md",
   "correction-incoming-review.json",
   "correction-incoming-review.md",
+  "pending-proof-acceptance.json",
 ];
 const publicationNames = ["prepare-push-result.env", "prepare-sync-result.env"];
 

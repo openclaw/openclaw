@@ -1840,6 +1840,19 @@ releases without this change (main builds since the release layout landed) fail
 every Git update that changes a schema in their own process, before the new release runs;
 rebuild the checkout once to get an updater with the fix.
 
+When the new release's Gateway starts, its state upgrade can replace
+`state/openclaw.sqlite` and keep the previous file as `openclaw.sqlite.pre-<buildId>`.
+The updater closes its own shared-state handles before it restarts the Gateway and
+reopens the database by path once the new Gateway is verified serving, so plugin
+convergence, the post-plugin Doctor, owed steps and the final run record use the
+current file. Run history written before the restart is carried into the new file.
+Installed updaters that have the inspection fix above but not this change report
+`post-update-failed` ("SQLite database pathname changed while its worker owner is
+active") after such an upgrade even though the new release is serving and nothing needs
+restoring. When the update output says the Gateway is serving the target version, the
+next plain `openclaw update` reports `already-current` and converges plugins. Updaters
+without the inspection fix fail before the new release starts, as described above.
+
 Database rehearsal also avoids a second full backup of each private snapshot.
 Candidate inventory reads database registrations and the installed plugin index
 in one read-only transaction instead of copying the whole shared database just

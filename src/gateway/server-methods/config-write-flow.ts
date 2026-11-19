@@ -40,6 +40,7 @@ import {
 } from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
+import { openClawIdAccessWarning } from "../openclaw-id/access-plugin.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { resolveSharedGatewaySessionGeneration } from "../server/ws-shared-generation.js";
 import { replyWithBillingRouteWarnings } from "./config-write-reply.js";
@@ -360,7 +361,12 @@ export async function commitGatewayConfigWrite(params: {
     path: resolveGatewayConfigPath(params.snapshot),
     config: result.nextConfig,
     ...(billingRouteWarnings.length > 0 ? { billingRouteWarnings } : {}),
-    reply: replyWithBillingRouteWarnings(params.respond, billingRouteWarnings, params.context),
+    reply: replyWithBillingRouteWarnings(
+      params.respond,
+      billingRouteWarnings,
+      params.context,
+      openClawIdAccessWarning(result.nextConfig),
+    ),
     // Acknowledge this commit; a later config.get can observe an external edit.
     hash: result.persistedHash,
     ...(application
