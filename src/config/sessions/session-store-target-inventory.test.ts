@@ -57,6 +57,22 @@ test("discovers canonical recovery stores without waiting for the shared ownersh
   }
 });
 
+test.each([{ agentIds: ["main"] }, { agentIds: ["helper"] }, { agentIds: [] }])(
+  "configured discovery retains only the requested agent scope: $agentIds",
+  ({ agentIds }) => {
+    cfg = { agents: { entries: { main: {}, helper: {} } } };
+    const request = prepareSessionStoreTargetInventory(cfg, agentIds, env, "configured");
+    const inventory = readSessionStoreTargetInventory({
+      ...request,
+      registeredDatabases: { status: "deferred" },
+    });
+    expect(inventory).toMatchObject({
+      kind: "session-target-inventory",
+      agents: agentIds.map((agentId) => ({ agentId })),
+    });
+  },
+);
+
 test("configured discovery excludes refused stores while retaining healthy agents", () => {
   cfg = { agents: { entries: { main: {}, helper: {} } } };
   const refusedPath = path.join(root, "agents", "helper", "agent", "openclaw-agent.sqlite");
