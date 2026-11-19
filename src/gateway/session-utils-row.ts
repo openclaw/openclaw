@@ -183,7 +183,7 @@ export function readSessionRowInputs(params: {
     catalogEntry,
     selected: entry?.contextWindow,
   });
-  const modelContext = resolveModelContextTokenProjection({
+  const modelContext = (params.runtimeResolution?.context ?? resolveModelContextTokenProjection)({
     cfg,
     provider,
     model,
@@ -236,7 +236,9 @@ export function readSessionRowInputs(params: {
       lastMessagePreview: params.preparedTitle?.lastMessagePreview,
       lastAssistantMessage: params.preparedTitle?.lastAssistantMessage,
       thinkingProjection,
-      agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
+      agentRuntime: (params.runtimeResolution?.placement ?? projectWorkerPlacementAgentRuntime)(
+        thinkingProjection.agentRuntime,
+      ),
       contextWindowProfile,
       fastModeState: resolveFastModeState({
         cfg,
@@ -596,7 +598,7 @@ export function replaceSessionRowFacts(
   return Object.freeze({
     publicationIdentity: materialized.publicationIdentity,
     row: row
-      ? freezeSessionRow(omitUndefinedFields({ ...materialized.row, ...row }), materialized.row)
+      ? freezeSessionRow({ ...materialized.row, ...row }, materialized.row, Object.keys(row))
       : materialized.row,
     source: Object.freeze(nextSource),
   });
