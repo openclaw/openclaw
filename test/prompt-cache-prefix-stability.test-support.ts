@@ -32,46 +32,109 @@ const OTHER = "agent:other:prefix-stability-other";
 const OVERFLOW_CHUNKS = 24;
 const OVERFLOW_CHUNK_CHARS = 8_000;
 
-const CRON_REPLY_TWICE =
-  "cron session-target reply written twice (reported to the prompt-cache owner; no PR yet)";
-// Breaks that main still has, each narrowed to its chat, transport and changed bytes so any other
-// break still fails. Remove an entry when its owner lands; the journey then fails until it goes.
-const KNOWN_BREAKS: ReadonlyArray<{
+/** True when `current` is `previous` with each changed message passing `changed`, plus new ones. */
+function onlyMessagesChanged(
+  previous: WireRequest,
+  current: WireRequest,
+  changed: (before: string, after: string) => boolean,
+): boolean {
+  return (
+    previous.system === current.system &&
+    previous.tools === current.tools &&
+    current.messages.length >= previous.messages.length &&
+    previous.messages.every(
+      (message, index) =>
+        current.messages[index] === message || changed(message, current.messages[index]!),
+    )
+  );
+}
+
+// Gemini replay also drops the call id of the merged call and of its result.
+const withoutCallIds = (message: string) =>
+  message.replace(/("function(?:Call|Response)":\{.*?),"id":"[^"]*"\}/g, "$1}");
+
+/**
+ * True when `current` is `previous` with the text-only assistant message at the first change and
+ * the tool-call message after it merged into one message, plus new messages.
+ */
+function cronReplyMerged(previous: WireRequest, current: WireRequest): boolean {
+  const at = previous.messages.findIndex((message, index) => current.messages[index] !== message);
+  if (at < 0 || previous.system !== current.system || previous.tools !== current.tools) {
+    return false;
+  }
+  const reply = JSON.parse(previous.messages[at]!) as Record<string, unknown>;
+  const call = JSON.parse(previous.messages[at + 1] ?? "{}") as Record<string, unknown>;
+  const merged = Array.isArray(call.tool_calls)
+    ? { ...reply, tool_calls: call.tool_calls }
+    : Array.isArray(reply.parts) && Array.isArray(call.parts)
+      ? { ...reply, parts: [...reply.parts, ...call.parts] }
+      : undefined;
+  return (
+    /"text":"ok \d+"/.test(previous.messages[at]!) &&
+    merged !== undefined &&
+    withoutCallIds(current.messages[at]!) === withoutCallIds(JSON.stringify(merged)) &&
+    previous.messages
+      .slice(at + 2)
+      .every(
+        (message, index) =>
+          current.messages[at + 1 + index] === message ||
+          (index === 0 && withoutCallIds(current.messages[at + 1]!) === withoutCallIds(message)),
+      )
+  );
+}
+
+// The cron reply is written twice: the scheduled turn's own reply, and an automation-result copy
+// (src/auto-reply/reply/session-event-automation.ts) that is stored pending
+// (context_eligible=0) while the cron run is active, then placed into model context by the next
+// request (src/agents/sessions/background-result-placement.ts). On every route the request after
+// the next user turn carries the reply twice; Chat Completions and Gemini then merge the copy
+// with the following tool-call message.
+const CRON_REPLY_TWICE = "cron reply sent twice (reported to the prompt-cache owner)";
+// Breaks that main still has. Each entry checks the whole request, so its known change cannot hide
+// another one. Remove an entry when its owner lands; the journey then fails until it goes.
+export const KNOWN_BREAKS: ReadonlyArray<{
   api: Api;
   chat: "target" | "other";
-  change: RegExp;
+  accepts: (previous: WireRequest, current: WireRequest) => boolean;
   owner: string;
 }> = [
   {
     // The pre-request pressure check trims tool results that earlier requests already sent.
     api: "google-generative-ai",
     chat: "other",
-    change: /functionResponse.* -> .*functionResponse.*more characters truncated/,
+    accepts: (previous, current) =>
+      onlyMessagesChanged(
+        previous,
+        current,
+        (before, after) =>
+          before.includes("functionResponse") &&
+          after.includes("functionResponse") &&
+          after.includes("more characters truncated") &&
+          after.length < before.length,
+      ),
     owner: "https://github.com/openclaw/openclaw/pull/199530",
   },
-  {
-    // A scheduled job's reply in its own chat is written a second time after the next user
-    // turn; replay then merges it into the next tool-call message.
-    api: "openai-completions",
-    chat: "target",
-    change:
-      /^message \d+: \{"role":"assistant","content":\[\{"type":"text","text":"ok \d+"\}\]\} -> .*"tool_calls"/,
-    owner: CRON_REPLY_TWICE,
-  },
+  { api: "openai-completions", chat: "target", accepts: cronReplyMerged, owner: CRON_REPLY_TWICE },
   {
     api: "google-generative-ai",
     chat: "target",
-    change: /^message \d+: \{"role":"model","parts":\[\{"text":"ok \d+"\}\]\} -> .*"functionCall"/,
+    accepts: cronReplyMerged,
     owner: CRON_REPLY_TWICE,
   },
 ];
 
 /** Requests that do not extend the previous request in the same session, with the first change. */
-function prefixBreaks(requests: readonly WireRequest[]): Array<{ at: number; change: string }> {
+function prefixBreaks(
+  requests: readonly WireRequest[],
+  isKnown: (previous: WireRequest, current: WireRequest) => boolean = () => false,
+): Array<{ at: number; change: string }> {
   const breaks: Array<{ at: number; change: string }> = [];
   for (let index = 1; index < requests.length; index++) {
     const previous = requests[index - 1]!;
     const current = requests[index]!;
+    if (isKnown(previous, current)) {
+      continue;
+    }
     const message = previous.messages.findIndex(
       (entry, position) => current.messages[position] !== entry,
     );
@@ -363,9 +426,8 @@ export function usePrefixStabilityJourney() {
           delivery: { mode: "none" },
         };
         if (api === "bedrock-converse-stream") {
-          // Known gap on main: cron.add refuses a model whose provider authenticates through the
-          // AWS SDK, although its runs use the same environment credentials. Remove this branch
-          // when that refusal is fixed; the journey then covers cron on Bedrock too.
+          // Intended behavior: a scheduled job needs a stored inference account, and a provider
+          // that authenticates through the AWS SDK has none, so cron.add refuses it.
           await expect(client.request("cron.add", cronJob)).rejects.toThrow(
             /requires a stored inference account/,
           );
@@ -438,16 +500,18 @@ export function usePrefixStabilityJourney() {
         // The unrelated chat rebuilds only at its compactions: the one its pressure check ran
         // inside the overflow run, and the explicit one. A silent rewrite of a tool result
         // it already sent would show as another break.
-        const isKnown = (chat: "target" | "other", change: string) =>
-          KNOWN_BREAKS.some(
-            (known) => known.api === api && known.chat === chat && known.change.test(change),
-          );
+        const isKnown =
+          (chat: "target" | "other") => (previous: WireRequest, current: WireRequest) =>
+            KNOWN_BREAKS.some(
+              (known) =>
+                known.api === api && known.chat === chat && known.accepts(previous, current),
+            );
         const allOtherBreaks = prefixBreaks(otherRequests);
         const otherMessage = JSON.stringify(allOtherBreaks, null, 2);
         const inOverflow = ({ at }: { at: number }) => at > overflowStartAt && at < overflowEndAt;
         // The pressure check acted inside the overflow run.
         expect(allOtherBreaks.some(inOverflow), otherMessage).toBe(true);
-        const otherBreaks = allOtherBreaks.filter(({ change }) => !isKnown("other", change));
+        const otherBreaks = prefixBreaks(otherRequests, isKnown("other"));
         expect(
           otherBreaks.map(({ at }) => at),
           otherMessage,
@@ -467,9 +531,11 @@ export function usePrefixStabilityJourney() {
         expect(childRequests.length).toBeGreaterThan(1);
         const childBreaks = prefixBreaks(childRequests);
         expect(childBreaks, JSON.stringify(childBreaks, null, 2)).toEqual([]);
-        const breaks = prefixBreaks(targetRequests)
-          .filter(({ change }) => !isKnown("target", change))
-          .map(({ at, change }) => ({ at, step: targetSteps[at], change }));
+        const breaks = prefixBreaks(targetRequests, isKnown("target")).map(({ at, change }) => ({
+          at,
+          step: targetSteps[at],
+          change,
+        }));
         expect(
           breaks.map(({ at }) => at),
           JSON.stringify(breaks, null, 2),
