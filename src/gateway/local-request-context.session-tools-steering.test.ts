@@ -217,7 +217,7 @@ describe("sessions_send steering custody", () => {
   ] as const)(
     "settles accepted steering custody after %s (backend settlement: %s)",
     async (outcome, reportSettlement) => {
-      const custodyReleased = createDeferredCore();
+      let custodyReleased = createDeferredCore();
       const capture = operatorContinuation.captureOperatorToolGatewayContinuationContext;
       const observeCapture = vi
         .spyOn(operatorContinuation, "captureOperatorToolGatewayContinuationContext")
@@ -255,6 +255,8 @@ describe("sessions_send steering custody", () => {
               expect(receiver.pendingCount()).toBe(0);
             }
             const existingLeases = new Set(turn.authorityLeases);
+            // Observe this send's custody; a refused earlier send releases its own.
+            custodyReleased = createDeferredCore();
             const sent = createSessionsSendTool({
               config: cfg,
               agentSessionKey: REQUESTER,
@@ -297,6 +299,8 @@ describe("sessions_send steering custody", () => {
             } else if (outcome === "source revoked") {
               turn.revoke(alice.profileId);
               await expect(receiver.commit()).rejects.toThrow(/authority|access|revoked/i);
+              // After admission the receiving run owns the refused input; its end settles custody.
+              receiver.end();
             } else if (outcome === "receiver cancelled") {
               await receiver.cancel();
               expect(receiver.pendingCount()).toBe(0);
