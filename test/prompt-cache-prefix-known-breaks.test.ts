@@ -20,11 +20,13 @@ describe("known prefix breaks", () => {
   it("accepts the known tool addition only when nothing else changed", () => {
     const previous = request(["u1", "a1"]);
     const tools = ["read", "skills_read", "skills_search"];
-    expect(unknownChange(previous, request(["u1", "a1", "u2"], tools))).toBeUndefined();
-    expect(unknownChange(previous, request(["u1-rewritten", "a1", "u2"], tools))).toMatch(
+    expect(unknownChange(previous, request(["u1", "a1", "u2"], tools), true)).toBeUndefined();
+    expect(unknownChange(previous, request(["u1-rewritten", "a1", "u2"], tools), true)).toMatch(
       /^message 0:/,
     );
-    expect(unknownChange(previous, request(["u1", "a1"], [...tools, "exec"]))).toMatch(/^tools /);
+    expect(unknownChange(previous, request(["u1", "a1"], [...tools, "exec"]), true)).toMatch(
+      /^tools /,
+    );
   });
 
   it("lets a tool-policy change replace the tools but not rewrite the history", () => {
