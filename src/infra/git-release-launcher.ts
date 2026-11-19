@@ -31,7 +31,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const prefix = path.dirname(fileURLToPath(import.meta.url));
-const slot = path.join(prefix, "lib", "node_modules", "openclaw");
+const slot = path.join(prefix, "openclaw");
 const trialFile = path.join(prefix, "releases", "${GIT_RELEASE_TRIAL}");
 const counts = process.argv.slice(2).includes("gateway");
 

@@ -386,7 +386,6 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
         const runtimeAuthorityError = () =>
           resolveNodeInvokeRuntimeAuthorityError({
             context,
-            client,
             approvalAuthority: forwardedParams.approvalAuthority,
           });
         const isForwardedApprovalAuthorityActive = () =>
