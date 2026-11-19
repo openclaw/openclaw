@@ -356,8 +356,23 @@ describe("scheduled authenticated operator source", () => {
         expect(restored.authority.assertCurrent).toThrow("Recovery claim retired");
         expect(first.assertCurrent).not.toThrow();
         expect(second.assertCurrent).not.toThrow();
-        invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
-        expect(first.assertCurrent).not.toThrow();
+        const descendant = expectDefined(
+          await first.run(async () => await captureOperatorToolGatewayContinuationContext()),
+          "descendant after requester retirement",
+        );
+        try {
+          first.release();
+          expect(descendant.assertCurrent).not.toThrow();
+          expect(descendant.operatorAuthority?.reauthorize).not.toThrow();
+          invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
+          expect(descendant.assertCurrent).not.toThrow();
+          await expect(
+            descendant.run(async () => await captureOperatorToolGatewayContinuationContext()),
+          ).rejects.toThrow();
+        } finally {
+          descendant.release();
+        }
+        expect(second.assertCurrent).not.toThrow();
       } finally {
         first.release();
         second.release();

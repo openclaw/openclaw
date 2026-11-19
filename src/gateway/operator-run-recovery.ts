@@ -579,6 +579,21 @@ export async function captureGatewayOperatorContinuation(
     releaseInherited?.();
     throw error;
   });
+  // Share the already-acquired source hold: retaining its old claim again would
+  // reject descendants after that request ends, even while this continuation lives.
+  let references = 1;
+  const releaseHold = () => {
+    let released = false;
+    return () => {
+      if (!released) {
+        released = true;
+        if (--references === 0) {
+          restored.release();
+          releaseInherited?.();
+        }
+      }
+    };
+  };
   const authority = createAdmittedRunOperatorAuthority({
     ...restored.authority,
     // One origin keeps one comparable source identity, as completion batches require.
@@ -590,26 +605,12 @@ export async function captureGatewayOperatorContinuation(
     },
     // Each descendant must keep both owners used by reauthorization alive.
     retain: () => {
-      const releaseSource = inherited.retain?.();
-      try {
-        const releaseRestored = restored.authority.retain?.();
-        return () => {
-          releaseRestored?.();
-          releaseSource?.();
-        };
-      } catch (error) {
-        releaseSource?.();
-        throw error;
-      }
+      restored.authority.assertCurrent();
+      references += 1;
+      return releaseHold();
     },
     scopes: intersectOperatorScopes(restored.authority.scopes, input.client?.connect.scopes ?? []),
   });
   bindGatewayDeviceRevocation(authority.assertCurrent, inherited.assertCurrent);
-  return {
-    authority,
-    release: () => {
-      restored.release();
-      releaseInherited?.();
-    },
-  };
+  return { authority, release: releaseHold() };
 }

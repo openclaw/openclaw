@@ -626,21 +626,23 @@ export async function captureGatewayOperatorRunAuthority(input: {
       },
       reauthorize: () => {
         if (
-          revoked ||
           references === 0 ||
           isDeviceCurrent?.() === false ||
           isCommittedSourceCurrent?.() === false ||
           (openclawIdPrincipal && !isOpenClawIdTunnelPrincipalCurrent(openclawIdPrincipal))
         ) {
           throw createOperatorAuthorityInactiveError(
-            references === 0
-              ? "closure-released"
-              : revoked
-                ? "closure-revoked"
-                : "source-invalidated",
+            references === 0 ? "closure-released" : "source-invalidated",
             "before-sources",
             capturedAt,
           );
+        }
+        // New work checks the original policy owners, not a failure latched by
+        // the previous invocation (for example, its edited transcript).
+        for (const sourceOwner of [sourceAuthority, ingressPrincipal]) {
+          sourceOwner?.signal?.throwIfAborted();
+          sourceOwner?.assertCurrent();
+          sourceOwner?.signal?.throwIfAborted();
         }
         const profile = assertProfileCurrent();
         const currentConfig = getConfig();
