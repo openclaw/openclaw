@@ -223,7 +223,11 @@ export async function initializeAndRunUpdate(
                     // The execution owner calls this at its first state change: Gateway
                     // handoff, activation, or Doctor. Refusals and no-op runs copy nothing.
                     run.captureOriginal = async () => {
-                      await captureOriginal();
+                      // The copy has its own step bound; it never spends the operator's
+                      // --timeout budget, which it did not before it became lazy either.
+                      await (run.deadline
+                        ? run.deadline.exclude(captureOriginal)
+                        : captureOriginal());
                       recordCaptureSteps();
                     };
                   }
