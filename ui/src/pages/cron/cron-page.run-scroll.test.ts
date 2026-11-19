@@ -14,6 +14,67 @@ function runPage(entries: CronRunLogEntry[]) {
   return { entries, total: entries.length, offset: 0, hasMore: false };
 }
 
+it.each([true, false])(
+  "retains the edit only for a fresh same-ID run link (same job: %s)",
+  async (sameJob) => {
+    const original = createCronViewJob("linked-job", { configRevision: "original-revision" });
+    const refreshed = createCronViewJob(sameJob ? original.id : "other-job", {
+      name: "Refreshed job",
+      configRevision: "refreshed-revision",
+    });
+    let nextJob = original;
+    const { page } = mountCronPage(
+      cronRpc({
+        "cron.get": () => ({ ...nextJob }),
+        "cron.runs": (params) => {
+          const request = asOptionalRecord(params);
+          return runPage(
+            request?.runId
+              ? [
+                  {
+                    jobId: String(request.id),
+                    runId: String(request.runId),
+                    ts: 10,
+                    action: "finished",
+                    summary: String(request.runId),
+                  },
+                ]
+              : [],
+          );
+        },
+      }),
+    );
+    try {
+      page.routeSearch = "?job=linked-job&run=first-run";
+      await waitForCronPage(() =>
+        expect(page.cron.cronEditingJob?.configRevision).toBe("original-revision"),
+      );
+      const editingSnapshot = page.cron.cronEditingJob;
+      page.patchForm({ name: "Unsaved draft" });
+      nextJob = refreshed;
+      page.routeSearch = `?job=${refreshed.id}&run=second-run`;
+      await waitForCronPage(() =>
+        expect(page.querySelector(".cron-run-entry--highlighted")?.textContent).toContain(
+          "second-run",
+        ),
+      );
+      page.querySelector<HTMLButtonElement>('[data-test-id="cron-detail-tab-settings"]')!.click();
+      await waitForCronPage(() =>
+        expect(page.querySelector<HTMLInputElement>("#cron-name")?.value).toBe(
+          sameJob ? "Unsaved draft" : "Refreshed job",
+        ),
+      );
+      expect(page.cron.cronEditingJob?.configRevision).toBe(
+        sameJob ? "original-revision" : "refreshed-revision",
+      );
+      if (sameJob) expect(page.cron.cronEditingJob).toBe(editingSnapshot);
+      else expect(page.cron.cronEditingJob).not.toBe(editingSnapshot);
+    } finally {
+      page.remove();
+    }
+  },
+);
+
 it("scrolls to a linked run again after its history rows unmount", async () => {
   const job = createCronViewJob("linked-job");
   const entry: CronRunLogEntry = {
