@@ -8,6 +8,7 @@ const LANGUAGE_LABELS = new Map([
   ["zh-CN", "Simplified Chinese"],
   ["zh-TW", "Traditional Chinese"],
   ["pt-BR", "Brazilian Portuguese"],
+  ["pt-PT", "European Portuguese"],
   ["ja-JP", "Japanese"],
   ["ko", "Korean"],
   ["fr", "French"],
