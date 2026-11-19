@@ -13,6 +13,7 @@ import {
   PICKED,
   WORKSPACE,
   LOCAL_GIT_WORKSPACE_RESPONSES,
+  captureProjectUiProof,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
@@ -102,7 +103,7 @@ suite.define(() => {
     const checkoutTrigger = page.locator("#new-session-checkout-trigger");
     await expectLabel(projectTrigger, "openclaw");
     await projectTrigger.click();
-    await pollLocatorText(projectSelect.locator(".header-search__title").first()).toBe("Projects");
+    await projectSelect.locator(".header-search__input").waitFor();
     await button(projectSelect, "Browse folders").click();
     await page.locator(".new-session-page__browser-entry", { hasText: "packages" }).click();
     await expectValue(page.locator("input.new-session-page__browser-path"), PICKED);
@@ -118,10 +119,8 @@ suite.define(() => {
     await expectLabel(checkoutTrigger, "main");
     await checkoutTrigger.click();
     await expectAttribute(checkoutTrigger, "aria-expanded", "true");
-    await pollLocatorText(checkoutSelect.locator(".new-session-page__menu-title").first()).toBe(
-      "Checkout",
-    );
-    await button(checkoutSelect, "New worktree Isolated copy of the repo", true).click();
+    await expectAttribute(checkoutSelect, "aria-label", "Checkout: main");
+    await button(checkoutSelect, "New worktree", true).click();
     await checkoutSelect.getByLabel("Name", { exact: true }).fill("release-proof");
     const afterPointerHide = checkoutSelect.evaluate(
       (element) =>
@@ -213,14 +212,21 @@ suite.define(() => {
     await gateway.waitForRequest("projects.list");
     const message = page.locator(".new-session-page__message");
     await message.fill("Inspect the project and explain the next change.");
+    await gateway.setMethodDelay("projects.checkoutOptions", "forever");
     await selectProject(page, "Sample Project");
+    await gateway.waitForRequest("projects.checkoutOptions");
     const trigger = page.locator("#new-session-checkout-trigger");
+    await captureProjectUiProof(suite, page, "checkout-discovery-pending.png");
+    expect(await trigger.count()).toBe(0);
+    await gateway.setMethodDelay("projects.checkoutOptions", null);
+    await expectLabel(trigger, "New worktree");
+    await captureProjectUiProof(suite, page, "checkout-discovery-ready.png");
     await trigger.click();
     const checkout = page.locator(".oc-popover.new-session-page__checkout-popover");
     await expectAttribute(trigger, "data-worktree", "true");
     const current = checkout.locator('[data-value="checkout"]');
     expect(await current.isDisabled()).toBe(true);
-    expect(await current.textContent()).toContain(
+    expect(await current.getAttribute("title")).toBe(
       "Use an isolated worktree for this project and agent",
     );
     await page.keyboard.press("Escape");
@@ -300,7 +306,7 @@ suite.define(() => {
     await page.locator("#new-session-checkout-trigger").click();
     await button(
       page.locator(".oc-popover.new-session-page__checkout-popover"),
-      "New worktree Isolated copy of the repo",
+      "New worktree",
       true,
     ).click();
     await page.keyboard.press("Escape");

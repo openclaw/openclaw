@@ -17,10 +17,15 @@ import type { PortUsage } from "../../infra/ports-types.js";
 import { gatewayHello } from "./update-command-service-fixtures.test-support.js";
 
 const mocks = vi.hoisted(() => ({
+  auth: vi.fn(),
   call: vi.fn(),
   managerTimeout: vi.fn(),
   legacyLock: vi.fn(),
   portUsage: vi.fn(),
+}));
+vi.mock("../../gateway/call-device-auth.js", async (actual) => ({
+  ...(await actual<typeof import("../../gateway/call-device-auth.js")>()),
+  resolveReadOnlyLocalGatewayAuth: mocks.auth,
 }));
 vi.mock("../../gateway/call.js", () => ({ callGatewayCli: mocks.call }));
 vi.mock("../../infra/gateway-lock-legacy.js", () => ({
@@ -92,6 +97,7 @@ const delay = (ms: number) =>
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance", "Date"] });
+  mocks.auth.mockReset().mockResolvedValue({ token: "fixture-token" });
   mocks.call.mockReset();
   mocks.managerTimeout.mockReset().mockResolvedValue(330_000);
   mocks.legacyLock.mockReset().mockResolvedValue(undefined);
@@ -317,6 +323,32 @@ it("retains stop authority after checking an offline Gateway port", async () => 
   expect(f.stop).not.toHaveBeenCalled();
 });
 
+it("stops an offline Gateway without waiting on unavailable client credentials", async () => {
+  const f = fixture();
+  f.params.state.running = false;
+  f.params.state.runtime = { status: "stopped" };
+  mocks.auth.mockRejectedValue(new Error("Client credential directory is unsafe."));
+  mocks.portUsage.mockResolvedValue(portUsage("free", []));
+
+  const running = f.run();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.stop).toHaveBeenCalledOnce();
+  await expect(running).resolves.toBe("stopped");
+  expect(f.warn).not.toHaveBeenCalled();
+  expect(mocks.auth).not.toHaveBeenCalled();
+});
+
+it("keeps explicit drain requirements for an offline Gateway with unavailable credentials", async () => {
+  const f = fixture();
+  f.params.state.running = false;
+  f.params.state.runtime = { status: "stopped" };
+  mocks.auth.mockRejectedValue(new Error("Client credential directory is unsafe."));
+  mocks.portUsage.mockResolvedValue(portUsage("free", []));
+
+  expect(await f.outcome()).toMatchObject({ message: "Client credential directory is unsafe." });
+  expect(f.stop).not.toHaveBeenCalled();
+});
+
 it.each(["admitted work", "published resident", "expired observation"] as const)(
   "warns before stopping at the drain deadline: %s",
   async (scenario) => {
@@ -413,6 +445,30 @@ it.each([
   await vi.advanceTimersByTimeAsync(1);
   expect(f.events).toContain("handoff");
   await expect(running).resolves.toBe("stopped");
+});
+
+it("keeps the handoff transport open while late writes settle within the drain budget", async () => {
+  const f = fixture({ observations: [{ ...ready(), expiresAtMs: Date.now() + 45_000 }] });
+  wrapCall((request, call) => {
+    if (request.method !== "gateway.suspend.handoff") {
+      return call(request);
+    }
+    return new Promise((resolve, reject) => {
+      const deadline = setTimeout(
+        () => reject(new Error("transport deadline")),
+        request.timeoutMs ?? undefined,
+      );
+      setTimeout(() => {
+        clearTimeout(deadline);
+        resolve(call(request));
+      }, 20_000);
+    });
+  });
+  const outcome = f.interrupt({ timeoutMs: undefined }).catch((error: unknown) => error);
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(await outcome).toBe("stopped");
+  expect(f.events).toContain("handoff");
+  expect(f.events).not.toContain("resume");
 });
 
 it.each([

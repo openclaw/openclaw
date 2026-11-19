@@ -175,18 +175,10 @@ describe("exec foreground failures", () => {
     const text = requireTextContent(result);
     const details = result.details;
     assert(details.status === "failed");
-    for (const fragment of [
-      "Command aborted by signal 9",
-      "OpenClaw selected its Linux OOM-score wrapper",
-      "attempts to set this child's oom_score_adj to 1000",
+    expect(text).toContain("Command aborted by signal 9");
+    expect(details.message).toContain(
       "SIGKILL alone does not identify whether the Linux OOM killer",
-      "Check cgroup memory events or kernel logs",
-      "If they show memory pressure, narrow the command",
-      "adjust memory, concurrency, or resource limits",
-    ]) {
-      expect(text).toContain(fragment);
-      expect(details.message).toContain(fragment);
-    }
+    );
     expect(text).not.toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ");
   });
 

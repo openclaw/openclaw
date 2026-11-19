@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
@@ -189,6 +190,7 @@ export async function readSessionCreateTarget(
   target: GatewaySessionStoreTarget,
   expectedSessionId: string | undefined,
   lifecycleIdentities: readonly string[],
+  operatorAuthority?: AdmittedRunOperatorAuthority,
 ): Promise<Result<InternalSessionEntry | undefined, ErrorShape>> {
   const assertRoutingCurrent = captureSessionMutationRouting(params.cfg, undefined, [
     { agentId: target.agentId, sessionKey: target.canonicalKey },
@@ -245,9 +247,11 @@ export async function readSessionCreateTarget(
       const creationError = authorizeGatewaySessionCreation({
         cfg: params.cfg,
         agentId: target.agentId,
-        ...(params.operatorRoleActor
-          ? { actor: params.operatorRoleActor }
-          : { profileId: params.requestingOperatorProfileId }),
+        ...(operatorAuthority
+          ? { authority: operatorAuthority }
+          : params.operatorRoleActor
+            ? { actor: params.operatorRoleActor }
+            : { profileId: params.requestingOperatorProfileId }),
       });
       if (creationError) {
         return { ok: false, error: creationError };
@@ -281,6 +285,7 @@ export async function finalizeSessionCreateTarget(
   target: Pick<CreatedGatewaySession, "key" | "storePath">,
   expectedEntry: InternalSessionEntry,
   commitGuard: CreateGatewaySessionParams["commitGuard"],
+  templateSetup?: InternalSessionEntry["templateSetup"],
 ): Promise<InternalSessionEntry> {
   const finalized = await patchSessionEntryCore(
     { sessionKey: target.key, storePath: target.storePath },
@@ -288,7 +293,11 @@ export async function finalizeSessionCreateTarget(
       if (!isDeepStrictEqual(current, expectedEntry)) {
         throw new Error(`created session ${target.key} changed before finalization`);
       }
-      return { initializationPending: undefined };
+      return {
+        initializationPending: undefined,
+        templateInitialization: undefined,
+        ...(templateSetup ? { templateSetup } : {}),
+      };
     },
     {
       preserveActivity: true,
@@ -300,4 +309,31 @@ export async function finalizeSessionCreateTarget(
     throw new Error(`created session ${target.key} disappeared before finalization`);
   }
   return finalized;
+}
+
+/** Persist a verified continuation without releasing this exact pending incarnation. */
+export async function checkpointSessionCreateTarget(
+  target: Pick<CreatedGatewaySession, "key" | "storePath">,
+  expectedEntry: InternalSessionEntry,
+  initialization: NonNullable<InternalSessionEntry["templateInitialization"]>,
+  commitGuard: CreateGatewaySessionParams["commitGuard"],
+): Promise<InternalSessionEntry> {
+  const updated = await patchSessionEntryCore(
+    { sessionKey: target.key, storePath: target.storePath },
+    (current) => {
+      if (!current?.initializationPending || !isDeepStrictEqual(current, expectedEntry)) {
+        throw new Error("The pending Template session changed before its configured checkpoint");
+      }
+      return { templateInitialization: structuredClone(initialization) };
+    },
+    {
+      preserveActivity: true,
+      requireWriteSuccess: true,
+      ...sessionEntryCommitGuardOptions(commitGuard),
+    },
+  );
+  if (!updated) {
+    throw new Error("The pending Template session changed before its configured checkpoint");
+  }
+  return updated;
 }

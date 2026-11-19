@@ -356,15 +356,11 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       nextMessages = stripTrailingAssistantPrefillTurns(nextMessages);
       strippedTrailingAssistantPrefill ||= nextMessages !== beforeStrip;
     }
-    // Appended Bedrock users need merging without revalidating unchanged signed tools.
-    if (nextMessages === messages) {
-      if (modelApi === "bedrock-converse-stream") {
-        nextMessages = mergeConsecutiveUserMessages(nextMessages);
-      }
-    } else if (
-      sanitized.droppedAssistantMessages > 0 ||
-      transcriptPolicy?.validateAnthropicTurns ||
-      strippedTrailingAssistantPrefill
+    if (
+      nextMessages !== messages &&
+      (sanitized.droppedAssistantMessages > 0 ||
+        transcriptPolicy?.validateAnthropicTurns ||
+        strippedTrailingAssistantPrefill)
     ) {
       if (transcriptPolicy?.validateGeminiTurns) {
         nextMessages = validateGeminiTurns(nextMessages);
@@ -372,8 +368,19 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       if (transcriptPolicy?.validateAnthropicTurns) {
         nextMessages = validateAnthropicTurns(nextMessages, {
           mergeConsecutiveTurns: shouldMergeConsecutiveTurns(transcriptPolicy, modelApi),
+          mergeConsecutiveUserTurns: false,
         });
       }
+    }
+    // Merge after prompt replacement and projection, without rewriting stored rows
+    // or revalidating unchanged signed tools.
+    if (
+      transcriptPolicy?.validateAnthropicTurns &&
+      shouldMergeConsecutiveTurns(transcriptPolicy, modelApi)
+    ) {
+      nextMessages = mergeConsecutiveUserMessages(nextMessages, {
+        preserveContextBoundaries: modelApi !== "bedrock-converse-stream",
+      });
     }
     if (isOpenAIResponsesApi) {
       nextMessages = normalizeOpenAIResponsesToolCallIds(nextMessages);

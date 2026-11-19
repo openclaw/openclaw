@@ -31,19 +31,17 @@ import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginCatalogResults as PluginCatalogResults } from "./catalog-results.tsx";
 import "./custom-elements.ts";
-import {
-  PluginArtTile,
-  renderPluginConsentDialog as PluginConsentDialog,
-} from "./consent-dialog.tsx";
+import { renderPluginConsentDialog as PluginConsentDialog } from "./consent-dialog.tsx";
 import { pluginDetailLocation, type InstalledPluginDetailTab } from "./detail-tabs.ts";
 import {
   pluginRowKey,
   renderPluginRowMessage as PluginRowMessageView,
 } from "./plugin-row-message.tsx";
 import { PluginsHubHeader } from "./plugins-hub-header.tsx";
-import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "./plugins-hub.ts";
+import { pluginsHubPanel, type PluginsHubTab } from "./plugins-hub.ts";
 import { installRequestForDiscoveryDetail } from "./plugins-page-model.ts";
 import type { PluginsPageModel } from "./plugins-page.ts";
+import { PluginArtTile } from "./presentation.tsx";
 import { renderPluginSettingsInventory as PluginSettingsInventory } from "./settings-inventory.tsx";
 import {
   pluginAdvancedSchema,
@@ -100,10 +98,14 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     return update.updateRunning || update.updateReconciliationPending;
   };
   const hasInventory = createMemo(() => page().state.result !== null);
+  const pluginSettingsLocation = (pluginId: string) => ({
+    pathname: pathForPluginSettings(pluginId, page().context.basePath),
+    // Settings returns to the Plugins workspace it was opened from.
+    search: "?view=settings&from=plugins",
+  });
   // The owner mutates in place; publish fresh props for each page revision.
   const discovery = createMemo(() => ({
     ...page().discovery.read(),
-    error: page().discovery.read().error ?? page().state.error,
   }));
   const onOpenSkill = (request: PluginsSkillsReadParams) => void page().skillPreview.open(request);
   const actions = {
@@ -126,6 +128,12 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
       });
     },
     selectInstalledDetailTab: (tab: InstalledPluginDetailTab) => {
+      const pluginId = page().state.detail?.pluginId;
+      // Plugin settings live in Settings; the Plugins workspace links there, never embeds them.
+      if (tab === "configuration" && page().surface === "discovery" && pluginId) {
+        page().context.navigate("plugin-settings", pluginSettingsLocation(pluginId));
+        return;
+      }
       page().setState({ installedDetailTab: tab });
       page().context.navigate(
         page().surface === "discovery" ? "plugins" : "plugin-settings",
@@ -218,7 +226,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
   }));
 
   function CatalogInventory() {
-    // The route owns first-load readiness; retain accepted inventory during refresh.
+    // Observe the page owner's read while retaining accepted inventory during refresh.
     const catalogRead = createMemo(() => props.page.catalogRead());
     const loading = () => {
       latest(catalogRead);
@@ -254,7 +262,10 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
       () => components()?.skillDetails ?? components()?.skills.map((name) => ({ name })) ?? [],
     );
     const settings = () => page().state.installedDetailTab === "configuration";
-    const settingsLocation = () => pluginDetailLocation(page().routeData?.location, true);
+    const settingsLocation = () =>
+      page().surface === "discovery"
+        ? pluginSettingsLocation(detailProps.pluginId)
+        : pluginDetailLocation(page().routeData?.location, true);
     const overviewLocation = () => pluginDetailLocation(page().routeData?.location, false);
     return (
       <PluginDetailBoundary onRetry={() => void page().showDetails(detailProps.pluginId)}>
@@ -362,7 +373,17 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
       <SettingsWorkspace>
         {PluginRowMessageView(page().state.pageNotice ?? undefined)}
         {page().surface === "discovery" ? (
-          <div id={PLUGINS_HUB_PANEL_ID} role="tabpanel" aria-labelledby="plugins-tab-plugins">
+          <div {...pluginsHubPanel("plugins")}>
+            <Show when={page().state.catalogDetail && page().loading && !hasInventory()}>
+              <div class="muted" role="status">
+                {t("pluginsPage.loading")}
+              </div>
+            </Show>
+            <Show when={page().state.error}>
+              {(error) => (
+                <PluginRetryError error={error()} onRetry={() => void page().refreshCatalog()} />
+              )}
+            </Show>
             {page().state.catalogDetail ? (
               detailPluginId() && !page().consent.getActiveInstall(`install:${catalogId()}`) ? (
                 <InstalledDetail pluginId={detailPluginId()!} />

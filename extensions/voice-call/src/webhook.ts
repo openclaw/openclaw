@@ -263,10 +263,10 @@ export class VoiceCallWebhookServer {
         listRealtimeTranscriptionProviders(pluginConfig, Object.keys(streaming.providers)),
       resolveProviderConfig: ({ provider, cfg, rawConfig }) =>
         provider.resolveConfig?.({ cfg, rawConfig }) ?? rawConfig,
-      isProviderConfigured: ({ provider, cfg, providerConfig }) =>
+      isProviderConfigured: ({ provider, ...ctx }) =>
         provider.isConfiguredAsync
-          ? provider.isConfiguredAsync({ cfg, providerConfig })
-          : (provider.isConfigured?.({ cfg, providerConfig }) ?? false),
+          ? provider.isConfiguredAsync(ctx)
+          : (provider.isConfigured?.(ctx) ?? false),
     });
     if (!resolution.ok) {
       this.logger.warn(

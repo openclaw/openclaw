@@ -1,13 +1,21 @@
 #!/usr/bin/env node
 
-// Rejects changelog thanks entries that credit bots or internal handles.
+// Rejects changelog thanks entries that credit automation or organization handles.
 import fs from "node:fs";
 import path from "node:path";
 import { listDirectoryTreeStrictSync } from "../src/infra/directory-walk.ts";
 import { normalizeChangedPath } from "./lib/changed-path-facts.mjs";
-import { changelogFormat, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
+import { isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 
-const FORBIDDEN_INTERNAL_THANKS_HANDLES = new Set(["codex", "openclaw", "steipete"]);
+const FORBIDDEN_INTERNAL_THANKS_HANDLES = new Set([
+  "claude",
+  "codex",
+  "hugin-bot",
+  "openclaw",
+  "roboclaw-bot",
+  "steipete-oai",
+  "tideclaw-bot",
+]);
 const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLES = new Set([
   "clawsweeper",
   "openclaw-clawsweeper",
@@ -17,13 +25,9 @@ const THANKS_PATTERN = /\bThanks\b/iu;
 const THANKED_HANDLE_PATTERN = /@([-_/A-Za-z0-9]+(?:\[bot\])?)/giu;
 type ThanksOptions = { docsMirror?: boolean };
 
-export function isForbiddenChangelogThanksHandle(handle: string, options: ThanksOptions = {}) {
+export function isForbiddenChangelogThanksHandle(handle: string, _options: ThanksOptions = {}) {
+  // Keep the docsMirror input for callers; all formats now permit verified human credit.
   const normalized = handle.toLowerCase();
-  // Approved docs mirrors retain every verified human, including the maintainer.
-  // Initial notes, frozen accounting, and PR-author queries keep their existing policy.
-  if (options.docsMirror && normalized === "steipete") {
-    return false;
-  }
   if (normalized === "" || normalized === "null") {
     // Empty/null input is not a GitHub handle, but the shell query path may pass it through.
     return true;
@@ -66,20 +70,16 @@ export function findForbiddenChangelogThanks(content: string, options: ThanksOpt
 }
 
 export const CHANGELOG_ATTRIBUTION_NEXT_STEP =
-  "Use verified human GitHub credits; retain the initial-note policy in frozen records.";
+  "Use verified human GitHub credits, including human maintainers; never thank bots.";
 
-// Shared by pnpm check (working tree) and the release dispatch gate (candidate SHA),
-// so both apply the same docs-mirror exemption to the same repository-relative paths.
+// Shared by pnpm check (working tree) and the release dispatch gate (candidate SHA)
+// so initial notes, frozen records, and docs mirrors apply the same human-credit policy.
 export function findChangelogAttributionViolations(
   files: Iterable<{ path: string; content: string }>,
 ) {
   const violations: Array<{ path: string; line: number; handle: string }> = [];
   for (const file of files) {
-    const docsMirror =
-      /^CHANGELOG\/[^/]+\.md$/u.test(file.path) &&
-      isReleaseChangelogPath(file.path) &&
-      changelogFormat(file.content) === "docs-mirror";
-    for (const violation of findForbiddenChangelogThanks(file.content, { docsMirror })) {
+    for (const violation of findForbiddenChangelogThanks(file.content)) {
       violations.push({ path: file.path, line: violation.line, handle: violation.handle });
     }
   }

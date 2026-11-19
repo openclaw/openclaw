@@ -18,8 +18,6 @@ import type {
 } from "../channels/plugins/types.adapters.js";
 import type { ChannelConfigSchema } from "../channels/plugins/types.config.js";
 import type {
-  ChannelMessagingAdapter,
-  ChannelOutboundSessionRoute,
   ChannelSecurityDmPolicy,
   ChannelThreadingAdapter,
 } from "../channels/plugins/types.core.js";
@@ -27,17 +25,21 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelMeta } from "../channels/plugins/types.public.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
-import { normalizeOutboundThreadId } from "../infra/outbound/thread-id.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
-import { resolveThreadSessionKeys } from "../routing/session-key.js";
-import {
-  normalizeSessionKeyPreservingOpaquePeerIds,
-  parseThreadSessionSuffix,
-} from "../sessions/session-key-utils.js";
 import { createAttachedChannelResultAdapter } from "./channel-send-result.js";
 import { createCachedLazyValueGetter } from "./lazy-value.js";
+export type {
+  OpenClawPluginService,
+  OpenClawPluginServiceContext,
+  OpenClawPluginServiceContextV2,
+  OpenClawPluginServiceV2,
+  OpenClawPluginServiceV3,
+  OpenClawPluginServiceContextV3,
+  PluginServiceSessionWorkV1,
+  PluginServiceSessionWorkContextV1,
+  PluginServiceSchedulerV1,
+} from "./core-service.types.js";
 export type {
   AgentPromptGuidance,
   AgentPromptGuidanceEntry,
@@ -49,10 +51,6 @@ export type {
   OpenClawPluginCommandDefinition,
   OpenClawPluginConfigSchema,
   OpenClawPluginDefinition,
-  OpenClawPluginService,
-  OpenClawPluginServiceContext,
-  OpenClawPluginServiceContextV2,
-  OpenClawPluginServiceV2,
   PluginCommandContext,
   PluginCommandResult,
   PluginAgentEventEmitParams,
@@ -70,7 +68,6 @@ export type {
   PluginRunContextGetParams,
   PluginRunContextPatch,
   PluginRuntimeLifecycleRegistration,
-  PluginServiceSchedulerV1,
   PluginSessionActionContext,
   PluginSessionActionRegistration,
   PluginSessionActionResult,
@@ -298,11 +295,6 @@ export {
 } from "../routing/resolve-route.js";
 export { resolveThreadSessionKeys } from "../routing/session-key.js";
 
-/** Params passed to a channel adapter when resolving outbound session routing. */
-export type ChannelOutboundSessionRouteParams = Parameters<
-  NonNullable<ChannelMessagingAdapter["resolveOutboundSessionRoute"]>
->[0];
-
 function getChatChannelMetaForSdk(id: ChatChannelId): ChannelMeta {
   return getBuiltInChatChannelMeta(id);
 }
@@ -313,137 +305,6 @@ export {
   stripChannelTargetPrefix,
   stripTargetKindPrefix,
 } from "../channels/plugins/chat-target-prefixes.js";
-
-/**
- * Build the canonical outbound session route payload returned by channel
- * message adapters.
- */
-export function buildChannelOutboundSessionRoute(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  channel: string;
-  accountId?: string | null;
-  recipientSessionExact?: boolean | "direct-alias" | "delivery-identity";
-  peer: { kind: "direct" | "group" | "channel"; id: string };
-  chatType: "direct" | "group" | "channel";
-  from: string;
-  to: string;
-  threadId?: string | number;
-}): ChannelOutboundSessionRoute {
-  const baseSessionKey = buildOutboundBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: params.channel,
-    accountId: params.accountId,
-    peer: params.peer,
-  });
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    ...(params.recipientSessionExact !== undefined
-      ? { recipientSessionExact: params.recipientSessionExact }
-      : {}),
-    peer: params.peer,
-    chatType: params.chatType,
-    from: params.from,
-    to: params.to,
-    ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
-  };
-}
-
-/** Candidate source used when choosing a thread id for outbound session routing. */
-export type ThreadAwareOutboundSessionRouteThreadSource =
-  | "replyToId"
-  | "threadId"
-  | "currentSession";
-
-/** Recovery context passed before reusing the current session thread id. */
-export type ThreadAwareOutboundSessionRouteRecoveryContext = {
-  route: ChannelOutboundSessionRoute;
-  currentBaseSessionKey: string;
-  currentThreadId: string;
-};
-
-/** Recover the current thread id when the current session belongs to the same base route. */
-export function recoverCurrentThreadSessionId(params: {
-  route: ChannelOutboundSessionRoute;
-  currentSessionKey?: string | null;
-  canRecover?: (context: ThreadAwareOutboundSessionRouteRecoveryContext) => boolean;
-}): string | undefined {
-  const current = parseThreadSessionSuffix(params.currentSessionKey);
-  if (!current.baseSessionKey || !current.threadId) {
-    return undefined;
-  }
-  if (
-    normalizeSessionKeyPreservingOpaquePeerIds(current.baseSessionKey) !==
-    normalizeSessionKeyPreservingOpaquePeerIds(params.route.baseSessionKey)
-  ) {
-    return undefined;
-  }
-  const context = {
-    route: params.route,
-    currentBaseSessionKey: current.baseSessionKey,
-    currentThreadId: current.threadId,
-  };
-  if (params.canRecover && !params.canRecover(context)) {
-    return undefined;
-  }
-  return current.threadId;
-}
-
-/** Add thread-aware session keys and route thread ids to an outbound channel route. */
-export function buildThreadAwareOutboundSessionRoute(params: {
-  route: ChannelOutboundSessionRoute;
-  replyToId?: string | number | null;
-  threadId?: string | number | null;
-  currentSessionKey?: string | null;
-  precedence?: readonly ThreadAwareOutboundSessionRouteThreadSource[];
-  useSuffix?: boolean;
-  parentSessionKey?: string;
-  normalizeThreadId?: (threadId: string) => string;
-  canRecoverCurrentThread?: (context: ThreadAwareOutboundSessionRouteRecoveryContext) => boolean;
-}): ChannelOutboundSessionRoute {
-  const recoveredThreadId = recoverCurrentThreadSessionId({
-    route: params.route,
-    currentSessionKey: params.currentSessionKey,
-    canRecover: params.canRecoverCurrentThread,
-  });
-  const candidates: Record<
-    ThreadAwareOutboundSessionRouteThreadSource,
-    { routeThreadId: string | number; sessionThreadId: string } | undefined
-  > = {
-    replyToId: resolveThreadAwareOutboundCandidate(params.replyToId),
-    threadId: resolveThreadAwareOutboundCandidate(params.threadId),
-    currentSession: resolveThreadAwareOutboundCandidate(recoveredThreadId),
-  };
-  const precedence = params.precedence ?? ["replyToId", "threadId", "currentSession"];
-  const candidate = precedence.map((source) => candidates[source]).find(Boolean);
-  const threadKeys = resolveThreadSessionKeys({
-    baseSessionKey: params.route.baseSessionKey,
-    threadId: candidate?.sessionThreadId,
-    parentSessionKey: candidate ? params.parentSessionKey : undefined,
-    useSuffix: params.useSuffix,
-    normalizeThreadId: params.normalizeThreadId,
-  });
-  return {
-    ...params.route,
-    sessionKey: threadKeys.sessionKey,
-    ...(candidate !== undefined ? { threadId: candidate.routeThreadId } : {}),
-  };
-}
-
-function resolveThreadAwareOutboundCandidate(
-  threadId?: string | number | null,
-): { routeThreadId: string | number; sessionThreadId: string } | undefined {
-  const sessionThreadId = normalizeOutboundThreadId(threadId);
-  if (sessionThreadId === undefined) {
-    return undefined;
-  }
-  return {
-    routeThreadId: typeof threadId === "number" ? threadId : sessionThreadId,
-    sessionThreadId,
-  };
-}
 
 /** Options for a channel plugin entry that should register a channel capability. */
 type ChannelEntryConfigSchema<TPlugin> =
@@ -761,9 +622,17 @@ export function createChannelPluginBase<TResolvedAccount>(
     ...(params.setupContract ? { setupContract: params.setupContract } : {}),
   } as CreatedChannelPluginBase<TResolvedAccount>;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 export type {
   ChannelGatewayContextV2,
   ChannelGatewayAdapterV2,
 } from "../channels/plugins/types.adapters.js";
+
+export {
+  buildChannelOutboundSessionRoute,
+  buildThreadAwareOutboundSessionRoute,
+  recoverCurrentThreadSessionId,
+  type ChannelOutboundSessionRouteParams,
+  type ThreadAwareOutboundSessionRouteThreadSource,
+  type ThreadAwareOutboundSessionRouteRecoveryContext,
+} from "./thread-aware-outbound-session-route.js";

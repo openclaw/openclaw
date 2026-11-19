@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Static } from "typebox";
 import { attachInternalToolResultAcknowledgement } from "../../packages/agent-core/src/internal-hooks.js";
 import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
+import { ToolInterruptedByUser } from "../../packages/agent-core/src/tool-interruption.js";
 import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
@@ -28,12 +29,18 @@ import { createProcessToolScope } from "./bash-process-scope.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
 import {
   EXEC_MANUAL_COLLECTION_FOLLOW_UP,
-  EXEC_RETENTION_CAP_NOTE,
+  renderExecDroppedOutputNote,
   appendExecTimeoutRetryGuidance,
+  describeExitWake,
+  hasExitWake,
   renderExecExitLabel,
 } from "./bash-tools.exec-output.js";
 import { ProcessToolOutputSchema } from "./bash-tools.process-schema.js";
-import { processSchema } from "./bash-tools.schemas.js";
+import {
+  isProcessObservationAction,
+  PROCESS_OBSERVATION_REPEATABLE,
+  processSchema,
+} from "./bash-tools.schemas.js";
 import {
   clampWithDefault,
   deriveSessionName,
@@ -88,7 +95,7 @@ function resolveLogSliceWindow(offset?: number, limit?: number) {
   const usingDefaultTail = offset === undefined && limit === undefined;
   const effectiveLimit =
     typeof limit === "number" && Number.isFinite(limit)
-      ? limit
+      ? Math.max(1, Math.floor(limit))
       : usingDefaultTail
         ? DEFAULT_LOG_TAIL_LINES
         : undefined;
@@ -100,10 +107,6 @@ function defaultTailNote(totalLines: number, usingDefaultTail: boolean) {
     return "";
   }
   return `\n\n[showing last ${DEFAULT_LOG_TAIL_LINES} of ${totalLines} lines; pass offset/limit to page]`;
-}
-
-function retentionCapNote(session: Pick<ProcessSession, "totalOutputChars" | "aggregated">) {
-  return session.totalOutputChars > session.aggregated.length ? EXEC_RETENTION_CAP_NOTE : "";
 }
 
 const MAX_POLL_WAIT_MS = 30_000;
@@ -217,7 +220,7 @@ function finishedPollResult(
       : "[earlier output is omitted from this poll; omitted output is no longer available through action=log]\n\n"
     : "";
   const text = appendExecTimeoutRetryGuidance(
-    retentionCapNote(finished) +
+    renderExecDroppedOutputNote(finished) +
       retainedOutputNote +
       (output || "(no new output)") +
       `\n\n${finishedSessionText(finished)}`,
@@ -265,7 +268,7 @@ export function createProcessTool(
     const idleMs = Math.max(0, Date.now() - lastOutputAt);
     const stdinWritable = isWritableStdin(session.stdin);
     return {
-      ...(session.notifyOnExit === false ? { followUp: EXEC_MANUAL_COLLECTION_FOLLOW_UP } : {}),
+      ...(hasExitWake(session) ? {} : { followUp: EXEC_MANUAL_COLLECTION_FOLLOW_UP }),
       stdinWritable,
       waitingForInput: stdinWritable && idleMs >= inputWaitIdleMs,
       idleMs,
@@ -286,6 +289,8 @@ export function createProcessTool(
     displaySummary: PROCESS_TOOL_DISPLAY_SUMMARY,
     description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
+    interruptible: isProcessObservationAction,
+    repeatable: PROCESS_OBSERVATION_REPEATABLE,
     outputSchema: ProcessToolOutputSchema,
     execute: async (_toolCallId, args, signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
       const assertCallerCurrent = () => {
@@ -445,6 +450,12 @@ export function createProcessTool(
           const pollWaitMs = resolvePollWaitMs(params.timeout);
           if (pollWaitMs > 0 && !scopedSession.exited) {
             await waitForSessionPoll(scopedSession, pollWaitMs, signal);
+            if (signal?.reason instanceof ToolInterruptedByUser) {
+              return runningSessionResult(
+                scopedSession,
+                `Poll interrupted by the user. Background process ${sessionId} remains independently managed; use process poll to check it or process kill to stop it.`,
+              );
+            }
             if (signal?.aborted) {
               throw createAbortError(signal.reason);
             }
@@ -463,18 +474,21 @@ export function createProcessTool(
             const delivery = prepareSessionPoll(scopedSession, pollScope);
             const { output: unreadOutput, outputDropped } = delivery;
             const output = unreadOutput.trim();
-            const aggregateOutputNote = retentionCapNote(scopedSession);
+            const aggregateOutputNote = renderExecDroppedOutputNote(scopedSession);
             const retainedOutputNote = outputDropped
               ? "[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]\n\n"
               : "";
             const hasNewOutput = output.length > 0;
             const retryInMs = recordPollRetrySuggestion(sessionId, hasNewOutput);
             const runtime = describeRunningSession(scopedSession);
+            const exitWake = hasNewOutput ? undefined : describeExitWake(scopedSession);
+            const exitWakeHint = exitWake ? ` ${exitWake} instead of polling.` : "";
             const text =
               aggregateOutputNote +
               retainedOutputNote +
               (output || "(no new output)") +
-              (buildInputWaitHint(runtime.waitingForInput) || "\n\nProcess still running.") +
+              (buildInputWaitHint(runtime.waitingForInput) ||
+                `\n\nProcess still running.${exitWakeHint}`) +
               (runtime.followUp ? `\n\n${runtime.followUp}` : "");
             return attachInternalToolResultAcknowledgement(
               textResult(text, {
@@ -509,7 +523,7 @@ export function createProcessTool(
             const runtime = scopedSession ? describeRunningSession(scopedSession) : undefined;
             const ended = record.exited && record.endedAt !== undefined;
             const text =
-              retentionCapNote(record) +
+              renderExecDroppedOutputNote(record) +
               (slice || (scopedSession ? "(no output yet)" : "(no output recorded)")) +
               defaultTailNote(totalLines, window.usingDefaultTail) +
               (ended ? `\n\n${finishedSessionText(record)}` : "");

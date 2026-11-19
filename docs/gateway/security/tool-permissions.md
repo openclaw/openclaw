@@ -16,7 +16,9 @@ Two built-in tools remain control-plane sensitive:
 - `gateway` reads config with `config.schema.lookup` / `config.get` and starts owner-requested OpenClaw updates with `update.run`. It also exposes `restart` for a runtime-supervised restart and `update.cleanup` for explicit recovery cleanup while serving (`dryRun` previews). It has no config-write action; update restart and completion notices are automatic.
 - `cron` creates scheduled jobs that keep running after the original chat/task ends.
 
-The `gateway` tool stays owner-only because config reads can expose secrets and host topology, updates change the running installation, and cleanup permanently retires eligible rollback copies. Each maintenance action requires an explicit owner request or operator-scheduled admission. Agents request other persistent config or lifecycle changes through the `openclaw` delegation tool. OpenClaw maps them to typed operations and applies the requesting run's effective permission policy: Full Access, including Default (Full Access), authorizes permitted changes without an approval prompt; restricted runs require human approval. Independent tool, filesystem, sandbox, and operation restrictions still apply, and the host revalidates live authority before execution. See [Session permission modes](/gateway/permission-modes#delegated-setup-and-repair) and [OpenClaw setup agent](/cli/openclaw#operations-and-approval).
+The `gateway` tool stays owner-only because config reads can expose secrets and host topology, updates change the running installation, and cleanup permanently retires eligible rollback copies. Each maintenance action requires an explicit owner request or operator-scheduled admission. Agents request other persistent config or lifecycle changes through the `openclaw` delegation tool. OpenClaw maps them to typed operations and applies the requesting run's current delegation authority. Inferred and explicit Full Access share the automatic-approval default, but inference requires effective unrestricted Gateway-host execution; settings for disabled tools grant no authority. Restricted defaults require human approval unless independently authorized.
+
+[`tools.openclaw.autoApproveChanges`](/gateway/config-tools/built-in-tools#tools.openclaw) sets a standing delegation grant globally or per agent. `false` requires human approval even in Full Access; `true` authorizes permitted delegated administration, including changes that can enable host code execution despite denied direct execution or editing tools. Explicit Full Access provides the same independent delegation grant when this setting is omitted. Filesystem, sandbox, inherited-authority, access to the `openclaw` tool, and operation restrictions still apply. The host revalidates live authority before execution. Grant broadening needs direct operator administration or exact human approval. See [Session permission modes](/gateway/permission-modes#delegated-setup-and-repair) and [OpenClaw setup agent](/cli/openclaw#operations-and-approval).
 
 For any agent/surface handling untrusted content, deny these by default:
 
@@ -29,6 +31,12 @@ For any agent/surface handling untrusted content, deny these by default:
 ```
 
 `commands.restart=false` disables `/restart`, `/update`, external-chat `gateway` update/restart actions, and external `SIGUSR2` restart requests. Cleanup does not stop the Gateway and does not depend on this flag. Tool maintenance keeps owner/operator and tool-policy gates; it does not require the separate setup-delegation approval path.
+
+## Owner authority after network reads
+
+Network tool results mark the current turn as tainted. That taint stays set, including across retries, but does not by itself remove an explicitly attributed owner's live authority. For example, an authorized owner can ask the agent to look up a GitHub profile and then assign a role without the lookup alone blocking the assignment. This is shared owner-tool behavior, not an exemption limited to role assignment or the `openclaw` tool.
+
+External content remains [untrusted input](/gateway/security/prompt-injection), not owner instructions or authorization for additional actions. Tool policy, required operator scopes, sandbox and operation restrictions, and applicable approvals still apply. Live authority is revalidated before effects; revocation still prevents execution. Inherited operator authority without explicit owner attribution remains subject to the network-taint veto and its narrower retained-tool eligibility.
 
 ## Cross-provider messaging
 

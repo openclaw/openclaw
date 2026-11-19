@@ -1,4 +1,4 @@
-import { readTranscriptExportSnapshotReadOnlySync } from "../../../../src/config/sessions/session-accessor.sqlite-read.js";
+import { readTranscriptExportSnapshotReadOnlySync } from "../../../../src/config/sessions/session-accessor.sqlite-export-read.js";
 import {
   resolveSessionResetRecallCutoff,
   type SessionResetRecallCutoff,

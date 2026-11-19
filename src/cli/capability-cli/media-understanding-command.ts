@@ -1,6 +1,6 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import type { Command } from "commander";
+import { resolveFilesystemPath } from "../../infra/home-dir.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText } from "./output.js";
@@ -14,18 +14,6 @@ type MediaUnderstandingOptions = {
   prompt?: string;
   json: boolean;
 };
-
-async function resolveMediaFilePath(file: string): Promise<string> {
-  if (process.platform === "win32" || !file.split("/").includes("..")) {
-    return path.resolve(file);
-  }
-  const name = path.basename(file);
-  if (file.endsWith("/") || name === "." || name === "..") {
-    throw new Error(`Expected a regular media file: ${file}`);
-  }
-  // Resolve symlinks before parent segments, but leave the final link for the media root check.
-  return path.join(await fs.realpath(path.dirname(file)), name);
-}
 
 export function registerMediaUnderstandingCommand(parent: Command, kind: "audio" | "video") {
   const audio = kind === "audio";
@@ -59,15 +47,22 @@ export function registerMediaUnderstandingCommand(parent: Command, kind: "audio"
           ...(audio ? {} : { surface: "infer video describe" }),
         });
         const activeModel = requireProviderModelOverride(opts.model);
-        const filePath = await resolveMediaFilePath(file);
+        const filePath = resolveFilesystemPath(file);
         const input = { filePath, cfg, agentId, agentDir, activeModel };
+        const signal = getAsyncWorkSignal();
+        const execution = signal
+          ? { signal, assertCurrent: () => signal.throwIfAborted() }
+          : undefined;
         const result = audio
-          ? await transcribeAudioFile({
-              ...input,
-              language: opts.language,
-              prompt: opts.prompt,
-            })
-          : await describeVideoFile(input);
+          ? await transcribeAudioFile(
+              {
+                ...input,
+                language: opts.language,
+                prompt: opts.prompt,
+              },
+              execution,
+            )
+          : await describeVideoFile(input, execution);
         if (!result.text) {
           if (audio && isMissingMediaUnderstandingProvider(result)) {
             throw new Error(

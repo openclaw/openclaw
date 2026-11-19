@@ -1,9 +1,9 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { createAbortError } from "../infra/abort-signal.js";
 import {
   createWatchdogAssessment,
   type WatchdogAssessmentBackend,
 } from "./session-controller.watchdog-assessment.js";
+import { SessionWatchdogError } from "./session-controller.watchdog-error.js";
 import {
   decideSessionWatchdog,
   SESSION_WATCHDOG_ABORT_FLOOR_MS,
@@ -16,71 +16,26 @@ import {
   type SessionWatchdogPhase,
   type SessionWatchdogSnapshot,
 } from "./session-controller.watchdog-state.js";
+import type {
+  DiagnosticToolAwaiting,
+  SessionControllerWatchdog,
+  SessionControllerWatchdogAttempt,
+  SessionWatchdogEffect,
+  SessionWatchdogEffectResult,
+  SessionWatchdogProgress,
+  SessionWatchdogWait,
+} from "./session-controller.watchdog.types.js";
 
-type SessionWatchdogProgress = "semantic" | "transport" | "source_arrival" | "finalization";
+export type {
+  SessionControllerWatchdog,
+  SessionControllerWatchdogAttempt,
+  SessionWatchdogEffect,
+  SessionWatchdogEffectResult,
+  SessionWatchdogWait,
+} from "./session-controller.watchdog.types.js";
+
 const executionDeadline = (execution: OwnedExecution) =>
   execution.getDeadlineAtMs ? execution.getDeadlineAtMs() : execution.deadlineAtMs;
-export type SessionWatchdogWait = {
-  close: () => void;
-  updateDeadline(deadlineAtMs: number): void;
-};
-export type SessionControllerWatchdogAttempt = {
-  isCurrent(): boolean;
-  progress(kind: SessionWatchdogProgress, reason?: string): boolean;
-  progressModel(reason?: string): boolean;
-  observeStagnation(params: { active: boolean; existingOnly?: boolean }): void;
-  progressTool(toolCallId: string, allowedNames: readonly string[]): boolean;
-  beginWait(wait: OwnedWait): SessionWatchdogWait;
-  beginTool(tool: {
-    toolCallId: string;
-    toolName: string;
-    deadlineAtMs?: number;
-  }): (completed?: boolean) => void;
-  toolEvent(event: {
-    phase: "start" | "end";
-    toolCallId: string;
-    toolName: string;
-    deadlineAtMs?: number;
-  }): void;
-  beginRequest(params: {
-    deadlineAtMs?: number;
-    requestTimeoutMs?: number;
-  }): (recoveryDeadlineAtMs?: number) => void;
-  requestEvent(event: { phase: "start" | "end"; callId: string; requestTimeoutMs?: number }): void;
-  setExecutionDeadline(deadlineAtMs: number | undefined): void;
-  close(): void;
-};
-export type SessionWatchdogEffect = {
-  cause: "run_stalled";
-  reason: string;
-  attempt?: SessionControllerWatchdogAttempt;
-  /** Revalidate at each actual asynchronous stop/cleanup side effect. */
-  isCurrent(): boolean;
-  recoverExecutionDeadline?: () => Promise<boolean>;
-};
-export type SessionWatchdogEffectResult = "settled" | "blocked" | "resumed" | "model_recovery";
-export type SessionControllerWatchdog = {
-  start(): void;
-  close(): void;
-  snapshot(now?: number): SessionWatchdogSnapshot;
-  decide(now?: number): SessionWatchdogDecision;
-  tick(now?: number): Promise<SessionWatchdogDecision>;
-  progress(kind: SessionWatchdogProgress, reason?: string): boolean;
-  beginWait(wait: OwnedWait): SessionWatchdogWait;
-  attachAttempt(params: { assertCurrent: () => void }): SessionControllerWatchdogAttempt;
-  describeStop(): { staleReason: "no_activity" | "rate_limited"; error: Error };
-  beginFinalization(): void;
-  beginTerminal(deadlineAtMs?: number): void;
-  beginExecution(
-    getDeadlineAtMs?: () => number | undefined,
-    recoverDeadline?: () => Promise<boolean>,
-  ): {
-    setDeadline(deadlineAtMs: number | undefined): void;
-    close(): void;
-  };
-  beginFinalizationWork(timeoutMs: number): () => void;
-};
-
 const inertWait: SessionWatchdogWait = { close() {}, updateDeadline() {} };
 const noop = () => {};
 function live(assertion: () => boolean): boolean {
@@ -103,7 +58,7 @@ export function createSessionControllerWatchdog(params: {
   expireCleanup: (
     effect: SessionWatchdogEffect,
   ) => SessionWatchdogEffectResult | Promise<SessionWatchdogEffectResult>;
-  onWarning?: (decision: SessionWatchdogDecision) => void;
+  onBlocked?: (decision: SessionWatchdogDecision) => void;
 }): SessionControllerWatchdog {
   const now = Date.now;
   const abortMs = Math.max(SESSION_WATCHDOG_ABORT_FLOOR_MS, 3 * SESSION_WATCHDOG_WARNING_MS);
@@ -112,45 +67,42 @@ export function createSessionControllerWatchdog(params: {
   let transportAt = params.startedAtMs;
   let reason: string | undefined;
   let semanticSequence = 0;
-  let stagnation:
-    | { startedAtMs: number; observedAtMs: number; semanticSequence: number }
-    | undefined;
-  const stagnationCurrent = (at: number) =>
-    stagnation &&
-    !(semanticSequence > stagnation.semanticSequence && at - stagnation.observedAtMs >= 60_000);
   // While an opted-in runtime-owned wait is live, the native runtime owns liveness, so
   // that interval is never semantically stale. Its release (a native turn that just
   // completed) starts the semantic horizon; it must not make the masked interval
   // retroactively expire and stop a run that is finalizing. Other waits keep their
   // retroactive horizon and publish progress themselves when they end.
   let runtimeOwnedThroughAt: number | undefined;
-  const progressOrigin = (at: number) =>
-    stagnationCurrent(at)
-      ? stagnation!.startedAtMs
-      : Math.max(semanticAt, runtimeOwnedThroughAt ?? semanticAt);
+  const progressOrigin = () => Math.max(semanticAt, runtimeOwnedThroughAt ?? semanticAt);
   let retryAllowanceAt: number | undefined;
   let requestRecoveryAt: number | undefined;
   let cleanupAt: number | undefined;
   let executionAt: number | undefined;
   let attempt: SessionControllerWatchdogAttempt | undefined;
+  let attemptReleases: Set<() => void> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let started = false;
-  let warningAt: number | undefined;
-  let blockedWarning = false;
+  let blockedReported = false;
   let recovery: SessionWatchdogSnapshot["recovery"];
+  let recoveryPendingTools: SessionWatchdogError["pendingTools"] | undefined;
   let recoveryAction: "stop" | "expire_cleanup" | undefined;
   let pendingTick:
     | { decision: SessionWatchdogDecision; resolve: (decision: SessionWatchdogDecision) => void }
     | undefined;
   const requests = new Set<{ requestTimeoutMs?: number; deadlineAtMs?: number }>();
   const waits = new Set<OwnedWait>();
-  const tools = new Set<SessionWatchdogSnapshot["tools"][number] & { touch(): void }>();
+  const tools = new Set<
+    SessionWatchdogSnapshot["tools"][number] & {
+      touch(): void;
+      awaiting?: readonly DiagnosticToolAwaiting[];
+    }
+  >();
   const executions = new Set<OwnedExecution>();
   const finalizationWork = new Set<{ deadlineAtMs: number }>();
   const current = () => !closed && live(params.isCurrent);
-  const semanticDeadline = (at = now()) =>
+  const semanticDeadline = () =>
     Math.max(
-      progressOrigin(at) + abortMs,
+      progressOrigin() + abortMs,
       requestRecoveryAt ?? 0,
       ...[...requests].map((request) => request.deadlineAtMs ?? 0),
     );
@@ -206,11 +158,8 @@ export function createSessionControllerWatchdog(params: {
       semanticAt = transportAt;
       semanticSequence += 1;
       assessment.clear();
-      if (!stagnationCurrent(transportAt)) {
-        retryAllowanceAt = undefined;
-      }
+      retryAllowanceAt = undefined;
       reason = nextReason;
-      warningAt = undefined;
     } else if (kind === "finalization" && cleanupAt !== undefined) {
       cleanupAt = transportAt + SESSION_WATCHDOG_CLEANUP_MS;
       reason = nextReason;
@@ -229,12 +178,13 @@ export function createSessionControllerWatchdog(params: {
     ) {
       runtimeOwnedThroughAt = Math.max(runtimeOwnedThroughAt ?? at, at);
     }
-    const liveWaits = currentWaits.map((wait) => ({
+    const liveWaits = currentWaits.map<SessionWatchdogSnapshot["waits"][number]>((wait) => ({
       kind: wait.kind,
+      admission: wait.admission,
       // Mechanical traffic/retry rearming never moves the logical semantic horizon.
       deadlineAtMs:
         wait.kind === "backend"
-          ? Math.min(wait.deadlineAtMs!, semanticDeadline(at))
+          ? Math.min(wait.deadlineAtMs!, semanticDeadline())
           : wait.kind === "retry"
             ? Math.min(wait.deadlineAtMs!, retryAllowanceAt!)
             : wait.deadlineAtMs,
@@ -247,10 +197,9 @@ export function createSessionControllerWatchdog(params: {
       current: isCurrent && current(),
       phase: closed ? "settled" : params.readPhase(),
       hasActiveAttempt: attempt?.isCurrent() === true,
-      semanticProgressAtMs: progressOrigin(at),
-      lastProgressReason: stagnationCurrent(at) ? "tool_loop:argument_churn" : reason,
-      warningMs: SESSION_WATCHDOG_WARNING_MS,
-      semanticDeadlineAtMs: semanticDeadline(at),
+      semanticProgressAtMs: progressOrigin(),
+      lastProgressReason: reason,
+      semanticDeadlineAtMs: semanticDeadline(),
       executionDeadlineAtMs: [executionAt, ...[...executions].map(executionDeadline)]
         .filter((deadline): deadline is number => deadline !== undefined)
         .reduce<number | undefined>(
@@ -282,6 +231,23 @@ export function createSessionControllerWatchdog(params: {
     };
   };
   const decide = (at = now()) => decideSessionWatchdog(snapshot(at), at);
+  const readPendingTools = () => {
+    const stoppedAtMs = now();
+    return [...tools]
+      .slice(0, 5)
+      .map(({ toolName, toolCallId, startedAtMs, explicitDeadlineAtMs, awaiting }) => {
+        const pending: SessionWatchdogError["pendingTools"][number] = {
+          toolName,
+          toolCallId,
+          elapsedMs: Math.max(0, stoppedAtMs - startedAtMs),
+          explicitDeadline: explicitDeadlineAtMs !== undefined,
+        };
+        if (awaiting?.length) {
+          pending.awaiting = awaiting;
+        }
+        return pending;
+      });
+  };
   const tick = async (at = now()): Promise<SessionWatchdogDecision> => {
     assessment.check(at);
     const cleanupDeadlineAtMs = snapshot(at).cleanupDeadlineAtMs;
@@ -294,20 +260,18 @@ export function createSessionControllerWatchdog(params: {
       at >= cleanupDeadlineAtMs
     ) {
       recovery = undefined;
+      recoveryPendingTools = undefined;
       recoveryAction = undefined;
-      blockedWarning = false;
+      blockedReported = false;
     }
     const decision = decide(at);
-    if (decision.action === "warn" || decision.action === "blocked") {
-      if (warningAt !== semanticAt || (decision.action === "blocked" && !blockedWarning)) {
-        warningAt = semanticAt;
-        if (decision.action === "blocked" && recovery) {
-          blockedWarning = true;
-          recovery.status = "blocked";
-          pendingTick?.resolve(decision);
-          pendingTick = undefined;
-        }
-        params.onWarning?.(decision);
+    if (decision.action === "blocked") {
+      if (!blockedReported && recovery) {
+        blockedReported = true;
+        recovery.status = "blocked";
+        pendingTick?.resolve(decision);
+        pendingTick = undefined;
+        params.onBlocked?.(decision);
       }
       return decision;
     }
@@ -382,6 +346,8 @@ export function createSessionControllerWatchdog(params: {
       startedAtMs: at,
     };
     recovery = ownedRecovery;
+    // Recovery can abort and drain tools before abortForStall describes this stop.
+    recoveryPendingTools = readPendingTools();
     recoveryAction = decision.action;
     let ownedPendingTick: typeof pendingTick;
     const deadlineResult = new Promise<SessionWatchdogDecision>((resolve) => {
@@ -396,13 +362,14 @@ export function createSessionControllerWatchdog(params: {
         if (result === "resumed" || result === "model_recovery") {
           if (recovery === ownedRecovery && current()) {
             recovery = undefined;
+            recoveryPendingTools = undefined;
             recoveryAction = undefined;
             if (!effect.isCurrent()) {
               assessment.clear();
             } else {
               assessment.check(now());
             }
-            blockedWarning = false;
+            blockedReported = false;
             const resumedPhase = params.readPhase();
             if (resumedPhase === "finishing" || resumedPhase === "terminal") {
               cleanupAt = now() + SESSION_WATCHDOG_CLEANUP_MS;
@@ -473,6 +440,7 @@ export function createSessionControllerWatchdog(params: {
       closed = true;
       assessment.clear();
       recoveryAction = undefined;
+      recoveryPendingTools = undefined;
       started = false;
       clearTimeout(timer);
       timer = undefined;
@@ -482,6 +450,7 @@ export function createSessionControllerWatchdog(params: {
       finalizationWork.clear();
       executions.clear();
       attempt = undefined;
+      attemptReleases = undefined;
     },
     snapshot,
     decide,
@@ -495,19 +464,18 @@ export function createSessionControllerWatchdog(params: {
           wait.kind === "retry" && wait.rateLimitStopMessage !== undefined && live(wait.isCurrent),
       )?.rateLimitStopMessage;
       const result = assessment.result();
+      const staleReason = rateLimitMessage === undefined ? "no_activity" : "rate_limited";
+      const pendingTools = recoveryPendingTools ?? readPendingTools();
       return {
-        staleReason: rateLimitMessage === undefined ? "no_activity" : "rate_limited",
-        error: Object.assign(
-          createAbortError(
-            rateLimitMessage ??
-              (result?.state === "closed"
-                ? "Reply backend closed before completing"
-                : "Reply operation stalled"),
-          ),
-          {
-            code: "OPENCLAW_SESSION_WATCHDOG",
-            ...(result ? { assessment: result } : {}),
-          },
+        staleReason,
+        error: new SessionWatchdogError(
+          rateLimitMessage ??
+            (result?.state === "closed"
+              ? "Reply backend closed before completing"
+              : "Reply operation stalled"),
+          staleReason,
+          pendingTools,
+          result,
         ),
       };
     },
@@ -549,7 +517,7 @@ export function createSessionControllerWatchdog(params: {
         finalizationWork.delete(work);
       };
     },
-    attachAttempt({ assertCurrent }) {
+    attachAttempt({ assertCurrent, nested }) {
       if (!current() || recovery) {
         throw new Error("Cannot attach attempt to retired or recovering operation");
       }
@@ -558,7 +526,20 @@ export function createSessionControllerWatchdog(params: {
       if (!current() || recovery || attempt !== previousAttempt) {
         throw new Error("Operation retired while attaching attempt");
       }
-      previousAttempt?.close();
+      const parent = nested ? previousAttempt : undefined;
+      const parentReleases = parent ? attemptReleases : undefined;
+      if (parent) {
+        if (!parent.isCurrent()) {
+          throw new Error("Cannot attach maintenance to a retired attempt");
+        }
+      } else {
+        previousAttempt?.close();
+      }
+      // Maintenance owns its deadline and resources, not the enclosing run's binding.
+      const maintenanceExecution: OwnedExecution | undefined = parent ? {} : undefined;
+      if (maintenanceExecution) {
+        executions.add(maintenanceExecution);
+      }
       let attemptClosed = false;
       const ownedReleases = new Set<() => void>();
       const emittedTools = new Map<string, (completed?: boolean) => void>();
@@ -566,14 +547,32 @@ export function createSessionControllerWatchdog(params: {
       const valid = () =>
         current() &&
         !attemptClosed &&
-        attempt === next &&
+        (parent ? parent.isCurrent() : attempt === next) &&
         live(() => {
           assertCurrent();
           return true;
         }) &&
         current() &&
         !attemptClosed &&
-        attempt === next;
+        (parent ? parent.isCurrent() : attempt === next);
+      const closeAttempt = () => {
+        attemptClosed = true;
+        parentReleases?.delete(closeAttempt);
+        if (maintenanceExecution) {
+          executions.delete(maintenanceExecution);
+        }
+        for (const release of ownedReleases) {
+          release();
+        }
+        emittedTools.clear();
+        emittedRequests.clear();
+        if (attempt === next) {
+          assessment.clear();
+          attempt = undefined;
+          attemptReleases = undefined;
+          executionAt = undefined;
+        }
+      };
       const next: SessionControllerWatchdogAttempt = {
         isCurrent: valid,
         progress: (kind, nextReason) => valid() && progress(kind, nextReason),
@@ -590,18 +589,6 @@ export function createSessionControllerWatchdog(params: {
             }
           }
           return false;
-        },
-        observeStagnation(observation) {
-          if (!valid() || (observation.existingOnly && !stagnation)) {
-            return;
-          }
-          if (!observation.active) {
-            stagnation = undefined;
-            return;
-          }
-          const at = now();
-          const startedAtMs = stagnationCurrent(at) ? stagnation!.startedAtMs : at;
-          stagnation = { startedAtMs, observedAtMs: at, semanticSequence };
         },
         beginWait(input) {
           const wait = beginWait(input, valid);
@@ -622,6 +609,9 @@ export function createSessionControllerWatchdog(params: {
             toolName: tool.toolName,
             toolCallId: tool.toolCallId,
             startedAtMs,
+            get awaiting() {
+              return tool.awaiting;
+            },
             touch() {
               lastProgressAtMs = now();
             },
@@ -696,24 +686,21 @@ export function createSessionControllerWatchdog(params: {
         },
         setExecutionDeadline(deadlineAtMs) {
           if (valid()) {
-            executionAt = deadlineAtMs;
+            if (maintenanceExecution) {
+              maintenanceExecution.deadlineAtMs = deadlineAtMs;
+            } else {
+              executionAt = deadlineAtMs;
+            }
           }
         },
-        close() {
-          attemptClosed = true;
-          for (const release of ownedReleases) {
-            release();
-          }
-          emittedTools.clear();
-          emittedRequests.clear();
-          if (attempt === next) {
-            assessment.clear();
-            attempt = undefined;
-            executionAt = undefined;
-          }
-        },
+        close: closeAttempt,
       };
-      attempt = next;
+      if (parent) {
+        parentReleases?.add(closeAttempt);
+      } else {
+        attempt = next;
+        attemptReleases = ownedReleases;
+      }
       return next;
     },
   };

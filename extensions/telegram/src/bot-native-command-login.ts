@@ -192,7 +192,7 @@ export async function executeTelegramLoginCommand(params: {
             sendLoginMessage(formatTelegramLoginDeviceCode(deviceCode), "HTML"),
           ),
         unsupportedPromptMessage:
-          "This provider needs input that Telegram cannot collect. Open Control UI → Models and choose Sign in.",
+          "This provider needs input that Telegram cannot collect. Open Models in the OpenClaw app and choose Sign in.",
       });
       flowSignal.throwIfAborted();
       const nextProfileId = loginResult.profiles.find(

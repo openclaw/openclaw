@@ -311,7 +311,7 @@ suite.define(() => {
       expect(await native.requests("connect_remote_gateway")).toHaveLength(1);
       await form.field("Gateway port").fill("18789");
       await form.field("Gateway port").press("Enter");
-      await status(page, "Opening the remote dashboard");
+      await status(page, "Opening the remote Gateway");
       await expectRequest(
         native,
         "connect_remote_gateway",

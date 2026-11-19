@@ -77,6 +77,7 @@ export async function executeSessionPatchMutations(params: {
   signal?: AbortSignal;
   diagnostics?: SessionPatchDiagnostics;
   operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
+  followSharingRegistration?: SessionMutationAuthorization["followRegistration"];
   onCreatedSessionCommitted?: SessionMutationAuthorization["recordCreatedSession"];
   patch: Omit<SessionsPatchParams, keyof PatchTargetIdentity>;
   targets: readonly MutationTarget[];
@@ -214,6 +215,7 @@ export async function executeSessionPatchMutations(params: {
     placementChecks,
     outcomes,
     operatorAuthority: params.operatorAuthority,
+    followSharingRegistration: params.followSharingRegistration,
     personalModelSelection,
   });
   const {
@@ -463,6 +465,7 @@ export async function executeSessionPatchMutations(params: {
                           entry: projected.entry,
                           expectedEntry: existingEntry,
                           callerCanConsent: callerIsAdmin,
+                          operatorAuthority,
                           catalog: (await catalogs.available(target.targetAgentId))?.entries,
                           validateModelSelection: projected.validateModelSelection,
                           placement: { context: params.context, sessionKey: primaryKey },
@@ -608,13 +611,12 @@ export async function executeSessionPatchMutations(params: {
                   },
                   afterCommitted: patchEffects.createSessionPatchCategoryRegistration(params),
                   assertCommitAllowed,
-                  agentId: first.targetAgentId,
                   sessionKeys: selectedSessionKeys,
-                  storePath: first.storePath,
                   skipMaintenance: true,
                 };
                 const applyGroup = createSessionPatchGroupWriter({
                   store: groupStore,
+                  followSharingRegistration: params.followSharingRegistration,
                   targets: group,
                   project: projectGroup,
                   timing: groupTiming,

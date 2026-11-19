@@ -1,6 +1,7 @@
 // Provider access keeps account credentials and plan limits together in each row.
 import type { JSX } from "@solidjs/web";
 import { createSignal, For, onSettled, Show } from "solid-js";
+import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -11,14 +12,21 @@ import {
 } from "../../components/solid/provider-usage.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
+import { modelSettingFallbacks, modelSettingPrimary } from "../../lib/model-setting.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { ModelProviderCard, ModelProviderRemovalTarget } from "./data.ts";
+import {
+  modelCatalogRef,
+  type ModelProviderCard,
+  type ModelProviderRemovalTarget,
+} from "./data.ts";
 import { apiKeySource, profileIdentity, ProviderProfiles } from "./profiles-view.tsx";
 import {
   isProviderUsable,
   needsAuthAttention,
   renderMutationMessage,
   renderProviderStatus,
+  probeStatus,
 } from "./view-status.tsx";
 import type { ModelProvidersViewProps } from "./view-types.ts";
 
@@ -127,6 +135,8 @@ function ProviderCredentials(props: ProviderRowProps) {
         <ProviderProfiles
           {...props}
           canMutate={props.canMutate && !props.configBusy}
+          canSignInAgain={() => props.canConnect(props.card)}
+          onSignInAgain={() => props.onConnect(props.card)}
           keyAction={keySource(props.card) === undefined ? keyAction : undefined}
         />
       </Show>
@@ -147,20 +157,10 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
   if (!result) {
     return undefined;
   }
-  const hasWarnings =
-    result.status === "ok" && result.results.some((target) => target.status !== "ok");
-  const kind = hasWarnings ? "warn" : result.status === "ok" ? "ok" : "danger";
   return (
     <div class="model-providers__probe" role="status">
       <div class="model-providers__probe-summary">
-        <SettingsStatus
-          kind={kind}
-          label={
-            hasWarnings
-              ? t("modelProviders.probe.status.partial")
-              : t(`modelProviders.probe.status.${result.status}`)
-          }
-        />
+        <SettingsStatus {...probeStatus(result)} />
       </div>
       {result.error ? <div>{formatUiExternalText(result.error)}</div> : undefined}
       <For each={result.results}>
@@ -294,7 +294,11 @@ function KeyForm(props: ProviderRowProps & { onCancel?: () => void }) {
           disabled={busy() || mutationDisabled() || authModeBlocked() || !props.keyDraft.trim()}
           onClick={() => props.onSaveKey(props.card.id, props.card.configKey ?? props.card.id)}
         >
-          {busy() ? t("modelProviders.saving") : t("common.save")}
+          {props.busy[`check:key:${props.card.id}`]
+            ? t("modelProviders.apiKey.checking")
+            : busy()
+              ? t("modelProviders.saving")
+              : t("common.save")}
         </button>
       </div>
     </div>
@@ -309,7 +313,27 @@ function KeyEditor(props: ProviderRowProps & { onCancel?: () => void }) {
   );
 }
 
-/** What "Remove provider" can delete, and the credential it has to leave behind. */
+/** Defaults for all agents served by this provider; removal keeps them selected. */
+function defaultModelsUsing(props: ProviderRowProps): string | undefined {
+  const { primary, fallbacks, utilityModel } = props.defaultModels;
+  const names = [
+    primary,
+    ...fallbacks,
+    modelSettingPrimary(utilityModel),
+    ...modelSettingFallbacks(utilityModel),
+  ].flatMap((ref) => {
+    const model = ref ? splitTrailingAuthProfile(ref).model : "";
+    // Aliases resolve through their catalog entry; other refs name the provider first.
+    const entry = props.configuredModels.find((candidate) => modelCatalogRef(candidate) === model);
+    const provider = entry?.provider ?? (model.includes("/") ? model.split("/", 1)[0] : "");
+    return provider && canonicalModelAuthProviderId(provider) === props.card.id
+      ? [entry?.name ?? model]
+      : [];
+  });
+  return names.length ? [...new Set(names)].join(", ") : undefined;
+}
+
+/** What credential removal can delete, and the credentials it has to leave behind. */
 function removalPlan(card: ModelProviderCard): {
   removeTargets: ModelProviderRemovalTarget[];
   keptSource?: string;
@@ -349,6 +373,12 @@ function removalPlan(card: ModelProviderCard): {
 
 function ProviderActions(props: ProviderRowProps) {
   const removal = () => removalPlan(props.card);
+  const defaultModels = () => defaultModelsUsing(props);
+  const removalLabel = (key: string) =>
+    t("modelProviders.actionNamed", {
+      action: t("modelProviders.remove.action"),
+      name: props.card.configKeys.length > 1 ? key : providerName(props.card),
+    });
   const connected = () => isProviderUsable(props.card) || props.card.profiles.length > 0;
   const connectName = () =>
     t(connected() ? "modelProviders.profiles.addAccount" : "modelProviders.login.action");
@@ -362,13 +392,37 @@ function ProviderActions(props: ProviderRowProps) {
     );
   return (
     <div class="model-providers__card-actions provider-row__footer">
+      <For each={props.card.configKeys}>
+        {(configKey) => (
+          <button
+            class="btn btn--sm btn--ghost danger"
+            disabled={
+              configMutationDisabled(props) || Boolean(props.busy["logout:" + props.card.id])
+            }
+            title={props.mutationBlockedReason ?? ""}
+            aria-label={removalLabel(configKey)}
+            onClick={() =>
+              props.onRequestLogout({
+                cardId: props.card.id,
+                label: providerName(props.card),
+                removeConfigKey: configKey,
+                defaultModels: defaultModels(),
+              })
+            }
+          >
+            {props.card.configKeys.length > 1
+              ? removalLabel(configKey)
+              : t("modelProviders.remove.action")}
+          </button>
+        )}
+      </For>
       <Show when={removal().removeTargets.length > 0}>
         <button
           class="btn btn--sm btn--ghost danger provider-row__remove"
           disabled={configMutationDisabled(props) || Boolean(props.busy[`logout:${props.card.id}`])}
           title={props.mutationBlockedReason ?? ""}
           aria-label={t("modelProviders.actionNamed", {
-            action: t("modelProviders.remove.action"),
+            action: t("modelProviders.remove.accessAction"),
             name: providerName(props.card),
           })}
           onClick={() =>
@@ -376,10 +430,11 @@ function ProviderActions(props: ProviderRowProps) {
               cardId: props.card.id,
               label: providerName(props.card),
               ...removal(),
+              ...(defaultModels() ? { defaultModels: defaultModels() } : {}),
             })
           }
         >
-          {t("modelProviders.remove.action")}
+          {t("modelProviders.remove.accessAction")}
         </button>
       </Show>
       <Show when={isProviderUsable(props.card)}>
@@ -434,6 +489,9 @@ function ProviderActions(props: ProviderRowProps) {
 
 /** Gateways often echo the raw id as the name; the shared label map reads better. */
 function providerName(card: ModelProviderCard): string {
+  if (card.providerName) {
+    return card.providerName;
+  }
   return card.displayName && card.displayName !== card.id
     ? card.displayName
     : providerDisplayLabel(card.id);
@@ -496,7 +554,11 @@ export function ProviderRow(props: ProviderRowProps) {
         aria-controls={detailId()}
         onClick={() => setExpanded(!open())}
       >
-        <ProviderBrandIcon provider={card().id} class="provider-row__icon model-providers__icon" />
+        <ProviderBrandIcon
+          provider={card().id}
+          presentation={card()}
+          class="provider-row__icon model-providers__icon"
+        />
         <span class="provider-row__identity">
           <span class="provider-row__name">{providerName(card())}</span>
           <span class="provider-row__meta settings-row__desc">
@@ -507,7 +569,9 @@ export function ProviderRow(props: ProviderRowProps) {
             <span class="provider-row__meta-part">{modelsText(card())}</span>
           </span>
         </span>
-        <span class="provider-row__status">{renderProviderStatus(card())}</span>
+        <span class="provider-row__status">
+          {renderProviderStatus(card(), props.probeResults[card().id])}
+        </span>
         <Icon name="chevronDown" class="provider-row__chevron" />
       </button>
       <Show when={open()}>
@@ -549,7 +613,11 @@ export function UnconnectedProviderRow(props: ProviderRowProps) {
   return (
     <li class="provider-row provider-row--quiet model-providers__row" data-provider-id={card().id}>
       <div class="provider-row__summary model-providers__head">
-        <ProviderBrandIcon provider={card().id} class="provider-row__icon model-providers__icon" />
+        <ProviderBrandIcon
+          provider={card().id}
+          presentation={card()}
+          class="provider-row__icon model-providers__icon"
+        />
         <span class="provider-row__identity">
           <span class="provider-row__name">{providerName(card())}</span>
           <span class="provider-row__meta settings-row__desc">

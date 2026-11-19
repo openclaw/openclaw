@@ -587,10 +587,7 @@ function buildToolCallView(
   }
 
   if (kind === "search") {
-    const pattern =
-      readNonBlankString(args?.pattern) ??
-      readNonBlankString(args?.query) ??
-      readNonBlankString(args?.glob);
+    const pattern = input.pattern;
     const path = input.path;
     if (!pattern && !path) {
       return { kind: "generic" };
@@ -599,7 +596,7 @@ function buildToolCallView(
   }
 
   if (kind === "fetch") {
-    const url = readNonBlankString(args?.url);
+    const url = input.url;
     if (!url) {
       return { kind: "generic" };
     }

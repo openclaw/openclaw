@@ -98,7 +98,8 @@ suite.define(() => {
         const listRect = row.closest(".sidebar-recent-sessions__list")!.getBoundingClientRect();
         const scrollerStyle = getComputedStyle(scroller);
         return {
-          leftInset: rowRect.left - sidebarRect.left,
+          // The panel's 1px hairline sits on its rail side only; measure inside it.
+          leftInset: rowRect.left - sidebarRect.left - sidebar.clientLeft,
           rightInset: sidebarRect.right - rowRect.right - scrollbarWidth,
           listLeft: listRect.left,
           listRight: listRect.right,
@@ -123,7 +124,7 @@ suite.define(() => {
       if (overflow) {
         expect(geometry.maskImage.match(/linear-gradient/g)).toHaveLength(2);
         expect(geometry.maskPosition.split(", ").at(-1)?.split(" ")[0]).toBe("100%");
-        expect(geometry.maskSize.split(", ")).toContain("12px 100%");
+        expect(geometry.maskSize.split(", ")).toContain(`${width === 390 ? 8 : 12}px 100%`);
       }
 
       const rtlMaskPosition = await active.evaluate((row) => {

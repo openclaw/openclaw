@@ -13,8 +13,9 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
+import { SettingsSectionHeader } from "../../components/solid/settings-ui.tsx";
 import { chatModelUnavailableMessage } from "../../lib/chat/model-select-state.ts";
 import {
   loadModelCatalog,
@@ -25,6 +26,7 @@ import {
 } from "../../lib/model-catalog-store.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
+import { useProviderDisplayLabel } from "../../lib/reactive/provider-presentation.tsx";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
 import type { captureModelSetupConnection } from "./first-run-setup.ts";
 import { createModelSetupSaving } from "./model-setup-saving.ts";
@@ -202,7 +204,6 @@ export function createNativeModelSetup(options: {
     models: () => nativeModels,
     selected: nativeModel,
     mutation: nativeMutation,
-    catalogPending: () => Boolean(catalog.read().pendingProviders?.length),
     result,
     request,
     setSelected: setNativeModel,
@@ -227,6 +228,7 @@ export function createNativeModelSetup(options: {
 }
 
 export function NativeModelSetupView(props: { owner: NativeModelSetup }) {
+  const providerDisplayLabel = useProviderDisplayLabel();
   const selected = () =>
     props.owner
       .models()
@@ -240,30 +242,17 @@ export function NativeModelSetupView(props: { owner: NativeModelSetup }) {
         model.available === true
           ? providerDisplayLabel(model.provider)
           : (chatModelUnavailableMessage(model.unavailableReason) ??
-            (props.owner.catalogPending() && model.available === undefined
-              ? t("modelSetup.nativeModels.loading")
-              : model.available === false
-                ? t("chat.modelControls.modelsUnavailable")
-                : t("modelSetup.nativeModels.unconfirmed"))),
+            (model.available === false
+              ? t("chat.modelControls.modelsUnavailable")
+              : t("modelSetup.nativeModels.unconfirmed"))),
       disabled: model.available !== true,
     })),
   );
-  // Only status regions wait; cached picker controls stay interactive during refresh.
+  // Catalog reads stay silent; cached picker controls remain interactive.
   return renderNativeModelSetupSection(
     <>
-      <Errored
-        fallback={() => (
-          <>
-            {isPending(() => props.owner.result()) ? (
-              <p role="status">{t("modelSetup.nativeModels.loading")}</p>
-            ) : undefined}
-          </>
-        )}
-      >
-        <Loading
-          on={props.owner.request()}
-          fallback={<p role="status">{t("modelSetup.nativeModels.loading")}</p>}
-        >
+      <Errored fallback={() => undefined}>
+        <Loading on={props.owner.request()}>
           <NativeCatalogStatus owner={props.owner} />
         </Loading>
       </Errored>
@@ -307,11 +296,11 @@ export function NativeModelSetupView(props: { owner: NativeModelSetup }) {
 function NativeCatalogStatus(props: { owner: NativeModelSetup }) {
   return (
     <>
-      {isPending(() => props.owner.result()) || props.owner.result().pendingProviders?.length ? (
-        <p role="status">{t("modelSetup.nativeModels.loading")}</p>
-      ) : props.owner.request() &&
-        props.owner.models().length === 0 &&
-        !modelCatalogRefreshError(props.owner.result()) ? (
+      {!isPending(() => props.owner.result()) &&
+      !props.owner.result().pendingProviders?.length &&
+      props.owner.request() &&
+      props.owner.models().length === 0 &&
+      !modelCatalogRefreshError(props.owner.result()) ? (
         <p role="status">{t("modelSetup.nativeModels.empty")}</p>
       ) : undefined}
     </>
@@ -322,7 +311,7 @@ function NativeCatalogError(props: { owner: NativeModelSetup; message: string | 
   return (
     <>
       {props.message ? (
-        <div class="callout danger" role="alert">
+        <InlineAlert tone="danger" role="alert">
           {props.message}
           <button
             class="btn btn--sm"
@@ -332,7 +321,7 @@ function NativeCatalogError(props: { owner: NativeModelSetup; message: string | 
           >
             {t("common.retry")}
           </button>
-        </div>
+        </InlineAlert>
       ) : undefined}
     </>
   );
@@ -343,9 +332,9 @@ function NativeModelMutationStatus(props: { completion: Promise<null> }) {
   return (
     <Errored
       fallback={(error) => (
-        <div class="callout danger" role="alert">
+        <InlineAlert tone="danger" role="alert">
           {formatModelSetupError(error())}
-        </div>
+        </InlineAlert>
       )}
     >
       <Loading>{completion()}</Loading>
@@ -357,10 +346,10 @@ function renderNativeModelSetupSection(content: JSX.Element) {
   return (
     <>
       <section class="settings-section" data-native-model-setup>
-        <div class="settings-section__header">
-          <h2>{t("modelSetup.nativeModels.title")}</h2>
-        </div>
-        <p class="muted">{t("modelSetup.nativeModels.body")}</p>
+        <SettingsSectionHeader
+          title={t("modelSetup.nativeModels.title")}
+          description={t("modelSetup.nativeModels.body")}
+        />
         {content}
       </section>
     </>

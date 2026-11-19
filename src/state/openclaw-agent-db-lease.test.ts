@@ -11,6 +11,9 @@ import {
   recordOpenClawAgentDatabaseAdmission,
   releaseOpenClawAgentDatabaseLease,
 } from "./openclaw-agent-db-lease.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "./openclaw-agent-db-lifecycle.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-resources.js";
+import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import { expectRows } from "./openclaw-state-db-fixtures.test-support.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -45,6 +48,56 @@ function createLeaseOwner() {
   const state = openOpenClawStateDatabase({ env });
   return { params, state };
 }
+
+it.each([499, 500])(
+  "adds native close phases only at the 500 ms threshold (%i ms)",
+  async (totalMs) => {
+    const { params, state } = createLeaseOwner();
+    const database = openOpenClawAgentDatabase(params);
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const stop = database.walMaintenance.stop.bind(database.walMaintenance);
+    vi.spyOn(database.walMaintenance, "stop").mockImplementation(async () => {
+      await stop();
+      now += totalMs - 205;
+    });
+    const checkpoint = database.walMaintenance.close.bind(database.walMaintenance);
+    vi.spyOn(database.walMaintenance, "close").mockImplementation((options) => {
+      now += 120;
+      return checkpoint(options);
+    });
+    const close = database.db.close.bind(database.db);
+    vi.spyOn(database.db, "close").mockImplementation(() => {
+      now += 60;
+      close();
+    });
+    const exec = state.db.exec.bind(state.db);
+    vi.spyOn(state.db, "exec").mockImplementation((sql) => {
+      exec(sql);
+      if (sql === "COMMIT") {
+        now += 25;
+      }
+    });
+    await closeOpenClawAgentDatabaseByPathAsync(database.path);
+    const slow = logger.info.mock.calls.filter(
+      ([message]) =>
+        String(message).includes("clean-close receipt:") && String(message).includes("; close="),
+    );
+    expect(slow).toHaveLength(totalMs >= 500 ? 1 : 0);
+    if (totalMs >= 500) {
+      expect(String(slow[0]?.[0])).toMatch(/agent=main.*db=[a-f0-9]{16}; thread=\d+; close=/);
+      expect(JSON.parse(String(slow[0]?.[0]).split("; close=")[1] ?? "")).toEqual({
+        totalMs,
+        walStopMs: 295,
+        checkpointMs: 120,
+        nativeCloseMs: 60,
+        leaseReleaseMs: 25,
+      });
+    }
+    expect(database.db.isOpen).toBe(false);
+    expectRows(state.db, "SELECT lease_id FROM agent_database_leases", []);
+  },
+);
 
 it.each([
   ["prior boot", 699_999, true, true],
@@ -89,7 +142,6 @@ it("excludes cleaned stale claims while retaining unknown peers until their rele
   const { params, state } = createLeaseOwner();
   claimOpenClawAgentDatabaseLease(params, "dead");
   claimOpenClawAgentDatabaseLease(params, "unknown-peer");
-  recordOpenClawAgentDatabaseAdmission("dead", params, "full-required");
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       db.prepare("UPDATE agent_database_leases SET owner_pid = -1 WHERE lease_id = ?").run("dead");
@@ -103,12 +155,7 @@ it("excludes cleaned stale claims while retaining unknown peers until their rele
 
   claimOpenClawAgentDatabaseLease(params, "first", verification);
 
-  expect(verification).toHaveBeenLastCalledWith(
-    false,
-    true,
-    "predecessor-full-required",
-    undefined,
-  );
+  expect(verification).toHaveBeenLastCalledWith(false, undefined);
   expectRows(state.db, "SELECT lease_id FROM agent_database_leases ORDER BY lease_id", [
     { lease_id: "first" },
     { lease_id: "unknown-peer" },
@@ -118,9 +165,36 @@ it("excludes cleaned stale claims while retaining unknown peers until their rele
   releaseOpenClawAgentDatabaseLease("first", { env: params.env }, "read-only");
   claimOpenClawAgentDatabaseLease(params, "second", verification);
 
-  expect(verification).toHaveBeenLastCalledWith(true, false, undefined, undefined);
+  expect(verification).toHaveBeenLastCalledWith(true, undefined);
   expectRows(state.db, "SELECT lease_id FROM agent_database_leases", [{ lease_id: "second" }]);
   releaseOpenClawAgentDatabaseLease("second", { env: params.env }, "read-only");
+});
+
+it("reports a slow worker join when only asynchronous database resources remain", async () => {
+  const { params } = createLeaseOwner();
+  let now = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  registerOpenClawAgentDatabaseAsyncResource({
+    agentId: params.agentId,
+    path: params.path,
+    revoke() {},
+    retireAfterResources: true,
+    async close() {
+      now += 520;
+    },
+  });
+  await closeOpenClawAgentDatabaseByPathAsync(params.path);
+  const completed = logger.info.mock.calls.filter(([message]) =>
+    String(message).includes("agent database close settled:"),
+  );
+  expect(completed).toHaveLength(1);
+  expect(String(completed[0]?.[0])).toMatch(/agent=main; db=[a-f0-9]{16}; thread=\d+;/);
+  expect(JSON.parse(String(completed[0]?.[0]).split("; close=")[1] ?? "")).toEqual({
+    totalMs: 520,
+    resourceJoinMs: 0,
+    workerJoinMs: 520,
+    nativeOwnerMs: 0,
+  });
 });
 
 it.each([
@@ -147,12 +221,7 @@ it.each([
 
   claimOpenClawAgentDatabaseLease(params, "borrower", verification);
 
-  expect(verification).toHaveBeenCalledWith(
-    false,
-    false,
-    "live-or-unknown-owner",
-    lends ? "process-v1:same" : undefined,
-  );
+  expect(verification).toHaveBeenCalledWith(false, lends ? "process-v1:same" : undefined);
 });
 
 it("records admission on its held claim and refuses to resurrect a released claim", () => {
@@ -163,8 +232,6 @@ it("records admission on its held claim and refuses to resurrect a released clai
   const openedAt = () =>
     state.db.prepare("SELECT opened_at FROM agent_database_leases WHERE lease_id = ?").get(leaseId);
 
-  recordOpenClawAgentDatabaseAdmission(leaseId, params, "full-required");
-  expect(openedAt()).toEqual({ opened_at: -1 });
   recordOpenClawAgentDatabaseAdmission(leaseId, params);
 
   expect(controls).not.toHaveBeenCalled();
@@ -182,6 +249,7 @@ it("records admission on its held claim and refuses to resurrect a released clai
 it("reports committed close-state transitions without repeating unchanged peer receipts", () => {
   const { params, state } = createLeaseOwner();
   claimOpenClawAgentDatabaseLease(params, "peer");
+  claimOpenClawAgentDatabaseLease(params, "second-peer");
   const publishSeal = vi.fn(() => true);
   const close = (id: string, checkpoint = true) => {
     claimOpenClawAgentDatabaseLease(params, id);
@@ -195,7 +263,10 @@ it("reports committed close-state transitions without repeating unchanged peer r
     close(`warm-${iteration}`);
   }
   expect(publishSeal).not.toHaveBeenCalled();
-  expectRows(state.db, "SELECT lease_id FROM agent_database_leases", [{ lease_id: "peer" }]);
+  expectRows(state.db, "SELECT lease_id FROM agent_database_leases ORDER BY lease_id", [
+    { lease_id: "peer" },
+    { lease_id: "second-peer" },
+  ]);
   const sibling = { ...params, agentId: "sibling", path: `${params.path}.sibling` };
   claimOpenClawAgentDatabaseLease(sibling, "sibling");
   releaseOpenClawAgentDatabaseLease("sibling", { env: params.env }, "uncheckpointed");
@@ -222,6 +293,15 @@ it("reports committed close-state transitions without repeating unchanged peer r
       publishSeal,
     },
   );
+  expect(publishSeal).not.toHaveBeenCalled();
+  releaseOpenClawAgentDatabaseLease(
+    "second-peer",
+    { env: params.env },
+    {
+      path: params.path,
+      publishSeal,
+    },
+  );
   expect(publishSeal).toHaveBeenCalledOnce();
   expectRows(state.db, "SELECT lease_id FROM agent_database_leases", []);
   expect(
@@ -233,6 +313,26 @@ it("reports committed close-state transitions without repeating unchanged peer r
     ["sibling", "checkpoint-incomplete"],
     ["main", "checkpoint-incomplete"],
     ["main", "active-leases"],
+    ["main", "active-leases"],
     ["main", "written"],
   ]);
+  const blocked = logger.info.mock.calls.filter(
+    ([, detail]) => detail?.receipt === "active-leases",
+  );
+  expect(blocked.map(([, detail]) => detail.blockingLease.leaseId)).toEqual([
+    "peer",
+    "peer",
+    "second-peer",
+  ]);
+  for (const [message, detail] of blocked) {
+    expect(message).toContain(
+      `blockingLeaseId=${detail.blockingLease.leaseId}; ownerPid=${process.pid}`,
+    );
+    expect(detail.blockingLease).toMatchObject({
+      ownerPid: process.pid,
+      ownerStartTime: getFileLockProcessStartTime(process.pid),
+      path: params.path,
+      openedAt: 0,
+    });
+  }
 });

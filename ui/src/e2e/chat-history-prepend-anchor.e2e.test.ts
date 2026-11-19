@@ -34,7 +34,7 @@ suite.define(() => {
     const prompts: Record<number, string> = {
       1: "Earlier prompt",
       3: "Recent prompt",
-      81: "Latest prompt",
+      203: "Latest prompt",
     };
     const message = (seq: number) => ({
       __openclaw: { id: `recall-${seq}`, seq },
@@ -49,17 +49,17 @@ suite.define(() => {
       sessions: [{ key: "agent:main:main", sessionId: "recall-session" }],
       methodResponses: {
         "chat.startup": {
-          messages: Array.from({ length: 80 }, (_, index) => message(index + 3)),
+          messages: Array.from({ length: 80 }, (_, index) => message(index + 203)),
           hasMore: true,
           nextOffset: 80,
           olderCursor: "older-recall",
-          totalMessages: 82,
+          totalMessages: 282,
           sessionId: "recall-session",
         },
         "chat.history": {
-          messages: [message(1), message(2)],
+          messages: Array.from({ length: 202 }, (_, index) => message(index + 1)),
           hasMore: false,
-          totalMessages: 82,
+          totalMessages: 282,
           sessionId: "recall-session",
         },
       },
@@ -68,13 +68,25 @@ suite.define(() => {
     const pane = page.locator(".chat-pane-cache__pane--active");
     const thread = pane.locator(".chat-thread");
     const textarea = pane.locator(".agent-chat__composer-combobox textarea");
-    await thread.getByText(/^History entry 82\./).waitFor();
+    const recallPrompt = async (key: "ArrowUp" | "ArrowDown", text: string) => {
+      await textarea.press(key);
+      const caret = key === "ArrowUp" ? 0 : text.length;
+      // The recalled text commits before its next-frame caret restoration.
+      await expect
+        .poll(() =>
+          textarea.evaluate((input: HTMLTextAreaElement) => [
+            input.value,
+            input.selectionStart,
+            input.selectionEnd,
+          ]),
+        )
+        .toEqual([text, caret, caret]);
+    };
+    await thread.getByText(/^History entry 282\./).waitFor();
     await waitForChatScrollIdle(page);
     expect(await gateway.getRequests("chat.history")).toHaveLength(0);
-    await textarea.press("ArrowUp");
-    await expect.poll(() => textarea.inputValue()).toBe("Latest prompt");
-    await textarea.press("ArrowDown");
-    await expect.poll(() => textarea.inputValue()).toBe("");
+    await recallPrompt("ArrowUp", "Latest prompt");
+    await recallPrompt("ArrowDown", "");
 
     await gateway.deferNext("chat.history");
     await thread.hover();
@@ -88,18 +100,12 @@ suite.define(() => {
     const requests = await gateway.getRequests("chat.history");
     expect(requests).toHaveLength(1);
     expect(requests[0]?.params).toMatchObject({ cursor: "older-recall" });
-    await textarea.press("ArrowUp");
-    await expect.poll(() => textarea.inputValue()).toBe("Latest prompt");
-    await textarea.press("ArrowUp");
-    await expect.poll(() => textarea.inputValue()).toBe("Recent prompt");
-    await textarea.press("ArrowUp");
-    await expect.poll(() => textarea.inputValue()).toBe("Earlier prompt");
-    await textarea.press("ArrowDown");
-    await expect.poll(() => textarea.inputValue()).toBe("Recent prompt");
-    await textarea.press("ArrowDown");
-    await expect.poll(() => textarea.inputValue()).toBe("Latest prompt");
-    await textarea.press("ArrowDown");
-    await expect.poll(() => textarea.inputValue()).toBe("");
+    await recallPrompt("ArrowUp", "Latest prompt");
+    await recallPrompt("ArrowUp", "Recent prompt");
+    await recallPrompt("ArrowUp", "Earlier prompt");
+    await recallPrompt("ArrowDown", "Recent prompt");
+    await recallPrompt("ArrowDown", "Latest prompt");
+    await recallPrompt("ArrowDown", "");
   });
 
   {

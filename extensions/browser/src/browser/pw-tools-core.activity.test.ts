@@ -73,6 +73,26 @@ it.each([
   expect(await readText({ ...target, selector, maxChars })).toEqual({ text, truncated });
 });
 
+it("rejects text the locator read from a document that replaced the page", async () => {
+  const mainFrame = {};
+  const listeners: Array<(frame: object) => void> = [];
+  harness.setPwToolsCoreCurrentPage({
+    mainFrame: () => mainFrame,
+    on: (_event: string, listener: (frame: object) => void) => listeners.push(listener),
+    locator: () => ({
+      first: () => ({
+        innerText: async () => {
+          for (const listener of listeners) {
+            listener(mainFrame);
+          }
+          return "Next page";
+        },
+      }),
+    }),
+  });
+  await expect(readText({ ...target, selector: "#total" })).rejects.toThrow(/Frame changed/);
+});
+
 it("filters by URL or resource type and clears the full network buffer", async () => {
   harness.setPwToolsCoreCurrentPage({});
   const byUrl = { id: "1", url: "https://x/fetch", resourceType: "document" };
@@ -80,14 +100,13 @@ it("filters by URL or resource type and clears the full network buffer", async (
   const requests = [byUrl, byType, { id: "3", url: "https://x/logo", resourceType: "image" }];
   const state = {
     ...session.ensurePageState(),
-    requests: new Map(requests.map((request) => [request.id, request])),
-    requestIds: new WeakMap(),
+    readNetworkRequests: vi.fn(() => requests),
   };
   session.ensurePageState.mockReturnValueOnce(state);
   expect(await readRequests({ ...target, filter: "fetch", clear: true })).toEqual({
     requests: [byUrl, byType],
   });
-  expect(state.requests).toEqual(new Map());
+  expect(state.readNetworkRequests).toHaveBeenCalledWith(true);
 });
 
 it("treats warn as warning priority", async () => {

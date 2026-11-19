@@ -31,12 +31,14 @@ it.each([
   ["Win32", "Ctrl", "Enter"],
   ["MacIntel", "⌘", "⏎"],
 ])("renders shortcut groups and send preferences: %s", async (platform, modifier, enter) => {
+  const background = "Start new session in background (from the new-session page)";
   vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
   const dialog = await openDialog();
 
   expect(dialog.querySelector("h2")?.textContent).toBe("Keyboard shortcuts");
   expect(chips(dialog, "Send message")).toEqual([enter]);
   expect(chips(dialog, "Start new session (from the new-session page)")).toEqual([enter]);
+  expect(chips(dialog, background)).toEqual([modifier, enter]);
   expect(dialog.textContent).not.toContain("shortcutsOverlay.");
 
   dialog.sendShortcut = "modifier-enter";
@@ -44,6 +46,7 @@ it.each([
 
   expect(chips(dialog, "Send message")).toEqual([modifier, enter]);
   expect(chips(dialog, "Start new session (from the new-session page)")).toEqual([modifier, enter]);
+  expect(chips(dialog, background)).toEqual([modifier, "⇧", enter]);
   dialog.querySelector<HTMLButtonElement>("button[aria-label='Close']")?.click();
   await dialog.updateComplete;
   expect(dialog.isOpen).toBe(false);
@@ -65,6 +68,7 @@ it("keeps mobile Return for a new line and omits submission shortcuts", async ()
     "Send message",
     "Start a background session (in the command palette)",
     "Start new session (from the new-session page)",
+    "Start new session in background (from the new-session page)",
     "Steer active response",
     "Save queued message",
   ]) {

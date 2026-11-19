@@ -4,6 +4,7 @@ import {
   markAgentToolExecutionUnavailable,
 } from "./agent-tool-availability.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
+import { guardOwnerTool } from "./scheduled-owner-tool-guard.js";
 import { CRON_SCOPED_READ_ACTIONS, isAutomationsToolName } from "./tools/automations-tool-name.js";
 import { readToolStringParam, type AnyAgentTool } from "./tools/common.js";
 import { prepareCronToolArguments } from "./tools/cron-tool-canonicalize.js";
@@ -34,6 +35,7 @@ export function resolveTurnToolSurface(params: {
   /** The session surface, when per-turn policy narrows it; defaults to `turnTools`. */
   sessionTools?: AnyAgentTool[];
   ownerOnlyDenied: ReadonlySet<string>;
+  ownerToolCurrentAssertion?: (toolName: string) => (() => void) | undefined;
   /**
    * The Gateway started this turn (see `isHostSystemTurn`), not a sender.
    * Its owner-only gate still serves the caller-scoped automation reads the
@@ -51,7 +53,8 @@ export function resolveTurnToolSurface(params: {
   const offered = params.sessionTools ?? params.turnTools;
   const tools = offered.map((tool) => {
     if (turnAuthorized(tool)) {
-      return tool;
+      const assertOwnerCurrent = params.ownerToolCurrentAssertion?.(tool.name);
+      return assertOwnerCurrent ? guardOwnerTool(tool, assertOwnerCurrent) : tool;
     }
     const ownerOnly = params.ownerOnlyDenied.has(tool.name);
     // A completion handoff's requester policy may omit the tool; that denial wins.

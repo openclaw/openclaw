@@ -75,7 +75,9 @@ function renderLinkElement(element: Record<string, unknown>): string {
   if (!href) {
     return escapeMarkdownText(text);
   }
-  return `[${escapeMarkdownText(text)}](${href})`;
+  return `[${escapeMarkdownText(text)}](${href.replace(/[\\()<>\s]/gu, (character) =>
+    character === "(" || character === ")" ? `\\${character}` : encodeURIComponent(character),
+  )})`;
 }
 
 function renderMentionElement(element: Record<string, unknown>): string {

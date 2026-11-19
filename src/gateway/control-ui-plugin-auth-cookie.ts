@@ -18,6 +18,7 @@ import type { ControlUiPluginTabAuthGrant } from "./control-ui-plugin-tabs.js";
 import {
   getRemoteControlUiIngressContext,
   assertRemoteControlUiIngressCurrent,
+  readGatewayIngressTransport,
 } from "./ingress-attribution.js";
 import { isLocalDirectRequest, isLoopbackHost, resolveHostName } from "./net.js";
 import { isOperatorScope, type OperatorScope } from "./operator-scopes.js";
@@ -208,6 +209,14 @@ export function setControlUiPluginAuthCookie(
   assertRemoteControlUiIngressCurrent(
     params.request ? getRemoteControlUiIngressContext(params.request) : undefined,
   );
+  // Tunnel requests authenticate every request by device key and never accept these
+  // cookies; issuing one would hand a relayed device a credential for ordinary ingress.
+  if (
+    params.request &&
+    readGatewayIngressTransport(params.request)?.kind === "openclaw-id-tunnel"
+  ) {
+    return [...grants];
+  }
   const issuedGrants: ControlUiPluginTabAuthGrant[] = [];
   const metadata: GatewayPluginReadCookieV1[] = [];
   const cookiesToAdd = grants.flatMap((grant) => {

@@ -4,6 +4,7 @@ import { copyWithPathPatch } from "../lib/config-form-utils.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import {
   ConfigCollectionDraft,
+  createCollectionDraftSource,
   type ConfigCollectionDraftHandle,
   type ConfigFormCollectionDraftCommit,
   type ConfigFormCollectionDraftProps,
@@ -194,7 +195,11 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
   );
 }
 
-function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArrayIdentity) {
+function resolveArrayContent(
+  params: ConfigNodeRenderParams,
+  rows: ConfigFormArrayIdentity,
+  editEntry: (expected: unknown[], dispatch: () => boolean) => boolean,
+) {
   const { schema, value, path, hints, disabled, onPatch, searchCriteria } = params;
   const showLabel = params.showLabel ?? true;
   const showHeaderMeta = params.showHeaderMeta ?? showLabel;
@@ -318,7 +323,7 @@ function resolveArrayContent(params: ConfigNodeRenderParams, rows: ConfigFormArr
       nextValue[itemIndex] = nextItem.value;
     }
     if (canApplyArrayCandidate(schema, arrayValue, nextValue, true)) {
-      return patch(nextValue, rowIdentities);
+      return editEntry(nextValue, () => patch(nextValue, rowIdentities));
     }
     return false;
   };
@@ -449,8 +454,11 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
   });
   const content = createMemo(() => {
     getLocale();
-    return resolveArrayContent(props.params, identity());
+    return resolveArrayContent(props.params, identity(), (expected, dispatch) =>
+      draftSource.editEntry(expected, dispatch),
+    );
   });
+  const draftSource = createCollectionDraftSource(() => content()?.draftProps.sourceIdentity);
   const entries = createMemo(
     () =>
       content()?.arrayValue.map((item, index) => ({
@@ -536,6 +544,7 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
           </div>
           <ConfigCollectionDraft
             {...current().draftProps}
+            sourceIdentity={draftSource.draftSource()}
             id={current().draftId}
             ref={(handle) => (draft = handle)}
             onCommit={(value) => current().commitDraft(value)}

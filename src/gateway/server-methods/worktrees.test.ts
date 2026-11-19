@@ -87,6 +87,9 @@ it("routes checkout operations through the managed worktree service", async () =
   const createParams = { repoRoot: "/repo", name: "task-one", baseRef: "main" };
 
   await expectResult(invoke("list"), { worktrees: [record] });
+  await expectResult(invoke("list", {}, admin), {
+    worktrees: [{ ...record, gcProtection: "branch-moved" }],
+  });
   await expectResult(invoke("create", createParams, admin), record);
   await expectResult(invoke("remove", { id: record.id, force: true }), removed);
   await expectResult(invoke("restore", { id: record.id }), restored);
@@ -111,7 +114,21 @@ it("routes checkout operations through the managed worktree service", async () =
     id: record.id,
     reason: "manual-delete",
     allowSnapshotLoss: true,
+    retryPreserved: undefined,
   });
+  const preserved = {
+    state: "preserved",
+    reason: "nested-repository",
+    attempts: 1,
+    nextAttemptAt: null,
+  };
+  remove.mockResolvedValue({ removed: false, preserved });
+  await expectResult(invoke("remove", { id: record.id }), { removed: false, preserved });
+  await expectResult(invoke("remove", { id: record.id, retryPreserved: true }), {
+    removed: false,
+    preserved,
+  });
+  expect(remove).toHaveBeenLastCalledWith(expect.objectContaining({ retryPreserved: true }));
 });
 
 it("lists branches for admin clients and configured workspaces only", async () => {

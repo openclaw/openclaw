@@ -1,5 +1,5 @@
 ---
-summary: "Connect OpenAI with an API key, Codex subscription, or Sign in with ChatGPT (Beta)"
+summary: "Connect OpenAI with an API key, Codex subscription, or Sign in with ChatGPT"
 read_when:
   - You are connecting OpenAI to OpenClaw for the first time
   - You want Codex subscription auth instead of API keys
@@ -459,16 +459,15 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
 
 <a id="sign-in-with-chatgpt-preview" />
 
-## Sign in with ChatGPT (Beta)
+<a id="sign-in-with-chatgpt-beta" />
 
-Use Sign in with ChatGPT (SIWC) for app-specific authorization to spend your
-Codex allowance on eligible Responses API requests. Check shared allowance
-usage in [ChatGPT Settings → Usage](https://chatgpt.com/settings/usage). OpenClaw
-does not show SIWC quota or per-app usage, and does not set per-app limits;
-ChatGPT may offer app-specific controls for your account.
+## Sign in with ChatGPT
 
-Your account and workspace must have SIWC registration and token sharing enabled
-by OpenAI.
+Use Sign in with ChatGPT (SIWC) to authorize OpenClaw to use your eligible
+ChatGPT plan for Responses API requests. Your account and workspace must support
+token sharing. On ChatGPT Business, your workspace admin controls whether
+OpenClaw can use the workspace plan. See [SIWC usage limits](/providers/openai/authentication#sign-in-with-chatgpt-usage-limits)
+to check your own app limit or the workspace sharing cap.
 
 SIWC does not support OpenAI-hosted plugins or connected apps yet. Those require
 a Codex credential with connector invocation scope, which device-code login does
@@ -486,16 +485,19 @@ Approve token sharing during sign-in to enable model calls. If you grant identit
 permissions only, OpenClaw saves the account but asks you to enable sharing or
 choose another credential before inference.
 
-The browser returns to `http://localhost:8080/auth/callback`. If your browser runs
-on another computer, forward its port 8080 to OpenClaw's IPv4 loopback before
-starting sign-in. For an SSH host, keep this command running on your browser's
-computer:
+The browser returns to `http://localhost:PORT/auth/callback`, where OpenClaw picks
+a free `PORT` for each sign-in, so an app already using a port cannot block it.
+If your browser runs on another computer, OpenClaw shows the port with the sign-in
+link. Forward that port to OpenClaw's IPv4 loopback before opening the link. For an
+SSH host, keep this command running on your browser's computer, with `PORT`
+replaced:
 
 ```bash
-ssh -N -L 8080:127.0.0.1:8080 user@gateway-host
+ssh -N -L PORT:127.0.0.1:PORT user@gateway-host
 ```
 
-Open the sign-in link on that computer.
+Open the sign-in link on that computer. The port changes on every sign-in, so a
+forward from an earlier attempt does not carry over.
 
 To reconnect an existing account, sign in with the same ChatGPT user and
 workspace. To switch either, choose **Connect a different ChatGPT account or

@@ -28,6 +28,10 @@ export class InvocationFrame implements PluginExecutionFrame {
     return undefined;
   }
 
+  get canUseInteractiveStateReadCapacity(): boolean {
+    return false;
+  }
+
   withScopes(scopes: PluginExecutionScopes): InvocationFrame {
     return new InvocationFrame(scopes);
   }
@@ -87,6 +91,14 @@ const pluginExecutionContext = resolveGlobalSingleton(
 export const pluginInstanceInvocation = pluginExecutionContext.invocation;
 export const getPluginExecutionFrame = pluginExecutionContext.getFrame;
 export const runWithPluginExecutionFrame = pluginExecutionContext.runFrame;
+
+/** Background runner of the active plugin call, for work that outlives the request that started it. */
+export function captureCurrentPluginBackgroundRunner(): <T>(run: () => T) => T {
+  return (
+    pluginInstanceInvocation.getStore()?.instance.lifecycle.runInBackgroundContext ??
+    ((run) => run())
+  );
+}
 
 /** Retain admission independently; each operation still owns its physical call settlement. */
 export function retainPluginOwnerWork(owner: {

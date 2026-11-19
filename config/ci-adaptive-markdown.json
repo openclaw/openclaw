@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceRevision": "e5123ea757fe8b0fc3b99ec1769d18bce4feb4b1",
+  "sourceRevision": "43983408fdf1a761da382746204371864fa40595",
   "common": [
     ".npmrc",
     "node-version.mjs",
@@ -17,7 +17,7 @@
     "test/vitest/vitest.sqlite-preload.mts",
     "tsconfig.json"
   ],
-  "commonHash": "1a3ba653e04345995bb32cff67f3caf97c71853b087cc88d3cd7a5d3b7eef66f",
+  "commonHash": "4b6dc0fe9b5308f6292ecafa8c4c1394cb53b069502243133ddd17838a3440bf",
   "tests": {
     "packages/markdown-core/src/chunk-text.test.ts": "9d0f0659316a70d09775199d8fe4fbc89439fee93dfe70871cd7bfd884e1ccc3",
     "packages/markdown-core/src/code-spans.test.ts": "52074f052f6b6596be042577c90952cd79773ff38f461db58dea9e800fb7372c",

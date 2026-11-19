@@ -20,7 +20,6 @@ import type {
 } from "./session-pending-input-operations.types.js";
 import {
   isFinalInputCompletion,
-  markSessionPendingInputCancelledByUser,
   normalizePendingInputReceiptRunIds,
   projectPendingInputReceipts,
   resolvePendingInputHistoryLimit,
@@ -156,12 +155,9 @@ export function createSessionActorMemoryPending(
           row.session_key === query.sessionKey &&
           row.session_id === query.sessionId &&
           row.consumed_event_id === null &&
-          (query.queuedInputIds
-            ? row.state === "queued" &&
-              query.queuedInputIds.includes(row.input_id) &&
-              !query.liveInputIds?.includes(row.input_id)
-            : row.state === "cancelled" ||
-              (row.state === "queued" && query.liveInputIds?.includes(row.input_id))),
+          (query.queuedOnly
+            ? row.state === "queued" && !query.liveInputIds?.includes(row.input_id)
+            : row.state === "cancelled" || row.state === "queued"),
       );
       const total =
         query.id === undefined && query.includeTotal !== false ? rows.length : undefined;
@@ -218,7 +214,12 @@ export function createSessionActorMemoryPending(
       }
       const row = pending(input);
       if (input.kind === "stage") {
-        if (row?.input_id !== input.expected.existing?.input_id) {
+        // Compare-and-set: a restage may rebind run_id, so a concurrent reopen must lose.
+        if (
+          row?.input_id !== input.expected.existing?.input_id ||
+          row?.run_id !== input.expected.existing?.run_id ||
+          row?.state !== input.expected.existing?.state
+        ) {
           throw new SessionPendingInputCustodyError(
             "Pending input changed before staging committed",
           );
@@ -255,7 +256,14 @@ export function createSessionActorMemoryPending(
       options.admit("transaction", grant);
       if (input.kind === "stage") {
         const staged: SessionPendingInputRow = row
-          ? { ...row, state: "queued", lifecycle_generation: input.lifecycleGeneration }
+          ? {
+              ...row,
+              state: "queued",
+              run_id: input.runId,
+              lifecycle_generation: input.lifecycleGeneration,
+              end_cause: null,
+              origin_source_json: row.origin_source_json ?? input.originSourceJson ?? null,
+            }
           : {
               seq:
                 [...state.pendingInputs.values()].reduce(
@@ -273,6 +281,8 @@ export function createSessionActorMemoryPending(
               state: "queued",
               accepted_at: Date.now(),
               consumed_event_id: null,
+              end_cause: null,
+              origin_source_json: input.originSourceJson ?? null,
             };
         state.pendingInputs.set(input.idempotencyKey, staged);
         receipt.stagedInput = structuredClone(staged);
@@ -313,9 +323,8 @@ export function createSessionActorMemoryPending(
         state.pendingInputs.set(input.idempotencyKey, {
           ...row,
           state: input.disposition,
-          ...(input.cancelledByUser
-            ? { message_json: markSessionPendingInputCancelledByUser(row.message_json) }
-            : {}),
+          end_cause: input.endCause,
+          origin_source_json: null,
         });
         if (input.disposition === "cancelled") {
           receipt.withdrawnInputId = input.inputId;

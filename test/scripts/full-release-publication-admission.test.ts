@@ -436,7 +436,7 @@ async function fixture(
     qualification?: "valid" | "wrong-input" | "wrong-archive" | "expired";
     legacyGhArchive?: boolean;
     toolingFullRef?: string;
-    androidPin?: string;
+    androidPin?: string | null;
     legacyPlatforms?: "absent-helper" | "dormant-helper";
     registry?:
       | "healthy"
@@ -506,7 +506,9 @@ async function fixture(
   const androidVersion = JSON.stringify({
     version: options.androidPin ?? version.split("-")[0],
   });
-  write(target, "apps/android/version.json", androidVersion);
+  if (options.androidPin !== null) {
+    write(target, "apps/android/version.json", androidVersion);
+  }
   const writePlugins = (directory: string) => {
     for (let index = 0; index < (options.pluginCount ?? 1); index += 1) {
       const plugin = writePublishablePluginFixture(directory, {
@@ -842,7 +844,9 @@ globalThis.fetch = async (input, init = {}) => {
     const manifest = readJson(join(tooling, "package.json"));
     writeJson(tooling, "package.json", { ...manifest, version, dependencies: { yaml: "2.9.1" } });
     writePlugins(tooling);
-    write(tooling, "apps/android/version.json", androidVersion);
+    if (options.androidPin !== null) {
+      write(tooling, "apps/android/version.json", androidVersion);
+    }
   }
   let toolingSha = commit(tooling);
   let toolingFullRef = options.toolingFullRef ?? "refs/heads/main";
@@ -929,7 +933,11 @@ if (${Boolean(options.qualification)}) {
   }
   const responses = JSON.parse(fs.readFileSync(${JSON.stringify(join(temporary, "qualification-responses.json"))}, "utf8"));
   const key = JSON.stringify(args);
-  if (Object.hasOwn(responses, key)) { process.stdout.write(responses[key]); process.exit(0); }
+  if (Object.hasOwn(responses, key)) {
+    const response = JSON.parse(responses[key]);
+    process.stdout.write(JSON.stringify(response));
+    process.exit(0);
+  }
 }
 const expected = ${JSON.stringify(
       toolingFullRef === "refs/heads/main"
@@ -1469,7 +1477,7 @@ describe("FRV required registry admission", () => {
     "binds actual post-upload admission without rewriting uploaded observations: %s",
     withCase(async (uploadFault, processFixture, check) => {
       const result = await fixture(processFixture, check, { registry: "healthy", uploadFault });
-      check(result.uploadedObservations).toBe(result.observationText);
+      check(result.uploadedObservations, result.stderr).toBe(result.observationText);
       check(result.effects.indexOf("Upload immutable publication observations")).toBeLessThan(
         result.effects.indexOf("Finalize publication admission"),
       );
@@ -2316,6 +2324,7 @@ describe("FRV publication source admission", () => {
   );
 
   publicationIt.concurrent.for([
+    { version: stable, pin: null, core: true, selected: false },
     { version: stable, pin: stable, core: true, selected: true },
     { version: "2026.9.9-1", pin: stable, core: true, selected: true },
     { version: stable, pin: "2026.8.1", core: true, selected: false },
@@ -2512,10 +2521,7 @@ describe("publication source intent and durable binding", () => {
         expect(bindSource(fact)).toBe(fact);
         expect(publicationSourceJson(fact)).toBe(bytes);
       }
-      for (const [key, value] of [
-        ["known_flaky_jobs_json", '["normalCi:test"]'],
-        ["telegram_waiver", "legacy-omission"],
-      ] as const) {
+      for (const [key, value] of [["known_flaky_jobs_json", '["normalCi:test"]']] as const) {
         expect(() =>
           bindSource({
             ...retained,
@@ -2524,7 +2530,7 @@ describe("publication source intent and durable binding", () => {
         ).toThrow(`${key} must be empty`);
       }
       const withoutLegacyField = structuredClone(retained);
-      delete withoutLegacyField.coverage.telegram_waiver;
+      delete withoutLegacyField.coverage.known_flaky_jobs_json;
       expect(() => bindSource(withoutLegacyField)).toThrow("source admission digest mismatch");
       expect(() =>
         bindSource(historical, {

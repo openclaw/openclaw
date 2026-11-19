@@ -1,3 +1,4 @@
+import type { FollowupQueueDisposition } from "../auto-reply/get-reply-options.types.js";
 /** Exact input identity and custody; scheduling remains with the mailbox selector. */
 import type { FollowupRun, QueueSettings } from "../auto-reply/reply/queue/types.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -36,6 +37,7 @@ export function bindSessionControllerSource(
   input.sourceAdapter?.signal?.throwIfAborted();
   input.source = source;
   source.controllerInput = input;
+  notifyGatewayWorkMetricsChanged();
 }
 
 export function isSessionControllerSourceQueued(input: SessionControllerInput): boolean {
@@ -57,11 +59,12 @@ export function settleSessionControllerSourceInjectionOrder(
 /** Retains an early source through the exact native outcome, not just its ACK. */
 export function beginSessionControllerSourceInjection(
   input: SessionControllerInput,
-  options: { keepOrderOnDecline?: boolean } = {},
+  options: { keepOrderOnDecline?: boolean; retryWithdrawnSteer?: boolean } = {},
 ): SessionControllerSourceInjection {
   if (
     (input.phase !== "preparing" && input.phase !== "waiting") ||
-    input.injectionAttempted ||
+    (input.injectionAttempted &&
+      !(options.retryWithdrawnSteer && input.steerNow && input.custody.enqueued)) ||
     input.injection ||
     input.claim ||
     input.withdrawalHolds ||
@@ -181,10 +184,6 @@ export function beginSessionControllerSourceInjection(
         });
         return true;
       } catch (error) {
-        // A failed live-authority assertion cannot return a queued-ready source
-        // to selection. Retire before releasing the injection receipt: finish
-        // can synchronously wake the mailbox and enter a backend.
-        retireSessionControllerInput(input);
         finish(false);
         if (input.abortSignal.aborted) {
           return false;
@@ -270,6 +269,7 @@ export function retireSessionControllerInput(input: SessionControllerInput): voi
     return;
   }
   input.retirementRequested = true;
+  input.steerNow = undefined;
   if (
     input.cancelling ||
     input.withdrawalHolds ||
@@ -531,6 +531,7 @@ export function holdSessionControllerSourceWithdrawal(
 function notifySessionControllerSourceAbandonment(
   run: Pick<FollowupRun, "turnAdoptionLifecycle">,
   state: SessionControllerSourceCustody,
+  dropReason?: FollowupQueueDisposition,
 ): void | Promise<void> {
   const prior = state.abandonment;
   if (prior) {
@@ -542,7 +543,10 @@ function notifySessionControllerSourceAbandonment(
   const notification: NonNullable<SessionControllerSourceCustody["abandonment"]> = {};
   state.abandonment = notification;
   try {
-    const completion = run.turnAdoptionLifecycle?.onAbandoned?.();
+    const completion =
+      dropReason && run.turnAdoptionLifecycle?.onDropped
+        ? run.turnAdoptionLifecycle.onDropped(dropReason)
+        : run.turnAdoptionLifecycle?.onAbandoned?.();
     if (completion) {
       notification.completion = Promise.resolve(completion);
       void notification.completion.catch(() => {});
@@ -558,7 +562,7 @@ function notifySessionControllerSourceAbandonment(
 export function completeSessionControllerSourceLifecycle(
   run: Pick<FollowupRun, "turnAdoptionLifecycle" | "controllerInput" | "controllerClaim">,
   state: SessionControllerSourceCustody,
-  disposition?: "consumed",
+  disposition?: "consumed" | { kind: "dropped"; reason: FollowupQueueDisposition },
 ): void {
   if (state.completed) {
     return;
@@ -583,7 +587,11 @@ export function completeSessionControllerSourceLifecycle(
     try {
       abandonment =
         disposition !== "consumed" && !state.adopted
-          ? notifySessionControllerSourceAbandonment(run, state)
+          ? notifySessionControllerSourceAbandonment(
+              run,
+              state,
+              typeof disposition === "object" ? disposition.reason : undefined,
+            )
           : undefined;
     } catch (error) {
       return afterFailure(error);

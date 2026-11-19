@@ -9,7 +9,6 @@ import { captureSessionExecutionPolicy } from "../../config/sessions/session-ent
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
-import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import type { CronCallerScope } from "./cron-caller-scope.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -33,7 +32,7 @@ export async function prepareCronCreatorSession(
     }
   };
   const assertCreatorReadCurrent = () => {
-    assertActiveAgentRuntimeAuthority(client, context, sessionMutationCommitGuard);
+    sessionMutationCommitGuard?.();
     assertCreatorStoreCurrent();
     if (hasCurrentClientAuthority?.() === false) {
       throw new TypeError("Gateway caller authority is no longer active.");

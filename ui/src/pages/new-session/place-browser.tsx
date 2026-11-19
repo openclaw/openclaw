@@ -4,6 +4,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isComposingKeyboardEvent, recordCompositionEnd } from "../../lib/ime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
+import { PickerSkeleton } from "./picker.tsx";
 import type { PlaceBrowserState } from "./place-browser-state.ts";
 export function PlaceBrowser(props: {
   params: {
@@ -32,11 +33,6 @@ export function PlaceBrowser(props: {
       }
     });
   });
-  const loadingStatus = () => (
-    <span class="new-session-page__browser-loading" role="status">
-      {t("common.loading")}
-    </span>
-  );
   const view = createMemo(() => ({
     ...props.params.browser.view(),
     highlighted: props.params.browser.highlightedEntry(),
@@ -58,7 +54,6 @@ export function PlaceBrowser(props: {
         <button
           type="button"
           class="new-session-page__browser-nav"
-          title={t("newSession.browserUp")}
           aria-label={t("newSession.browserUp")}
           ref={nativeListener("click", () => {
             if (props.params.browser.listing?.parent) {
@@ -116,13 +111,9 @@ export function PlaceBrowser(props: {
             }
           }}
         />
-        <Loading fallback={loadingStatus()}>
-          {isPending(listingRead) ? loadingStatus() : undefined}
-        </Loading>
         <button
           type="button"
           class="new-session-page__browser-nav"
-          title={t("common.close")}
           aria-label={t("common.close")}
           ref={nativeListener("click", () => props.params.onClose())}
         >
@@ -151,6 +142,9 @@ export function PlaceBrowser(props: {
         id={`${props.params.id}-list`}
         aria-label={t("newSession.folder")}
       >
+        <Loading fallback={<PickerSkeleton />}>
+          {isPending(listingRead) ? <PickerSkeleton /> : undefined}
+        </Loading>
         {view().empty !== "none" ? (
           <div class="new-session-page__browser-empty">
             {t(

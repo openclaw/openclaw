@@ -366,6 +366,7 @@ export function createSessionRowProjectionFixture(params: {
         now,
         subagentRuns: options?.subagentRuns ?? rowContext.subagentRuns.atTime(now),
         activeModel: record.fallbackModel,
+        preparedRunState: options?.preparedRunState,
         excludedChildKeys: options?.excludedChildKeys,
         childActivity:
           options?.childActivity ??
@@ -463,6 +464,11 @@ export function createSessionRowProjectionFixture(params: {
       scope: (options) => {
         const ownerAgentIds = new Set(listAgentIds(cfg));
         return {
+          targets: [
+            ...new Map(
+              [...rows.values()].map((row) => [JSON.stringify(row.storeTarget), row.storeTarget]),
+            ).values(),
+          ],
           paths: new Map(
             [...rows.values()].map((row, index) => [row.storeTarget.storePath, index]),
           ),

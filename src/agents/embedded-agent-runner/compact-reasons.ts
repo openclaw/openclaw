@@ -3,7 +3,11 @@ import { isSummaryProviderError } from "../../../packages/agent-core/src/harness
 import { formatErrorMessage } from "../../infra/errors.js";
 import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
 import type { CompactionSafeguardCancellation } from "../agent-hooks/compaction-safeguard-runtime.js";
-import { hasModelFallbackStop } from "../failover-error.js";
+import {
+  buildAssistantFailoverSignal,
+  classifyAssistantFailoverReason,
+} from "../embedded-agent-helpers/assistant-message-failures.js";
+import { describeFailoverError, hasModelFallbackStop } from "../failover-error.js";
 import { extractFailoverHttpStatus } from "../failover/retry-evidence.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
@@ -62,6 +66,38 @@ export function resolveCompactionFailure(params: {
   return { reason: cancellation?.reason ?? reason, error: cancellation?.error ?? params.error };
 }
 
+function findSummaryProviderError(error: unknown) {
+  let current = error;
+  while (current instanceof Error) {
+    if (isSummaryProviderError(current)) {
+      return current;
+    }
+    current = current.cause;
+  }
+  return undefined;
+}
+
+/** Classify the retained provider response, not the compaction wrappers' display text. */
+export function describeCompactionFailure(
+  error: unknown,
+): ReturnType<typeof describeFailoverError> {
+  const providerFailure = findSummaryProviderError(error);
+  const reason = classifyAssistantFailoverReason(providerFailure?.response);
+  if (providerFailure && reason) {
+    const signal = buildAssistantFailoverSignal(providerFailure.response);
+    return {
+      message: signal.message ?? providerFailure.message,
+      rawError: signal.message,
+      reason,
+      status: signal.status,
+      code: signal.code,
+      provider: signal.provider,
+      model: providerFailure.response.model,
+    };
+  }
+  return describeFailoverError(error);
+}
+
 /**
  * Only an actual summary timeout qualifies: the summary watchdog fired (the caller is still
  * live, so its composed signal aborted on the deadline), or the provider answered 408/504.
@@ -75,14 +111,12 @@ export function isSummaryTimeoutFailure(params: {
   abortSignal?: AbortSignal;
 }): boolean {
   // Terminal failures (model-fallback stop) rethrow before any timeout verdict.
-  let providerFailure = resolveCompactionFailure(params).error;
+  const failure = resolveCompactionFailure(params).error;
   if (params.summarySignal?.aborted) {
     return true;
   }
-  while (providerFailure instanceof Error && !isSummaryProviderError(providerFailure)) {
-    providerFailure = providerFailure.cause;
-  }
-  const status = isSummaryProviderError(providerFailure)
+  const providerFailure = findSummaryProviderError(failure);
+  const status = providerFailure
     ? extractErrorHttpStatus(providerFailure.response.errorMessage?.trim() ?? "")?.code
     : undefined;
   return status === 408 || status === 504;

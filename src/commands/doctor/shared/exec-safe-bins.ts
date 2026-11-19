@@ -32,7 +32,7 @@ type ExecSafeBinScopeRef = {
   safeBins: string[];
   exec: Record<string, unknown>;
   mergedProfiles: Record<string, unknown>;
-  trustedSafeBinDirs: ReadonlySet<string>;
+  trustedSafeBinDirs: string[];
 };
 
 type ExecSafeBinTrustedDirHintHit = {
@@ -75,12 +75,10 @@ function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
       safeBins,
       exec,
       mergedProfiles: resolveMergedSafeBinProfileFixtures({ global: globalExec, local }) ?? {},
-      trustedSafeBinDirs: getTrustedSafeBinDirs({
-        extraDirs: [
-          ...globalTrustedDirs,
-          ...normalizeConfiguredTrustedSafeBinDirs(local?.safeBinTrustedDirs),
-        ],
-      }),
+      trustedSafeBinDirs: [
+        ...globalTrustedDirs,
+        ...normalizeConfiguredTrustedSafeBinDirs(local?.safeBinTrustedDirs),
+      ],
     });
   }
   return scopes;
@@ -120,20 +118,21 @@ export function scanExecSafeBinCoverage(cfg: OpenClawConfig): ExecSafeBinCoverag
   return hits;
 }
 
-export function scanExecSafeBinTrustedDirHints(
+export async function scanExecSafeBinTrustedDirHints(
   cfg: OpenClawConfig,
-): ExecSafeBinTrustedDirHintHit[] {
+): Promise<ExecSafeBinTrustedDirHintHit[]> {
   const hits: ExecSafeBinTrustedDirHintHit[] = [];
   for (const scope of collectExecSafeBinScopes(cfg)) {
+    const trustedDirs = await getTrustedSafeBinDirs({ extraDirs: scope.trustedSafeBinDirs });
     for (const bin of scope.safeBins) {
-      const resolution = resolveCommandResolutionFromArgv([bin]);
+      const resolution = await resolveCommandResolutionFromArgv([bin]);
       if (!resolution?.execution.resolvedPath) {
         continue;
       }
       if (
-        isTrustedSafeBinPath({
+        await isTrustedSafeBinPath({
           resolvedPath: resolution.execution.resolvedPath,
-          trustedDirs: scope.trustedSafeBinDirs,
+          trustedDirs,
         })
       ) {
         continue;

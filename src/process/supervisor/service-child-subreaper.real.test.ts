@@ -33,7 +33,7 @@ it.skipIf(process.platform !== "linux" || !["x64", "arm64"].includes(process.arc
         extinct: true,
         owner: "linux-subreaper",
       },
-      { label: "realtime-signal", signalNumber: 34, extinct: true },
+      { label: "realtime-signal", signalNumber: 35, extinct: true },
       { label: "active-root-orphan", code: 37, signal: null, extinct: true },
       {
         label: "startup-failed",

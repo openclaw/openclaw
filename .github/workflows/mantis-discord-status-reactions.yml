@@ -115,7 +115,7 @@ jobs:
     name: Run Discord status reaction before/after
     needs: [resolve_request, validate_refs]
     if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 180
     environment: qa-live-shared
     steps:

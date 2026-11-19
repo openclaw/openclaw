@@ -322,7 +322,9 @@ suite.define(() => {
 
       await Promise.all([
         mobile.page.getByRole("heading", { name: "Approved here", exact: true }).waitFor(),
-        desktop.page.getByRole("heading", { name: "Resolved elsewhere", exact: true }).waitFor(),
+        desktop.page
+          .getByRole("heading", { name: "Decision already recorded", exact: true })
+          .waitFor(),
       ]);
       await Promise.all(surfaces.map(({ page }) => expectNoDecisionButtons(page)));
       const terminalFocus = await mobile.page.evaluate(() => {

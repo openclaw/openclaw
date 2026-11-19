@@ -172,6 +172,7 @@ openclaw googlemeet attendance --today --format csv --output attendance.csv
 ```
 
 `--today` searches today's `primary` calendar for an event with a Meet link; `--event <query>` searches matching event text; `--calendar <id>` targets a non-primary calendar. `calendar-events` previews matching events and marks which one `latest`/`artifacts`/`attendance`/`export` will choose.
+Calendar listing and lookup follow all result pages, including empty pages with a continuation token, before selecting the best matching event.
 
 If you already know the conference record id, address it directly:
 

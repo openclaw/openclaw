@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-types.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-contexts.js";
 import { useRelayFixtures } from "./fixture.test-support.js";
 import { createIdleRelayProvider, makeRelayTransport } from "./index.test-support.js";
 import { relaySessions } from "./state.js";

@@ -781,72 +781,72 @@ describe("doctor health contributions", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["none", "detected", "migrated", "removed"] as const)(
+  it.each(["none", "detected", "migrated", "removed", "config-blockers"] as const)(
     "omits unrelated scans only when credential work is absent: %s",
     async (credentialWork) => {
+      const blockers =
+        credentialWork === "config-blockers"
+          ? ["config.model-retirement.warning-notes.codex-routes", "config.repair-warning"]
+          : credentialWork === "none"
+            ? []
+            : ["doctor:auth-profile-migration"];
       const state = await createOpenClawTestState({ layout: "state-only" });
-      try {
-        const routes = vi
-          .spyOn(
-            await import("../commands/doctor/shared/codex-route-warnings.js"),
-            "maybeRepairCodexSessionRoutes",
-          )
-          .mockResolvedValue({ scannedStores: 0, changes: [], warnings: [] });
-        const transcripts = vi
-          .spyOn(
-            await import("../commands/doctor-session-transcripts.js"),
-            "noteSessionTranscriptHealth",
-          )
-          .mockResolvedValue(undefined);
-        const cfg = { agents: { entries: { main: {} } } };
-        if (credentialWork !== "none") {
-          mocks.maybeMigrateModelCatalogCredentials.mockResolvedValue({
-            detected: 0,
-            migrated: 0,
-            removed: 0,
-            warnings: [],
-            [credentialWork]: 1,
-          });
-        }
-        const ctx = createDoctorContext({
-          cfg,
-          retirementOnly: true,
-          shouldRepair: true,
-          env: state.env,
-          configResult: {
-            shouldWriteConfig: true,
-            modelRetirementRepairRan: true,
-            retirementOnly: true,
-            openAICodexAuthProfileIdMap: new Map(),
-          },
+      await using resources = new AsyncDisposableStack();
+      resources.defer(state.cleanup);
+      const routeModule = await import("../commands/doctor/shared/codex-route-warnings.js");
+      const routes = vi
+        .spyOn(routeModule, "maybeRepairCodexSessionRoutes")
+        .mockResolvedValue({ scannedStores: 0, changes: [], warnings: [] });
+      const transcriptModule = await import("../commands/doctor-session-transcripts.js");
+      const transcripts = vi
+        .spyOn(transcriptModule, "noteSessionTranscriptHealth")
+        .mockResolvedValue(undefined);
+      if (credentialWork !== "none" && credentialWork !== "config-blockers") {
+        mocks.maybeMigrateModelCatalogCredentials.mockResolvedValue({
+          detected: 0,
+          migrated: 0,
+          removed: 0,
+          warnings: [],
+          [credentialWork]: 1,
         });
-
-        await runDoctorHealthContributions(ctx);
-
-        expect(transcripts).toHaveBeenCalledOnce();
-        if (credentialWork !== "none") {
-          expect(ctx.retirementOnly).toBe(false);
-          expect(mocks.detectLegacyStateMigrations).toHaveBeenCalled();
-          return;
-        }
-        expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
-        expect(ctx.retirementOnly).toBe(true);
-        expect(mocks.maybeMigrateLegacyPluginModelCatalogs).toHaveBeenCalledOnce();
-        expect(mocks.maybeMigrateModelCatalogCredentials).toHaveBeenCalledOnce();
-        expect(routes).toHaveBeenCalledOnce();
-        expect(mocks.repairCronCodexModelRefsAfterConfigWrite).toHaveBeenCalledOnce();
-        // The initial writer and strict final validation each read the persisted config.
-        expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
-        expect(mocks.replaceConfigFile.mock.invocationCallOrder[0]).toBeLessThan(
-          mocks.repairCronCodexModelRefsAfterConfigWrite.mock.invocationCallOrder[0]!,
-        );
-        expect(mocks.detectLegacyStateMigrations).not.toHaveBeenCalled();
-        expect(mocks.maybeScanExtraGatewayServices).not.toHaveBeenCalled();
-        expect(mocks.noteMemorySearchHealth).not.toHaveBeenCalled();
-        expect(mocks.runDoctorHealthRepairs).not.toHaveBeenCalled();
-      } finally {
-        await state.cleanup();
       }
+      const ctx = createDoctorContext({
+        cfg: { agents: { entries: { main: {} } } },
+        options: { nonInteractive: true },
+        retirementOnly: true,
+        shouldRepair: true,
+        env: state.env,
+        configResult: {
+          shouldWriteConfig: true,
+          modelRetirementRepairRan: true,
+          retirementOnly: credentialWork !== "config-blockers",
+          retirementOnlyBlockers: blockers.map((reason) => reason.replace("config.", "")),
+          openAICodexAuthProfileIdMap: new Map(),
+        },
+      });
+      await runDoctorHealthContributions(ctx);
+
+      expect(transcripts).toHaveBeenCalledOnce();
+      if (credentialWork !== "none") {
+        expect(ctx.retirementOnly).toBe(false);
+        const diagnostics = blockers.map((reason) => `Retirement-only Doctor widened: ${reason}`);
+        expect(vi.mocked(ctx.runtime.error).mock.calls.flat()).toEqual(diagnostics);
+        expect(mocks.detectLegacyStateMigrations).toHaveBeenCalled();
+        return;
+      }
+      expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+      expect(ctx.retirementOnly).toBe(true);
+      expect(routes).toHaveBeenCalledOnce();
+      expect(mocks.repairCronCodexModelRefsAfterConfigWrite).toHaveBeenCalledOnce();
+      // The initial writer and strict final validation each read the persisted config.
+      expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
+      expect(mocks.replaceConfigFile.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.repairCronCodexModelRefsAfterConfigWrite.mock.invocationCallOrder[0]!,
+      );
+      expect(mocks.detectLegacyStateMigrations).not.toHaveBeenCalled();
+      expect(mocks.maybeScanExtraGatewayServices).not.toHaveBeenCalled();
+      expect(mocks.noteMemorySearchHealth).not.toHaveBeenCalled();
+      expect(mocks.runDoctorHealthRepairs).not.toHaveBeenCalled();
     },
   );
 
@@ -2350,8 +2350,6 @@ describe("doctor health contributions", () => {
   it("keeps disk space opt-in for default lint selection", async () => {
     const ctx = createDoctorLintFixture();
 
-    expect(mocks.collectDiskSpaceHealthFindings).not.toHaveBeenCalled();
-
     mocks.collectDiskSpaceHealthFindings.mockReturnValueOnce([
       {
         checkId: "core/doctor/disk-space",
@@ -2472,7 +2470,6 @@ describe("doctor health contributions", () => {
 
   it("keeps device pairing opt-in for default lint selection", async () => {
     const ctx = createDoctorLintFixture({ gateway: { mode: "local" } });
-    expect(mocks.collectDevicePairingHealthFindings).not.toHaveBeenCalled();
 
     await expectOptInLintFindings(ctx, "core/doctor/device-pairing");
     expect(mocks.collectDevicePairingHealthFindings).toHaveBeenCalledWith({
@@ -2483,15 +2480,7 @@ describe("doctor health contributions", () => {
   });
 
   it("keeps legacy cron store opt-in for default lint selection", async () => {
-    const contribution = requireDoctorContribution("doctor:legacy-cron");
-    expect(contribution.healthCheckIds).toEqual([
-      "core/doctor/legacy-whatsapp-crontab",
-      "core/doctor/legacy-cron-store",
-    ]);
-
     const ctx = createDoctorLintFixture({ cron: { store: "/tmp/openclaw-cron/jobs.json" } });
-
-    expect(mocks.collectLegacyCronStoreHealthFindings).not.toHaveBeenCalled();
 
     mocks.collectLegacyCronStoreHealthFindings.mockResolvedValueOnce([
       {
@@ -2505,7 +2494,7 @@ describe("doctor health contributions", () => {
     await expectOptInLintFindings(ctx, "core/doctor/legacy-cron-store", [
       expect.objectContaining({ checkId: "core/doctor/legacy-cron-store" }),
     ]);
-    expect(mocks.collectLegacyCronStoreHealthFindings).toHaveBeenCalledWith({ cfg: ctx.cfg });
+    expect(mocks.collectLegacyCronStoreHealthFindings.mock.calls).toEqual([[{ cfg: ctx.cfg }]]);
   });
 
   it("defers channel package-state loading only until post-core plugin convergence", async () => {

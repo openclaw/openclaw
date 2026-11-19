@@ -57,7 +57,11 @@ export function createSqliteWorkerBackend(
               const board = { id: "grouped", createdAt: 1, updatedAt: 2 };
               kernel.boards.register(board.id, { version: 1, board });
               const replacement = { version: 1, card: next };
-              kernel.cards.claimIfOwnerAvailable(id, replacement, updatedAt, "slot-owner", 3000);
+              kernel.cards.claimIfOwnerAvailable(id, replacement, updatedAt, {
+                ownerId: "slot-owner",
+                now: 3000,
+                limit: 1,
+              });
             });
           } catch (error) {
             failure = encodeWorkboardSqliteFailure(error);
