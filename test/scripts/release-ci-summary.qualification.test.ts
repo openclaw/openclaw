@@ -91,6 +91,22 @@ function npmProducer(f: ReturnType<typeof candidatePublicationFixture>) {
 }
 
 describe("candidate-owned publish consumer chain", () => {
+  it("verifies pre-ledger frozen Q evidence without requiring a new Q grant file", async () => {
+    const f = candidatePublicationFixture();
+    const client = {
+      ...f.client,
+      getWorkflowSource: (sha: string, path?: string) => {
+        if (path === "scripts/lib/release-validation-waivers.json") {
+          throw new Error("gh: Not Found (HTTP 404)");
+        }
+        if (path === "scripts/lib/release-validation-waivers.mjs") {
+          return "const RELEASE_VALIDATION_WAIVERS = [];";
+        }
+        return f.client.getWorkflowSource(sha, path);
+      },
+    };
+    await expect(validateReleaseRunEvidence(verifier(f), client)).resolves.toBeDefined();
+  });
   it("evaluates raw failed evidence against Q data rather than the verifier checkout", async () => {
     const f = candidatePublicationFixture({
       candidateVersion: "2099.1.1-beta.1",

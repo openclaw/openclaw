@@ -72,7 +72,13 @@ export function evaluateReleaseChildPolicy(input: {
 }): ReleaseChildPolicy;
 export const RELEASE_VALIDATION_WAIVERS_PATH: string;
 export function parseReleaseValidationWaivers(source: string): ReleaseValidationWaiver[];
-export function decodeReleaseValidationWaivers(payload: unknown): ReleaseValidationWaiver[];
+export function decodeReleaseValidationSource(payload: unknown, sourcePath: string): string;
+export function readReleaseValidationWaivers(
+  readSource: (path: string) => string,
+): ReleaseValidationWaiver[];
+export function readReleaseValidationWaiversAsync(
+  readSource: (path: string) => string | Promise<string>,
+): Promise<ReleaseValidationWaiver[]>;
 export class ReleaseAggregateValidationError extends Error {}
 export function validateReleaseWaiverAggregates(input: {
   policy: ReleaseChildPolicy;

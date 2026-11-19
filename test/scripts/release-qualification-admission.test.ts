@@ -15,6 +15,14 @@ import {
   fixture,
 } from "./release-qualification-admission.test-support.js";
 
+it("preserves production and verification of pre-ledger Q admissions", () => {
+  const f = fixture(false, { preLedgerSource: "const RELEASE_VALIDATION_WAIVERS = [];" });
+  expect(f.verify()).toEqual(f.receipt);
+  expect(() =>
+    fixture(false, { preLedgerSource: "import grants from './release-validation-waivers.json';" }),
+  ).toThrow("requires its release waiver ledger");
+});
+
 const envelope = (inputs = request().inputs) =>
   JSON.parse(expectDefined(inputs.trusted_workflow_json, "trusted workflow envelope"));
 const withEnvelope = (trusted: Record<string, unknown>, inputs = request().inputs) => ({
