@@ -72,59 +72,62 @@ export function admitStoreSearchExtension(
       `Search extension ${name} changed. Restore its previous definition, or rebuild the derived extension from canonical source data before using the new definition.`,
     );
   }
-  db.runTransaction(() => {
-    admitPostgresSearch(db, definition, facts.namespace, base.postgresVectorSearchVersion);
-    const existing = [base.search, ...Object.values(base.searchExtensions ?? {})].filter(
-      (item) => item !== undefined,
-    );
-    if (
-      existing.some(
-        (item) => (item.extensionSchema ?? "public") !== (definition.extensionSchema ?? "public"),
-      )
-    ) {
-      throw new Error("Search extensions must use the store's admitted extension schema");
-    }
-    const next = {
-      ...base,
-      searchExtensions: { ...base.searchExtensions, [name]: definition },
-    };
-    db.exec(
-      postgresSearchSql(
-        definition,
-        facts.namespace,
-        {
-          text: existing.some((item) => Object.keys(item.text ?? {}).length > 0),
-          vector: existing.some(
-            (item) => item.mode !== "keyword-only" && Object.keys(item.vector ?? {}).length > 0,
-          ),
-        },
-        base.postgresVectorDecoderVersion,
-        base.postgresVectorSearchVersion,
-        base.postgresTextSearchVersion,
-      ),
-    );
-    if (!Object.keys(base.searchExtensions ?? {}).length) {
-      // sqlite-allow-raw: Engine-owned metadata is outside the application catalog seal.
-      db.exec("ALTER TABLE openclaw_schema_meta ADD COLUMN IF NOT EXISTS search_extensions TEXT");
-    }
-    // sqlite-allow-raw: Persist only the admitted owner's definitions, in the same DDL transaction.
-    db.prepare("UPDATE openclaw_schema_meta SET search_extensions = ? WHERE store = ?").run(
-      JSON.stringify(next.searchExtensions),
-      base.id,
-    );
-    const after = verifyAndRecordPostgresSchema(db, facts.namespace, next);
-    invalidateLocalSqliteSchemaAdmissions(db);
-    stageSqliteTransactionState(db, {
-      commit: () => publishSqliteDatabaseSchemaChange(db),
-    });
-    // Publish the new revision before its facts; admission owns rollback too.
-    retainPostgresSchema(db, next);
-    publishPostgresSearchExtensionFacts(db, facts, after.catalog, next);
-    for (const item of [next.search, ...Object.values(next.searchExtensions)].filter(
-      (candidate) => candidate !== undefined,
-    )) {
-      publishPostgresSearch(db, item, base.postgresVectorSearchVersion);
-    }
-  });
+  db.runTransaction(
+    () => {
+      admitPostgresSearch(db, definition, facts.namespace, base.postgresVectorSearchVersion);
+      const existing = [base.search, ...Object.values(base.searchExtensions ?? {})].filter(
+        (item) => item !== undefined,
+      );
+      if (
+        existing.some(
+          (item) => (item.extensionSchema ?? "public") !== (definition.extensionSchema ?? "public"),
+        )
+      ) {
+        throw new Error("Search extensions must use the store's admitted extension schema");
+      }
+      const next = {
+        ...base,
+        searchExtensions: { ...base.searchExtensions, [name]: definition },
+      };
+      db.exec(
+        postgresSearchSql(
+          definition,
+          facts.namespace,
+          {
+            text: existing.some((item) => Object.keys(item.text ?? {}).length > 0),
+            vector: existing.some(
+              (item) => item.mode !== "keyword-only" && Object.keys(item.vector ?? {}).length > 0,
+            ),
+          },
+          base.postgresVectorDecoderVersion,
+          base.postgresVectorSearchVersion,
+          base.postgresTextSearchVersion,
+        ),
+      );
+      if (!Object.keys(base.searchExtensions ?? {}).length) {
+        // sqlite-allow-raw: Engine-owned metadata is outside the application catalog seal.
+        db.exec("ALTER TABLE openclaw_schema_meta ADD COLUMN IF NOT EXISTS search_extensions TEXT");
+      }
+      // sqlite-allow-raw: Persist only the admitted owner's definitions, in the same DDL transaction.
+      db.prepare("UPDATE openclaw_schema_meta SET search_extensions = ? WHERE store = ?").run(
+        JSON.stringify(next.searchExtensions),
+        base.id,
+      );
+      const after = verifyAndRecordPostgresSchema(db, facts.namespace, next);
+      invalidateLocalSqliteSchemaAdmissions(db);
+      stageSqliteTransactionState(db, {
+        commit: () => publishSqliteDatabaseSchemaChange(db),
+      });
+      // Publish the new revision before its facts; admission owns rollback too.
+      retainPostgresSchema(db, next);
+      publishPostgresSearchExtensionFacts(db, facts, after.catalog, next);
+      for (const item of [next.search, ...Object.values(next.searchExtensions)].filter(
+        (candidate) => candidate !== undefined,
+      )) {
+        publishPostgresSearch(db, item, base.postgresVectorSearchVersion);
+      }
+    },
+    { maintenance: true },
+  );
   return bindStoreSearch(db, definition);
 }
