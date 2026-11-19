@@ -123,8 +123,9 @@ jobs:
     if: ${{ needs.validate_npm_request.result == 'success' && (inputs.preflight_phase != 'prepare' && (inputs.preflight_phase != 'verify' || inputs.source_check_json == '')) }}
     strategy:
       fail-fast: false
+      max-parallel: 5
       matrix:
-        stage: [nonlint, lintformat]
+        stage: [guards, types, lint-core, lint-extensions, lintformat]
     # The 2026-09-01 probe delivered 4 CPUs/15 GiB for 16, versus 8 CPUs/31 GiB for 32.
     # Request 32 to clear parallel-check thresholds; see docs/ci.md#blacksmith-runner-capacity.
     runs-on: &linux_runner_xlarge >-
@@ -226,29 +227,37 @@ jobs:
           mv .release-harness "$harness_root"
           restore_harness() { mv "$harness_root" .release-harness; }
           trap restore_harness EXIT
-          # Probe the target CLI, not the trusted harness's current inventory.
+          case "$SOURCE_STAGE" in
+            guards|types|lint-core|lint-extensions|lintformat) ;;
+            *) echo "Unknown source stage: $SOURCE_STAGE" >&2; exit 1 ;;
+          esac
+          # Probe target interfaces, never substitute the harness's current inventory.
           check_help="$(pnpm check --help)"
-          if grep -qE -- '^[[:space:]]+--stage[[:space:]]' <<< "$check_help"; then
+          if grep -qE -- '^[[:space:]]+--stage[[:space:]]' <<< "$check_help" &&
+            grep -q -- '--only=' scripts/run-oxlint-shards.mts 2>/dev/null; then
             case "$SOURCE_STAGE" in
-              nonlint) stages=(--stage preflight --stage typecheck --stage policy) ;;
-              lintformat) stages=(--stage lint) ;;
-              *) echo "Unknown source stage: $SOURCE_STAGE" >&2; exit 1 ;;
+              # Keep preflight and policy in one invocation: policy reuses completed guards.
+              guards) pnpm check --include-test-types --include-architecture --stage preflight --stage policy ;;
+              types) pnpm check --include-test-types --include-architecture --stage typecheck ;;
+              lint-core) node --import tsx scripts/run-oxlint-shards.mts --only=core ;;
+              lint-extensions) node --import tsx scripts/run-oxlint-shards.mts --only=extensions ;;
+              lintformat)
+                # The canonical lint wrapper also owns controller, i18n, and style checks.
+                pnpm lint --only=scripts
+                pnpm format:check
+                ;;
             esac
-            pnpm check --include-test-types --include-architecture "${stages[@]}"
-          elif [[ "$SOURCE_STAGE" == nonlint ]]; then
-            # Frozen pre-selector sources keep their original complete check once.
+          elif [[ "$SOURCE_STAGE" == guards ]]; then
+            # Frozen sources missing either interface keep their complete check once.
             pnpm check --include-test-types --include-architecture
-          elif [[ "$SOURCE_STAGE" == lintformat ]]; then
-            echo 'Frozen target has no --stage support; nonlint owns the full check.'
           else
-            echo "Unknown source stage: $SOURCE_STAGE" >&2
-            exit 1
+            echo 'Frozen target lacks source partition support; guards owns the full check.'
           fi
           restore_harness
           trap - EXIT
 
       - name: Enforce plugin compatibility release readiness
-        if: ${{ matrix.stage == 'nonlint' }}
+        if: ${{ matrix.stage == 'guards' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
