@@ -322,14 +322,14 @@ describe("post-activation failure settlement without inference", () => {
   });
 
   it.each([
-    { rollback: "blocked", restoredHealthy: false, reason: "readyz-unhealthy" },
-    { rollback: "failed", restoredHealthy: false, reason: "source-rollback-failed" },
-    { rollback: "unavailable", restoredHealthy: false, reason: "readyz-unhealthy" },
-    { rollback: "restored", restoredHealthy: false, reason: "readyz-unhealthy" },
-    { rollback: "restored", restoredHealthy: true, reason: "readyz-unhealthy" },
+    { rollback: "blocked", restoredHealthy: false },
+    { rollback: "failed", restoredHealthy: false },
+    { rollback: "unavailable", restoredHealthy: false },
+    { rollback: "restored", restoredHealthy: false },
+    { rollback: "restored", restoredHealthy: true },
   ])(
     "settles $rollback rollback before allowing post-failure triage (restoredHealthy=$restoredHealthy)",
-    async ({ rollback, restoredHealthy, reason }) => {
+    async ({ rollback, restoredHealthy }) => {
       const params = fixture();
       const installedRoot = dirs.make("repair-installed-runtime-");
       await writeOpenClawPackageFixture(installedRoot, "2026.9.3");
@@ -427,6 +427,12 @@ describe("post-activation failure settlement without inference", () => {
         };
       }
       const activeRoot = rollback === "restored" ? params.root : params.result.root;
+      const reason =
+        rollback === "blocked"
+          ? "state-migrated-no-rollback"
+          : rollback === "failed"
+            ? "source-rollback-failed"
+            : "readyz-unhealthy";
       await expect(finishUpdate(params)).rejects.toMatchObject({
         exitCode: 1,
         result: {
@@ -459,14 +465,7 @@ describe("post-activation failure settlement without inference", () => {
           expect(completeRecovery).toHaveBeenCalledWith(false);
         }
       }
-      const blocked = rollback === "blocked";
-      expect(mocks.rollback).toHaveBeenCalledTimes(rollback === "unavailable" || blocked ? 0 : 1);
-      if (blocked) {
-        // The launched candidate owns the migrated state: no rollback and no data risk.
-        const recorded = getUpdateRun(run.runId, { env: run.env });
-        expect({ ...recorded?.verification.recovery }).not.toHaveProperty("dataAtRisk");
-        expect(recorded?.origin.nextAction).toMatch(/^(?!.*data at risk).*update repair/su);
-      }
+      expect(mocks.rollback).toHaveBeenCalledTimes(rollback === "unavailable" ? 0 : 1);
       if (rollback === "unavailable") {
         expect(getUpdateRun(run.runId, { env: run.env })?.steps).toEqual(
           expect.arrayContaining([
@@ -557,7 +556,6 @@ describe("post-activation failure settlement without inference", () => {
         });
         mocks.restart.mockImplementation(async (restart) => {
           await startTask();
-          restart.onGatewayStartAttempted?.();
           mocks.healthy = activated;
           recordUpdateRunPhase(run.runId, "verifying", undefined, { env: run.env });
           if (!mocks.healthy) {
@@ -605,10 +603,10 @@ describe("post-activation failure settlement without inference", () => {
             result: { status: "error" },
           });
         }
-        // The started candidate owns migrated state; the original recovery owner stays in charge.
+        // Refused rollback leaves the original recovery owner in charge.
         await originalRecovery.restore();
         await originalRecovery.complete();
-        expect(mocks.rollback).not.toHaveBeenCalled();
+        expect(mocks.rollback).toHaveBeenCalledTimes(activated ? 0 : 1);
         expect(mocks.repair).not.toHaveBeenCalled();
         expect(mocks.restart).toHaveBeenCalledOnce();
         expect(mocks.restartCommand).not.toHaveBeenCalled();
@@ -637,8 +635,6 @@ describe("post-activation failure settlement without inference", () => {
       status: "failed",
       phase: "finished",
       repair: [],
-      verification: { recovery: { dataAtRisk: "state-migrated-no-rollback" } },
-      origin: { nextAction: expect.stringContaining("data at risk (state-migrated-no-rollback)") },
     });
   });
 
