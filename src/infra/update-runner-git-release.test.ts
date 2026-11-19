@@ -270,8 +270,11 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
    * Gateway started the new release: the link names release 2.0.0, which never served,
    * and `.trial` is armed with `attempts: 0` and falls back to 1.0.0, which serves.
    * With `pending`, a `--no-restart` update left 2.0.0 for the next service start instead.
+   * With `linkedCheckout`, the install checkout is a linked worktree of a repository built at 2.0.0.
    */
-  async function halfSwitchedInstall(left: { pending?: boolean; linkedState?: boolean } = {}) {
+  async function halfSwitchedInstall(
+    left: { pending?: boolean; linkedState?: boolean; linkedCheckout?: boolean } = {},
+  ) {
     target.runtimeVerified = true;
     const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "git-release-left-")));
     roots.push(dir);
@@ -289,13 +292,18 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
       await git(checkout, "commit", "-qm", version);
       commits[version] = await git(checkout, "rev-parse", "HEAD");
     }
-    await git(checkout, "checkout", "-q", "--detach", commits["1.0.0"]!);
-    await writeBuildInfo(checkout, commits["1.0.0"]!);
+    const install = left.linkedCheckout ? path.join(dir, "linked-checkout") : checkout;
+    if (left.linkedCheckout) {
+      await git(checkout, "worktree", "add", "-q", "--detach", install, commits["1.0.0"]!);
+      await writeBuildInfo(checkout, commits["2.0.0"]!);
+    }
+    await git(install, "checkout", "-q", "--detach", commits["1.0.0"]!);
+    await writeBuildInfo(install, commits["1.0.0"]!);
     const prefix = path.join(dir, "state", "git-install");
     const slot = gitReleaseSlot(prefix);
     const place = async (version: string) => {
       const root = (await createGitReleaseDirs(prefix)).releaseRoot;
-      await git(checkout, "worktree", "add", "-q", "--detach", root, commits[version]!);
+      await git(install, "worktree", "add", "-q", "--detach", root, commits[version]!);
       await fs.mkdir(path.join(root, "dist"));
       await fs.writeFile(path.join(root, "dist", "index.js"), `console.log("serving ${version}");`);
       return await fs.realpath(root);
@@ -308,17 +316,17 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     const resolveLink = (link: string) => fs.realpath(path.resolve(path.dirname(slot), link));
     return {
       commits,
-      checkout,
+      checkout: install,
+      place,
+      prefix,
       slot,
       serving,
       unserved,
       trialFile,
       readTrial: async () => {
-        const trial = JSON.parse(await fs.readFile(trialFile, "utf8")) as Trial;
-        return {
-          target: await resolveLink(trial.target),
-          previous: await resolveLink(trial.previous),
-        };
+        const t = JSON.parse(await fs.readFile(trialFile, "utf8")) as Trial;
+        const [linked, previous] = await Promise.all([t.target, t.previous].map(resolveLink));
+        return { target: linked, previous };
       },
       releaseCount: async () =>
         (await fs.readdir(path.join(prefix, PACKAGE_RELEASES_DIR))).filter(
@@ -327,7 +335,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
       update: (revision: string, deferReleaseActivation?: boolean) => {
         target.revision = revision;
         return updateGitRelease({
-          gitRoot: slot,
+          gitRoot: install,
           runCommand: async (argv, options) =>
             argv[1]?.endsWith("openclaw.mjs")
               ? {
@@ -373,16 +381,16 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   type HalfSwitchedInstall = Awaited<ReturnType<typeof halfSwitchedInstall>>;
 
   it.each([
-    ["", false],
-    [", also when the launcher starts it during validation", true],
-  ])("finishes activating a placed release that never served%s", async (_l, startedMeanwhile) => {
-    const install = await halfSwitchedInstall();
-    target.duringValidation = startedMeanwhile ? install.countStart : undefined;
+    ["", false, false],
+    [", also when the launcher starts it during validation", true, false],
+    // Its own build is the evidence, not the build of the repository it is a worktree of.
+    [", with a linked-worktree checkout", false, true],
+  ])("finishes activating a placed release that never served%s", async (_l, started, linked) => {
+    const install = await halfSwitchedInstall({ linkedCheckout: linked });
+    target.duringValidation = started ? install.countStart : undefined;
     // The fallback was deselected days ago; age alone must not remove it.
     await fs.utimes(path.resolve(install.serving, "../../.."), threeDaysAgo, threeDaysAgo);
-
     const result = await install.update(install.commits["2.0.0"]!);
-
     expect(result.status, JSON.stringify(result.steps)).toBe("ok");
     expect(result.before).toMatchObject({ sha: install.commits["1.0.0"], version: "1.0.0" });
     expect(result.after).toMatchObject({ sha: install.commits["2.0.0"], version: "2.0.0" });
@@ -402,15 +410,12 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     "falls back to the serving release and deselects a superseded release that never served",
     async () => {
       const install = await halfSwitchedInstall();
-
       const result = await install.update(install.commits["3.0.0"]!);
-
       expect(result.status, JSON.stringify(result.steps)).toBe("ok");
       expect(result.before).toMatchObject({ sha: install.commits["1.0.0"], version: "1.0.0" });
       const candidate = await fs.realpath(install.slot);
       expect(await install.readTrial()).toEqual({ target: candidate, previous: install.serving });
       expect(await install.releaseCount()).toBe(3);
-
       await fs.mkdir(path.join(candidate, "dist"));
       await fs.writeFile(path.join(candidate, "dist", "index.js"), 'throw new Error("boot");');
       expect(install.startGateway().status).not.toBe(0);
@@ -437,7 +442,6 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     const release = await mark(install);
     try {
       const result = await install.update(install.commits["3.0.0"]!);
-
       // The launcher owns a started trial's state rollback: the next trial falls back to it.
       expect((await install.readTrial()).previous).toBe(install.unserved);
       expect(result.steps.some((entry) => entry.name === "git-release-placement")).toBe(false);
@@ -449,9 +453,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   it("keeps the link on a release that ended its trial while the target built", async () => {
     const install = await halfSwitchedInstall();
     target.duringBuild = () => fs.rm(install.trialFile);
-
     await install.update(install.commits["3.0.0"]!);
-
     expect(await install.readTrial()).toMatchObject({ previous: install.unserved });
   });
 
@@ -480,9 +482,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   ])("builds instead of reusing when %s", async (_label, arrange) => {
     const install = await halfSwitchedInstall();
     await arrange(install);
-
     await install.update(install.commits["2.0.0"]!);
-
     expect(target.builds).toBe(1);
     expect(await fs.realpath(install.slot)).not.toBe(install.unserved);
   });
@@ -492,9 +492,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     ["deselects it once superseded", "3.0.0", 1],
   ])("a release a --no-restart update left: %s", async (_label, version, builds) => {
     const install = await halfSwitchedInstall({ pending: true });
-
     await install.update(install.commits[version]!);
-
     expect(target.builds).toBe(builds);
     const linked = await fs.realpath(install.slot);
     expect(await install.readTrial()).toEqual({ target: linked, previous: install.serving });
@@ -502,19 +500,17 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   });
 
   it.each([
-    ["does not verify", false],
     ["does not verify under a linked state directory", true],
-    ["lacks the launcher's entry", false],
+    ["has a directory where the launcher's entry belongs", false],
   ])("rebuilds the serving commit as the fallback when it %s", async (label, linkedState) => {
     const install = await halfSwitchedInstall({ linkedState });
-    if (label.startsWith("lacks")) {
+    if (label.startsWith("has a directory")) {
       await fs.rm(path.join(install.serving, "dist", "index.js"));
+      await fs.mkdir(path.join(install.serving, "dist", "index.js"));
     } else {
       target.broken.push(install.serving);
     }
-
     await install.update(install.commits["3.0.0"]!);
-
     expect(target.conversionTargets).toEqual([install.commits["1.0.0"]]);
     const { previous } = await install.readTrial();
     expect([install.serving, install.unserved]).not.toContain(previous);
@@ -527,7 +523,6 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     ["the serving target", "1.0.0"],
   ])("writes a link that resolves under a linked state directory for %s", async (_l, version) => {
     const install = await halfSwitchedInstall({ linkedState: true });
-
     const result = await install.update(install.commits[version]!);
 
     expect(result.status, JSON.stringify(result.steps)).not.toBe("error");
@@ -551,18 +546,26 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   });
 
   it.each([
-    ["is gone", "serving", ["../../.."], false],
-    ["lost its Git metadata", "serving", [".git"], false],
+    ["is gone", "serving", ["../../.."], ""],
+    ["lost its Git metadata", "serving", [".git"], ""],
     // Only the checkout's build reporting its commit shows that the fallback serves.
-    ["has no evidence that it serves", "checkout", ["dist"], false],
+    ["has no evidence that it serves", "checkout", ["dist"], ""],
     // After any Gateway's release lease, even from a failed boot, the checkout proves nothing.
-    ["is incomplete and a Gateway took a release lease", "serving", [], true],
-  ] as const)("changes nothing and refuses when the fallback %s", async (_l, root, gone, lease) => {
-    const install = await halfSwitchedInstall();
+    ["is incomplete and a Gateway took a release lease", "serving", [], "lease"],
+    // An older publisher recorded never-started 2.0.0 as the fallback of a 3.0.0 trial, and
+    // the repository the linked checkout belongs to is built at 2.0.0.
+    ["never started and only its repository's build reports it", "serving", [], "linked"],
+  ] as const)("changes nothing and refuses when the fallback %s", async (_l, root, gone, also) => {
+    const install = await halfSwitchedInstall({ linkedCheckout: also === "linked" });
+    if (also === "linked") {
+      const releaseRoot = await install.place("3.0.0");
+      await publishGitRelease({ prefix: install.prefix, releaseRoot, trial: true });
+    }
     const trial = await fs.readFile(install.trialFile, "utf8");
+    const link = await fs.realpath(install.slot);
     const release = path.resolve(install.serving, "../../..");
     await Promise.all(gone.map((p) => fs.rm(path.resolve(install[root], p), { recursive: true })));
-    if (lease) {
+    if (also === "lease") {
       target.broken.push(install.serving);
       await fs.mkdir(path.join(release, "../.leases", path.basename(release)), { recursive: true });
     }
@@ -573,7 +576,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     expect(result).toMatchObject({ status: "error", reason: "git-release-fallback-unavailable" });
     expect(result.recovery).toMatchObject(unsafe);
     expect(target.builds + target.conversionTargets.length).toBe(0);
-    expect(await fs.realpath(install.slot)).toBe(install.unserved);
+    expect(await fs.realpath(install.slot)).toBe(link);
     expect(await fs.readFile(install.trialFile, "utf8")).toBe(trial);
     expect(result.steps.at(-1)?.stderrTail).toContain("openclaw triage");
     target.fetchFails = true; // A restart after an early failure would start the placed release.
@@ -583,23 +586,20 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   it.each([
     ["a newer target", "3.0.0"],
     ["the placed target", "2.0.0"],
-  ])(
-    "leaves the half-switched link and trial alone under --no-restart for %s",
-    async (_l, version) => {
-      const install = await halfSwitchedInstall();
-      target.broken.push(install.serving);
-      const trial = await fs.readFile(install.trialFile, "utf8");
+  ])("leaves a half-switched install alone under --no-restart for %s", async (_l, version) => {
+    const install = await halfSwitchedInstall();
+    target.broken.push(install.serving);
+    const trial = await fs.readFile(install.trialFile, "utf8");
 
-      const result = await install.update(install.commits[version]!, true);
+    const result = await install.update(install.commits[version]!, true);
 
-      expect(result.status, JSON.stringify(result.steps)).not.toBe("error");
-      expect(target.conversionTargets).toEqual([]);
-      expect(await fs.realpath(install.slot)).toBe(install.unserved);
-      if (version === "2.0.0") {
-        expect(await fs.readFile(install.trialFile, "utf8")).toBe(trial);
-      }
-    },
-  );
+    expect(result.status, JSON.stringify(result.steps)).not.toBe("error");
+    expect(target.conversionTargets).toEqual([]);
+    expect(await fs.realpath(install.slot)).toBe(install.unserved);
+    if (version === "2.0.0") {
+      expect(await fs.readFile(install.trialFile, "utf8")).toBe(trial);
+    }
+  });
 
   it("puts the link back on the serving release when that release is the target", async () => {
     const install = await halfSwitchedInstall();
@@ -639,6 +639,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     target.duringValidation = () => fs.rm(install.trialFile);
     const result = await install.update(install.commits["1.0.0"]!);
     expect(result).toMatchObject({ status: "error", reason: "git-release-selection-changed" });
+    expect(result.recovery).toMatchObject({ serviceRestartSafe: false });
     expect(await fs.realpath(install.slot)).toBe(install.unserved);
   });
 });

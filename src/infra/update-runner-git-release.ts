@@ -64,7 +64,7 @@ export async function updateGitRelease(params: {
   const slot = gitReleaseSlot(prefix);
   const selected = readPackageReleaseSlotSync(slot);
   const converting = !selected;
-  let placement = selected ? await readGitReleasePlacement(selected) : null;
+  let placement = selected ? await readGitReleasePlacement(selected, params.gitRoot) : null;
   // Repair moves the link, which a launcher-backed Gateway follows by restarting, so an
   // update with --no-restart leaves a placed release, its trial and the link exactly as an
   // earlier updater would, for the next update that restarts.
@@ -351,7 +351,7 @@ export async function updateGitRelease(params: {
         cwd: prefix,
         durationMs: 0,
         exitCode: 1,
-        stderrTail: `${lost} ${commit ? `Rebuilding the commit it was built from (${commit.slice(0, 12)}) did not produce a verified release` : "The commit that serves is not recorded"}, so a switch could not back out to a working Gateway. This update changed nothing and the Gateway keeps serving; do not restart it into the release link. Run \`openclaw triage\` to have an agent rebuild a fallback from the serving commit, then run \`openclaw update\` again.`,
+        stderrTail: `${lost} ${commit ? `Rebuilding the commit it was built from (${commit.slice(0, 12)}) did not produce a verified release` : "The commit that serves is not recorded"}, so a switch could not back out to a working Gateway. This update changed nothing; do not restart the Gateway into the release link. Run \`openclaw triage\` to have an agent rebuild a fallback from the serving commit, then run \`openclaw update\` again.`,
       });
       return {
         ...result("error", "git-release-fallback-unavailable"),
@@ -457,8 +457,12 @@ export async function updateGitRelease(params: {
     });
     // The placed release started or passed its trial meanwhile: the target is no longer
     // what is selected, so this update is not current.
+    // The restart verdict was for the earlier selection; the next start runs another release.
     if (!(await supersedeUnserved())) {
-      return result("error", "git-release-selection-changed");
+      return {
+        ...result("error", "git-release-selection-changed"),
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      };
     }
   }
   if (target.status !== "ok" && (!previousRelease || target.reason !== "already-current")) {

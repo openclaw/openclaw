@@ -204,20 +204,16 @@ async function readReleaseHead(root: string): Promise<string | null> {
  */
 async function isCheckoutServingCommit(
   prefix: string,
-  root: string,
+  checkout: string | undefined,
   commit: string,
 ): Promise<boolean> {
   const leases = path.join(prefix, PACKAGE_RELEASES_DIR, ".leases");
-  if ((await fs.readdir(leases).catch((): string[] => [])).length > 0) {
+  if (!checkout || (await fs.readdir(leases).catch((): string[] => [])).length > 0) {
     return false;
   }
-  const dotGit = await fs.readFile(path.join(root, ".git"), "utf8").catch(() => "");
-  const gitDir = /^gitdir: (.+)$/mu.exec(dotGit)?.[1]?.trim();
-  const commonDir = gitDir
-    ? (await fs.readFile(path.resolve(root, gitDir, "commondir"), "utf8").catch(() => "")).trim()
-    : "";
-  const checkout = commonDir ? path.dirname(path.resolve(root, gitDir!, commonDir)) : null;
-  return Boolean(checkout && (await readBuiltRuntimeCommit(checkout)) === commit);
+  // The install's own checkout, named by the caller: when it is a linked worktree, the
+  // releases' common Git directory belongs to another repository with its own build.
+  return (await readBuiltRuntimeCommit(checkout)) === commit;
 }
 
 /**
@@ -226,11 +222,8 @@ async function isCheckoutServingCommit(
  */
 export async function verifiesAsGitRelease(root: string): Promise<boolean> {
   const verified = await verifyGitUpdateRecovery({ root, sha: await readReleaseHead(root) });
-  const entry = await fs.access(path.join(root, "dist", "index.js")).then(
-    () => true,
-    () => false,
-  );
-  return verified.serviceRestartSafe && entry;
+  const entry = await fs.stat(path.join(root, "dist", "index.js")).catch(() => null);
+  return verified.serviceRestartSafe && entry?.isFile() === true;
 }
 
 /** A verified release built from `commit`, other than `exclude`, if one is on disk. */
@@ -271,6 +264,8 @@ export async function findVerifiedGitRelease(params: {
  */
 export async function readGitReleasePlacement(
   slot: PackageReleaseSlot,
+  /** The install's own checkout, whose build is the only evidence of what serves. */
+  checkout?: string,
 ): Promise<GitReleasePlacement> {
   const current = { serving: slot.releaseRoot, fallback: slot.releaseRoot };
   const trial = await readGitReleaseTrial(slot.prefix).catch(() => null);
@@ -302,7 +297,7 @@ export async function readGitReleasePlacement(
   const commit = previous ? await readReleaseHead(previous) : null;
   // A fallback is used, or its commit rebuilt, only on evidence that the commit serves.
   const served = Boolean(
-    previous && commit && (await isCheckoutServingCommit(slot.prefix, previous, commit)),
+    previous && commit && (await isCheckoutServingCommit(slot.prefix, checkout, commit)),
   );
   if (served && (await verifiesAsGitRelease(previous!))) {
     return { serving: previous!, fallback: previous!, unserved };

@@ -1616,7 +1616,8 @@ serve (see below), the next plain `openclaw update` builds on it:
 - If the serving release is the target, the update runs the candidate checks on it and the
   caller's mutation check, puts the link back on the serving release, and reports that the
   installation is current. If the placed release started or ended its trial meanwhile, the
-  link stays on it and the update fails with `git-release-selection-changed` instead.
+  link stays on it and the update fails with `git-release-selection-changed` instead. It
+  does not call a restart safe, because the next start runs that other release.
 
 Only a release the launcher never started and no process holds counts as never started.
 A trial that started stays under the launcher, which owns its state rollback. If the
@@ -1643,8 +1644,8 @@ copy.
 
 Without that evidence, or when the fallback is gone or no longer readable as a Git
 release, the commit that serves is not known. The update then changes nothing and fails
-with `git-release-fallback-unavailable`, and the Gateway keeps serving. Do not restart it
-into the release link. Run `openclaw triage` so an agent can rebuild a fallback from the
+with `git-release-fallback-unavailable`. Do not restart the Gateway into the release
+link. Run `openclaw triage` so an agent can rebuild a fallback from the
 serving commit, then run `openclaw update` again.
 
 The link text is computed between real paths and must resolve to the chosen release before
