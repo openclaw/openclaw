@@ -31,6 +31,10 @@ export function isVerifiedSuccessfulUpdate(run: UpdateRunRecord): boolean {
   );
 }
 
+export function isUnchangedUpdate(run: UpdateRunRecord): boolean {
+  return run.status === "skipped" && run.reason === "already-current" && run.finishedAtMs !== null;
+}
+
 /** A rollback original is superseded after a later update succeeded or a verified one finished. */
 export function readCompletedUpdateHistory(env: NodeJS.ProcessEnv) {
   try {
@@ -40,11 +44,14 @@ export function readCompletedUpdateHistory(env: NodeJS.ProcessEnv) {
       (run) => run.finishedAtMs !== null && isUpdateRunVerificationConfirmed(run.verification),
     );
     const verifiedSuccess = completed.find(isVerifiedSuccessfulUpdate);
+    const runs = listUpdateRuns({ limit: 100 }, { env });
     return {
-      runs: listUpdateRuns({ limit: 100 }, { env }),
+      runs,
       latestCompletedStartedAt: latest && latest.finishedAtMs !== null ? latest.createdAtMs : 0,
       latestVerifiedStartedAt: verified?.createdAtMs ?? 0,
       latestVerifiedFinishedAt: verifiedSuccess?.finishedAtMs ?? 0,
+      latestVerifiedSuccessStartedAt: verifiedSuccess?.createdAtMs ?? 0,
+      hasUnfinishedRun: runs.some((run) => run.status === "running" || run.finishedAtMs === null),
       hasPendingRecovery: inspectUpdateRecoveries({ env }).some(({ record }) =>
         isUpdateRecoveryPending(record),
       ),
@@ -69,6 +76,7 @@ function classifyCapture(
   run: UpdateRunRecord,
   latestCompletedStartedAt: number,
   latestVerifiedStartedAt: number,
+  latestVerifiedSuccessStartedAt: number,
   env: NodeJS.ProcessEnv,
 ): Pick<RecoveryCleanupArtifact, "outcome" | "reason"> {
   if (run.status === "running" || run.finishedAtMs === null) {
@@ -82,10 +90,24 @@ function classifyCapture(
   if (isNeverActivatedFailedUpdate(run)) {
     return { outcome: "candidate", reason: "never-activated-update-capture" };
   }
+  // An already-current run finished without activating anything; its copy restores nothing.
+  if (isUnchangedUpdate(run)) {
+    return { outcome: "candidate", reason: "unchanged-update-capture" };
+  }
   const sealed =
     fs.existsSync(path.join(directory, "manifest.json")) &&
     !fs.existsSync(path.join(directory, "manifest.json.partial"));
   const capture = run.origin.updateRecoveryCapture;
+  // A verified successful update that started after this failed run finished supersedes
+  // its sealed recovery source; other captures keep their existing rules below.
+  if (
+    sealed &&
+    (run.status === "failed" || run.status === "rolled-back") &&
+    latestVerifiedSuccessStartedAt > run.createdAtMs &&
+    latestVerifiedSuccessStartedAt >= run.finishedAtMs
+  ) {
+    return { outcome: "candidate", reason: "superseded-by-verified-update" };
+  }
   // A sealed baseline from a failed update is its manual recovery source until resolved.
   // Succeeded and skipped (already-current) runs completed without needing it.
   if (
@@ -274,6 +296,7 @@ function collectCaptureRootInventory(params: {
               run!,
               history.latestCompletedStartedAt,
               history.latestVerifiedStartedAt,
+              history.latestVerifiedSuccessStartedAt,
               params.env,
             ),
       );

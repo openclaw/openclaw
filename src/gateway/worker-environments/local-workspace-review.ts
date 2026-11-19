@@ -28,14 +28,12 @@ export async function readLocalWorkspaceReviewBase(params: {
   );
   params.assertCurrent();
   const row = reply?.row;
-  if (!row) {
-    return undefined;
-  }
   if (
-    row.worktree_id !== binding.id ||
-    row.agent_id !== params.agentId ||
-    row.session_key !== params.sessionKey ||
-    row.session_id !== params.entry.sessionId
+    row &&
+    (row.worktree_id !== binding.id ||
+      row.agent_id !== params.agentId ||
+      row.session_key !== params.sessionKey ||
+      row.session_id !== params.entry.sessionId)
   ) {
     throw new Error("Local workspace review binding belongs to another session incarnation");
   }
@@ -47,9 +45,12 @@ export async function readLocalWorkspaceReviewBase(params: {
     assertWorktreeCurrent();
   };
   assertCurrent();
+  if (!worktree || worktree.removedAt !== undefined) {
+    throw new Error(
+      `This session's worktree was removed by cleanup or deletion. Use Restore in Settings > Worktrees (worktrees.restore), or start a new session. Worktree: ${binding.id}.`,
+    );
+  }
   if (
-    !worktree ||
-    worktree.removedAt !== undefined ||
     worktree.ownerKind !== "session" ||
     worktree.ownerId !== params.sessionKey ||
     worktree.repoRoot !== binding.repoRoot ||
@@ -58,5 +59,5 @@ export async function readLocalWorkspaceReviewBase(params: {
   ) {
     throw new Error("Local workspace review owner changed");
   }
-  return { baseCommit: row.base_commit, assertCurrent };
+  return row ? { baseCommit: row.base_commit, assertCurrent } : undefined;
 }

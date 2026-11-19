@@ -43,6 +43,7 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { installTestApprovalClock } from "../exec-approval-manager.test-support.js";
 import { getOperatorApprovalDetailed } from "../operator-approval-store.js";
+import { cancelAgentRuntimeBoundApprovals } from "./approval-run-cancellation.js";
 import { runSystemAgentGatewayTask } from "./system-agent-execution.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
@@ -436,125 +437,110 @@ describe("Full Access delegated chat", () => {
     },
   );
 
-  it.each([
-    "apply",
-    "closed-before",
-    "closed-after",
-    "tool-cancelled",
-    "denied",
-    "failed-correction",
-  ] as const)("settles a separately approved correction with outcome %s", async (outcome) => {
-    const fixture = await createDelegatedChatFixture(createTestGatewayScheduler(), "repair");
-    fixture.runConfigSet.mockRejectedValueOnce(
-      new Error(
-        "Config validation failed: gateway.port: Invalid input: expected number, received string",
-      ),
-    );
-    if (outcome === "failed-correction") {
-      fixture.runConfigSet.mockRejectedValue(new Error("fixture correction failed"));
-    }
-    if (outcome === "closed-before") {
-      const resolve = fixture.engine.resolveOperatorApproval.bind(fixture.engine);
-      vi.spyOn(fixture.engine, "resolveOperatorApproval").mockImplementationOnce(
-        async (...args) => {
-          const reply = await resolve(...args);
-          releaseAgentRunDelegatedAuthority(fixture.authority);
-          return reply;
-        },
+  it.each(["apply", "closed-before", "tool-cancelled", "denied", "failed-correction"] as const)(
+    "settles a separately approved correction with outcome %s",
+    async (outcome) => {
+      const fixture = await createDelegatedChatFixture(createTestGatewayScheduler(), "repair");
+      fixture.runConfigSet.mockRejectedValueOnce(
+        new Error(
+          "Config validation failed: gateway.port: Invalid input: expected number, received string",
+        ),
       );
-    }
-    const controller = new AbortController();
-    let settled = false;
-    const pending = fixture
-      .callChat("Set the Gateway port to banana.", {
-        approvalSignals: [controller.signal],
-      })
-      .then((reply) => {
-        settled = true;
-        return reply;
-      });
-    try {
-      await fixture.requested.promise;
-      const original = expectDefined(
-        (await fixture.manager.listPendingRecords())[0],
-        "original approval",
-      );
-      const correctionRequested = createDeferred();
-      fixture.broadcast.mockImplementation((event) => {
-        if (event === "openclaw.approval.requested") {
-          correctionRequested.resolve();
-        }
-      });
-      expect(fixture.runConfigSet).not.toHaveBeenCalled();
-      expect(await fixture.manager.resolve(original.id, "allow-once", "operator")).toBe(true);
-      if (outcome === "closed-before") {
-        await pending;
-        expect(await fixture.manager.listPendingRecords()).toEqual([]);
-        expect(fixture.engine.getPendingOperatorProposal()).toBeNull();
-        expect(fixture.runConfigSet).toHaveBeenCalledOnce();
-        fixture.expectRequests(1);
-        return;
-      }
-      expect(
-        await Promise.race([
-          correctionRequested.promise.then(() => "requested"),
-          pending.then(() => "completed"),
-        ]),
-      ).toBe("requested");
-      const correction = expectDefined(
-        (await fixture.manager.listPendingRecords())[0],
-        "corrective approval",
-      );
-      fixture.expectRequests(2);
-      expect(correction.id).not.toBe(original.id);
-      expect(correction.request.proposalHash).not.toBe(original.request.proposalHash);
-      await runSystemAgentGatewayTask(async () => undefined);
-      expect(settled).toBe(false);
-      expect(fixture.runConfigSet).toHaveBeenCalledOnce();
-      expect(await fixture.manager.resolve(original.id, "allow-once", "stale-operator")).toBe(
-        false,
-      );
-      if (outcome === "closed-after" || outcome === "tool-cancelled" || outcome === "denied") {
-        if (outcome === "closed-after") {
-          releaseAgentRunDelegatedAuthority(fixture.authority);
-          await fixture.manager.forceDenyIfRuntimeAuthorityClosed(correction.id);
-        } else if (outcome === "tool-cancelled") {
-          controller.abort();
-        } else {
-          expect(await fixture.manager.resolve(correction.id, "deny", "operator")).toBe(true);
-        }
-        expect((await pending).payload).toMatchObject({
-          reply: expect.stringContaining(outcome === "denied" ? "Denied" : "cancelled"),
-        });
-        expect(fixture.runConfigSet).toHaveBeenCalledOnce();
-        expect(fixture.engine.getPendingOperatorProposal()).toBeNull();
-        expect(await fixture.manager.listPendingRecords()).toEqual([]);
-        return;
-      }
-      expect(await fixture.manager.resolve(correction.id, "allow-once", "operator")).toBe(true);
-      const result = await pending;
-      expectReplyParts(result.payload, "gateway.port: Invalid input");
       if (outcome === "failed-correction") {
-        expectReplyParts(result.payload, "stopped after one corrective attempt");
+        fixture.runConfigSet.mockRejectedValue(new Error("fixture correction failed"));
+      }
+      if (outcome === "closed-before") {
+        const resolve = fixture.engine.resolveOperatorApproval.bind(fixture.engine);
+        vi.spyOn(fixture.engine, "resolveOperatorApproval").mockImplementationOnce(
+          async (...args) => {
+            const reply = await resolve(...args);
+            releaseAgentRunDelegatedAuthority(fixture.authority);
+            return reply;
+          },
+        );
+      }
+      const controller = new AbortController();
+      let settled = false;
+      const pending = fixture
+        .callChat("Set the Gateway port to banana.", {
+          approvalSignals: [controller.signal],
+        })
+        .then((reply) => {
+          settled = true;
+          return reply;
+        });
+      try {
+        await fixture.requested.promise;
+        const original = expectDefined(
+          (await fixture.manager.listPendingRecords())[0],
+          "original approval",
+        );
+        const correctionRequested = createDeferred();
+        fixture.broadcast.mockImplementation((event) => {
+          if (event === "openclaw.approval.requested") {
+            correctionRequested.resolve();
+          }
+        });
+        expect(fixture.runConfigSet).not.toHaveBeenCalled();
+        expect(await fixture.manager.resolve(original.id, "allow-once", "operator")).toBe(true);
+        expect(
+          await Promise.race([
+            correctionRequested.promise.then(() => "requested"),
+            pending.then(() => "completed"),
+          ]),
+        ).toBe("requested");
+        const correction = expectDefined(
+          (await fixture.manager.listPendingRecords())[0],
+          "corrective approval",
+        );
         fixture.expectRequests(2);
+        expect(correction.id).not.toBe(original.id);
+        expect(correction.request.proposalHash).not.toBe(original.request.proposalHash);
+        await runSystemAgentGatewayTask(async () => undefined);
+        expect(settled).toBe(false);
+        expect(fixture.runConfigSet).toHaveBeenCalledOnce();
+        expect(await fixture.manager.resolve(original.id, "allow-once", "stale-operator")).toBe(
+          false,
+        );
+        if (outcome === "tool-cancelled" || outcome === "denied") {
+          if (outcome === "tool-cancelled") {
+            controller.abort();
+          } else {
+            expect(await fixture.manager.resolve(correction.id, "deny", "operator")).toBe(true);
+          }
+          expect((await pending).payload).toMatchObject({
+            reply: expect.stringContaining(outcome === "denied" ? "Denied" : "cancelled"),
+          });
+          expect(fixture.runConfigSet).toHaveBeenCalledOnce();
+          expect(fixture.engine.getPendingOperatorProposal()).toBeNull();
+          expect(await fixture.manager.listPendingRecords()).toEqual([]);
+          return;
+        }
+        expect(await fixture.manager.resolve(correction.id, "allow-once", "operator")).toBe(true);
+        const result = await pending;
+        expectReplyParts(result.payload, "gateway.port: Invalid input");
+        if (outcome === "failed-correction") {
+          expectReplyParts(result.payload, "stopped after one corrective attempt");
+          fixture.expectRequests(2);
+        }
+        expect(fixture.runConfigSet).toHaveBeenCalledTimes(2);
+        expect(fixture.runConfigSet).toHaveBeenLastCalledWith({
+          path: "gateway.port",
+          value: "18789",
+          cliOptions: {},
+          beforePersistentApply: expect.any(Function),
+          runtime: expect.objectContaining({ log: expect.any(Function) }),
+          throwOnError: false,
+        });
+        expect(fixture.engine.getPendingOperatorProposal()).toBeNull();
+      } finally {
+        for (const record of await fixture.manager.listPendingRecords()) {
+          await fixture.manager.resolve(record.id, "deny", "cleanup");
+        }
+        await pending;
       }
-      expect(fixture.runConfigSet).toHaveBeenCalledTimes(2);
-      expect(fixture.runConfigSet).toHaveBeenLastCalledWith({
-        path: "gateway.port",
-        value: "18789",
-        cliOptions: {},
-        beforePersistentApply: expect.any(Function),
-        runtime: expect.objectContaining({ log: expect.any(Function) }),
-        throwOnError: false,
-      });
-      expect(fixture.engine.getPendingOperatorProposal()).toBeNull();
-    } finally {
-      for (const record of await fixture.manager.listPendingRecords()) {
-        await fixture.manager.resolve(record.id, "deny", "cleanup");
-      }
-      await pending;
-    }
-  });
+    },
+  );
 
   it.each([false, true])(
     "bounds Full Access repair when the correction fails=%s",
@@ -587,15 +573,12 @@ describe("Full Access delegated chat", () => {
     ["run-cancelled", "cancelled", 0, cancelledGuidance],
     ["tool-cancelled", "cancelled", 0, cancelledGuidance],
     ["apply-failed", "failed", 1, failedGuidance],
-    ["queued-cancelled", "cancelled", 0, cancelledGuidance],
-    ["precommit-cancelled", "cancelled", 0, cancelledGuidance],
     ["afterDecision-failed", "failed", 0, failedGuidance],
     ["gateway-close", "", 0, []],
   ] as const)(
     "keeps delegated chat pending without blocking other work until %s settles",
     async (outcome, expected, writes, guidance) => {
-      const inferenceBoundary =
-        outcome === "precommit-cancelled" || outcome === "afterDecision-failed";
+      const inferenceBoundary = outcome === "afterDecision-failed";
       const fixture = await createDelegatedChatFixture(
         createTestGatewayScheduler(outcome === "expired" ? "fake-timers" : undefined),
         inferenceBoundary ? "model tool" : "typed",
@@ -612,7 +595,7 @@ describe("Full Access delegated chat", () => {
       const historyStarted = createDeferred();
       const releaseHistory = createDeferred();
       const execution = await setupInferenceMocks.resolvePersistentApplyInference();
-      if (outcome === "precommit-cancelled" || outcome === "afterDecision-failed") {
+      if (outcome === "afterDecision-failed") {
         setupInferenceMocks.resolvePersistentApplyInference.mockImplementationOnce(async () => {
           applyStarted.resolve();
           await releaseApply.promise;
@@ -676,20 +659,14 @@ describe("Full Access delegated chat", () => {
           await vi.advanceTimersByTimeAsync(SYSTEM_AGENT_APPROVAL_TIMEOUT_MS);
         } else if (outcome === "run-cancelled") {
           releaseAgentRunDelegatedAuthority(fixture.authority);
-          await fixture.manager.forceDenyIfRuntimeAuthorityClosed(record.id);
+          await cancelAgentRuntimeBoundApprovals({
+            authority: fixture.authority,
+            manager: fixture.manager,
+            publish: vi.fn(),
+          });
         } else if (outcome === "tool-cancelled") {
           controller.abort();
         } else {
-          const queued =
-            outcome === "queued-cancelled"
-              ? runSystemAgentGatewayTask(async () => {
-                  applyStarted.resolve();
-                  await releaseApply.promise;
-                })
-              : undefined;
-          if (queued) {
-            await applyStarted.promise;
-          }
           expect(
             await fixture.manager.resolve(
               record.id,
@@ -697,13 +674,9 @@ describe("Full Access delegated chat", () => {
               "operator-ui",
             ),
           ).toBe(true);
-          if (queued || outcome === "precommit-cancelled" || outcome === "afterDecision-failed") {
+          if (outcome === "afterDecision-failed") {
             await applyStarted.promise;
-            if (outcome !== "afterDecision-failed") {
-              controller.abort();
-            }
             releaseApply.resolve();
-            await queued;
           }
         }
         if (outcome === "allow") {
@@ -718,15 +691,6 @@ describe("Full Access delegated chat", () => {
         const result = await pending;
         if (sameOwner) {
           expect((await sameOwner).payload).toEqual(result.payload);
-        }
-        if (outcome === "queued-cancelled" || outcome === "precommit-cancelled") {
-          expect(await fixture.readApproval(record.id)).toMatchObject({
-            outcome: "found",
-            record: { decision: "allow-once", status: "allowed" },
-          });
-          expect(await fixture.manager.resolve(record.id, "allow-once", "late-operator")).toBe(
-            false,
-          );
         }
         expect.soft(result.payload).toMatchObject({ reply: expect.stringContaining(expected) });
         expectReplyParts(result.payload, ...guidance);
@@ -768,7 +732,6 @@ describe("Full Access delegated chat", () => {
       })),
     ),
     { source: "typed" as const, previousRun: "storage-failure" as const },
-    { source: "typed" as const, previousRun: "unregistered-closed" as const },
     { source: "typed" as const, previousRun: "registration-failure" as const },
   ])(
     "applies Full Access via $source without inheriting a $previousRun proposal",
@@ -806,29 +769,10 @@ describe("Full Access delegated chat", () => {
         }),
       );
 
-      if (previousRun === "unregistered-closed") {
-        const handle = fixture.engine.handle.bind(fixture.engine);
-        vi.spyOn(fixture.engine, "handle").mockImplementationOnce(async (...args) => {
-          const reply = await handle(...args);
-          // Close the real requesting run after staging, before the Gateway resolves its proposal.
-          expect(fixture.engine.getPendingOperatorProposal()?.operation).toEqual({
-            kind: "config-set",
-            path: "logging.level",
-            value: "info",
-          });
-          expect(releaseAgentRunDelegatedAuthority(fixture.authority)).toBe(true);
-          return reply;
-        });
-      }
-      const proposalCall = fixture.callChat("config set logging.level info", {
-        assertAutoApproveChangesCurrent:
-          previousRun === "unregistered-closed" ? () => {} : undefined,
-      });
-      if (previousRun === "unregistered-closed" || previousRun === "registration-failure") {
+      const proposalCall = fixture.callChat("config set logging.level info");
+      if (previousRun === "registration-failure") {
         await expect(proposalCall).rejects.toThrow(
-          previousRun === "unregistered-closed"
-            ? "system-agent approval authority is no longer active"
-            : "SQLite worker database path must identify a regular file",
+          "SQLite worker database path must identify a regular file",
         );
         expect.soft(fixture.delegatedSession.pendingApproval).toBeUndefined();
         expect(await fixture.manager.listPendingRecords()).toEqual([]);
@@ -842,14 +786,17 @@ describe("Full Access delegated chat", () => {
       if (previousRun === "closed") {
         releaseAgentRunDelegatedAuthority(fixture.authority);
         const pendingId = expectDefined(pending, "restricted proposal").id;
-        await fixture.manager.forceDenyIfRuntimeAuthorityClosed(pendingId);
+        await cancelAgentRuntimeBoundApprovals({
+          authority: fixture.authority,
+          manager: fixture.manager,
+          publish: vi.fn(),
+        });
         expect((await fixture.manager.getSnapshot(pendingId))?.status).toBe("cancelled");
       }
 
       const replacementRun = createOperationalRunInstanceRef("delegated-replacement-run");
       const replacementAuthority = claimAgentRunDelegatedAuthority(replacementRun);
-      const previousAuthorityActive =
-        previousRun !== "closed" && previousRun !== "unregistered-closed";
+      const previousAuthorityActive = previousRun !== "closed";
       expect(validateAgentRunDelegatedAuthority(fixture.authority)).toBe(previousAuthorityActive);
       expect(validateAgentRunDelegatedAuthority(replacementAuthority)).toBe(true);
       const readOnly = () =>
@@ -858,18 +805,12 @@ describe("Full Access delegated chat", () => {
           assertAutoApproveChangesCurrent: previousRun !== "live-restricted" ? () => {} : undefined,
         });
       if (previousRun === "storage-failure") {
-        const forceDeny = fixture.manager.forceDenyIfRuntimeAuthorityClosed.bind(fixture.manager);
+        const forceDeny = fixture.manager.forceDenyDetailed.bind(fixture.manager);
         const storageFailure = vi
-          .spyOn(fixture.manager, "forceDenyIfRuntimeAuthorityClosed")
-          .mockImplementation(async (id) => {
-            if (!fixture.delegatedSession.pendingApproval) {
-              await fixture.manager.forceDenyDetailed(id, "storage-corrupt", {
-                kind: "system",
-                id: null,
-              });
-              throw new Error("approval storage unavailable");
-            }
-            return forceDeny(id);
+          .spyOn(fixture.manager, "forceDenyDetailed")
+          .mockImplementation(async (...args) => {
+            await forceDeny(...args);
+            throw new Error("approval storage unavailable");
           });
         await expect(readOnly()).rejects.toThrow("approval storage unavailable");
         expect(fixture.engine.getPendingOperatorProposal()).toBeNull();

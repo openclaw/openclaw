@@ -151,10 +151,13 @@ export function projectOperatorModelRead<
     // Access-only metadata filtering must not decode and re-encode unchanged history.
     ...(result.messages && presentation.restrictsModels
       ? {
-          messages: (result.messages instanceof SerializedJsonArray
-            ? result.messages.materialize()
-            : result.messages
-          ).map(result.kind === "delta" ? presentation.deltaMessage : presentation.message),
+          messages:
+            result.messages instanceof SerializedJsonArray && result.kind !== "delta"
+              ? result.messages.mapIndexedRows(presentation.message)
+              : (result.messages instanceof SerializedJsonArray
+                  ? result.messages.materialize()
+                  : result.messages
+                ).map(result.kind === "delta" ? presentation.deltaMessage : presentation.message),
         }
       : {}),
     ...(Object.hasOwn(result, "message") ? { message: presentation.message(result.message) } : {}),
@@ -355,12 +358,16 @@ export function prepareOperatorModelPolicyPresentation(params: {
       const session = asOptionalRecord(envelope.session);
       // Delta copies were budgeted before the last readiness await. Recheck all three
       // concrete disclosure sites at publication; removing fields only shrinks that budget.
+      const projected = projectSession(envelope);
+      const projectedSession = session ? projectSession(session) : session;
+      const message = projectMessage(envelope.message);
+      if (projected === envelope && projectedSession === session && message === envelope.message) {
+        return value;
+      }
       return {
-        ...projectSession(envelope),
-        ...(session ? { session: projectSession(session) } : {}),
-        ...(Object.hasOwn(envelope, "message")
-          ? { message: projectMessage(envelope.message) }
-          : {}),
+        ...projected,
+        ...(session ? { session: projectedSession } : {}),
+        ...(Object.hasOwn(envelope, "message") ? { message } : {}),
       };
     },
     forAgent(agentId: string, catalog: ModelCatalogEntry[] = []) {

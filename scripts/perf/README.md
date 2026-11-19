@@ -6256,3 +6256,29 @@ Use the same A/A and AB/BA order for ordinary `skill-resource-delivery-measure.t
 preparation, with `--operations 50 --concurrency 1 --existing` against one prepared
 32-file fixture. Time and profile separately; retain the baseline SHA and raw
 results. These owner measurements do not qualify storage or whole-Gateway latency.
+
+## Talk transcription catalog discovery
+
+`talk-catalog-transcription-measure.ts` compares the actual file resolver and
+unscoped operator-read catalog handler against four frozen owner modules from a
+base commit, sharing unchanged dependencies and one prepared plugin generation.
+It uses generated state only: `agent-startup-inspection.ts seed --gib 35` for the
+agent database and `team-shape-fixture.ts --sessions 5000 --agents 32 --runs 0
+--projects 1 --worktree-files 62000 --worktree-file-bytes 19000` for workspaces.
+Both generators also require a new `--state-dir`.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/talk-catalog-transcription-measure.ts \
+  --baseline <base-commit> --state-dir <database-fixture> \
+  --workspace-fixture <workspace-fixture> --output <new-results-directory>
+```
+
+Run `--allocations` separately for sampled allocations, and `--profile` separately
+for owner CPU profiles. Five serial A1/A2/B groups each measure 200 warm handler
+reads, 20 refresh completions, and 1,000 direct resolver calls. Cold imports and
+preparation are excluded; the injected clock advances the existing refresh timer.
+Results include source hashes, fixture sizes, host load, CPU, and latency spread.
+Require reduced discovery work and owner CPU/allocations without a material
+handler regression beyond A/A variability. Returned catalog bytes must stay
+identical within each arm. This is owner-boundary evidence, not WebSocket,
+provider-network, filesystem cold-cache, or production incident attribution.

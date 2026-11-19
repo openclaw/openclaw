@@ -376,7 +376,7 @@ it.for([
       } else {
         await expect(pending).rejects.toThrow(
           viaGateway && revokeAt !== "unconfirmed-action"
-            ? "agent runtime authority is no longer active"
+            ? "message action authority is no longer active"
             : revokedError,
         );
       }

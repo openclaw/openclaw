@@ -254,9 +254,15 @@ it("retains nested publication facts across real transcript writes without hidin
       { a: ["a"], b: ["b"] },
       { b: ["b"], a: ["a"] },
     ]) {
-      record.materialized = replaceSessionRowFacts(record.materialized, {
-        toolOverrides: { mcpToolsDeny },
-      });
+      {
+        using keys = vi.spyOn(Object, "keys");
+        record.materialized = replaceSessionRowFacts(record.materialized, {
+          toolOverrides: { mcpToolsDeny },
+        });
+        expect(keys.mock.calls.some(([value]) => Reflect.get(value, "key") === query.key)).toBe(
+          false,
+        );
+      }
       expect(JSON.stringify((await read())[0]!.row.toolOverrides)).toBe(
         JSON.stringify({ mcpToolsDeny }),
       );

@@ -232,6 +232,9 @@ export async function prepareToolExecutionEnd(
             ...(terminalErrorMessage ? { error: terminalErrorMessage } : {}),
             ...(terminalDiagnostic ? { terminalDiagnostic } : {}),
             ...(validationErrorSummary ? { validationErrorSummary } : {}),
+            ...(evt.executionStarted === false && evt.errorKind === "unknown-tool"
+              ? { unknownTool: true as const }
+              : {}),
             timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
             middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
           },

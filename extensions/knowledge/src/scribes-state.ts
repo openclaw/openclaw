@@ -441,7 +441,7 @@ export async function loadScribes(host: ScribeReader, agentId: string): Promise<
       };
       Object.assign(snapshot, session && { session }, job && { job }, result && { result });
       if (job?.payload?.message !== undefined) {
-        snapshot.runMessage = checkRunMessage(scribe.id, job.payload.message);
+        snapshot.runMessage = checkRunMessage(scribe.id, job.payload.message, job.schedule);
       }
       if (job && current && snapshot.status === "on") {
         snapshot.firstRunDue = isFirstRunDue(job, current, messages[sentIndex]);

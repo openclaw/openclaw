@@ -30,7 +30,6 @@ import {
 } from "../cron-creator-authority-grant.js";
 import { retainCronControlSource } from "../cron-operator-source.js";
 import type { OperatorRunRecoverySnapshot } from "../operator-run-recovery-source.codec.js";
-import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import { cronAddHandler } from "./cron-add.js";
 import { cronBindHandler } from "./cron-bind.js";
 import {
@@ -116,7 +115,6 @@ export const cronHandlers: GatewayRequestHandlers = {
     sessionMutationCommitGuard,
     hasCurrentClientAuthority,
   }) => {
-    assertActiveAgentRuntimeAuthority(client, context);
     sessionMutationCommitGuard?.();
     if (hasCurrentClientAuthority?.() === false) {
       throw new Error("Automation caller authority is no longer active");
@@ -277,7 +275,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return nextJob;
     };
     try {
-      streamExecPolicy = resolveCronStreamExecPolicy(client, requiresStreamExec, context);
+      streamExecPolicy = resolveCronStreamExecPolicy(client, requiresStreamExec);
       capture = resolveCronCreatorAuthorityCapture(creatorScope);
       const runtimeAuthority = capture?.captureRuntimeAuthority();
       capture &&= { ...capture, captureRuntimeAuthority: () => runtimeAuthority };
@@ -383,7 +381,6 @@ export const cronHandlers: GatewayRequestHandlers = {
         updateOptions.streamOperatorSource = processSource;
       }
       if (currentJob.streamSandbox && streamExecPolicy && !streamExecPolicy.sandboxContext) {
-        assertActiveAgentRuntimeAuthority(client, context);
         throw new TypeError("Change this sandbox stream from its original sandbox session.");
       }
       if (streamExecPolicy) {
@@ -411,7 +408,6 @@ export const cronHandlers: GatewayRequestHandlers = {
             (currentJob.streamSandbox.scopeKey !== streamSandbox.scopeKey ||
               currentJob.streamSandbox.sessionId !== streamSandbox.sessionId)
           ) {
-            assertActiveAgentRuntimeAuthority(client, context);
             throw new TypeError("Change this sandbox stream from its original sandbox session.");
           }
           updateOptions.streamSandbox = streamSandbox;
@@ -462,7 +458,7 @@ export const cronHandlers: GatewayRequestHandlers = {
                 lockedJob,
               );
               if (lockedRequiresStreamExec && !streamExecPolicy) {
-                streamExecPolicy = resolveCronStreamExecPolicy(client, true, context);
+                streamExecPolicy = resolveCronStreamExecPolicy(client, true);
               }
               const execPolicy = lockedRequiresStreamExec ? streamExecPolicy : undefined;
               const nextJob = await validateUpdate(lockedJob);
@@ -553,17 +549,13 @@ export const cronHandlers: GatewayRequestHandlers = {
           { sessionMutationCommitGuard, hasCurrentClientAuthority },
         );
         const identity = client?.internal?.agentRuntimeIdentity;
-        const validateAuthority = context.validateAgentRuntimeApprovalAuthority;
-        if (identity && validateAuthority && commitGuard && callerScope?.currentJobId === jobId) {
+        if (identity && commitGuard && callerScope?.currentJobId === jobId) {
           commitGuard = bindCronSelfRemovalCommitGuard(
             jobId,
             identity.operationalRunInstance,
             commitGuard,
             () => {
-              if (
-                !validateAuthority(identity) ||
-                readCronCallerScope(client)?.currentJobId !== jobId
-              ) {
+              if (readCronCallerScope(client)?.currentJobId !== jobId) {
                 throw new TypeError("cron self-removal authority is no longer active");
               }
             },
@@ -603,8 +595,7 @@ export const cronHandlers: GatewayRequestHandlers = {
   "cron.runs": cronRunsHandler,
 };
 
-// The existing one-use grant is request-scoped; the original runtime identity
-// stays intact so deferred cron commits still fence the exact admitted run.
+// The existing one-use management grant remains request-scoped.
 for (const [method, handler] of Object.entries(cronHandlers)) {
   const invoke: GatewayRequestHandler = async (args) => {
     const identity = args.client?.internal?.agentRuntimeIdentity;
@@ -614,7 +605,6 @@ for (const [method, handler] of Object.entries(cronHandlers)) {
     const grant = identity.cronManagementGrant;
     let succeeded = false;
     const run = async () => {
-      assertActiveAgentRuntimeAuthority(args.client, args.context);
       await handler({
         ...args,
         respond: (...response) => {
@@ -626,7 +616,6 @@ for (const [method, handler] of Object.entries(cronHandlers)) {
             method === "cron.runs" ||
             method === "cron.history"
           ) {
-            assertActiveAgentRuntimeAuthority(args.client, args.context);
             getCronManagementAuthority(identity)?.();
           }
           succeeded = response[0];
