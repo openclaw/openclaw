@@ -10,7 +10,7 @@ import { createToolSearchTools, resolveToolSearchConfig } from "./tool-search.js
 import { textResult, type AnyAgentTool } from "./tools/common.js";
 
 it("offers exact schema recovery when a wide input hint elides nested fields", async () => {
-  const execute = vi.fn(async () => textResult("ran"));
+  const execute = vi.fn(async () => textResult("ran", {}));
   const tool: AnyAgentTool = {
     name: "wide_search",
     label: "Wide search",
