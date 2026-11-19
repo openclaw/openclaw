@@ -208,7 +208,11 @@ export function readModelContextNavigationPages(params: {
   anchorId?: string;
   maxEvents?: number;
   readCompacted?: () =>
-    | { rows: Map<number, ModelContextNavigationRow>; entries: ContextEntry[] }
+    | {
+        rows: Map<number, ModelContextNavigationRow>;
+        entries: ContextEntry[];
+        observedSeqs: number[];
+      }
     | undefined;
   readRows: (after: number, through: number) => Iterable<ModelContextNavigationRow>;
 }) {
@@ -314,26 +318,41 @@ export function readModelContextNavigationPages(params: {
     }
   }
   const compacted = params.readCompacted?.();
+  const rows =
+    compacted?.rows ?? new Map(Array.from(readRows(-1, through), (row) => [row.entry.seq, row]));
+  let entries: ContextEntry[];
+  let leafId: string | null;
+  let appendParentId: string | null;
+  let anchorFound: boolean;
   if (compacted) {
-    // Partial ancestry has no receipt for discarded-prefix rewrites; do not cache it.
-    return { ...compacted, anchorFound: true, prepared: undefined };
+    entries = compacted.entries;
+    leafId = entries.at(-1)?.id ?? null;
+    // An off-path append parent takes the existing canonical reseed path.
+    appendParentId = leafId;
+    anchorFound = true;
+  } else {
+    // Branch/reset/compaction or prompt restarts need canonical ancestry once.
+    const tree = scanSessionTranscriptTree(Array.from(rows.values(), (row) => row.entry));
+    const branch = selectSessionTranscriptTreePathNodes(tree, anchorId ?? tree.leafId).map(
+      ({ entry, parentId }) => {
+        entry.parentId = parentId;
+        return entry;
+      },
+    );
+    entries = normalizeSessionContextEntryBoundaries(branch, tree.nodes);
+    leafId = tree.leafId;
+    appendParentId = tree.appendParentId;
+    anchorFound = anchorId === undefined || tree.byId.has(anchorId);
   }
-  // Old anchors, branch/reset/compaction or prompt-series restarts and displaced results need
-  // canonical ancestry once. The resulting compact state serves subsequent ordinary reads.
-  const rows = new Map(Array.from(readRows(-1, through), (row) => [row.entry.seq, row]));
-  const tree = scanSessionTranscriptTree(Array.from(rows.values(), (row) => row.entry));
-  const branch = selectSessionTranscriptTreePathNodes(tree, anchorId ?? tree.leafId).map(
-    ({ entry, parentId }) => {
-      entry.parentId = parentId;
-      return entry;
-    },
-  );
-  const entries = normalizeSessionContextEntryBoundaries(branch, tree.nodes);
-  const anchorFound = anchorId === undefined || tree.byId.has(anchorId);
   if (cacheable && anchorFound) {
     const pages = new Map<number, NavigationPage>();
-    for (const seq of rows.keys()) {
+    for (const seq of compacted?.observedSeqs ?? rows.keys()) {
       rememberPage(pages, seq);
+    }
+    // Reuse the existing snapshot only with receipts for the entire certified prefix.
+    // Unhosted readers without receipts keep the bounded cold path on later calls.
+    if (compacted && [...pages.values()].some((page) => page.token === undefined)) {
+      return { rows, entries, anchorFound, prepared: undefined };
     }
     const requests = collectSessionModelContextRequests(entries);
     const pending = collectSessionPendingBackgroundResultRequests(entries);
@@ -343,8 +362,8 @@ export function readModelContextNavigationPages(params: {
       through,
       maxEvents,
       anchorId,
-      leafId: anchorId ?? tree.leafId,
-      appendParentId: tree.appendParentId,
+      leafId: anchorId ?? leafId,
+      appendParentId,
       pages,
       rows: new Map(
         [...requests, ...pending].map(({ entry }) => [entry.seq, rows.get(entry.seq)!]),

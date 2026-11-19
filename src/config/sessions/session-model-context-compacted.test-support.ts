@@ -1,5 +1,8 @@
+import { once } from "node:events";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
-import { parentPort, workerData } from "node:worker_threads";
+import { parentPort, workerData, type MessagePort } from "node:worker_threads";
+import { withSqliteDatabaseAdmissionExchange } from "../../infra/sqlite-database-admission-context.js";
+import { exchangeSqliteDatabaseAdmissions } from "../../infra/sqlite-worker-database-admission-relay.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import type { SessionModelContextLimits } from "./session-history-read.types.js";
 import type { TranscriptEntryAnchor, TranscriptTurnAdmission } from "./transcript-entry-anchor.js";
@@ -40,19 +43,27 @@ const { runWithSessionTranscriptReadFence } = await import("./session-transcript
 const { closeOpenClawAgentDatabasesAsync } = await import("../../state/openclaw-agent-db.js");
 const { closeOpenClawStateDatabaseAsync } = await import("../../state/openclaw-state-db.js");
 const { drainGlobalSingletonLifecycleState } = await import("../../shared/global-singleton.js");
-const input = workerData as CompactedContextWorkerInput;
+const input = workerData as CompactedContextWorkerInput & { admissionPort: MessagePort };
 try {
-  const result: CompactedContextWorkerResult = input.requests.map((request) => {
-    navigationRows = 0;
-    const context = runWithSessionTranscriptReadFence(request.admission, () =>
-      readSessionTranscriptModelContext(input.scope, request.through, request.limits),
-    );
-    return { json: JSON.stringify(context), navigationRows };
-  });
-  parentPort!.postMessage(result, []);
+  await withSqliteDatabaseAdmissionExchange(
+    (records, location, create, observed) =>
+      exchangeSqliteDatabaseAdmissions(input.admissionPort, records, location, create, observed),
+    async () => {
+      for (const request of input.requests) {
+        navigationRows = 0;
+        const context = runWithSessionTranscriptReadFence(request.admission, () =>
+          readSessionTranscriptModelContext(input.scope, request.through, request.limits),
+        );
+        const continued = once(parentPort!, "message");
+        parentPort!.postMessage({ json: JSON.stringify(context), navigationRows }, []);
+        await continued;
+      }
+    },
+  );
 } finally {
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
   await drainGlobalSingletonLifecycleState();
+  input.admissionPort.close();
   parentPort!.close();
 }

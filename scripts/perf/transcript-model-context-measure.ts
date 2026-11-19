@@ -13,7 +13,8 @@
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { once } from "node:events";
+import { mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { Session, type HeapProfiler } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
@@ -22,18 +23,64 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { isMainThread, Worker } from "node:worker_threads";
+import { isMainThread, parentPort, Worker, type MessagePort } from "node:worker_threads";
 import type { TranscriptEvent } from "../../src/config/sessions/session-accessor.sqlite-contract.js";
 import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 
-// Exercise the same worker-only reader as dispatch, including baseline substitutions.
+// Exercise dispatch's worker reader with the same host-owned SQLite write receipts.
 if (isMainThread) {
   const worker = new Worker(new URL(import.meta.url), { argv: process.argv.slice(2) });
-  const code = await new Promise<number>((resolve, reject) => {
-    worker.once("error", reject);
-    worker.once("exit", resolve);
-  });
-  process.exit(code);
+  let relay:
+    | ReturnType<
+        typeof import("../../src/infra/sqlite-worker-operation-admission.js").createSqliteDatabaseAdmissionRelay
+      >
+    | undefined;
+  try {
+    const exited = new Promise<number>((resolve, reject) => {
+      worker.once("error", reject);
+      worker.once("exit", resolve);
+    });
+    const admitted = (async () => {
+      const [storePath] = await once(worker, "message");
+      const {
+        prepareOwnedSqliteDatabaseAdmission,
+        captureSqliteDatabaseAdmissions,
+        trackSqliteDatabaseAdmissionWorker,
+      } = await import("../../src/infra/sqlite-database-admission.js");
+      const { createSqliteDatabaseAdmissionRelay } =
+        await import("../../src/infra/sqlite-worker-operation-admission.js");
+      const { readDatabaseIdentityBirthtime } =
+        await import("../../src/infra/sqlite-worker-identity.js");
+      const location = realpathSync.native(storePath);
+      const file = statSync(location, { bigint: true });
+      await prepareOwnedSqliteDatabaseAdmission({
+        location,
+        expectedIdentity: {
+          key: `file:${file.dev}:${file.ino}`,
+          birthtime: readDatabaseIdentityBirthtime(file),
+        },
+        assertCurrent() {},
+      });
+      const record = captureSqliteDatabaseAdmissions().find((entry) => entry.location === location);
+      assert(record);
+      relay = createSqliteDatabaseAdmissionRelay(() => {});
+      relay.bindDatabaseAuthority({
+        databasePath: record.location,
+        databaseIdentity: { ...record.physicalIdentity, databasePath: record.location },
+        assertAccess() {},
+        acquireSchema() {
+          throw new Error("Synthetic reader must not acquire schema custody");
+        },
+      });
+      trackSqliteDatabaseAdmissionWorker(worker);
+      worker.postMessage(relay.port, [relay.port]);
+    })();
+    const [code] = await Promise.all([exited, admitted]);
+    process.exitCode = code;
+  } finally {
+    await relay?.finish();
+  }
+  process.exit(process.exitCode ?? 0);
 }
 
 const { values } = parseArgs({
@@ -173,6 +220,7 @@ function events(sessionId: string): TranscriptEvent[] {
 const limits = { maxBytes: 1024 * 1024, maxEvents: 128 };
 const inspector = new Session();
 let probe: DatabaseSync | undefined;
+let admissionPort: MessagePort | undefined;
 let measuring = false;
 let statementCount = 0;
 const statements = channel("openclaw.database.statement");
@@ -204,93 +252,111 @@ try {
     })),
   );
   await closeOpenClawAgentDatabasesAsync();
-  if (values["vfs-probe"]) {
-    probe = new DatabaseSync(":memory:", { allowExtension: true });
-    probe.loadExtension(path.resolve(values["vfs-probe"]), "sqlite3_bufprobe_init");
-    probe.prepare("SELECT buf696_target(?, 1)").get(storePath);
-  }
-  let latest = read(scopes[0]!, undefined, limits);
-  const golden = JSON.stringify(latest.events);
-  for (let index = 0; index < warmups; index++) {
-    read(scopes[index % sessions]!, undefined, limits);
-  }
-  await setImmediate();
-  observer.observe({ entryTypes: ["gc"] });
-  if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
-  }
-  const loadBefore = os.loadavg();
-  statements.subscribe(observeStatement);
-  const beforeCpu = process.threadCpuUsage();
-  const started = performance.now();
-  const sqliteReadSamples: unknown[] = [];
-  let eventCount = 0;
-  for (let index = 0; index < iterations; index++) {
-    if (probe) {
-      withOpenClawAgentDatabaseReadOnly(
-        ({ db }) => {
-          db.exec("PRAGMA mmap_size=0; PRAGMA cache_size=-2048; PRAGMA shrink_memory");
-        },
-        { agentId: "main", path: storePath, env },
-      );
-    }
-    probe?.prepare("SELECT buf696_reset()").get();
-    measuring = true;
-    latest = read(scopes[index % sessions]!, undefined, limits);
-    measuring = false;
-    if (probe) {
-      sqliteReadSamples.push(
-        JSON.parse(String(probe.prepare("SELECT buf696_io() AS io").get()!.io)),
-      );
-    }
-    eventCount += latest.events.length;
-  }
-  const wallMs = performance.now() - started;
-  const cpu = process.threadCpuUsage(beforeCpu);
-  const sampled =
-    values.mode === "allocation" ? await inspector.post("HeapProfiler.stopSampling") : undefined;
-  await setImmediate();
-  await setImmediate();
-  observer.disconnect();
-  assert.equal(JSON.stringify(read(scopes[0]!, undefined, limits).events), golden);
-  const result = {
-    mode: values.mode,
-    node: process.version,
-    iterations,
-    sessions,
-    turns,
-    prefixTurns,
-    resultBytes,
-    sqliteReadSamples: probe ? sqliteReadSamples : undefined,
-    limits,
-    ownerSha256: hash("sha256", readFileSync(sourceUrl)),
-    eventCount,
-    statementCount,
-    eventsPerRead: latest.events.length,
-    firstSessionEventBytes: Buffer.byteLength(golden),
-    firstSessionEventSha256: hash("sha256", golden),
-    wallMs: values.mode === "timing" ? wallMs : undefined,
-    cpuMs: values.mode === "timing" ? (cpu.user + cpu.system) / 1000 : undefined,
-    cpuUsPerRead: values.mode === "timing" ? (cpu.user + cpu.system) / iterations : undefined,
-    allocatedBytes: sampled ? allocatedBytes(sampled.profile.head) : undefined,
-    allocatedBytesPerRead: sampled ? allocatedBytes(sampled.profile.head) / iterations : undefined,
-    gcMs: values.mode === "timing" ? pauses.reduce((sum, pause) => sum + pause, 0) : undefined,
-    gcCount: values.mode === "timing" ? pauses.length : undefined,
-    gcMaxMs: values.mode === "timing" ? Math.max(0, ...pauses) : undefined,
-    memory: process.memoryUsage(),
-    loadBefore,
-    loadAfter: os.loadavg(),
-  };
-  writeFileSync(path.join(output, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
-  if (sampled) {
-    writeFileSync(path.join(output, "allocation.heapprofile"), JSON.stringify(sampled.profile));
-  }
-  console.log(JSON.stringify(result));
+  const admission = new Promise<MessagePort>((resolve) => parentPort!.once("message", resolve));
+  parentPort!.postMessage(storePath, []);
+  const port = await admission;
+  admissionPort = port;
+  const { withSqliteDatabaseAdmissionExchange } =
+    await import("../../src/infra/sqlite-database-admission-context.js");
+  const { exchangeSqliteDatabaseAdmissions } =
+    await import("../../src/infra/sqlite-worker-database-admission-relay.js");
+  await withSqliteDatabaseAdmissionExchange(
+    (records, location, create, observed) =>
+      exchangeSqliteDatabaseAdmissions(port, records, location, create, observed),
+    async () => {
+      if (values["vfs-probe"]) {
+        probe = new DatabaseSync(":memory:", { allowExtension: true });
+        probe.loadExtension(path.resolve(values["vfs-probe"]), "sqlite3_bufprobe_init");
+        probe.prepare("SELECT buf696_target(?, 1)").get(storePath);
+      }
+      let latest = read(scopes[0]!, undefined, limits);
+      const golden = JSON.stringify(latest.events);
+      for (let index = 0; index < warmups; index++) {
+        read(scopes[index % sessions]!, undefined, limits);
+      }
+      await setImmediate();
+      observer.observe({ entryTypes: ["gc"] });
+      if (values.mode === "allocation") {
+        inspector.connect();
+        await inspector.post("HeapProfiler.startSampling", {
+          samplingInterval: 32768,
+          includeObjectsCollectedByMajorGC: true,
+          includeObjectsCollectedByMinorGC: true,
+        });
+      }
+      const loadBefore = os.loadavg();
+      statements.subscribe(observeStatement);
+      const beforeCpu = process.threadCpuUsage();
+      const started = performance.now();
+      const sqliteReadSamples: unknown[] = [];
+      let eventCount = 0;
+      for (let index = 0; index < iterations; index++) {
+        if (probe) {
+          withOpenClawAgentDatabaseReadOnly(
+            ({ db }) => {
+              db.exec("PRAGMA mmap_size=0; PRAGMA cache_size=-2048; PRAGMA shrink_memory");
+            },
+            { agentId: "main", path: storePath, env },
+          );
+        }
+        probe?.prepare("SELECT buf696_reset()").get();
+        measuring = true;
+        latest = read(scopes[index % sessions]!, undefined, limits);
+        measuring = false;
+        if (probe) {
+          sqliteReadSamples.push(
+            JSON.parse(String(probe.prepare("SELECT buf696_io() AS io").get()!.io)),
+          );
+        }
+        eventCount += latest.events.length;
+      }
+      const wallMs = performance.now() - started;
+      const cpu = process.threadCpuUsage(beforeCpu);
+      const sampled =
+        values.mode === "allocation"
+          ? await inspector.post("HeapProfiler.stopSampling")
+          : undefined;
+      await setImmediate();
+      await setImmediate();
+      observer.disconnect();
+      assert.equal(JSON.stringify(read(scopes[0]!, undefined, limits).events), golden);
+      const result = {
+        mode: values.mode,
+        node: process.version,
+        iterations,
+        sessions,
+        turns,
+        prefixTurns,
+        resultBytes,
+        sqliteReadSamples: probe ? sqliteReadSamples : undefined,
+        limits,
+        ownerSha256: hash("sha256", readFileSync(sourceUrl)),
+        eventCount,
+        statementCount,
+        eventsPerRead: latest.events.length,
+        firstSessionEventBytes: Buffer.byteLength(golden),
+        firstSessionEventSha256: hash("sha256", golden),
+        wallMs: values.mode === "timing" ? wallMs : undefined,
+        cpuMs: values.mode === "timing" ? (cpu.user + cpu.system) / 1000 : undefined,
+        cpuUsPerRead: values.mode === "timing" ? (cpu.user + cpu.system) / iterations : undefined,
+        allocatedBytes: sampled ? allocatedBytes(sampled.profile.head) : undefined,
+        allocatedBytesPerRead: sampled
+          ? allocatedBytes(sampled.profile.head) / iterations
+          : undefined,
+        gcMs: values.mode === "timing" ? pauses.reduce((sum, pause) => sum + pause, 0) : undefined,
+        gcCount: values.mode === "timing" ? pauses.length : undefined,
+        gcMaxMs: values.mode === "timing" ? Math.max(0, ...pauses) : undefined,
+        memory: process.memoryUsage(),
+        loadBefore,
+        loadAfter: os.loadavg(),
+      };
+      writeFileSync(path.join(output, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
+      if (sampled) {
+        writeFileSync(path.join(output, "allocation.heapprofile"), JSON.stringify(sampled.profile));
+      }
+      console.log(JSON.stringify(result));
+    },
+  );
 } finally {
   statements.unsubscribe(observeStatement);
   probe?.prepare("SELECT buf696_restore()").get();
@@ -300,4 +366,6 @@ try {
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
   await drainGlobalSingletonLifecycleState();
+  admissionPort?.close();
+  parentPort?.close();
 }

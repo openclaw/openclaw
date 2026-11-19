@@ -148,7 +148,7 @@ export function readCompactedModelContextNavigation(
         entry.parentId = entries.at(-1)?.id ?? null;
         entries.push(entry);
       }
-      return { rows, entries };
+      return { rows, entries, observedSeqs: metadata.map((identity) => identity.event_seq) };
     });
     // Stale projections keep the original read path; readers never reconcile the writer.
     return result.kind === "value" ? result.value : undefined;

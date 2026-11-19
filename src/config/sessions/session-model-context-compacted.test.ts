@@ -4,6 +4,11 @@ import { Worker } from "node:worker_threads";
 import { expect, it } from "vitest";
 import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  trackSqliteDatabaseAdmissionWorker,
+} from "../../infra/sqlite-database-admission.js";
+import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { importSqliteSessionRowsBatch } from "./session-accessor.sqlite-import.js";
@@ -21,27 +26,50 @@ import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fen
 
 async function readWorker(
   input: CompactedContextWorkerInput,
+  afterRead?: (index: number) => Promise<void>,
 ): Promise<CompactedContextWorkerResult> {
+  const options = toDatabaseOptions(resolveSqliteTranscriptScope(input.scope));
+  const record = captureSqliteDatabaseAdmissions().find((entry) => entry.location === options.path);
+  assert(record);
+  const relay = createSqliteDatabaseAdmissionRelay(() => {});
+  relay.bindDatabaseAuthority({
+    databasePath: record.location,
+    databaseIdentity: { ...record.physicalIdentity, databasePath: record.location },
+    assertAccess() {},
+    acquireSchema() {
+      throw new Error("Read-only fixture must not acquire schema custody");
+    },
+  });
   const register = `import { register } from ${JSON.stringify(import.meta.resolve("tsx/esm/api"))}; register();`;
   const worker = new Worker(
     new URL("./session-model-context-compacted.test-support.ts", import.meta.url),
     {
-      workerData: input,
+      workerData: { ...input, admissionPort: relay.port },
+      transferList: [relay.port],
       execArgv: ["--import", `data:text/javascript,${encodeURIComponent(register)}`],
     },
   );
+  trackSqliteDatabaseAdmissionWorker(worker);
   const exited = once(worker, "exit");
   try {
-    const [result] = await once(worker, "message");
+    const results: CompactedContextWorkerResult = [];
+    for (let index = 0; index < input.requests.length; index++) {
+      const [result] = await once(worker, "message");
+      results.push(result as CompactedContextWorkerResult[number]);
+      await afterRead?.(index);
+      worker.postMessage(undefined, []);
+    }
     await exited;
-    return result as CompactedContextWorkerResult;
+    return results;
   } finally {
     await worker.terminate();
+    await relay.finish();
   }
 }
 
 const cases = [
   "compaction",
+  "prefix-rewrite",
   "prior-reset",
   "reset",
   "branch",
@@ -64,133 +92,136 @@ it.each(cases)("preserves exact model bytes for %s and bounds eligible navigatio
       storePath: state.statePath("transcript.sqlite"),
     };
     const timestamp = "2026-01-01T00:00:00.000Z";
-    await importSqliteSessionRowsBatch([
-      {
-        ...scope,
-        entry: { sessionId: kind, updatedAt: 1 },
-        transcriptMtimeMs: 1,
-        readTranscriptEvents(append) {
-          append({ type: "session", id: kind, version: 3, timestamp, cwd: "/synthetic" });
-          let parentId: string | null = null;
-          const add = (id: string, event: Record<string, unknown>) => {
-            append({ id, parentId, timestamp, ...event });
-            parentId = id;
-          };
-          add("thinking", { type: "thinking_level_change", thinkingLevel: "high" });
-          for (let turn = 0; turn < 80; turn++) {
-            add(`user-${turn}`, {
-              type: "message",
-              message: { role: "user", content: `Question ${turn}`, timestamp: turn },
-            });
-            add(`assistant-${turn}`, {
-              type: "message",
-              message: {
-                role: "assistant",
-                provider: "openai",
-                model: "synthetic",
-                timestamp: turn,
-                content: [{ type: "toolCall", id: `call-${turn}`, name: "read", arguments: {} }],
-                providerReplay: {
-                  type: "openai-responses-compaction",
-                  replayIndex: 0,
-                  id: "synthetic-checkpoint",
+    let rewritePrefix = false;
+    const seed = () =>
+      importSqliteSessionRowsBatch([
+        {
+          ...scope,
+          entry: { sessionId: kind, updatedAt: 1 },
+          transcriptMtimeMs: 1,
+          readTranscriptEvents(append) {
+            append({ type: "session", id: kind, version: 3, timestamp, cwd: "/synthetic" });
+            let parentId: string | null = null;
+            const add = (id: string, event: Record<string, unknown>) => {
+              append({ id, parentId, timestamp, ...event });
+              parentId = id;
+            };
+            add("thinking", { type: "thinking_level_change", thinkingLevel: "high" });
+            for (let turn = 0; turn < 80; turn++) {
+              add(`user-${turn}`, {
+                type: "message",
+                message: { role: "user", content: `Question ${turn}`, timestamp: turn },
+              });
+              add(`assistant-${turn}`, {
+                type: "message",
+                message: {
+                  role: "assistant",
+                  provider: "openai",
+                  model: "synthetic",
+                  timestamp: turn,
+                  content: [{ type: "toolCall", id: `call-${turn}`, name: "read", arguments: {} }],
+                  providerReplay: {
+                    type: "openai-responses-compaction",
+                    replayIndex: 0,
+                    id: "synthetic-checkpoint",
+                  },
                 },
-              },
-            });
-            if (turn === 79) {
-              add("synthetic-result", {
+              });
+              if (turn === 79) {
+                add("synthetic-result", {
+                  type: "message",
+                  message: {
+                    role: "toolResult",
+                    toolCallId: `call-${turn}`,
+                    toolName: "read",
+                    timestamp: turn,
+                    content: [{ type: "text", text: "Missing result" }],
+                    isError: true,
+                    details: { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true },
+                  },
+                });
+              }
+              add(`result-${turn}`, {
                 type: "message",
                 message: {
                   role: "toolResult",
                   toolCallId: `call-${turn}`,
                   toolName: "read",
                   timestamp: turn,
-                  content: [{ type: "text", text: "Missing result" }],
-                  isError: true,
-                  details: { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true },
+                  content: [
+                    { type: "text", text: (turn % 2 ? "synthetic\0" : "synthetic").repeat(2048) },
+                    { type: "image", data: "a".repeat(256), mimeType: "image/png" },
+                  ],
+                  details: { private: "not-model-input" },
                 },
               });
+              if (turn === 1 && (kind === "pending" || kind === "placed" || rewritePrefix)) {
+                add("pending", {
+                  type: "message",
+                  message: {
+                    role: "assistant",
+                    provider: "openclaw",
+                    model: "automation-result",
+                    excludeFromContext: true,
+                    openclawModelPlacement: "pending",
+                    content: [{ type: "text", text: "Accepted background result" }],
+                    timestamp: 1,
+                  },
+                });
+              }
+              if (turn === 1 && kind === "restart") {
+                add("restart", {
+                  type: "custom",
+                  customType: "openclaw.system-prompt",
+                  data: { restart: true },
+                });
+              }
+              if (turn === 1 && kind === "branch") {
+                append({
+                  type: "message",
+                  id: "abandoned",
+                  parentId,
+                  appendMode: "side",
+                  timestamp,
+                  message: { role: "user", content: "Abandoned branch", timestamp: 1 },
+                });
+              }
+              if (turn === 20 && kind === "prior-reset") {
+                add("old-reset", { type: "reset", reason: "new", firstKeptEntryId: "old-reset" });
+              }
+              if (turn === 40 && kind === "prior-reset") {
+                add("old-compaction", {
+                  type: "compaction",
+                  firstKeptEntryId: "user-40",
+                  summary: "Older summary",
+                  tokensBefore: 1000,
+                });
+              }
             }
-            add(`result-${turn}`, {
-              type: "message",
-              message: {
-                role: "toolResult",
-                toolCallId: `call-${turn}`,
-                toolName: "read",
-                timestamp: turn,
-                content: [
-                  { type: "text", text: (turn % 2 ? "synthetic\0" : "synthetic").repeat(2048) },
-                  { type: "image", data: "a".repeat(256), mimeType: "image/png" },
-                ],
-                details: { private: "not-model-input" },
-              },
-            });
-            if (turn === 1 && (kind === "pending" || kind === "placed")) {
-              add("pending", {
-                type: "message",
-                message: {
-                  role: "assistant",
-                  provider: "openclaw",
-                  model: "automation-result",
-                  excludeFromContext: true,
-                  openclawModelPlacement: "pending",
-                  content: [{ type: "text", text: "Accepted background result" }],
-                  timestamp: 1,
-                },
+            if (kind !== "no-boundary") {
+              add("boundary", {
+                type: kind === "reset" ? "reset" : "compaction",
+                firstKeptEntryId: kind === "prefix-model" ? "boundary" : "user-78",
+                summary: "Earlier conversation",
+                reason: "new",
+                tokensBefore: 10000,
               });
             }
-            if (turn === 1 && kind === "restart") {
-              add("restart", {
+            if (kind === "placed") {
+              add("placement", {
                 type: "custom",
-                customType: "openclaw.system-prompt",
-                data: { restart: true },
+                customType: BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE,
+                data: { afterEntryId: parentId, resultEntryIds: ["pending"] },
               });
             }
-            if (turn === 1 && kind === "branch") {
-              append({
-                type: "message",
-                id: "abandoned",
-                parentId,
-                appendMode: "side",
-                timestamp,
-                message: { role: "user", content: "Abandoned branch", timestamp: 1 },
-              });
-            }
-            if (turn === 20 && kind === "prior-reset") {
-              add("old-reset", { type: "reset", reason: "new", firstKeptEntryId: "old-reset" });
-            }
-            if (turn === 40 && kind === "prior-reset") {
-              add("old-compaction", {
-                type: "compaction",
-                firstKeptEntryId: "user-40",
-                summary: "Older summary",
-                tokensBefore: 1000,
-              });
-            }
-          }
-          if (kind !== "no-boundary") {
-            add("boundary", {
-              type: kind === "reset" ? "reset" : "compaction",
-              firstKeptEntryId: kind === "prefix-model" ? "boundary" : "user-78",
-              summary: "Earlier conversation",
-              reason: "new",
-              tokensBefore: 10000,
+            add("latest", {
+              type: "message",
+              message: { role: "user", content: "Continue", timestamp: 100 },
             });
-          }
-          if (kind === "placed") {
-            add("placement", {
-              type: "custom",
-              customType: BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE,
-              data: { afterEntryId: parentId, resultEntryIds: ["pending"] },
-            });
-          }
-          add("latest", {
-            type: "message",
-            message: { role: "user", content: "Continue", timestamp: 100 },
-          });
+          },
         },
-      },
-    ]);
+      ]);
+    await seed();
     if (kind === "missing-facts" || kind === "stale") {
       runOpenClawAgentWriteTransaction(
         ({ db }) => {
@@ -232,11 +263,26 @@ it.each(cases)("preserves exact model bytes for %s and bounds eligible navigatio
         ),
       ),
     );
-    const actual = await readWorker({ scope, requests });
+    const actual = await readWorker({ scope, requests }, async (index) => {
+      if (kind === "prefix-rewrite" && index === 0) {
+        rewritePrefix = true;
+        await seed();
+        expected[1] = JSON.stringify(
+          readSessionTranscriptModelContext(scope, undefined, requests[1]!.limits),
+        );
+      }
+    });
     expect(actual.map((result) => result.json)).toEqual(expected);
-    if (kind === "compaction" || kind === "branch" || kind === "prior-reset") {
+    if (kind === "prefix-rewrite") {
       expect(actual[0]!.navigationRows).toBeLessThan(20);
-      expect(actual[1]!.navigationRows).toBeLessThan(20);
+      expect(actual[1]!.navigationRows).toBeGreaterThan(200);
+    }
+    if (kind === "compaction" || kind === "branch" || kind === "prior-reset") {
+      expect(
+        actual[0]!.navigationRows,
+        JSON.stringify(actual.map((row) => row.navigationRows)),
+      ).toBeLessThan(20);
+      expect(actual[1]!.navigationRows).toBe(0);
     }
   }),
 );
