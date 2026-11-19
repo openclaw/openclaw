@@ -53,8 +53,11 @@ function clearRouteBoundCatalogMetadata(
     inference: _inference,
     ...routeNeutral
   } = entry;
-  // Losing route provenance must not promote a declared typed route to legacy chat.
-  return { ...routeNeutral, ...(entry.inference ? { inference: { chat: false } } : {}) };
+  // Losing route provenance must not promote an explicitly non-chat route to legacy chat.
+  return {
+    ...routeNeutral,
+    ...(entry.inference?.chat === false ? { inference: { chat: false } } : {}),
+  };
 }
 
 type ThinkingLevelMap = Partial<Record<string, string | null>>;
@@ -124,7 +127,11 @@ export function overlayCatalogMetadata(
     !applyRoute && inferenceRouteChanged
       ? base.inference
       : (overlay.inference ??
-        (inferenceRouteChanged && base.inference ? { chat: false } : base.inference));
+        (inferenceRouteChanged
+          ? base.inference?.chat === false
+            ? { chat: false }
+            : undefined
+          : base.inference));
   return {
     ...selectionNeutralBase,
     ...(contextWindows !== undefined ? { contextWindows } : {}),

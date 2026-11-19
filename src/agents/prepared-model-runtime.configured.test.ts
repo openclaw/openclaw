@@ -3,6 +3,8 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
+import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { resolveEmbeddedRuntimeModelPolicy } from "./embedded-agent-runner/run/setup.js";
 import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 import { providerConfig } from "./model-catalog-fixtures.test-support.js";
@@ -238,65 +240,96 @@ describe("configured catalog authority", () => {
       }
     }
   });
-  it("keeps declared inference bound to the configured physical route (custom endpoint)", () => {
-    const custom = true;
-    const chat = false;
-    const inference = {
-      chat,
-      decision: { protocol: "fixture", input: ["text" as const] },
-    };
-    const metadata = createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: "fixture",
-          providers: ["fixture"],
-          modelCatalog: {
-            providers: {
-              fixture: {
-                api: "openai-responses",
-                baseUrl: "https://catalog.fixture.invalid/v1",
-                models: [{ id: "typed", name: "Typed", inference }],
+  it.each([
+    { chat: false, expected: { chat: false } },
+    { chat: true, expected: undefined },
+  ])(
+    "keeps declared inference bound to the configured physical route (chat: $chat)",
+    async ({ chat, expected }) => {
+      const inference = {
+        chat,
+        decision: { protocol: "fixture", input: ["text" as const] },
+      };
+      const metadata = createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "fixture",
+            providers: ["fixture"],
+            modelCatalog: {
+              providers: {
+                fixture: {
+                  api: "openai-responses",
+                  baseUrl: "https://catalog.fixture.invalid/v1",
+                  models: [{ id: "typed", name: "Typed", inference }],
+                },
               },
             },
           },
-        },
-      ],
-    });
-    const config: OpenClawConfig = {
-      models: {
-        providers: {
-          fixture: {
-            api: "openai-responses",
-            baseUrl: "https://catalog.fixture.invalid/v1",
-            models: [
-              modelDefinition("typed", {
-                name: "Configured",
-                ...(custom ? { baseUrl: "https://custom.fixture.invalid/v1" } : {}),
-                reasoning: false,
-                maxTokens: 256,
-              }),
-            ],
+        ],
+      });
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            fixture: {
+              api: "openai-responses",
+              baseUrl: "https://catalog.fixture.invalid/v1",
+              models: [
+                modelDefinition("typed", {
+                  name: "Configured",
+                  baseUrl: "https://custom.fixture.invalid/v1",
+                  reasoning: false,
+                  maxTokens: 256,
+                }),
+              ],
+            },
           },
         },
-      },
-    };
-    const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:typed-configured", {
-      config,
-      includePluginCatalogs: false,
-      pluginMetadataSnapshot: metadata,
-    });
-    const facts = captureRegistry(registry, config, metadata);
-    const rows = facts.modelCatalog.entries.filter(
-      (entry) => entry.provider === "fixture" && entry.id === "typed",
-    );
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
-      name: "Configured",
-      baseUrl: custom ? "https://custom.fixture.invalid/v1" : "https://catalog.fixture.invalid/v1",
-      inference: custom ? { chat: false } : inference,
-    });
-    if (custom) {
-      expect(rows[0]!.inference).not.toHaveProperty("decision");
-    }
-  });
+      };
+      const authStorage = AuthStorage.inMemory({});
+      const registry = ModelRegistry.create(authStorage, "captured:typed-configured", {
+        config,
+        includePluginCatalogs: false,
+        pluginMetadataSnapshot: metadata,
+      });
+      const facts = captureRegistry(registry, config, metadata);
+      const rows = facts.modelCatalog.entries.filter(
+        (entry) => entry.provider === "fixture" && entry.id === "typed",
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        name: "Configured",
+        baseUrl: "https://custom.fixture.invalid/v1",
+      });
+      expect(rows[0]!.inference).toEqual(expected);
+      expect(rows[0]!.inference?.decision).toBeUndefined();
+      const preparedModelRuntime = {
+        ...createEmptyPreparedModelRuntimeFixture({
+          config,
+          agentDir: "unused:configured-inference",
+          metadataSnapshot: metadata,
+          createStores: () => ({ authStorage, modelRegistry: registry }),
+        }),
+        modelCatalog: facts.modelCatalog,
+      };
+      const resolution = resolveModelAsync(
+        "fixture",
+        "typed",
+        preparedModelRuntime.agentDir,
+        config,
+        {
+          authStorage,
+          modelRegistry: registry,
+          preparedModelRuntime,
+          skipAgentDiscovery: true,
+        },
+      );
+      if (chat) {
+        await expect(resolution).resolves.toMatchObject({
+          model: { provider: "fixture", id: "typed" },
+        });
+      } else {
+        await expect(resolution).rejects.toMatchObject({ code: "model_chat_unsupported" });
+      }
+    },
+  );
 });
