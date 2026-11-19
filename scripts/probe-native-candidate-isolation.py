@@ -56,7 +56,10 @@ for label, port in (("provider", allowed), ("unrelated_local_service", denied)):
             result[label] = connection.recv(2).decode()
     except OSError:
         result[label] = "denied"
-result["sudo"] = subprocess.run(["/usr/bin/sudo", "-n", "/usr/bin/true"], capture_output=True).returncode
+try:
+    result["sudo"] = subprocess.run(["/usr/bin/sudo", "-n", "/usr/bin/true"], capture_output=True).returncode
+except PermissionError:
+    result["sudo"] = "execution-denied"
 path = pathlib.Path(root) / "candidate" / "allowed"
 path.write_text("candidate writes stay private")
 result["own_write"] = path.read_text()
