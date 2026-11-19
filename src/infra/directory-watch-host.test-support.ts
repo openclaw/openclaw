@@ -10,10 +10,11 @@ childProcess.spawn = () => {
 };
 syncBuiltinESMExports();
 installDirectoryWatchPort(port);
-watchDirectory(directory, (_event, filename) => parent.postMessage(filename)).on(
-  "error",
-  (error) => {
-    throw error;
-  },
-);
+watchDirectory(directory, (_event, filename) => {
+  // Node worker ports do not have a target origin.
+  // oxlint-disable-next-line unicorn/require-post-message-target-origin
+  parent.postMessage(filename);
+}).on("error", (error) => {
+  throw error;
+});
 parent.on("message", () => {});
