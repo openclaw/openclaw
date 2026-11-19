@@ -2,9 +2,17 @@ import {
   getSubagentRunsForRequesterSession,
   subagentRuns,
 } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { resumeSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
+import {
+  resumeSubagentRun,
+  settleRestartInterruptedSubagentRunNow,
+} from "../agents/subagents/registry/subagent-registry.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { owesRequesterCompletion } from "../agents/subagents/registry/subagent-requester-settle-identity.js";
-import { isYieldedSubagentRun } from "../agents/subagents/registry/subagent-run-liveness.js";
+import {
+  isSubagentRunLive,
+  isYieldedSubagentRun,
+} from "../agents/subagents/registry/subagent-run-liveness.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { readSessionSubmittedInput } from "../config/sessions/session-pending-input-source.js";
 import type { PendingInputScope } from "../config/sessions/session-pending-input-store.js";
 import { isRestartResumeEntryOutOfScope } from "../config/sessions/session-restart-resume-scope.js";
@@ -101,6 +109,55 @@ export async function prepareRestartCompletionCustody(
   };
 }
 
+/**
+ * Children this boot will not resume end once with the restart error. Fresh requester custody
+ * binds first, so the settled outcome is delivered instead of losing its retired owner.
+ */
+export async function settleUnresumableChildren(
+  { context, signal, log }: RestartResumeParams,
+  rows: SubagentRunRecord[],
+): Promise<void> {
+  const assertCurrent = () => signal.throwIfAborted();
+  const byRequester = new Map<string, SubagentRunRecord[]>();
+  for (const row of rows) {
+    byRequester.set(row.requesterSessionKey, [
+      ...(byRequester.get(row.requesterSessionKey) ?? []),
+      row,
+    ]);
+  }
+  for (const [sessionKey, children] of byRequester) {
+    try {
+      const { requesterAgentId: agentId, requesterStorePath: storePath } = children[0]!;
+      const entry =
+        agentId && storePath
+          ? await readSessionEntryReadOnlyInWorker({ agentId, sessionKey, storePath })
+          : undefined;
+      // A requester from another restart scope is never woken; its child still ends.
+      const deliver = entry !== undefined && !isRestartResumeEntryOutOfScope(entry);
+      if (deliver) {
+        await recoverRequesterCompletionCustody({
+          context,
+          agentId: agentId!,
+          storePath: storePath!,
+          sessionKey,
+          entry,
+          assertCurrent,
+          children,
+        });
+      }
+      for (const child of children) {
+        const current = subagentRuns.get(child.runId);
+        // A child re-keying to a resumed run is live again and keeps its row.
+        if (current && !isSubagentRunLive(current)) {
+          await settleRestartInterruptedSubagentRunNow(current, deliver);
+        }
+      }
+    } catch (error) {
+      log.warn(`Restart settlement failed for children of ${sessionKey}: ${String(error)}`);
+    }
+  }
+}
+
 /** Recover the obligation under a fresh exact requester admission, never its stored bearer. */
 async function recoverRequesterCompletionCustody(params: {
   context: GatewayRequestContext;
@@ -110,21 +167,24 @@ async function recoverRequesterCompletionCustody(params: {
   env?: NodeJS.ProcessEnv;
   entry: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision" | "archivedAt">;
   assertCurrent: () => void;
+  children?: SubagentRunRecord[];
 }): Promise<string[]> {
   const { context, entry, agentId, sessionKey, storePath, assertCurrent } = params;
   if (entry.archivedAt !== undefined) {
     return [];
   }
-  const pending = [...getSubagentRunsForRequesterSession(sessionKey)].filter(
-    (child) =>
-      child.requesterAgentId === agentId &&
-      subagentRuns.isCompletionAuthorityRetired(child) &&
-      ((isYieldedSubagentRun(child) && owesRequesterCompletion(child)) ||
-        child.requesterSettleWake !== undefined ||
-        child.delivery?.status === "pending" ||
-        child.delivery?.status === "in_progress" ||
-        child.delivery?.status === "failed"),
-  );
+  const pending =
+    params.children ??
+    [...getSubagentRunsForRequesterSession(sessionKey)].filter(
+      (child) =>
+        child.requesterAgentId === agentId &&
+        subagentRuns.isCompletionAuthorityRetired(child) &&
+        ((isYieldedSubagentRun(child) && owesRequesterCompletion(child)) ||
+          child.requesterSettleWake !== undefined ||
+          child.delivery?.status === "pending" ||
+          child.delivery?.status === "in_progress" ||
+          child.delivery?.status === "failed"),
+    );
   if (!pending.length) {
     return [];
   }

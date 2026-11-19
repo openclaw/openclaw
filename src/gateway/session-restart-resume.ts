@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { resolveSessionYieldWait } from "../agents/subagents/registry/subagent-registry-read.js";
+import {
+  hasSubagentRunEnded,
+  isSubagentRunLive,
+  isSubagentRunQueued,
+  isYieldedSubagentRun,
+} from "../agents/subagents/registry/subagent-run-liveness.js";
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
@@ -38,6 +45,7 @@ import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   hasInterruptedCommittedRequesterSettleInput,
   prepareRestartCompletionCustody,
+  settleUnresumableChildren,
 } from "./session-restart-resume-custody.js";
 import {
   discoverRestartSessionStores,
@@ -196,17 +204,34 @@ function resumePreparedRestartStores(
   const recovery = getRestartRecovery(params.context);
   let work = recovery.agents.get(agentId);
   if (!work) {
+    // Child sessions this pass resumed, parked, or left marked for a later boot.
+    const kept = new Set(prepared.flatMap((store) => store.entries.map((e) => e.sessionKey)));
     work = Promise.resolve().then(() =>
       withAgentInputRecovery(params.context.agentDatabaseStartup, agentId, async () => {
         let completed = true;
         for (const store of prepared) {
-          completed = (await resumeRestartStore(params, store, deferred)) && completed;
+          completed = (await resumeRestartStore(params, store, deferred, kept)) && completed;
         }
         const through = prepared[0]?.windows?.at(-1)?.endedAt;
         if (completed && through !== undefined) {
           params.signal.throwIfAborted();
           await completeGatewayAgentRestartRecovery(agentId, through, prepared[0]?.target.env);
         }
+      }).finally(() => {
+        // Every decision for this agent is made; a child it will not resume cannot finish.
+        const agents = new Set(prepared.map((store) => store.target.agentId));
+        const rows = [...subagentRuns.values()].filter(
+          (row) =>
+            agents.has(parseAgentSessionKey(row.childSessionKey)?.agentId ?? "") &&
+            !kept.has(row.childSessionKey) &&
+            row.expectsCompletionMessage === true &&
+            row.createdAt < performance.timeOrigin &&
+            !hasSubagentRunEnded(row) &&
+            !isYieldedSubagentRun(row) &&
+            !isSubagentRunLive(row) &&
+            !isSubagentRunQueued(row),
+        );
+        void settleUnresumableChildren(params, rows);
       }),
     );
     recovery.agents.set(agentId, work);
@@ -228,12 +253,8 @@ export async function prepareAgentRestartRecovery(
   params.assertCurrent();
   const prepared = await prepareRestartStores(params, targets);
   params.assertCurrent();
-  // Empty stores need the startup recovery barrier only to acknowledge pending crash windows.
-  if (
-    !prepared?.some(
-      (store) => store.entries.length || store.orphaned.length || store.windows?.length,
-    )
-  ) {
+  // Empty stores still settle children that no restart marker can resume.
+  if (!prepared) {
     return undefined;
   }
   return createPreparedRestartRecovery(params, params.agentId, prepared);
@@ -345,6 +366,7 @@ async function resumeRestartStore(
   { context, signal, log }: RestartResumeParams,
   { target, entries, orphaned, outOfScope, windows, sessions }: PreparedRestartStore,
   deferred: Map<string, () => Promise<void>>,
+  kept: Set<string>,
 ): Promise<boolean> {
   let completed = true;
   const { assertCurrent: assertRecoveryCurrent, resume } = await prepareRestartCompletionCustody(
@@ -368,6 +390,7 @@ async function resumeRestartStore(
       let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>> | undefined;
       let interrupted = false;
       let stale = false;
+      let keep = false;
       try {
         await waitForAgentInputAdmission(agentId, {
           sessionKey,
@@ -471,6 +494,7 @@ async function resumeRestartStore(
         if (parked === "waiting") {
           // The registry retains the wait; a new requester message owns fresh admission.
           summary.record(agentId, sessionKey, "parked");
+          keep = true;
           log.warn(
             `Parked restart resume (yield-waiting): ${truncateUtf16Safe(JSON.stringify({ agentId, sessionKey }), 1024)}`,
           );
@@ -541,6 +565,7 @@ async function resumeRestartStore(
             authority = undefined;
             await accepted;
             summary.record(agentId, sessionKey, "resumed");
+            keep = true;
           } catch (error) {
             signal.throwIfAborted();
             summary.record(agentId, sessionKey, "admission-failed");
@@ -570,10 +595,14 @@ async function resumeRestartStore(
           );
         }
       } catch (error) {
+        keep = true; // The marker is retained for the next boot.
         signal.throwIfAborted();
         completed = false;
         log.warn(`Skipped restart resume for ${sessionKey}: ${String(error)}`);
       } finally {
+        if (!keep) {
+          kept.delete(sessionKey);
+        }
         authority?.release();
         if (!queuedKeys.has(sessionKey)) {
           sessions.get(sessionKey)?.resolve();

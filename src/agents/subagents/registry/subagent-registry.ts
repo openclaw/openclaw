@@ -50,6 +50,10 @@ import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import { clearSubagentRunsReadCacheForTest } from "./subagent-registry-state.js";
 import { reconcileProvisionalSubagentKill } from "./subagent-registry-sweep-kill.js";
 import {
+  settleRestartInterruptedSubagentRun,
+  SUBAGENT_RESTART_INTERRUPTED_ERROR,
+} from "./subagent-registry-sweep-settle.js";
+import {
   createSubagentRegistrySweeper,
   retireSupersededSubagentRun as retireSupersededSubagentRunForSweep,
 } from "./subagent-registry-sweeper.js";
@@ -601,6 +605,37 @@ export async function terminateLiveSubagentsForShutdown(
         suppressSessionEffects: true,
       }),
     ),
+  );
+}
+
+/**
+ * Startup restart resume ends a child it will not resume: after binding fresh custody it
+ * delivers the restart error, otherwise the row ends without any delivery attempt.
+ */
+export async function settleRestartInterruptedSubagentRunNow(
+  entry: SubagentRunRecord,
+  deliver: boolean,
+): Promise<void> {
+  const complete = completionRuntime.completeSubagentRunWithRecovery;
+  if (deliver) {
+    await settleRestartInterruptedSubagentRun({
+      runId: entry.runId,
+      entry,
+      complete,
+      now: Date.now(),
+    });
+    return;
+  }
+  const outcome = { status: "error" as const, error: SUBAGENT_RESTART_INTERRUPTED_ERROR };
+  await complete(
+    {
+      runId: entry.runId,
+      expectedEntry: entry,
+      outcome,
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      triggerCleanup: false,
+    },
+    "startup-restart-out-of-scope",
   );
 }
 
