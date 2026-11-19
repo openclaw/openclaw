@@ -4,7 +4,10 @@ import type {
   TemplateInstallEvent,
   TemplateInstallOutcome,
 } from "../shared/template-install-notice.js";
-import type { StatelessTemplateAddOptions, StatelessTemplateAddResult } from "./add-stateless.js";
+import type {
+  StatelessTemplateAddOptions,
+  StatelessTemplateAddResult,
+} from "./add-stateless-contract.js";
 
 export function createTemplateInstallReceipts(
   agentId: string,

@@ -6,7 +6,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ClawHubFetchOptions } from "../infra/clawhub-client.js";
 import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
-import type { StatelessTemplateAddOptions } from "./add-stateless.js";
+import type { StatelessTemplateAddOptions } from "./add-stateless-contract.js";
 import type { ClawHubCoordinate } from "./clawhub-source.js";
 import type { TemplateSetupReport } from "./conversation.js";
 import type { TemplateCronGateway, PersistedTemplateCronRef } from "./cron.js";
