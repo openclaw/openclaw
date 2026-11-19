@@ -269,10 +269,9 @@ suite.define(() => {
         .poll(async () => Math.round((await frame.boundingBox())?.height ?? 0))
         .toBeGreaterThanOrEqual(tallContentHeight);
       const widget = innerWidget(page);
-      const overflow = await widget
-        .locator("body")
-        .evaluate((body) => body.scrollHeight - innerHeight);
-      expect(overflow).toBeLessThanOrEqual(0);
+      await expect
+        .poll(() => widget.locator("body").evaluate((body) => body.scrollHeight - innerHeight))
+        .toBeLessThanOrEqual(0);
 
       const player = widget.getByLabel("Synthetic video");
       const thread = page.locator(".chat-thread");

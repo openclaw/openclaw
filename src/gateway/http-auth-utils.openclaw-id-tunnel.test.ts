@@ -6,7 +6,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeScopedGatewayHttpRequestOrReply } from "./http-auth-utils.js";
 import { assertGatewayHttpRequestCurrent } from "./http-request-authority.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
-import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   setOpenClawIdTunnelPrincipalResolver,

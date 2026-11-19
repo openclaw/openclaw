@@ -23,7 +23,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { mergeProfiles } from "../state/user-profile-writes.worker.js";
+import { mergeCanonicalUserProfiles } from "../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   createOpenClawTestState,
@@ -345,7 +345,7 @@ it("restores a merged owner's selected revision and checkpoint privately and rep
   await expect(restoreSessionDependencies({ input, sha256: seal })).rejects.toThrow("payload");
   await git(sourceRoot, "update-ref", checkpointRef, originalRef);
   const canonical = ensureProfileForEmail("canonical@example.invalid", { env: state.env });
-  mergeProfiles(profileId, canonical.id, { env: state.env });
+  await mergeCanonicalUserProfiles(profileId, canonical.id, { env: state.env });
   profileId = canonical.id;
   const request = JSON.parse(await fs.readFile(path.join(input, "request.json"), "utf8"));
   request.profileId = profileId;

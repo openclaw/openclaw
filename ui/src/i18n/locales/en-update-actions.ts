@@ -10,6 +10,14 @@ const enUpdateActions = {
     refreshUnreachable: "Couldn't reach the server",
     refreshBlocked: "Finish pending work first",
     campaign: en.updates.campaign,
+    // A campaign without a target restarts the Gateway to finish an earlier update's plugins.
+    // Only lazy update views format it, so this copy stays out of the boot catalog.
+    finishing: {
+      countdown: "Restarting in {time} to finish plugin updates",
+      waitingForIdle: "Waiting for active work · restarting in {time} to finish plugin updates",
+      held: "Restart held · resumes in {time}",
+      applying: "Finishing plugin updates…",
+    },
     holdOneHour: "Hold 1 h",
     reviewUpdate: "Review update",
     run: {
@@ -64,7 +72,7 @@ const enUpdateActions = {
         install: "Installing dependencies",
         update: "Installing OpenClaw",
         build: "Building OpenClaw",
-        buildUi: "Building the Control UI",
+        buildUi: "Building the web app",
         doctor: "Checking configuration and data",
       },
     },
@@ -78,7 +86,7 @@ const enUpdateActions = {
       macMessage:
         "Hands this update to the OpenClaw Mac app, which installs it and restarts the Gateway it manages.",
       impact:
-        "Running sessions are interrupted and this Control UI disconnects until the Gateway is back.",
+        "Running sessions are interrupted and this page disconnects until the Gateway is back.",
       versions: "Installed {installed} · Available {available}",
       versionsBehind: "Installed {installed} · {available}",
       macAction: "Update Mac app and restart",
@@ -95,6 +103,7 @@ const enUpdateActions = {
       checkFailed: "Couldn’t check for updates. Try again.",
       updating: "Updating Gateway…",
       availableTitle: "Update available",
+      finishingTitle: "Finishing update",
       availableBadge: "Available",
       availableSummary: "A newer revision is ready.",
       blockedTitle: "Update blocked",
@@ -103,8 +112,7 @@ const enUpdateActions = {
       blockedWaiting: "Blocked · waiting for active work · {target}",
     },
     dialog: {
-      disconnected:
-        "The Gateway disconnected during the update. This page reconnects on its own. If it stays disconnected, run `openclaw triage` on the computer running OpenClaw to open a local coding agent for diagnosis and repair.",
+      reconnecting: "Reconnecting…",
       restarting:
         "The Gateway is restarting. This page disconnects and reconnects on its own. If it stays disconnected, run `openclaw triage` on the computer running OpenClaw to open a local coding agent for diagnosis and repair.",
       checkStatus: "Check status",
@@ -113,7 +121,7 @@ const enUpdateActions = {
       statusNotRefreshed: "Couldn’t refresh update status. Check your connection and try again.",
       checkStatusDisconnected: "Reconnect to the Gateway to check status or retry the update.",
       retryUpdate: "Retry update",
-      installing: "Installing the update on the Gateway. It restarts once the install finishes.",
+      starting: "Starting update…",
       notStarted:
         "The update request went unanswered. Run `openclaw triage` on the computer running OpenClaw and inspect the result before retrying.",
     },
@@ -171,6 +179,7 @@ export const registerUpdateActionsEnglish = Object.assign(
       refreshBlocked,
       holdOneHour,
       reviewUpdate,
+      finishing,
     } = enUpdateActions.updates;
     const { phase, ...runLabels } = run;
     Object.assign(en.updates, {
@@ -180,6 +189,7 @@ export const registerUpdateActionsEnglish = Object.assign(
       refreshBlocked,
       holdOneHour,
       reviewUpdate,
+      finishing,
     });
     Object.assign(en.updates.run, runLabels);
     Object.assign(en.updates.run.phase, phase);

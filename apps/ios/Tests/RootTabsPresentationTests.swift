@@ -967,25 +967,6 @@ struct RootTabsPresentationTests {
         #expect(!RootTabs.sidebarVisibility(layoutMode: .drawer, splitPreference: nil))
     }
 
-    @Test func `destination headers own hidden sidebar reveal control`() {
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: false,
-                layoutMode: .drawer))
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: false,
-                layoutMode: .split))
-        #expect(
-            !RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: true,
-                layoutMode: .drawer))
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: true,
-                layoutMode: .split))
-    }
-
     private static func sessionEntry(
         key: String,
         archived: Bool? = nil,

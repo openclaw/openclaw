@@ -39,6 +39,7 @@ const opaqueLeafEntrySchema = z.object({
   targetId: z.union([z.string(), z.null()]),
   appendParentId: z.union([z.string(), z.null()]).optional(),
   appendMode: z.literal("side").optional(),
+  billsDisplaced: z.literal(true).optional(),
 });
 const sessionHeaderSchema = z.object({ type: z.literal("session"), id: z.string() });
 
@@ -210,6 +211,7 @@ export function parseOpaqueLeafEntry(record: unknown):
       targetId: string | null;
       appendParentId?: string | null;
       appendMode?: "side";
+      billsDisplaced?: true;
     }
   | undefined {
   const parsed = opaqueLeafEntrySchema.safeParse(record);
@@ -223,6 +225,7 @@ export function parseOpaqueLeafEntry(record: unknown):
     targetId: leaf.targetId,
     ...(leaf.appendParentId !== undefined ? { appendParentId: leaf.appendParentId } : {}),
     ...(leaf.appendMode === "side" ? { appendMode: leaf.appendMode } : {}),
+    ...(leaf.billsDisplaced ? { billsDisplaced: true as const } : {}),
   };
 }
 

@@ -159,7 +159,7 @@ describe("queued chat input withdrawal", () => {
       expect(page.items).toMatchObject([
         {
           state: "cancelled",
-          cancelledByUser: true,
+          endCause: "user-stop",
           message: { content: fixture.approvedContent },
         },
       ]);
@@ -268,7 +268,7 @@ describe("queued chat input withdrawal", () => {
       if (reason) {
         const page = await readChatPendingInputs(scope, { limit: 1, maxChars: 1000 });
         expect(page.items).toHaveLength(1);
-        expect(page.items[0]?.cancelledByUser).toBeUndefined();
+        expect(page.items[0]?.endCause).not.toBe("user-stop");
         if (discardPendingInput) {
           expect(page.items[0]?.message).toMatchObject({ display: false, content: [] });
           expect(JSON.stringify(page)).not.toContain(fixture.approvedContent);

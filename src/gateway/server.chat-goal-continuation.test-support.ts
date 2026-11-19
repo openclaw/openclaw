@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, type MockInstance } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -11,10 +12,12 @@ import {
 import * as runs from "../agents/embedded-agent-runner/runs.js";
 import type { runEmbeddedAgent as executeEmbeddedAgent } from "../agents/embedded-agent.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { createCreateGoalTool, createUpdateGoalTool } from "../agents/tools/goal-tools.js";
 import { CommandOwnerRevokedError } from "../auto-reply/command-owner-authority.js";
 import { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-handoff.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { createSessionGoal, updateSessionGoalStatus } from "../config/sessions/goals.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
@@ -47,28 +50,109 @@ export function registerGoalAutomaticContinuationCases(
     }));
   const start = async (message: string) =>
     expect((await rpc("chat.send", goalStart(message))).mock.calls[0]?.[0]).toBe(true);
-  it("nudges consecutive normal final turns until the same Goal is complete", async () => {
-    const completed = createDeferred();
-    runEmbeddedAgent.mockImplementation(async (params) => {
-      const calls = runEmbeddedAgent.mock.calls.length;
-      if (calls === 3) {
-        await setGoalStatus("complete");
-        completed.resolve();
+  it.each(["missing", "complete"] as const)(
+    "nudges consecutive normal final turns with a %s predecessor",
+    async (predecessor) => {
+      if (predecessor === "complete") {
+        await createSessionGoal({ ...scope(), objective: "Finished checklist" });
+        await updateSessionGoalStatus({ ...scope(), status: "complete" });
       }
-      return result(params.sessionId);
-    });
-    await start("Finish a three-turn checklist");
-    await completed.promise;
-    await expectDrained();
-    expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
-    expect(runEmbeddedAgent.mock.calls[1]?.[0].prompt).toContain("Advance");
-    expect(runEmbeddedAgent.mock.calls[2]?.[0].prompt).toContain("Advance");
-    expect(userMessages()).toHaveLength(1);
-    expect(loadSessionEntry(scope())?.goal).toMatchObject({
-      status: "complete",
-      continuationTurns: 2,
-    });
-  });
+      const completed = createDeferred();
+      runEmbeddedAgent.mockImplementation(async (params) => {
+        const calls = runEmbeddedAgent.mock.calls.length;
+        if (calls === 3) {
+          await setGoalStatus("complete");
+          completed.resolve();
+        }
+        return result(params.sessionId);
+      });
+      await start("Finish a three-turn checklist");
+      await completed.promise;
+      await expectDrained();
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
+      expect(runEmbeddedAgent.mock.calls[1]?.[0].prompt).toContain("Advance");
+      expect(runEmbeddedAgent.mock.calls[2]?.[0].prompt).toContain("Advance");
+      expect(userMessages()).toHaveLength(1);
+      expect(loadSessionEntry(scope())?.goal).toMatchObject({
+        status: "complete",
+        continuationTurns: 2,
+      });
+    },
+  );
+
+  it.each([
+    ["direct", "before"],
+    ["queued", "before"],
+    ["direct", "during"],
+    ["queued", "during"],
+  ] as const)(
+    "continues a replacement created by the goal tool during a %s user turn (predecessor completes %s turn)",
+    async (route, completion) => {
+      const previous = await createSessionGoal({ ...scope(), objective: "Finished task" });
+      if (completion === "before") {
+        await updateSessionGoalStatus({ ...scope(), status: "complete" });
+      }
+      const nextTask =
+        completion === "during"
+          ? "Complete the finished goal, then create a goal for the next task"
+          : "Create a goal for the next task";
+      let replacementId: string | undefined;
+      const createAt = route === "queued" ? 2 : 1;
+      runEmbeddedAgent.mockImplementation(async (params) => {
+        const calls = runEmbeddedAgent.mock.calls.length;
+        const options = {
+          runId: params.runId,
+          agentSessionKey: scope().sessionKey,
+          config: { session: { store: scope().storePath } },
+        };
+        if (route === "queued" && calls === 1) {
+          expect(
+            (
+              await rpc("chat.send", {
+                sessionKey: scope().sessionKey,
+                message: nextTask,
+                idempotencyKey: randomUUID(),
+              })
+            ).mock.calls[0]?.[0],
+          ).toBe(true);
+        } else if (calls === createAt) {
+          if (completion === "during") {
+            await createUpdateGoalTool(options).execute("complete-previous", {
+              status: "complete",
+            });
+            expect(loadSessionEntry(scope())?.goal).toMatchObject({
+              id: previous.id,
+              status: "complete",
+            });
+          }
+          await createCreateGoalTool(options).execute("create-next", { objective: "Next task" });
+          replacementId = loadSessionEntry(scope())?.goal?.id;
+          expect(replacementId).not.toBe(previous.id);
+        } else {
+          expect(params.prompt).toContain("Advance the active goal");
+          await createUpdateGoalTool(options).execute("finish-next", { status: "complete" });
+        }
+        return result(params.sessionId);
+      });
+      expect(
+        (
+          await rpc("chat.send", {
+            sessionKey: scope().sessionKey,
+            message: route === "queued" ? "Check the current work" : nextTask,
+            idempotencyKey: randomUUID(),
+          })
+        ).mock.calls[0]?.[0],
+      ).toBe(true);
+      await expectDrained();
+      expect(runEmbeddedAgent).toHaveBeenCalledTimes(createAt + 1);
+      expect(loadSessionEntry(scope())?.goal).toMatchObject({
+        id: replacementId,
+        objective: "Next task",
+        status: "complete",
+        continuationTurns: 1,
+      });
+    },
+  );
 
   // Admit the completion before ending the first turn. Goal successors outlive the
   // event's signal and one-shot delivery but retain its explicit delivery restriction.
@@ -153,7 +237,7 @@ export function registerGoalAutomaticContinuationCases(
     const caller = { agentId, sessionKey, requesterOrigin };
     await withGatewayToolCallerIdentity(
       silent ? { ...caller, sessionEventDelivery: false as const } : caller,
-      () => prepareExecExitNotification(process, false),
+      () => prepareExecExitNotification(process, false, false),
     );
     addSession(process);
     try {

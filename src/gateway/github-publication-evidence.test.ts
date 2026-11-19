@@ -35,7 +35,15 @@ import { prepareGatewayConnectOperatorAccess } from "./server/ws-connection/conn
 import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 
 const mocks = githubPublicationTestMocks();
-vi.mock("node:dns/promises", { spy: true });
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup: vi.fn(actual.lookup),
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 // Mocked fetch normally skips DNS. Retain real guarded preflight with the isolated lookup.
 vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/net/fetch-guard.js")>();

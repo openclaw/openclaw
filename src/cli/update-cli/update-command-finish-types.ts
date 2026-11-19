@@ -13,6 +13,8 @@ import type {
 } from "./update-command-service-context-types.js";
 export type FinishUpdateParams = UpdateRestartParams & {
   coreAlreadyCurrent?: boolean;
+  /** A POSIX Git checkout update that switches the release link (usesGitReleases). */
+  gitRelease?: boolean;
   deferredMaintenance?: string;
   failure?: { cause: unknown; detail: string };
   mutationStarted: boolean;

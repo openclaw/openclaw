@@ -1,6 +1,7 @@
 import { createDeferred } from "@solidjs/signals";
 import {
   createMemo,
+  createSignal,
   Errored,
   For,
   isPending,
@@ -57,14 +58,17 @@ import { createModeGlide } from "./command-palette-mode-glide.ts";
 import { CommandPaletteResult } from "./command-palette-result.tsx";
 import { SESSION_ACTION_PREFIX } from "./command-palette-session-search.ts";
 import type { CommandPaletteState, PaletteFilter } from "./command-palette-state.ts";
+import { ImageLightboxItemView } from "./image-lightbox.tsx";
+import type { ImageLightboxItem } from "./image-lightbox.types.ts";
 import {
   CUSTODIAN_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
 } from "./panel-toggle-contract.ts";
 import { Icon } from "./solid/icon.tsx";
+import { Kbd, KeyboardShortcut, ShortcutHint } from "./solid/kbd.tsx";
 import "./modal-dialog.tsx";
 import "./tooltip.ts";
-import { Kbd, KeyboardShortcut, ShortcutHint, ShortcutText } from "./solid/kbd.tsx";
+import { PanelEmptyState } from "./solid/panel-empty-state.tsx";
 
 registerCommandPaletteEnglish();
 
@@ -172,9 +176,7 @@ function handleKeydown(
   if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, event)) {
     event.preventDefault();
     event.stopPropagation();
-    if (props.mode === "compose") {
-      void props.draft.submit();
-    }
+    void props.draft.submit();
     return;
   }
   if (event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) {
@@ -292,12 +294,12 @@ function PaletteSearch(props: {
     Boolean(current().searchQuery.trim()) &&
     !sessionSearchPending() &&
     !catalogSearchPending() &&
+    !isPending(props.modelRead) &&
     !current().remoteSearchOffline &&
     !current().modelSearchError &&
     !current().sessionSearchFailed &&
     !current().sessionSearchPartial &&
-    !current().sessionSearchIndexing &&
-    current().archivedTranscriptsExcluded === 0;
+    !current().sessionSearchIndexing;
   return (
     <>
       {(latest(props.sessionRead), null)}
@@ -412,26 +414,14 @@ function PaletteSearch(props: {
         )}
       </For>
       <Show when={results().items.length === 0 && searchSettled()}>
-        <div class="cmd-palette__no-results" role="status">
-          <span class="cmd-palette__no-results-icon" aria-hidden="true">
-            <Icon name="messageSquarePlus" />
-          </span>
-          <h2>{t("palette.noResults")}</h2>
-          <Show when={!isMobileBrowserPlatform()}>
-            <p>
-              <ShortcutText
-                text={t("palette.noResultsStart", { shortcut: "{shortcut}" })}
-                shortcut={() => <Kbd keys="Tab" />}
-              />
-            </p>
-          </Show>
-        </div>
-      </Show>
-      <Show when={current().archivedTranscriptsExcluded > 0}>
-        <div class="cmd-palette__footer">
-          <span class="cmd-palette__archive-note" role="status">
-            {t("palette.archivedSessionsExcluded")}
-          </span>
+        <div class="cmd-palette__no-results">
+          <PanelEmptyState
+            icon={<Icon name="search" />}
+            heading={t("palette.noResults")}
+            description={
+              isMobileBrowserPlatform() ? "" : t("palette.noResultsStart", { shortcut: "Tab" })
+            }
+          />
         </div>
       </Show>
     </>
@@ -441,11 +431,12 @@ function PaletteSearch(props: {
 export function CommandPaletteView(props: { readProps: () => CommandPaletteProps }) {
   let initialInput!: HTMLTextAreaElement;
   let stack!: HTMLDivElement;
+  const [image, setImage] = createSignal<ImageLightboxItem | null>(null);
   // Share one presentation snapshot; event handlers retain synchronous owner reads.
   const current = createMemo(() => props.readProps());
   const readCurrent = () => props.readProps();
   const drop = PaletteSessionDraft.createDropHandlers(() => readCurrent().draft);
-  const error = createMemo(() => current().draft.error);
+  const error = createMemo(() => current().draft.error ?? current().draft.blockedSubmitNotice);
   const saving = createSubmissionAction(
     () => readCurrent().draft,
     current,
@@ -516,7 +507,11 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             onDrop={drop.onDrop}
           >
             <Show when={current().mode === "compose"}>
-              <PaletteSessionAttachments draft={current().draft} revision={current()} />
+              <PaletteSessionAttachments
+                draft={current().draft}
+                revision={current()}
+                onOpenImage={setImage}
+              />
             </Show>
             <CommandPaletteInput
               onAutofocusRef={(element) => {
@@ -667,7 +662,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
               </div>
             </Show>
           </div>
-          <Show when={current().mode === "compose" && error()}>
+          <Show when={error()}>
             <div
               class="cmd-palette__creation-error agent-chat__composer-status agent-chat__composer-status-band agent-chat__composer-status-band--wrap"
               data-tone="danger"
@@ -707,6 +702,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
         </div>
       </openclaw-modal-dialog>
       <PaletteSessionAuxiliary draft={current().draft} revision={current()} />
+      <ImageLightboxItemView item={image()} onClose={() => setImage(null)} />
     </>
   );
 }

@@ -47,7 +47,9 @@ it("generates identical executable assets across dependency store locations", as
   }
   put(
     path.join(checkout, "src/infra/runtime-process-script-file.ts"),
-    `${source} export function materializeRuntimeProcessScriptFile() { return value; }`,
+    `${source}
+export function materializeRuntimeProcessScriptFile() { return value; }
+export async function materializeRuntimeProcessScriptFileAsync() { return value; }`,
   );
   const link = path.join(checkout, "node_modules/fixture-dependency");
   fs.mkdirSync(path.dirname(link), { recursive: true });

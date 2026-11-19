@@ -16,7 +16,8 @@ import { projectGatewayUrlForDiagnostics } from "../gateway/connection-details.j
 import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 import { isLoopbackGatewayUrl } from "../gateway/net.js";
 import { probeGateway } from "../gateway/probe.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
 const STATE_DIR_CHECK_TIMEOUT_MS = 3_000;
@@ -121,6 +122,7 @@ export async function checkCliGatewayStateDir(params: {
   command: string;
   config?: OpenClawConfig;
 }): Promise<CliGatewayStateDirOutcome> {
+  const signal = getAsyncWorkSignal();
   const cliStateDir = resolveStateDir(process.env);
   const cliConfigPath = resolveConfigPath(process.env);
   const details = buildGatewayConnectionDetails({ config: params.config });
@@ -141,6 +143,7 @@ export async function checkCliGatewayStateDir(params: {
       scopes: [ADMIN_SCOPE],
       sharedStateMode: "read-only",
       timeoutMs: STATE_DIR_CHECK_TIMEOUT_MS,
+      signal,
       onHelloOk: (value) => {
         hello = value;
       },
@@ -148,6 +151,8 @@ export async function checkCliGatewayStateDir(params: {
   } catch (error) {
     connectionError = error;
   }
+  // An interrupted read must not fall through to offline service diagnostics and their output.
+  signal?.throwIfAborted();
   if (hello?.snapshot.stateDir) {
     return compareCliGatewayStateDirs({
       cliStateDir,
@@ -161,6 +166,7 @@ export async function checkCliGatewayStateDir(params: {
   }
 
   const servicePaths = await inspectInstalledGatewayStatePaths();
+  signal?.throwIfAborted();
   if (servicePaths.kind === "unknown") {
     return { kind: "warn", message: GATEWAY_SERVICE_PATHS_UNVERIFIED };
   }
@@ -195,7 +201,9 @@ export async function checkCliGatewayStateDir(params: {
       timeoutMs: STATE_DIR_CHECK_TIMEOUT_MS,
       includeDetails: false,
       suppressStoredDeviceAuth: true,
+      signal,
     });
+    signal?.throwIfAborted();
     if (probe.gatewayReached) {
       return {
         kind: "warn",

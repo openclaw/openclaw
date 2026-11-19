@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { addGatewayClientOptions } from "../gateway-rpc.js";
 import { formatDocsHelp, formatHelpExamples } from "../help-format.js";
 import { collectOption, parseStrictPositiveIntOption } from "./helpers.js";
@@ -49,6 +50,11 @@ export function registerBackupCommand(program: Command) {
     .option(
       "--exclude-worktree-templates",
       "Omit registered regenerable worktree templates, not live checkouts",
+      false,
+    )
+    .option(
+      "--exclude-migration-backups",
+      "Omit Doctor's retained pre-migration database originals",
       false,
     )
     .option("--only-config", "Back up only the active JSON config file", false)
@@ -148,7 +154,7 @@ export function registerBackupCommand(program: Command) {
             return;
           }
           if (opts.namespace) {
-            throw new Error("--namespace requires --from <location>.");
+            throwExpectedCliError("--namespace requires --from <location>.");
           }
           const run = restore
             ? (await import("../../commands/backup-restore.js")).backupRestoreCommand

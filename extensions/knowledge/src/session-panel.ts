@@ -45,6 +45,7 @@ export function registerSessionPanel(host: ControlUiHost) {
   const panel: ControlUiPanel = {
     id: "session-activity",
     label: "Knowledge",
+    icon: "knowledge",
     mount(container, initialContext) {
       let context = initialContext;
       const root = el("section", undefined, "knowledge-page knowledge-session-panel");

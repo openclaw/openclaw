@@ -33,7 +33,7 @@ operator steering. Do not preserve superseded scope.
 - Code SHA: `<regular release full sha | not applicable>`
 - integrated prepush: `<passing Code SHA + pinned comparison base | pending>`
 - Candidate C: `<exact qualification target sha>`
-- Qualification Q: `<C for candidate-owned | original workflow SHA for historical route>`
+- Qualification Q: `<C by default | explicit reviewed main-ancestor Q | original historical Q>`
 - Admission/verifier/publisher P: `<independent trusted full sha and ref>`
 - Qualification admission: `<P run/attempt and immutable descriptor | historical route>`
 - Retained request: `<private request path; original semantics preserved>`
@@ -142,8 +142,10 @@ reference for commands rather than redispatching the release parent.
   follow [backports and new fixes](../SKILL.md#backports-and-new-fixes), with
   urgent release-first forward-ports owned in the handoff. Record the
   source/invariant and replace all exact-head evidence
-- qualification harness/contract failure: deliberately repair the candidate, freeze
-  a new C/Q, and replace affected evidence; never substitute newer main checks
+- qualification harness/contract failure: preserve C for a tooling-only repair,
+  select an exact reviewed main-ancestor Q through a new admitted request and
+  successful parent, and replace affected evidence; never retarget the old
+  request, relabel the failed FRV, or silently substitute moving-main checks
 - P-only admission/verifier/publisher failure: keep C/Q and original artifacts,
   repair independent trusted P only when needed, and record invalidated evidence
 - infrastructure/credential failure: keep C/Q/P and repair the external

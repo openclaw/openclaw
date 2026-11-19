@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import { formatErrorMessage as formatToolErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { computeBackoffSchedule, sleepWithAbort } from "@openclaw/retry";
 import { getRuntimeConfig } from "../../config/config.js";
-import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
@@ -15,14 +14,11 @@ import {
   sameSessionTranscriptStorageEnvironment,
 } from "../../config/sessions/transcript-target-binding.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
-import { removeCronRunContinuationSessionIfIdle } from "../../cron/run-continuation-cleanup.js";
 import {
   clearAgentRunContext,
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { captureGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -79,26 +75,11 @@ const MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS = 120_000;
 
 export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => void;
 
-function shouldDetachMediaGenerationTask(
-  sessionKey: string | undefined,
-  entry?: SessionEntry,
-): boolean {
+// A cron run is already background work and delivers its own output, so it
+// waits for its media inline instead of resuming after the run has ended.
+function shouldDetachMediaGenerationTask(sessionKey: string | undefined): boolean {
   const normalizedSessionKey = sessionKey?.trim();
-  if (!normalizedSessionKey) {
-    return false;
-  }
-  if (!parseCronRunScopeSuffix(normalizedSessionKey).runId) {
-    return true;
-  }
-  const marker = entry?.cronRunContinuation;
-  if (!marker) {
-    // Exact cron work without a durable checkpoint cannot be resumed safely.
-    return false;
-  }
-  const cliExecutionProvider = marker.cliExecutionProvider?.trim();
-  return (
-    !cliExecutionProvider || Boolean(getCliSessionBinding(entry, cliExecutionProvider)?.sessionId)
-  );
+  return Boolean(normalizedSessionKey && !parseCronRunScopeSuffix(normalizedSessionKey).runId);
 }
 
 export type MediaGenerationExecutionResult = {
@@ -323,8 +304,7 @@ async function createMediaGenerationTaskRun(
       task: params.prompt,
       progressSummary: params.queuedProgressSummary,
     });
-    const detach =
-      Boolean(requesterTranscript) && shouldDetachMediaGenerationTask(sessionKey, entry);
+    const detach = Boolean(requesterTranscript) && shouldDetachMediaGenerationTask(sessionKey);
     const handle = {
       taskId: task.taskId,
       runId,
@@ -382,23 +362,8 @@ function recordMediaGenerationTaskProgress(params: RecordMediaGenerationTaskProg
 }
 
 function clearMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle): void {
-  const current = isMediaGenerationOperationCurrent(handle.runId);
   clearGeneratedMediaTaskActivity(handle.runId);
   clearAgentRunContext(handle.runId);
-  if (!current) {
-    return;
-  }
-  // A one-shot cron job can be deleted before detached media settles, leaving no
-  // later timer tick to reap its exact continuation row.
-  void removeCronRunContinuationSessionIfIdle(handle.requesterSessionKey).catch(
-    (error: unknown) => {
-      log.warn("Failed to remove settled cron media continuation", {
-        taskId: handle.taskId,
-        runId: handle.runId,
-        error: formatErrorMessage(error),
-      });
-    },
-  );
 }
 
 export function createDefaultMediaGenerateBackgroundScheduler(params: {

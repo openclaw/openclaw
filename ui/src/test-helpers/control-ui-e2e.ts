@@ -1572,8 +1572,8 @@ function installControlUiMockGateway(
       case "agent.identity.get":
         return {
           agentId: scenario.assistantAgentId,
-          avatar: "",
-          avatarStatus: "none",
+          avatar: scenario.assistantAvatar,
+          avatarStatus: scenario.assistantAvatarStatus,
           name: scenario.assistantName,
         };
       case "agents.list":
@@ -1581,7 +1581,7 @@ function installControlUiMockGateway(
           agents: [
             {
               id: scenario.defaultAgentId,
-              identity: { name: scenario.assistantName },
+              identity: { name: scenario.assistantName, avatar: scenario.assistantAvatar },
               ...(scenario.agentModel ? { model: { primary: scenario.agentModel } } : {}),
               name: scenario.assistantName,
               ...(scenario.workspace ? { workspace: scenario.workspace } : {}),

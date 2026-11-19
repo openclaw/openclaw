@@ -7,7 +7,6 @@ import type {
 
 const restartFailureReasons: Partial<Record<GatewayRestartWaitOutcome, string>> = {
   "auth-rejected": "the Gateway rejected this CLI's credentials",
-  "plugin-errors": "activated plugins reported load errors",
   "channel-errors": "channel health checks failed",
   "version-mismatch": "the running Gateway version did not match the expected version",
   "build-id-mismatch": "the running Gateway build did not match the expected build",

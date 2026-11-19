@@ -15,7 +15,7 @@ import {
 import { stripCompactionReplayCheckpoint } from "./provider-compaction-replay.js";
 
 const model = fixtures.createReplayModel();
-const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+const replayIdentity = { sessionId: "session-a" };
 
 const createOutput = () => fixtures.createAssistant(model);
 
@@ -59,10 +59,8 @@ function replayTypes(output: AssistantMessage): string[] {
 const convertProvider = (context: Context) =>
   convertProviderResponsesMessages(model, context, new Set(["openai"]), replayIdentity);
 
-const convertTransport = (
-  context: Context,
-  identity: { sessionId?: string; authProfileId?: string } = replayIdentity,
-) => convertResponsesMessages(model, context, new Set(["openai"]), identity);
+const convertTransport = (context: Context, identity: { sessionId?: string } = replayIdentity) =>
+  convertResponsesMessages(model, context, new Set(["openai"]), identity);
 
 function createAssistant(
   content: string | AssistantMessage["content"],
@@ -295,11 +293,9 @@ describe("OpenAI Responses compaction replay", () => {
     );
   });
 
-  it.each<[string, Partial<ProviderReplayState>, { sessionId?: string; authProfileId?: string }]>([
-    ["model", { model: "other-model" }, replayIdentity],
+  it.each<[string, Partial<ProviderReplayState>, { sessionId?: string }]>([
     ["base route", { baseUrlHash: "0000000000000000" }, replayIdentity],
     ["session", {}, { ...replayIdentity, sessionId: "session-b" }],
-    ["auth profile", {}, { ...replayIdentity, authProfileId: "profile-b" }],
     ["missing identity", {}, {}],
   ])("leaves the full transcript unchanged for incompatible %s", (_name, overrides, identity) => {
     const older = createAssistant("older assistant", compactionState(model, { replayIndex: 0 }));
@@ -328,6 +324,22 @@ describe("OpenAI Responses compaction replay", () => {
       "newer incompatible assistant",
       "active user",
     ]);
+  });
+
+  it("replays a checkpoint written by another model in the same session", () => {
+    const owner = createAssistant(
+      "checkpoint from gpt-6-astra",
+      compactionState(model, { replayIndex: 0, model: "gpt-6-astra" }),
+    );
+    const input = convertTransport({
+      messages: [
+        fixtures.userMessage("first user", 1),
+        owner,
+        fixtures.userMessage("active user", 2),
+      ],
+    });
+
+    expect(input.filter((item) => item.type === "compaction")).toHaveLength(1);
   });
 
   it("ignores a newer foreign-route suppression tombstone", () => {

@@ -1,10 +1,15 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
 import { deserialize } from "node:v8";
 import { zstdDecompressSync } from "node:zlib";
 import { requestGitWorkerEffect } from "../../infra/git-worker-context.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { decodeLocalWorkspaceTree } from "./local-workspace-cas.js";
-import type { LocalWorkspaceManifestRecord } from "./local-workspace-manifest-tree.js";
+import { prepareLocalWorkspaceFingerprints } from "./local-workspace-fingerprints.js";
+import {
+  createLocalWorkspaceManifestTree,
+  type LocalWorkspaceManifestRecord,
+} from "./local-workspace-manifest-tree.js";
 import {
   pruneWorkspaceHashMemo,
   withWorkerWorkspaceHashMemo,
@@ -153,22 +158,15 @@ export async function executeWorkspaceManifestComputation(
       return result;
     }
     case "workspace.manifest.base-refresh": {
-      const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
+      const { readWorkspaceBaseRefreshTrees } = await import("./workspace-base-refresh-trees.js");
       const input = command.input;
       return await withHashes(input.hashes, async () => {
-        const { manifest: before } = await readActualWorkspaceManifestImpl({
-          root: input.beforeRoot,
-          baseCommit: input.baseCommit,
-        });
-        const { manifest: after } = await readActualWorkspaceManifestImpl({
-          root: input.afterRoot,
-          baseCommit: input.baseCommit,
-        });
         const accepted = parseWorkerWorkspaceManifest(
           decodeUtf8(input.baseRaw),
           input.baseRef,
           input.buildCacheInputs,
         );
+        const [before, after] = await readWorkspaceBaseRefreshTrees(input, accepted);
         const current = applyWorkspaceSourceOverlay(before, accepted, after);
         current.buildCacheInputs = [
           ...new Set([...input.buildCacheInputs, ...after.entries.map((entry) => entry.path)]),
@@ -286,21 +284,48 @@ export async function executeWorkspaceManifestComputation(
     case "workspace.manifest.capture":
     case "workspace.manifest.snapshot":
     case "workspace.manifest.document":
+    case "workspace.manifest.initial":
     case "workspace.manifest.reference": {
       const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
       const input = decodeManifestValue(command);
+      const empty =
+        command.type === "workspace.manifest.initial"
+          ? createLocalWorkspaceManifestTree([])
+          : undefined;
+      const fingerprints = empty
+        ? prepareLocalWorkspaceFingerprints(empty, empty.get("")!.treeRef, null, Date.now())
+        : undefined;
       const result = await withHashes(input.hashes, () =>
-        readActualWorkspaceManifestImpl({
-          ...input,
-          includePaths: input.includePaths && new Set(input.includePaths),
-          gitIgnore: input.gitIgnore && {
-            paths: new Set(input.gitIgnore.paths),
-            retainedPaths: new Set(input.gitIgnore.retainedPaths),
+        readActualWorkspaceManifestImpl(
+          {
+            ...input,
+            includePaths: input.includePaths && new Set(input.includePaths),
+            gitIgnore: input.gitIgnore && {
+              paths: new Set(input.gitIgnore.paths),
+              retainedPaths: new Set(input.gitIgnore.retainedPaths),
+            },
+            buildCacheInputs: input.buildCacheInputs && new Set(input.buildCacheInputs),
+            preserveDirectories: input.preserveDirectories && new Set(input.preserveDirectories),
           },
-          buildCacheInputs: input.buildCacheInputs && new Set(input.buildCacheInputs),
-          preserveDirectories: input.preserveDirectories && new Set(input.preserveDirectories),
-        }),
+          undefined,
+          fingerprints?.observe,
+        ),
       );
+      if (fingerprints) {
+        const { manifest, rawManifest, manifestRef } = result.value;
+        const records = createLocalWorkspaceManifestTree([
+          ...manifest.entries,
+          ...(manifest.directories ?? []).map((path) => ({ path, type: "directory" as const })),
+        ]);
+        return {
+          ...result,
+          value: {
+            rawManifest,
+            manifestRef,
+            projectionFingerprints: fingerprints.encode(records, records.get("")!.treeRef),
+          },
+        };
+      }
       if (command.type === "workspace.manifest.document") {
         const { manifestRef, rawManifest } = result.value;
         return { ...result, value: { manifestRef, rawManifest } };
@@ -320,6 +345,52 @@ export async function executeWorkspaceManifestComputation(
       return await withHashes(input.hashes, () =>
         readWorkspaceFileSnapshotWithLimit(input.path, input.maxBytes, input.root),
       );
+    }
+    case "workspace.reconcile.temporary": {
+      const { join } = await import("node:path");
+      const { resolvePreferredOpenClawTmpDir } = await import("../../infra/tmp-openclaw-dir.js");
+      return join(resolvePreferredOpenClawTmpDir(), command.input.prefix);
+    }
+    case "workspace.reconcile.ownership": {
+      const { assertWorkspaceInputOwnership } = await import("./workspace-reconcile-core.js");
+      return await assertWorkspaceInputOwnership(command.input);
+    }
+    case "workspace.reconcile.recover": {
+      const { recoverWorkerWorkspaceReconciliation } =
+        await import("./workspace-reconcile-recovery.js");
+      return await recoverWorkerWorkspaceReconciliation({
+        ...command.input,
+        journal: {
+          ...command.input.journal,
+          basePack: await fs.readFile(command.input.basePackPath),
+        },
+        assertCurrent: assertBeforeMutation,
+      });
+    }
+    case "workspace.reconcile.apply": {
+      const { root, appliedEntries, buildCacheInputs, patchPath } = command.input;
+      const { root: openRoot } = await import("../../infra/fs-safe.js");
+      const { createStagedInputPathMatcher } = await import("../../media/staged-inputs.js");
+      const { prepareNonDirectoryTargets } = await import("./workspace-reconcile-derived-paths.js");
+      const { applyWorkspacePatch } = await import("./workspace-reconcile-recovery.js");
+      const { applyWorkspaceDirectoryChanges } = await import("./workspace-reconcile-core.js");
+      const staged = createStagedInputPathMatcher(await openRoot(root));
+      await prepareNonDirectoryTargets(
+        root,
+        appliedEntries,
+        async (entryPath) => Boolean(buildCacheInputs?.has(entryPath)) || (await staged(entryPath)),
+        assertBeforeMutation,
+        buildCacheInputs !== undefined,
+      );
+      await applyWorkspacePatch({
+        root,
+        patch: await fs.readFile(patchPath),
+        assertCurrent: assertBeforeMutation,
+      });
+      return await applyWorkspaceDirectoryChanges({
+        ...command.input,
+        assertCurrent: assertBeforeMutation,
+      });
     }
     case "workspace.reconcile.diff": {
       const { readWorkspacePatch } = await import("./workspace-reconcile-recovery.js");

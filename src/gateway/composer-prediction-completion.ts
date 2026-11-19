@@ -58,6 +58,8 @@ export async function completeComposerPrediction(params: {
     {
       ...prepared,
       purpose: "composer-prediction",
+      // Measured on real threads: low reasoning picks the useful reply more often than none.
+      thinkLevel: "low",
       workspaceDir,
       agentHarnessRuntimeOverride: requestedRuntime,
       systemPrompt: [

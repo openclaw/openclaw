@@ -15,7 +15,7 @@ import {
 import { availableParallelism } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, describe, expect, it } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild.mts";

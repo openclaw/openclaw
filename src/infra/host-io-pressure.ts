@@ -52,7 +52,9 @@ export function createHostIoPressureProbe(): () => Promise<boolean> {
       if (fresh) {
         pressured ||= value("last_commit_ms") >= SLOW_COMMIT_MS;
         if (before && commits > before.commits && totalMs >= before.totalMs) {
-          pressured ||= (totalMs - before.totalMs) / (commits - before.commits) >= SLOW_COMMIT_MS;
+          // The interval total bounds its slowest commit; averaging hides a stall
+          // followed by quick commits. The kernel maximum is lifetime, not recent.
+          pressured ||= totalMs - before.totalMs >= SLOW_COMMIT_MS;
         }
       }
       next.set(id, { commits, totalMs });

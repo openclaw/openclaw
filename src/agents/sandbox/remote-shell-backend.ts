@@ -35,6 +35,7 @@ type ResolvedRemoteRuntimePaths = {
 };
 export type RemoteShellSandboxBackendOptions = {
   createSession: () => Promise<RemoteShellSandboxSession>;
+  prepareCurrent?: () => Promise<void>;
   backendId?: string;
   runtimeId?: string;
   configLabel?: string;
@@ -125,6 +126,7 @@ class RemoteShellSandboxBackendImpl {
             env: prepared.env,
             cwd: prepared.cwd,
             stdinMode: "pipe-open",
+            prepareCurrent: this.params.prepareCurrent,
             assertCurrent: this.params.createParams.assertRuntimeCurrent,
             finalizeToken,
           };

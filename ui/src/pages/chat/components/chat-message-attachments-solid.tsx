@@ -76,6 +76,7 @@ type AttachmentProps = {
 export type MessageAttachmentProps = AttachmentProps & {
   item: AssistantAttachmentItem;
   presentation?: "inline" | "card" | "preview";
+  onPlay?: () => void;
 };
 
 export function AssistantAttachments(
@@ -218,6 +219,7 @@ export function MessageAttachment(props: MessageAttachmentProps): SolidJSX.Eleme
             onOpenSidebar={props.onOpenSidebar}
             onAssistantAttachmentLoaded={props.onAssistantAttachmentLoaded}
             presentation={props.presentation}
+            onPlay={props.onPlay}
             admission={admission}
           />
         );
@@ -368,6 +370,7 @@ function AttachmentContent(
   props: AttachmentProps & {
     item: AttachmentItem;
     presentation?: "inline" | "card" | "preview";
+    onPlay?: () => void;
     admission?: AttachmentAdmission;
   },
 ): SolidJSX.Element {
@@ -383,10 +386,12 @@ function AttachmentContent(
       label={attachment().label}
       mimeType={attachment().mimeType}
       sizeBytes={model().media?.sizeBytes ?? attachment().sizeBytes}
+      durationMs={props.onPlay ? (model().media?.durationMs ?? attachment().durationMs) : undefined}
+      onPlay={props.onPlay}
       downloadHref={model().safeAttachmentUrl}
       downloadPending={Boolean(props.admission && !model().media)}
       downloadPendingFocusable={Boolean(props.admission)}
-      onExpand={model().openAttachmentSidebar}
+      onExpand={props.onPlay ? undefined : model().openAttachmentSidebar}
       voiceNote={attachment().isVoiceNote === true}
       elementRef={props.admission?.observeElement}
       onFocus={props.admission?.onAdmit}
@@ -501,6 +506,7 @@ function AttachmentContent(
           prop:sizeBytes={model().media?.sizeBytes}
           prop:mediaWidth={model().media?.width}
           prop:mediaHeight={model().media?.height}
+          prop:autoplay={Boolean(props.onPlay)}
           prop:onExpand={model().openVideoOverlay}
           prop:onFallbackExpand={model().openAttachmentSidebar}
           prop:onMediaLoaded={props.onAssistantAttachmentLoaded}
@@ -532,7 +538,7 @@ function AttachmentContent(
           ])}
           src={model().safeAttachmentUrl!}
           label={attachment().label}
-          onOpen={() => model().openAttachmentSidebar?.()}
+          onOpen={() => (props.onPlay ?? model().openAttachmentSidebar)?.()}
           fallback={card()}
         />
       </Match>

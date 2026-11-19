@@ -29,8 +29,8 @@ const enCodeBlocks = {
       rendering: "Rendering diagram…",
       error: "Couldn’t render this diagram. Check the source or simplify it.",
       rendererError:
-        "Couldn’t load or finish the Mermaid renderer. Reload the dashboard; if this continues, check proxy or authentication rules for its renderer asset URLs.",
-      imageError: "Couldn’t display the diagram image. Reload the dashboard to try again.",
+        "Couldn’t load or finish the Mermaid renderer. Reload the page; if this continues, check proxy or authentication rules for its renderer asset URLs.",
+      imageError: "Couldn’t display the diagram image. Reload the page to try again.",
     },
   },
 } satisfies TranslationMap;

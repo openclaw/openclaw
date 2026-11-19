@@ -91,7 +91,9 @@ select a personal file. Internal turns continuing the same session use that
 session's selection, including subagent completions, `sessions_send`, goal
 continuation, and cron and restart wakes in that session. Isolated cron sessions
 keep shared defaults only. Subagent sessions still load only their allowed project
-instructions, so delegated tasks never receive a personal `USER.md` file. The shared
+instructions, so delegated tasks never receive a personal `USER.md` file. A spawned session's prompt
+series keys on its session's selection on every turn, including its hidden task, so
+a later `sessions_send` turn does not rebuild the cached prompt. The shared
 local owner profile represents all connections using that identity, not separate
 people; use per-person sign-in on a team Gateway.
 
@@ -382,9 +384,12 @@ agent turn, the `sessions` tool exposes `assign_owner` for these senders;
 settings, reset/delete, and global group controls still require owner authority.
 Operators with `operator.write` also retain the separate archive, restore, and
 stop controls for sessions they created or are assigned to, subject to session access checks.
-New visible sessions default to the trusted requester when the parent has no
-different human owner; this includes agent-owned and channel-originated parents.
-Without a trusted requester, they remain agent-owned. The agent can assign an
+New visible sessions belong to the verified person who requested them, even in a
+conversation owned by someone else. This does not reassign the parent session.
+Without a trusted requester, visible sessions remain agent-owned. When an agent
+creates an automation for a verified requester, that person is recorded as its
+human owner. Existing jobs are not reassigned on upgrade. Scheduling, management,
+and execution still require their existing permissions. The agent can assign an
 existing session to the trusted requester profile and verify the stored owner
 with `sessions_list`.
 This changes responsibility, not creator attribution or access. Unlinked or
@@ -440,7 +445,7 @@ The account arrow beside **Publish PR** appears only when both shared and person
 
 An existing `gh` login in the Gateway's runtime environment is supported; connecting **My GitHub** is optional and does not replace that login. A login on your browser's computer does not automatically authenticate a remote Gateway. When no publication account is selectable, the row distinguishes missing credentials, failed or rate-limited account verification, and an unsupported session workspace. Follow the displayed recovery guidance instead of reconnecting for a verification or workspace failure. Session-scoped shared publication requires a session-owned worktree or repository workspace with a supported GitHub origin; ordinary agent `git` and `gh` commands remain separate from this publication eligibility check.
 
-A local chat can publish a committed task checkout with `github_publish` and `workspacePath`. If the conversation has no publication workspace and omits `workspacePath`, the error asks the agent to retry with the known checkout's absolute path. OpenClaw creates a linked publication task with its own managed checkout and resumes the requesting conversation at its original workspace. The source checkout stays unchanged, including when publication fails. Later work in another repository does not inherit that publication checkout. Retries use the original task and accepted snapshot; status, PR metadata actions, and completion receipts remain available from the requesting conversation, including after a Gateway restart. If that task is deleted, retry reports the missing source; use the original request ID to inspect its receipt. A deliberately prepared PR keeps its own default target.
+A local chat can publish a committed task checkout with `github_publish` and `workspacePath`. If the conversation has no publication workspace and omits `workspacePath`, the error asks the agent to retry with the known checkout's absolute path. OpenClaw creates one linked publication task per conversation and checkout, with its own managed checkout, and resumes the requesting conversation at its original workspace. Publishing the same checkout again, for example after fixing CI, updates that task's branch and PR with the checkout's newest commit; a rebased or amended checkout updates it too, including a rebase that changes ancestry without changing file contents. An existing publication task from an earlier version is reused when there is one matching task. If several tasks already use that checkout, publication identifies them for inspection instead of choosing a PR or creating another one. The source checkout stays unchanged, including when publication fails. Later work in another repository does not inherit that publication checkout. Retries use the original task and accepted snapshot without synchronizing newer source changes; status, PR metadata actions, and completion receipts remain available from the requesting conversation, including after a Gateway restart. If that task is deleted, retry reports the missing source; use the original request ID to inspect its receipt. A deliberately prepared PR keeps its own default target.
 
 The requesting turn retains its original permission ceiling and current-access checks; task creation grants no extra tool, host-path, or GitHub permissions. Selecting a new checkout uses the existing workspace-path permissions. Publishing a checkout already owned by the conversation does not require `operator.admin`, even outside the agent's default workspace. Omit `workspacePath` or use its managed checkout path for that flow. In a writable sandbox-backed conversation, explicitly select an existing PR with `prepare_pr`; this keeps deliberate PR-workspace selection separate from one publication's custody. For conversations adopted by an earlier version, see [managed workspace recovery](/concepts/managed-worktrees#session-worktrees).
 
