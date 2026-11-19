@@ -278,7 +278,7 @@ describe("full release same-parent recovery workflow", () => {
         );
       }
       expect(evaluate(step("watch", "Checkout release state tooling").if ?? "true")).toBe(true);
-      expect(watcher.jobs.watch.env?.OPENCLAW_RELEASE_WAIVERS_PATH).toBe(
+      expect(workflowJob("watch").env?.OPENCLAW_RELEASE_WAIVERS_PATH).toBe(
         "${{ github.workspace }}/scripts/lib/release-validation-waivers.json",
       );
       for (const jobName of ["watch", "summary", "release_execution_plan", "evidence_reuse"]) {

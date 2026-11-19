@@ -1,7 +1,10 @@
 export const MAX_RELEASE_ARTIFACT_BYTES: number;
 export function validateReleaseManifestAdvisoryJobs(
   manifest: unknown,
-  options?: { deferWaiverPolicy?: boolean },
+  options?: {
+    deferWaiverPolicy?: boolean;
+    waiverPolicy?: import("./lib/release-validation-waivers.mjs").ReleaseValidationWaiver[];
+  },
 ): ReleaseRecord[];
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY: "split-changelog-release-v1";
 export const GHOST_JOBS_ADVICE: string;

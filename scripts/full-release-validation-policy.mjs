@@ -50,7 +50,10 @@ function validateReleaseAdvisoryJobs(value, expected = []) {
   return expected;
 }
 
-export function validateReleaseManifestAdvisoryJobs(manifest, { deferWaiverPolicy = false } = {}) {
+export function validateReleaseManifestAdvisoryJobs(
+  manifest,
+  { deferWaiverPolicy = false, waiverPolicy } = {},
+) {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw new Error("Release advisory manifest is invalid");
   }
@@ -73,6 +76,7 @@ export function validateReleaseManifestAdvisoryJobs(manifest, { deferWaiverPolic
         child: { ...normalCi, key: "normalCi" },
         targetVersion: manifest.validationInputs?.targetVersion,
         targetSha: manifest.targetSha,
+        waiverPolicy,
       }).blockingJobs.length > 0
     ) {
       throw new Error("Release manifest contains failed selected job evidence");
