@@ -124,14 +124,7 @@ function prefixChange(previous: WireRequest, current: WireRequest): string | und
               ? (tool.functionDeclarations as Array<Record<string, unknown>>)
               : [tool],
           )
-          .map((tool) => [
-            String(
-              tool.name ??
-                (tool.function as { name?: unknown } | undefined)?.name ??
-                (tool.toolSpec as { name?: unknown } | undefined)?.name,
-            ),
-            JSON.stringify(tool),
-          ]),
+          .map((tool) => [toolName(tool), JSON.stringify(tool)]),
       );
     const before = byName(previous.tools);
     const after = byName(current.tools);
@@ -160,19 +153,59 @@ function prefixChange(previous: WireRequest, current: WireRequest): string | und
   return `message ${message}: ${own.slice(0, 120)} -> ${theirs.slice(0, 120)} @${at}: ${around(own)} -> ${around(theirs)}`;
 }
 
-// Breaks that main still has, narrowed to the transport and changed bytes so any other break still
-// fails. Remove an entry when its owner lands; the suite then fails until it goes.
-const KNOWN_BREAKS: ReadonlyArray<{ api?: Api; change: RegExp; owner: string }> = [
+// Tools that main still adds mid-session. The request must equal its predecessor once only these
+// tools are taken out, so the known change cannot hide another one. Remove an entry when its owner
+// lands; the suite then fails until it goes.
+const KNOWN_TOOL_ADDITIONS: ReadonlyArray<{ tools: readonly string[]; owner: string }> = [
   {
     // After a switch to a second provider, turns started by a subagent completion or an
     // inter-session message list two more tools than user turns do.
-    change: /^tools added=skills_read,skills_search removed= changed=$/,
-    owner: "tools after a provider switch (reported to the prompt-cache owner; no PR yet)",
+    tools: ["skills_read", "skills_search"],
+    owner: "https://github.com/openclaw/openclaw/pull/201710",
   },
 ];
 
-// Known on main (https://github.com/openclaw/openclaw/pull/201654): a silent reply is dropped
-// from replay, so these transports merge the user turns around it into one message.
+const toolName = (tool: Record<string, unknown>) =>
+  String(
+    tool.name ??
+      (tool.function as { name?: unknown } | undefined)?.name ??
+      (tool.toolSpec as { name?: unknown } | undefined)?.name,
+  );
+
+/** `request` without the named tools (Gemini nests them under `functionDeclarations`). */
+function withoutTools(request: WireRequest, names: readonly string[]): WireRequest {
+  const keep = (tool: Record<string, unknown>) => !names.includes(toolName(tool));
+  const tools = (JSON.parse(request.tools) as Array<Record<string, unknown>>).filter(keep);
+  for (const tool of tools) {
+    // A fresh parse, so changing it in place is safe; the key keeps its position.
+    if (Array.isArray(tool.functionDeclarations)) {
+      tool.functionDeclarations = (
+        tool.functionDeclarations as Array<Record<string, unknown>>
+      ).filter(keep);
+    }
+  }
+  return { ...request, tools: JSON.stringify(tools) };
+}
+
+/** First change of `current` against `previous` that no known tool addition explains. */
+export function unknownChange(previous: WireRequest, current: WireRequest): string | undefined {
+  let change = prefixChange(previous, current);
+  for (const known of KNOWN_TOOL_ADDITIONS) {
+    const rest = prefixChange(previous, withoutTools(current, known.tools));
+    if (change?.startsWith("tools ") && !rest?.startsWith("tools ")) {
+      // Only the known tools changed the list; any other change still fails.
+      change = rest;
+    }
+  }
+  return change;
+}
+
+// Accepted on main (closed https://github.com/openclaw/openclaw/pull/201654: no production impact
+// on our hosts): a silent reply is dropped from replay, so the user turns around it merge into one
+// message. Bedrock merges every adjacent user pair. Chat Completions keeps a Gateway turn with a
+// runtime-context block apart and merges only user turns without that carrier: here the
+// "System prompt update" notes after a skill or workspace edit, exec-wake and other host system
+// turns, and the inter-session and subagent-completion inputs.
 const SILENT_MERGE_APIS = new Set<Api>(["bedrock-converse-stream", "openai-completions"]);
 
 /**
@@ -220,9 +253,20 @@ function isSilentTurnMerge(previous: WireRequest, current: WireRequest): boolean
 const readResult = (input: string) =>
   hasToolResult(input) && input.includes("alpha") && input.includes("beta");
 const IMAGE_BLOCK = /"type":"image"|image_url|input_image|inlineData|"image":\{/;
-const STEP_EVIDENCE: Partial<Record<TurnKind, (requests: WireRequest[]) => boolean>> = {
+const THINKING = "Reading the notes first.";
+const STEP_EVIDENCE: Partial<Record<TurnKind, (requests: WireRequest[], api: Api) => boolean>> = {
   tool: (requests) => requests.some((r) => readResult(lastMessage(r))),
-  thinkingTool: (requests) => requests.some((r) => readResult(lastMessage(r))),
+  // On Anthropic the signed thinking of the tool call must reach the continuation request, which
+  // also proves that the request enabled thinking.
+  thinkingTool: (requests, api) =>
+    requests.some(
+      (r) =>
+        readResult(lastMessage(r)) &&
+        (api !== "anthropic-messages" ||
+          r.messages.some(
+            (m) => m.includes(`"thinking":"${THINKING}"`) && /"signature":"sig_\d+"/.test(m),
+          )),
+    ),
   parallelTools: (requests) =>
     requests.some((r) => readResult(lastMessage(r)) && lastMessage(r).includes("parallel")),
   imageInput: (requests) => requests.some((r) => IMAGE_BLOCK.test(lastMessage(r))),
@@ -304,7 +348,7 @@ export function usePrefixRandomizedJourney() {
       if (marker === "STEP-THINKING-TOOL") {
         // A model returns signed thinking only when the request enables it.
         return {
-          ...(thinkingEnabled ? { thinking: "Reading the notes first." } : {}),
+          ...(thinkingEnabled ? { thinking: THINKING } : {}),
           calls: [{ tool: "read", args: { path: "notes.txt" } }],
         };
       }
@@ -542,7 +586,10 @@ export function usePrefixRandomizedJourney() {
           const evidence = STEP_EVIDENCE[kind];
           if (evidence) {
             expect(
-              evidence(target.slice(before).map((entry) => entry.request)),
+              evidence(
+                target.slice(before).map((entry) => entry.request),
+                api,
+              ),
               `step ${step} ${kind} did not reach the provider\n${seen.join("\n")}`,
             ).toBe(true);
           }
@@ -556,7 +603,7 @@ export function usePrefixRandomizedJourney() {
         for (let index = 1; index < parents.length; index++) {
           const previous = parents[index - 1]!;
           const current = parents[index]!;
-          const change = prefixChange(previous.request, current.request);
+          const change = unknownChange(previous.request, current.request);
           const rebuild =
             REBUILD_KINDS.has(current.kind) &&
             parents.findIndex((entry) => entry.step === current.step) === index;
@@ -592,12 +639,8 @@ export function usePrefixRandomizedJourney() {
         process.stdout.write(
           `[prefix-random] ${api} seed=${seed} requests=${target.length} forks=${target.filter((entry) => entry.fork).length} children=${[...children.values()].map((requests) => requests.length).join(",")}\n`,
         );
-        const remaining = unexpected.filter(
-          ({ change }) =>
-            !KNOWN_BREAKS.some((known) => (known.api ?? api) === api && known.change.test(change)),
-        );
         expect(
-          JSON.stringify(remaining, null, 1),
+          JSON.stringify(unexpected, null, 1),
           `seed=${seed} journey=${journey.join(",")} breaks=${JSON.stringify(unexpected)}`,
         ).toBe("[]");
       } catch (error) {
