@@ -113,7 +113,7 @@ describe("chat pane assistant identity snapshots", () => {
     expect(pane.chatProps!.widgetLayout!.read(row)).toBe(400);
   });
 
-  it("keeps an unknown transcript loading before hello and reconciles cached or live history", async () => {
+  it("keeps an unknown transcript neutral before hello and reconciles cached or live history", async () => {
     installTranscriptDomMocks();
     const pane = createRenderTestChatPane();
     const state = pane.initialize(createInitializationContext());
@@ -127,8 +127,9 @@ describe("chat pane assistant identity snapshots", () => {
       draw();
       expect(container.querySelector(".agent-chat__empty")).toBeNull();
       await waitForSolid(() =>
-        expect(container.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull(),
+        expect(container.querySelector(".chat-thread-inner")).not.toBeNull(),
       );
+      expect(container.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
 
       state.currentSessionId = "cached-session";
       state.chatMessages = [{ role: "assistant", content: "Cached mission briefing." }];

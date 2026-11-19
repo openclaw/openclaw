@@ -258,7 +258,8 @@ export function projectChatTranscript(
     (!props.historyPagination?.hasMore || search.open);
   const { isDirectThread, avatarPlacement } = resolveTranscriptAvatarPlacement(props, chatItems);
   transcript.layout.configureRows(props, avatarPlacement, searchFiltering || recovery.revision > 0);
-  const showLoadingSkeleton = props.loading && transcriptItems.length === 0 && !hasTypingActors;
+  const isLoading = props.loading && transcriptItems.length === 0 && !hasTypingActors;
+  const showLoadingSkeleton = isLoading && props.selectedSession?.hasMessages === true;
   // Pending nonempty rows must not settle an empty viewport or overwrite its saved reader.
   transcript.layout.ready &&= isEmpty;
   const presented =
@@ -696,6 +697,7 @@ export function projectChatTranscript(
               : message,
         },
     isEmpty,
+    isLoading,
     showLoadingSkeleton,
     searchOpen: search.open,
     renderRows: (overlay: JSX.Element = null, header: TranscriptHeader | null = null) => {
