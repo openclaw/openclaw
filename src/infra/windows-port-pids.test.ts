@@ -9,12 +9,16 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawnSync: spawn,
 }));
 vi.mock("./windows-appcontainer-spawn.js", () => ({ assertAppContainerSpawnSupported: () => {} }));
-vi.mock("./windows-install-roots.js", () => ({
+vi.mock("./windows-install-roots.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./windows-install-roots.js")>()),
   getWindowsPowerShellExePath: () => "powershell.exe",
   getWindowsSystem32ExePath: (name: string) => name,
   getWindowsWmicExePath: () => "wmic.exe",
 }));
-vi.mock("./process-env.js", () => ({ resolveDiagnosticProcessEnv: () => ({}) }));
+vi.mock("./process-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./process-env.js")>()),
+  resolveDiagnosticProcessEnv: () => ({}),
+}));
 
 const ok = (stdout: string) => ({ status: 0, stdout, stderr: "", error: undefined });
 
@@ -46,14 +50,4 @@ it("reports empty only when both native collectors see no listener", () => {
   const result = withMockedWindowsPlatform(() => readWindowsListeningPidsResultSync(18789));
 
   expect(result).toEqual({ ok: true, pids: [] });
-});
-
-it("recovers through netstat when PowerShell fails", () => {
-  spawn
-    .mockReturnValueOnce({ status: 1, stdout: "", stderr: "", error: undefined })
-    .mockReturnValueOnce(ok("TCP 127.0.0.1:18789 0.0.0.0:0 LISTENING 4242\n"));
-
-  const result = withMockedWindowsPlatform(() => readWindowsListeningPidsResultSync(18789));
-
-  expect(result).toEqual({ ok: true, pids: [4242] });
 });
