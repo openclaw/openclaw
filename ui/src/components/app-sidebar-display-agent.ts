@@ -17,17 +17,31 @@ export function resolveSidebarDisplayAgent(input: {
   chipMode: boolean;
 }) {
   const active = resolveActiveSidebarAgent(input);
+  const creation = input.creation;
   const sessionAgentId = parseAgentSessionKey(input.sessionKey)?.agentId;
   if (
-    input.chipMode &&
-    input.pending &&
-    input.creation &&
-    !input.creation.creation.admitted &&
-    areUiSessionKeysEquivalent(input.sessionKey, input.creation.creation.sessionKey) &&
-    sessionAgentId &&
-    normalizeAgentId(sessionAgentId) === normalizeAgentId(input.pending.id)
+    !input.chipMode ||
+    !creation ||
+    creation.creation.admitted ||
+    !sessionAgentId ||
+    !areUiSessionKeysEquivalent(input.sessionKey, creation.creation.sessionKey)
   ) {
-    return { ...active, activeId: input.pending.id, agent: input.pending, identity: null };
+    return active;
   }
-  return active;
+  // An agent being created has no selection yet. Name it from the pending creation,
+  // then from the row its durable admission added, then from the chat that was opened.
+  const agentId = normalizeAgentId(sessionAgentId);
+  const provisional =
+    (input.pending && normalizeAgentId(input.pending.id) === agentId ? input.pending : undefined) ??
+    input.roster.find((agent) => normalizeAgentId(agent.id) === agentId) ??
+    (creation.displayName ? { id: sessionAgentId, name: creation.displayName } : undefined);
+  if (!provisional) {
+    return active;
+  }
+  return {
+    ...active,
+    activeId: provisional.id,
+    agent: provisional,
+    identity: active.identities.get(agentId) ?? null,
+  };
 }

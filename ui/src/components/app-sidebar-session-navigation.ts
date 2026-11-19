@@ -599,7 +599,8 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
       identities: this.context.agentIdentity.entries(),
       pending: this.context.agents.state.pendingAgent,
       creation: this.context.chatSubmissions.readCreate(),
-      sessionKey: this.sessionKey,
+      // The shell's key still names the previous chat while a provisional one is open.
+      sessionKey: this.getRouteSessionKey(),
       chipMode: this.sidebarAgentsMode === "chip",
     });
   }

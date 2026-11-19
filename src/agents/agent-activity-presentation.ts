@@ -89,13 +89,24 @@ export function projectAgentActivityItem<
   ) {
     return { ...item, status: "failed" };
   }
+  const args = asRecord(facts.args);
+  // A reply sent to the conversation it came from is already shown there as a message;
+  // a row naming the tool that sent it would only repeat it.
+  const sourceReply =
+    name === "message" &&
+    (asRecord(details?.sourceReply) !== undefined ||
+      (args?.action === "send" &&
+        args.channel === undefined &&
+        args.target === undefined &&
+        args.targets === undefined));
   const routine =
     facts.nativeOperation === "wait" ||
     facts.nativeOperation === "process.poll" ||
     isAgentPlanProgressToolName(name) ||
     name === "sessions_yield" ||
-    (name === "process" && asRecord(facts.args)?.action === "poll") ||
-    (name === "message" && asRecord(facts.args)?.action === "react");
+    (name === "process" && args?.action === "poll") ||
+    (name === "message" && args?.action === "react") ||
+    sourceReply;
   return routine && (item.status === "running" || item.status === "completed")
     ? { ...item, hideFromChannelProgress: true }
     : item;
