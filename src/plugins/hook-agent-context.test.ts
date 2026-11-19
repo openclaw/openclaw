@@ -74,6 +74,27 @@ describe("buildAgentHookContextIdentityFields", () => {
     });
   });
 
+  it("exposes the verified requester device for user turns only", () => {
+    expect(
+      buildAgentHookContextIdentityFields({
+        trigger: "user",
+        approvalReviewerDeviceId: " device-1 ",
+      }),
+    ).toEqual({ requesterDeviceId: "device-1" });
+    expect(buildAgentHookContextIdentityFields({ approvalReviewerDeviceId: "device-1" })).toEqual({
+      requesterDeviceId: "device-1",
+    });
+    expect(
+      buildAgentHookContextIdentityFields({ trigger: "user", senderId: "openclaw-ios" }),
+    ).not.toHaveProperty("requesterDeviceId");
+    expect(
+      buildAgentHookContextIdentityFields({
+        trigger: "cron",
+        approvalReviewerDeviceId: "device-1",
+      }),
+    ).toEqual({});
+  });
+
   it("omits identity fields for system-originated triggers", () => {
     expect(
       buildAgentHookContextIdentityFields({

@@ -99,6 +99,13 @@ keeps its own current-source and commit-authority checks.
 
 ## Choose the execution owner
 
+Transcript-facts backfill discovery and covered-window probes use the session-store
+read worker, independently of writer admission. Only bounded fact-publication
+batches reserve the writer, at background priority after queued foreground work.
+Read delays scale with their own elapsed request time; write delays include
+preparation, commit and reply delivery, with the existing bounded contention backoff.
+The in-memory position cursor and transactional coverage checks preserve resumability.
+
 Shared-state worker contexts carry installed-service migration restrictions only
 for the admitted database. An unrelated older global installation does not change
 an isolated Gateway's actor policy during cron startup or configuration reload.
@@ -276,6 +283,12 @@ The writable lifecycle alone opens and publishes those handles and owns leases,
 migrations, timers, and closure. Borrowers prevent idle eviction; explicit disposal
 can still close the connection and invalidate its claims immediately. Maintenance
 closes cached handles before migrating or replacing their storage.
+
+Retained PostgreSQL connections use the same pre-query reconnect owner as pooled
+connections when the server's last completed status was idle. After one second
+of wall-clock inactivity, including VM suspension, transport validation runs
+before caller SQL. A lost active transaction or uncertain statement outcome still
+fails; reconnect never replays caller SQL or claims an uncertain commit rolled back.
 
 If PostgreSQL schema publication invalidates admission, connection opening,
 shared-state reads before their callback, and standalone feature-schema ensures
@@ -6248,6 +6261,10 @@ Persisted-turn replay admission validates the exact session writer row and the
 prepared transcript version in the anchor reader's single snapshot. Each scan
 retains its physical source through validation and cleanup; later preparation
 phases must select that same physical file and obtain fresh reader authority.
+Initial preparation and final consumption share one bounded refresh when a
+concurrent append invalidates selection. The refreshed current user must retain
+the original entry ID and generation; a newer user or completed turn still fails.
+Once consumption starts, its callback is never retried.
 Final consumption retains writer FIFO custody and the native mutation witness
 through synchronous prompt publication and core entry. Current run ownership,
 permission generation, cancellation, and one-time replay consumption remain live

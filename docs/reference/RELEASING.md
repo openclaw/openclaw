@@ -206,8 +206,13 @@ changed bytes. This change authorizes no dispatch/publication.
 `release-ci-summary.mjs` authenticates qualification once for all consumers;
 `validate-full-release-validation-evidence.mjs` checks the release tag and
 publication selection, including plugin subsets, and rechecks live authority.
-Recovery preserves the original admission, candidate, artifacts, and coverage.
-Existing waiver, historical-evidence, profile, soak, and performance rules apply.
+Only authenticated direct admission qualifies evidence for publication.
+Unadmitted historical manifests, including v3, require new admitted
+qualification; ancestry alone is not admission. Receipt-backed aggregate recovery
+is retired for every profile, including beta. Normal authenticated qualification
+and reuse remain available, and C, Q, and P may remain independent. Existing
+waiver, profile, soak, and performance rules apply. Historical manifest parsing
+remains available for diagnostic summaries, not qualification or publication.
 
 ### Frozen qualification identity
 

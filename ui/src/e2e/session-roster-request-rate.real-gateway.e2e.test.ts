@@ -282,7 +282,8 @@ suite.define(() => {
           )
           .toBe(true);
         await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
-        await sidebar.locator('[data-navigation-view="sessions"]').click();
+        // People opens Activity; going back returns to this page beside the Sessions list.
+        await page.goBack();
         await selected.waitFor();
         await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
         await pauseVirtualClock(page);

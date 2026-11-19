@@ -44,7 +44,7 @@ import {
   type SkillsState,
 } from "../../lib/skills/index.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "../plugins/plugin-icon-owner.ts";
-import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
+import { pluginsHubPanel } from "../plugins/plugins-hub.ts";
 import { createSkillLibrary } from "./library-state.ts";
 import { SkillLibraryNavigation, SkillLibraryPageMenu } from "./library-toolbar.tsx";
 import { SkillLibrary, SkillLibraryDialogs, SkillLibraryFeedback } from "./library-view.tsx";
@@ -603,9 +603,7 @@ export function SkillsPage(props: SkillsPageProps) {
         <div
           // Bound layout work for the large installed inventory without containing discovery.
           style={{ contain: surface() === "settings" ? "layout" : undefined }}
-          id={surface() === "discovery" ? PLUGINS_HUB_PANEL_ID : undefined}
-          role={surface() === "discovery" ? "tabpanel" : undefined}
-          aria-labelledby={surface() === "discovery" ? "plugins-tab-skills" : undefined}
+          {...(surface() === "discovery" ? pluginsHubPanel("skills") : {})}
         >
           <Skills
             state={viewState()}

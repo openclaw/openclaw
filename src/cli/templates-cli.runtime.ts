@@ -294,6 +294,11 @@ async function runTemplatesAddFromSource(
     diagnostics: result.diagnostics,
     context: {
       config,
+      resolvePreferredModel: async (requested) => {
+        const { resolveLocalTemplatePreferredModel } =
+          await import("../templates/preferred-model-runtime.js");
+        return resolveLocalTemplatePreferredModel(requested, config);
+      },
       agentId: opts.agentId,
       ...(opts.workspace ? { workspace: opts.workspace } : {}),
       existingAgentIds,

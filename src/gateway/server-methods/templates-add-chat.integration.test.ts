@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { resolveEffectiveToolPolicy } from "../../agents/agent-tools.policy.js";
 import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
@@ -218,6 +219,7 @@ async function withGateway(
   }) => Promise<void>,
   entries: NonNullable<OpenClawConfig["agents"]>["entries"] = {},
   tools?: OpenClawConfig["tools"],
+  hostModels: ModelChoice[] | Error = [],
 ) {
   await withOpenClawTestState(
     {
@@ -285,6 +287,12 @@ async function withGateway(
               },
               context: {
                 getRuntimeConfig: () => config,
+                readPreparedModelsList: async () => {
+                  if (hostModels instanceof Error) {
+                    throw hostModels;
+                  }
+                  return { models: hostModels };
+                },
                 broadcastToConnIds: (_event: string, payload: { stage: string; agentId: string }) =>
                   events.push({ stage: payload.stage, agentId: payload.agentId }),
                 cron: {
@@ -847,3 +855,55 @@ it("retries a failed dependency report without repeating the completed opening o
     expect(resolveSource).toHaveBeenCalledTimes(sources);
   });
 });
+
+// Public Add seam: authored CLAW.md -> ordinary agent config before its first turn.
+// Model/catalog rows are external facts; schema, planning, admission, writes and
+// runtime-application acknowledgement are real. Live inference is exercised separately.
+it.each([
+  ["available", { available: true }, "ollama/template-model"],
+  ["missing", undefined, undefined],
+  ["missing auth", { available: false, unavailableReason: "missing-auth" }, undefined],
+  ["unknown readiness", {}, undefined],
+  ["denied by host policy", { available: true, manualSelectionAllowed: false }, undefined],
+  ["catalog failure", new Error("Fixture catalog unavailable"), undefined],
+  ["omitted preference", { available: true }, undefined],
+] as const)(
+  "applies a Template model preference only when offered: %s",
+  async (scenario, status, expected) => {
+    const hostModels: ModelChoice[] | Error =
+      status instanceof Error
+        ? status
+        : status
+          ? [{ id: "template-model", provider: "ollama", name: "Template Model", ...status }]
+          : [];
+    await withGateway(
+      async (gateway) => {
+        const manifest = {
+          schemaVersion: 1,
+          agent: {
+            id: "travel-copilot",
+            name: "Travel Copilot",
+            ...(scenario === "omitted preference" ? {} : { model: "ollama/template-model" }),
+          },
+        };
+        const source = await writeTemplate(gateway.root, manifest);
+        deliver(source);
+        const reply = await gateway.add({
+          mode: "chat",
+          source: coordinate,
+          agentId: "travel-copilot",
+        });
+        expect(reply[0]).toBe(true);
+        expect(reply[1]).toMatchObject({ status: "complete", agentId: "travel-copilot" });
+        expect(gateway.config().agents?.entries?.["travel-copilot"]?.model).toBe(expected);
+        expect(gateway.config().agents?.defaults?.model).toBe("ollama/test-model");
+        expect(greeting).toHaveBeenCalledTimes(1);
+        const persisted = await readConfigFileSnapshot();
+        expect(persisted.config.agents?.entries?.["travel-copilot"]?.model).toBe(expected);
+      },
+      {},
+      undefined,
+      hostModels,
+    );
+  },
+);

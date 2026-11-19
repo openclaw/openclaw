@@ -21,6 +21,8 @@ type SubagentAnnounceDeliveryFailureReason =
   | "operator_authority_unavailable"
   | "requester_abandoned"
   | "requester_aborted"
+  | "requester_timed_out"
+  | "requester_preparation_changed"
   | "requester_state_conflict"
   | "requester_transcript_conflict"
   | "requester_turn_pending"
@@ -35,7 +37,6 @@ export type SubagentAnnounceDeliveryResult = {
   enqueuedAt?: number;
   /** Direct delivery that already committed the requester's visible final. */
   requesterVisibleFinalDelivered?: true;
-  storeReplaced?: true;
   /** Bounded visible final returned by the direct requester synthesis turn. */
   finalAssistantVisibleText?: string;
   reason?: SubagentAnnounceDeliveryFailureReason;

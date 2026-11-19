@@ -34,6 +34,7 @@ import { readPendingWorktrees } from "./pending-slots.js";
 import * as registry from "./registry.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import { createWithWorktreeAllocation } from "./service-preparation.js";
+import * as preparation from "./service-preparation.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 import type { ManagedWorktreeRecord } from "./types.js";
@@ -88,6 +89,51 @@ describe("managed worktree pending slots", () => {
     );
     return waiting.promise;
   }
+
+  it("retries an inferred name published by another owner after destination planning", async ({
+    signal,
+  }) => {
+    const planned = createDeferred();
+    const release = createDeferred();
+    const prepare = preparation.prepareWorktreeDestination;
+    vi.spyOn(preparation, "prepareWorktreeDestination").mockImplementation(async (params) => {
+      const destination = await prepare(params);
+      if (params.owner.ownerId === "second" && destination.name === "release-planning") {
+        planned.resolve();
+        await withinTest(release.promise, signal);
+      }
+      return destination;
+    });
+    const second = service.create({
+      repoRoot,
+      suggestedName: "release-planning",
+      ownerKind: "session",
+      ownerId: "second",
+      signal,
+    });
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(planned.promise, second, "Second destination was not planned"),
+        signal,
+      );
+      const first = await service.create({
+        repoRoot,
+        suggestedName: "release-planning",
+        ownerKind: "session",
+        ownerId: "first",
+        signal,
+      });
+      expect(first.name).toBe("release-planning");
+      expect(await readPendingWorktrees(env)).toEqual([]);
+      release.resolve();
+      expect(await second).toMatchObject({ name: "release-planning-2", ownerId: "second" });
+      expect(await service.listRegistryRecords()).toHaveLength(2);
+      expect(await readPendingWorktrees(env)).toEqual([]);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([second]);
+    }
+  });
 
   async function holdLease(scope: string, key: string) {
     const entered = createDeferred();

@@ -113,6 +113,34 @@ async function fixture(fork = false, linked = true, maintainer = false, sameBran
       return commandResult(`${branchHead}\trefs/heads/${pr.head.ref}\n`);
     }
     if (argv[0] === "gh") {
+      if (argv.includes("graphql")) {
+        return commandResult(
+          JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  headRefOid: pr.head.sha,
+                  commits: {
+                    nodes: [
+                      {
+                        commit: {
+                          id: "commit-node",
+                          authors: {
+                            nodes: [{ user: { databaseId: 42 } }, { user: { databaseId: 101 } }],
+                            pageInfo: { hasNextPage: false, endCursor: null },
+                          },
+                          committer: { user: { databaseId: 42 } },
+                        },
+                      },
+                    ],
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                  },
+                },
+              },
+            },
+          }),
+        );
+      }
       if (argv.includes("POST") || argv.includes("PATCH") || argv.includes("DELETE")) {
         mutations.push(argv);
         throw new Error("An imported publication must not create or edit a PR");
@@ -245,6 +273,20 @@ describe("shared publication to a prepared original PR", () => {
     creatorEmail: "publication-guest@example.test",
     sandbox: "required",
     realWorktree: true,
+  });
+
+  it("lets a linked coauthor continue a publisher-authored PR from another session", async () => {
+    const f = await fixture();
+    f.pr.user = { id: 42, login: "roboclaw-bot" };
+    const result = await f.publish("coauthor-continuation");
+    expect(result, JSON.stringify(result)).toMatchObject({
+      status: "published",
+      url: f.pr.html_url,
+    });
+    f.expectWrites(1);
+    expect(await f.local.git("show", f.pr.head.sha + ":original.txt")).toBe(
+      "Original contribution",
+    );
   });
 
   it.each([

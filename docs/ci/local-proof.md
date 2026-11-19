@@ -345,6 +345,13 @@ contents, its fresh current analysis also supplies the comparison counts.
 Changed snapshots retain both full analyses and historical-cache validation.
 Frozen targets without the aggregate command retain their original commands.
 
+`pnpm check:session-identity-ratchet` rejects growth in identity comparisons and
+pins outside the session-store owner. Direct `null`/`undefined` presence checks
+do not compare identities and are excluded; adjacent comparisons between IDs
+and explicit pin names still count. Its per-file allowlist may only shrink.
+After removing counted sites, run the checker with `--prune` and verify again
+without pruning.
+
 <a id="test-line-budget" />
 
 `pnpm check:test-lines-ratchet` measures this change's net test-line delta

@@ -216,6 +216,7 @@ function ChatFooterContent(
           prop:sessionKey={input.props.sessionKey}
           prop:agentId={input.props.currentAgentId}
           prop:presented={input.presented}
+          prop:composer={input.props}
         />
       </Show>
     </>

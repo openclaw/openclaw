@@ -619,3 +619,61 @@ it("keeps titled node execution private under status policy and diagnostic under
     "Check runtime version, node: preview-node",
   );
 });
+
+function createReasoningProgress(progressConfig: Record<string, unknown>) {
+  return createChannelProgressDraftCompositor({
+    active: true,
+    mode: "progress",
+    seed: "reasoning-rows",
+    entry: { streaming: { mode: "progress", progress: progressConfig } },
+    update: () => true,
+  });
+}
+
+const reasoningRow = (text: string) => ({
+  id: "reasoning:1",
+  kind: "item" as const,
+  text,
+  label: "Reasoning",
+});
+
+it("keeps the reasoning burst open when its own projection is admitted as a line", async () => {
+  const progress = createReasoningProgress({ toolProgress: true, maxLines: 8 });
+  try {
+    // The raw text keeps the trailing space the display text drops.
+    expect(progress.mergeReasoningProgress("Reading ")).toBe("Reading");
+    await progress.pushToolProgress(reasoningRow("Reading"), {
+      startImmediately: true,
+      reasoningLine: true,
+    });
+    expect(progress.mergeReasoningProgress("the handler")).toBe("Reading the handler");
+
+    // The opening tag survives admission so the delta that closes it still parses.
+    expect(progress.mergeReasoningProgress("<think>Fresh", { snapshot: true })).toBe("Fresh");
+    await progress.pushToolProgress(reasoningRow("Fresh"), {
+      startImmediately: true,
+      reasoningLine: true,
+    });
+    expect(progress.mergeReasoningProgress(" snapshot</think>")).toBe("Fresh snapshot");
+
+    // Admitted work still delimits the burst.
+    await progress.pushToolProgress("🛠️ ls", { startImmediately: true });
+    expect(progress.mergeReasoningProgress("Next thought")).toBe("Next thought");
+  } finally {
+    progress.cancel();
+  }
+});
+
+it("stores a channel's reasoning rows on a quiet draft but not its tool rows", async () => {
+  const progress = createReasoningProgress({ toolProgress: false, label: false });
+  try {
+    await progress.pushToolProgress(reasoningRow("Reading"), {
+      startImmediately: true,
+      reasoningLine: true,
+    });
+    await progress.pushToolProgress("🛠️ ls", { startImmediately: true });
+    expect(progress.getSnapshot().lines).toEqual([expect.objectContaining({ id: "reasoning:1" })]);
+  } finally {
+    progress.cancel();
+  }
+});

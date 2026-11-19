@@ -93,6 +93,7 @@ export type SqliteSessionReclamationDiagnostics = {
     | "maintenance-pages"
     | "cold-batch"
     | "cold-maintain"
+    | "cold-sweep"
     | "cold-restore";
   workerThreadId?: number;
 };

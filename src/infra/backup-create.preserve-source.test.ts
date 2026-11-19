@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { beforeAll, expect, it } from "vitest";
 import {
   closeOpenClawStateDatabaseAsync,

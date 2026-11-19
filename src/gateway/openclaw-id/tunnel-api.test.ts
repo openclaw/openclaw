@@ -205,11 +205,16 @@ describe("OpenClaw ID tunnel API", () => {
       "binding_seq",
       "claw_id",
       "devices",
+      "hostname",
+      "recovery_kit",
       "role",
+      "root_fp",
       "seq",
     ]);
     expect(view).toMatchObject({
       account_id: "bob",
+      root_fp: await fingerprint(formatEd25519PublicKey(claw.root.publicKey)),
+      recovery_kit: null,
       binding_seq: 1,
       role: "operator",
       devices: [

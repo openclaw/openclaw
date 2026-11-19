@@ -19,6 +19,8 @@ export type TemplatesAddOptions = TemplatesDevOptions & {
   acceptCapabilities?: boolean;
   acknowledgeClawhubRisk?: boolean;
 };
+export type TemplatesReleaseOptions = { yes?: boolean };
+
 export function registerTemplatesCli(program: Command) {
   const templates = program.command("templates").description("Author and add OpenClaw Templates");
 
@@ -100,6 +102,16 @@ export function registerTemplatesCli(program: Command) {
     .action(async (source: string, opts: TemplatesAddOptions) => {
       const { runTemplatesAddCommand } = await import("./templates-cli.runtime.js");
       await runTemplatesAddCommand(source, opts);
+    });
+
+  templates
+    .command("release")
+    .description("Make an agent added by an older Template lifecycle an ordinary agent")
+    .argument("<agent-id>", "Template-managed agent to release")
+    .option("--yes", "Confirm without prompting", false)
+    .action(async (agentId: string, opts: TemplatesReleaseOptions) => {
+      const { runTemplatesReleaseCommand } = await import("./templates-cli.release.js");
+      await runTemplatesReleaseCommand(agentId, opts);
     });
 
   applyParentDefaultHelpAction(templates);

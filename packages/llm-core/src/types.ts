@@ -556,6 +556,8 @@ export interface AssistantMessage {
   endTurn?: boolean;
   errorMessage?: string;
   errorCode?: string;
+  /** Transport-owned repair outcome; execution owns whether a deferred request can replay. */
+  itemConflictRecovery?: "deferred" | "recovered" | "failed";
   errorType?: string;
   errorBody?: string;
   /** Provider retry floor before diagnostic clipping; null means too large to represent. */

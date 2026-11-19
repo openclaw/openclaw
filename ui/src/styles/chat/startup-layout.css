@@ -77,9 +77,6 @@
   overflow-y: auto;
   overflow-x: hidden;
   overflow-anchor: none;
-  /* Only message text opts in; selecting across turns must not paint layout or media. */
-  -webkit-user-select: none;
-  user-select: none;
   scrollbar-gutter: stable both-edges;
   /* The pane header owns the titlebar and native drag surface. No horizontal
      padding: macOS overlay scrollbars render inside the
@@ -195,6 +192,22 @@ div.chat-thread:where(.chat-thread--annotations) {
   margin-inline: var(--chat-composer-side-inset, 16px);
 }
 
+.creation-composer__loading {
+  height: 96px;
+  max-width: var(--chat-thread-max-width, 48rem);
+  width: calc(100% - 32px);
+  margin: 0 auto 16px;
+  border-radius: var(--radius-xl);
+  opacity: 0.35;
+}
+
+.new-session-page__starting-status {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+/* Blank transcript space keeps native selection and click-to-deselect behavior. */
+.chat-thread,
 .chat-text,
 .chat-thinking {
   -webkit-user-select: text;
@@ -288,6 +301,8 @@ div.chat-thread:where(.chat-thread--annotations) {
 /* Avatar Styles. Identity avatars are circles everywhere (sidebar, pickers,
    profile, native apps); square tiles expose opaque avatar corners. */
 .chat-avatar {
+  -webkit-user-select: none;
+  user-select: none;
   width: 36px;
   height: 36px;
   aspect-ratio: 1;
@@ -879,8 +894,6 @@ div.chat-thread:where(.chat-thread--annotations) {
   width: 14px;
   height: 14px;
   flex: 0 0 auto;
-  border-radius: 2px;
-  object-fit: contain;
 }
 
 .chat-pane__workspace-chip > .oc-menu-item__label > span {

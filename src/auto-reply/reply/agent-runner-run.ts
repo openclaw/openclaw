@@ -4,6 +4,7 @@ import {
   isRequiredReplyExpectation,
   resolveReplyCompletion,
 } from "../../agents/reply-completion.js";
+import { isUserInitiatedAgentRunAbortReason } from "../../agents/run-termination.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -60,6 +61,7 @@ import { refuseCollaborativeSteering } from "./queue/lifecycle.js";
 import { bindReplyOperationQueueDisposition, resolveFollowupAbortSignal } from "./queue/types.js";
 import { prepareReplyAgentTurn } from "./reply-agent-turn-preparation.js";
 import { createReplyInputAdmission } from "./reply-input-admission.js";
+import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
 import * as replyRunState from "./reply-operation-run-state.js";
 import { bindReplyOperationTyping } from "./reply-run-typing.js";
 import { enqueueReplySourceAdmission } from "./reply-source-admission.js";
@@ -543,6 +545,7 @@ export async function runReplyAgent(
     const { admitUserTurn, recordPendingDelivery } = createReplyInputAdmission({
       followupRun,
       replyOperation,
+      runId: turn.runId,
       sourceTurnId,
       sessionKey,
       storePath,
@@ -606,6 +609,22 @@ export async function runReplyAgent(
         followupRun.replyOperationRunStates,
         replyOperation,
       );
+      if (
+        turn.preflightFailurePayload &&
+        (!replyOperation.abortSignal.aborted ||
+          (followupRun.operatorAuthority?.signal?.aborted &&
+            replyOperation.abortSignal.reason === followupRun.operatorAuthority.signal.reason &&
+            !isUserInitiatedAgentRunAbortReason(replyOperation.abortSignal.reason) &&
+            resolveReplyOperationAbortReason(replyOperation) === "user"))
+      ) {
+        // The prepared failure notice survives source revocation; it starts no new work.
+        replyOperation.fail("run_failed", error);
+        return prependCompactionNotices(
+          returnWithQueuedFollowupDrain(turn.preflightFailurePayload),
+          pendingCompactionNotices,
+          replyOperation,
+        );
+      }
       const result = await handleReplyAgentRunError(error, {
         config: cfg,
         resolveVisibleReplyDelivery,

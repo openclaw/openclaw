@@ -4,7 +4,7 @@ import type { SessionEntry } from "../sessions/session-manager-types.js";
 import type { describeSessionToolDefinition } from "./session-tool-definition.js";
 
 export type ToolDefinition = ReturnType<typeof describeSessionToolDefinition>;
-export type PublicationListing = ToolDefinition &
+type PublicationListing = ToolDefinition &
   Pick<AnyAgentTool, "label" | "async" | "catalogMode"> & { scope?: string };
 
 export type ToolSurface = {
@@ -18,14 +18,12 @@ export type ToolSurface = {
 
 /** The latest checkpointed pin, unless a later model change retired it. */
 export function readToolSurfaceCheckpoint(entries: SessionEntry[]) {
-  const markerIndex = entries.findLastIndex(
-    (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
+  const entry = selectToolSurfaceCheckpoint(
+    entries,
+    (candidate) => candidate.type === "custom" && candidate.customType === "openclaw.system-prompt",
   );
-  const entry = entries[markerIndex];
   const data = entry?.type === "custom" ? entry.data : undefined;
-  return isRecord(data) &&
-    Array.isArray(data.tools) &&
-    !entries.slice(markerIndex + 1).some((later) => later.type === "model_change")
+  return isRecord(data) && Array.isArray(data.tools)
     ? {
         routeKey: data.routeKey,
         historyId: data.historyId,
@@ -36,4 +34,21 @@ export function readToolSurfaceCheckpoint(entries: SessionEntry[]) {
         publicationListing: data.publicationListing as PublicationListing | undefined,
       }
     : undefined;
+}
+
+/** Array and scalar readers retire a pin on every newer checkpoint or model change. */
+export function selectToolSurfaceCheckpoint<T extends { type: string }>(
+  entries: readonly T[],
+  isCheckpoint: (entry: T) => boolean,
+): T | undefined {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]!;
+    if (entry.type === "model_change") {
+      return undefined;
+    }
+    if (isCheckpoint(entry)) {
+      return entry;
+    }
+  }
+  return undefined;
 }

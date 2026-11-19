@@ -53,6 +53,8 @@ const enTemplateCreator = {
       auth: "Authentication",
       transport: "Transport",
       url: "Endpoint",
+      urlDigest: "Endpoint integrity",
+      queryParameterNames: "Redacted query parameters",
       command: "Command",
       args: "Arguments",
       env: "Environment",

@@ -126,6 +126,12 @@ function classifyProjectGitFailure(
       `Git ${operation} could not reach GitHub. Check the Gateway network connection and retry.`,
     );
   }
+  if (/write access to repository not granted|requested url returned error: 403\b/u.test(detail)) {
+    return new ProjectCloneError(
+      "auth_required",
+      "GitHub denied access to this repository. Ask the Gateway operator to check the configured GitHub credential and repository access before retrying.",
+    );
+  }
   if (
     /authentication failed|permission denied|could not read username|access denied/u.test(detail)
   ) {
