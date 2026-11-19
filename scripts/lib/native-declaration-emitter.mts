@@ -376,13 +376,10 @@ async function compileDeclarationsWithCompilerCli({
       }),
     );
     const compiled = await run(["-p", leaf, "--listFiles"]);
-    // --listFiles prints one absolute path per line after any diagnostics; a checkout
-    // path may itself contain a line break. Admit read files before reporting errors so
-    // an escaped input fails as an escape, not as the type error it causes.
-    const separator = root.includes("\n")
-      ? new RegExp(`\\r?\\n(?=${root.replaceAll(/[\\^$.*+?()[\]{}|/]/gu, "\\$&")})`, "u")
-      : /\r?\n/u;
-    const lines = compiled.output.replace(/\r?\n$/u, "").split(separator);
+    // --listFiles prints one absolute path per line after any diagnostics. Admit read files
+    // before reporting errors so an escaped input fails as an escape, not as the type error
+    // it causes.
+    const lines = compiled.output.replace(/\r?\n$/u, "").split(/\r?\n/u);
     const read = lines.filter((line) => path.isAbsolute(line) && fs.existsSync(line));
     // Published SDK declarations probe `../`-relative node_modules paths several levels up.
     // In a checkout nested inside another install (an updater's preflight worktree) they
@@ -427,22 +424,25 @@ export async function emitNativeDeclarations(
   if (!options.roots.length) {
     return { inputs: [], declarations };
   }
-  const bounded = () =>
+  const root = fs.realpathSync.native(options.cwd);
+  const api = (assertInput = options.assertInput) =>
     compileNativeProject({
       ...options,
-      compilerOptions: {
-        ...options.compilerOptions,
-        rootDir: fs.realpathSync.native(options.cwd),
-        declarationMap: true,
-      },
+      assertInput,
+      compilerOptions: { ...options.compilerOptions, rootDir: root, declarationMap: true },
     });
+  // The command line always applies the checkout boundary; its API replacement must too.
+  const bounded = () => api(options.assertInput ?? ((file) => file));
   // API baselines check only declaration diagnostics, sometimes with a historical
   // compiler; the command line reports every diagnostic, so they keep the API path.
-  // A command-line pass that read outside the checkout is redone behind the API filesystem.
+  // A checkout path with a line break cannot be framed in --listFiles output. A pass that
+  // read outside the checkout is redone behind the bounded API filesystem.
   const compilation =
     options.diagnostics === "declarations"
-      ? await bounded()
-      : ((await compileDeclarationsWithCompilerCli(options)) ?? (await bounded()));
+      ? await api()
+      : root.includes("\n")
+        ? await bounded()
+        : ((await compileDeclarationsWithCompilerCli(options)) ?? (await bounded()));
   const inputs = new Set(compilation.inputs);
   for (const [file, output] of compilation.outputFiles) {
     if (!/\.d\.[cm]?ts$/u.test(file)) {

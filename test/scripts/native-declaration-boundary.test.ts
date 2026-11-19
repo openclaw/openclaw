@@ -308,7 +308,12 @@ it("keeps optional SDK relative imports inside a checkout nested in a parent ins
     path.join(root, path.dirname(localTypes)),
     "junction",
   );
-  await expect(fixture.compile()).rejects.toThrow("Declaration input escapes checkout");
+  // Callers without their own input policy still get the checkout boundary.
+  for (const options of [{}, { assertInput: undefined }]) {
+    await expect(fixture.compile(options)).rejects.toThrow(
+      `Declaration input escapes checkout: ${path.join(root, path.dirname(localTypes))}`,
+    );
+  }
 });
 
 for (const kind of [

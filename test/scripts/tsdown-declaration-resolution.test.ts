@@ -714,7 +714,9 @@ it.concurrent.for([
     // Outside paths are absent behind the bounded filesystem; checkout links that leave it
     // are rejected by the checkout boundary.
     if (kind === "ancestor module") {
+      // The ancestor install has the module; only the bounded view makes it missing.
       expect(output).toContain("TS2307: Cannot find module 'synthetic-core'");
+      expect(output).not.toContain("Declaration input escapes checkout");
     } else {
       const ancestorOrReference = kind === "ancestor ambient types" || kind === "source reference";
       expect(output).toContain(
