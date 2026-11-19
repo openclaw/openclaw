@@ -1,7 +1,9 @@
 import { getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { GetReplyOptions } from "../../auto-reply/get-reply-options.types.js";
+import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { replyCallbackCustody } from "../../auto-reply/reply/reply-source-binding.types.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { LegacyPluginSdkResourceHost } from "../legacy-sdk-resource-host.js";
@@ -184,10 +186,35 @@ describe("inbound dispatch", () => {
     }
   });
 
+  it("keeps a callback-only queued turn alive until settlement", async () => {
+    const { owner, delivered, dispatch } = createOwnedInboundFixture();
+    let release: (() => void) | undefined;
+    dispatchRoutedChannelTurn.mockImplementationOnce(async (turn) => {
+      const options: InternalGetReplyOptions | undefined = turn.replyOptions;
+      release = options?.[replyCallbackCustody]?.retain();
+      return { status: "handled" };
+    });
+    try {
+      await dispatch({ onPreparedAgentRunStart: delivered });
+      const queued = dispatchRoutedChannelTurn.mock.calls.at(-1)?.[0];
+      const start = { runId: "queued-observer-run", transcriptStart: null };
+      queued?.replyOptions?.onPreparedAgentRunStart?.(start);
+      expect(delivered).toHaveBeenCalledExactlyOnceWith(start);
+      release?.();
+      release = undefined;
+      expect(owner.hasRetainedConsumers).toBe(false);
+    } finally {
+      release?.();
+      await owner.dispose();
+    }
+  });
+
   it.each([false, true])("owns queued callback lifetime (observer=%s)", async (observerOnly) => {
     const { owner, delivered, dispatch } = createOwnedInboundFixture(observerOnly);
     let settle: (() => void | Promise<void>) | undefined;
     dispatchRoutedChannelTurn.mockImplementationOnce(async (turn) => {
+      const options: InternalGetReplyOptions | undefined = turn.replyOptions;
+      settle = options?.[replyCallbackCustody]?.retain();
       const lifecycle = turn.turnAdoptionLifecycle ?? turn.replyOptions?.turnAdoptionLifecycle;
       lifecycle?.onDeferred?.();
       return { status: "handled" };
@@ -198,8 +225,6 @@ describe("inbound dispatch", () => {
       if (!queued) {
         throw new Error("Dispatch did not retain the queued source");
       }
-      settle = (queued.turnAdoptionLifecycle ?? queued.replyOptions?.turnAdoptionLifecycle)
-        ?.onSettled;
       const batch = {
         kind: "queued-followup" as const,
         runId: "queued-run",
