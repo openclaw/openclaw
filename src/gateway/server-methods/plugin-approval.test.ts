@@ -569,11 +569,17 @@ describe("createPluginApprovalHandlers", () => {
       expect(expectResponseRejected(respond).message).toContain("expired or not found");
     });
 
-    it("returns decision when resolved", async () => {
-      const record = await registerApproval(manager);
+    it("returns decision when resolved", async (test) => {
+      await createApprovalSessionFixture(test);
+      const record = await registerOwnedApproval(manager, { title: "T" });
 
       await manager.resolve(record.id, "allow-once");
-      expect(expectResponseOk(await call("waitDecision", { id: record.id }))).toMatchObject({
+      const respond = await call(
+        "waitDecision",
+        { id: record.id },
+        { client: createOwnedClient() },
+      );
+      expect(expectResponseOk(respond)).toMatchObject({
         id: record.id,
         decision: "allow-once",
       });
