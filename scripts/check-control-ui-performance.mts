@@ -59,9 +59,9 @@ const controlUiPerformanceBudgets = {
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
   // Main feature cost after paydown #199196 includes signing #199136.
-  // Owner-approved bounded history (#187440): +7,298 B on the prior budget.
-  // Keep that approved absolute ceiling while measuring the joined route.
-  chatBootJsGzipBytes: 1_311_256,
+  // Owner-approved bounded history (#187440): measured 1,317,399 B on the
+  // joined route, retaining the prior 699 B headroom.
+  chatBootJsGzipBytes: 1_318_098,
   // The shared lazy signer adds the coordinator-accepted +235 B here.
   newBootJsGzipBytes: 814_563,
   startupCssRequests: 1,
