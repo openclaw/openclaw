@@ -150,6 +150,10 @@ export async function runTalkNodePermissionParity({
   context.getClientConnIds = (filter) => new Set(!filter || filter(client) ? [connectionId] : []);
   const { closeTalkClientGatewayControlSession } = await import("./talk/client-gateway-control.js");
   const workspace = expectDefined(config.agents?.defaults?.workspace, "fixture workspace");
+  // Keep workspace content independent of the effect marker: removing the only
+  // file after a consult attests the workspace correctly looks like data loss.
+  await fs.mkdir(workspace, { recursive: true });
+  await fs.writeFile(path.join(workspace, "README.md"), "Synthetic Talk permission workspace.\n");
   const marker = path.join(workspace, "node-parity-effects");
   let requested = createDeferred<Record<string, unknown>>();
   let approvalEvents = 0;
@@ -346,7 +350,16 @@ export async function runTalkNodePermissionParity({
           task = dispatch(method, params);
         }
         void task.catch((error: unknown) => finished.resolve({ error: String(error) }));
-        const runId = await started.promise;
+        // Direct callbacks settle with execution, unlike RPC dispatch acknowledgments.
+        const runId =
+          ingress === "direct"
+            ? await Promise.race([
+                started.promise,
+                task.then(() => {
+                  throw new Error("Direct consult settled before model start");
+                }),
+              ])
+            : await started.promise;
         diagnostic.lastCompletedAwait = "model-started";
         if (requiresApproval) {
           const pending = await Promise.race([
