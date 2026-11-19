@@ -160,6 +160,13 @@ async function createFixture(
   if (options.archivedTurns) {
     await sessionManager.appendResetBoundaryAsync("new");
   }
+  // Match an initialized runtime session so abort assertions include every preexisting entry.
+  await sessionManager.appendCustomEntryAsync("model-snapshot", {
+    timestamp: 1,
+    provider: model.provider,
+    modelApi: model.api,
+    modelId: model.id,
+  });
   if (options.previousSummary) {
     await sessionManager.appendMessageAsync({
       role: "user",
@@ -693,28 +700,29 @@ describe("direct compactor through the context-engine delegate", () => {
   );
 
   it.each(["abort", "owner-replaced"] as const)(
-    "discards a hydrated compaction transcript after %s before publication",
+    "discards prepared compaction facts after %s before publication",
     async (transition) => {
       const fixture = await createFixture("summary");
       const { historyLane } =
         await import("../../config/sessions/session-transcript-worker-resources.js");
       const { withSessionTranscriptWriteAssertion } =
         await import("../../config/sessions/transcript-write-context.js");
-      const hydrationGate = createEnteredGate();
+      const preparationGate = createEnteredGate();
       const controller = new AbortController();
       let current = true;
       const reason = new Error("compaction preparation no longer current");
       const run = historyLane.pool.run.bind(historyLane.pool);
       const read = vi.spyOn(historyLane.pool, "run").mockImplementation((input, options) => {
-        let hydration = false;
+        let preparation = false;
         return run(async () => {
           const request = typeof input === "function" ? await input() : input;
-          hydration = request.kind === "transcript-hydration";
+          preparation =
+            request.kind === "compaction-preparation" && request.operation.kind === "preflight";
           return request;
         }, options).then(async (snapshot) => {
-          if (hydration) {
+          if (preparation) {
             read.mockRestore();
-            await hydrationGate.wait();
+            await preparationGate.wait();
           }
           return snapshot;
         });
@@ -734,16 +742,16 @@ describe("direct compactor through the context-engine delegate", () => {
       );
       try {
         await awaitGateBeforeSettlement(
-          hydrationGate.entered,
+          preparationGate.entered,
           pending,
-          "Compaction completed before the native hydration reply",
+          "Compaction completed before the native preparation reply",
         );
         if (transition === "abort") {
           controller.abort(reason);
         } else {
           current = false;
         }
-        hydrationGate.release();
+        preparationGate.release();
         expect(await pending).toMatchObject({ ok: false, compacted: false });
         expect(fixture.stream).not.toHaveBeenCalled();
         expect(hookRunner.runBeforeCompaction).not.toHaveBeenCalled();
@@ -755,7 +763,7 @@ describe("direct compactor through the context-engine delegate", () => {
           fixture.originalEntries,
         );
       } finally {
-        hydrationGate.release();
+        preparationGate.release();
         read.mockRestore();
         await pending.catch(() => undefined);
       }
@@ -779,6 +787,8 @@ describe("direct compactor through the context-engine delegate", () => {
         info: { ownsCompaction: false },
         compact: vi.fn<ContextEngine["compact"]>(delegate),
       });
+      const preparation = await import("../../config/sessions/session-compaction-prepared.js");
+      const reads = vi.spyOn(preparation, "readPreparedSessionCompactionInWorker");
       const observed = await observeTranscriptHydrations();
       try {
         let preparedSession: PreparedCompactionSession | undefined;
@@ -799,37 +809,30 @@ describe("direct compactor through the context-engine delegate", () => {
             storePath: fixture.target.storePath,
           });
           preparedSession = prepared.preparedSession;
-          const sessionManager = preparedSession?.sessionManager;
-          if (!sessionManager) {
-            throw new Error("expected the prepared compaction session manager");
-          }
-          const branch = sessionManager.getBranch();
-          expect(branch).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ type: "compaction", summary: previousSummary }),
-            ]),
-          );
-          const messages = branch.filter((event) => event.type === "message");
-          expect(messages).toHaveLength(7);
-          // Beta.4 hydrates mutable payloads once; repeated branch reads must not copy them.
-          const repeatedMessages = sessionManager
-            .getBranch()
-            .filter((event) => event.type === "message");
-          for (const [index, { message }] of messages.entries()) {
-            expect(repeatedMessages?.[index]?.message).toBe(message);
-          }
+          expect(preparedSession?.source).toBeDefined();
+          expect(preparedSession?.sessionManager).toBeUndefined();
         }
         const result = await compactQueued(
           { ...fixture.queuedParams, trigger, contextTokenBudget: 32_000 },
           preparedSession ? { preparedSession } : undefined,
         );
         expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
+        const values = await Promise.all(reads.mock.results.map(({ value }) => value));
+        const planned = values.find((value) => value.status === "prepared");
+        if (!planned) {
+          throw new Error("expected bounded compaction preparation");
+        }
+        // Keep the prior summary and all seven active messages as facts, not hydrated payloads.
+        expect(planned.source.entries).toEqual(
+          expect.arrayContaining([expect.objectContaining({ previousSummary })]),
+        );
+        expect(planned.source.entries.filter((entry) => entry.type === "message")).toHaveLength(7);
+        expect(planned.source.eventCount).toBeGreaterThan(80);
+        expect(observed.hydrations).toEqual([]);
       } finally {
         observed.restore();
+        reads.mockRestore();
       }
-      // Header, retained request, full summary, and all six current message entries.
-      expect(observed.hydrations[0]).toMatchObject({ kind: "streamed-bounded", events: 9 });
-      expect(observed.hydrations[0]?.totalEvents).toBeGreaterThan(80);
       const requests = fixture.stream.mock.calls.map((call) => JSON.stringify(call[1]));
       expect(requests.some((request) => request.includes(marker))).toBe(true);
       expect(requests.join("\n")).not.toContain("Archived request");
