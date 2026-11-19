@@ -183,7 +183,7 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   background: transparent;
   text-align: start;
   &:hover {
-    background: var(--bg-hover);
+    background: var(--surface-hover);
   }
   & > span:not([class]) {
     flex: 1;
