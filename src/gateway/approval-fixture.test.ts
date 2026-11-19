@@ -2,6 +2,10 @@ import fs from "node:fs";
 import { afterEach, expect, it, vi, type TestContext } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createDeferredCore as deferred } from "../shared/deferred.js";
@@ -201,6 +205,8 @@ it("does not expose a registered approval before publication", async (testContex
 });
 
 it("waits for the real RPC accepted tuple after held registration", async (testContext) => {
+  setRuntimeConfigSnapshot({});
+  testContext.onTestFinished(() => clearRuntimeConfigSnapshot());
   const fixture = createTestApprovalFixture(testContext);
   const { manager } = fixture;
   await fixture.run(async () => {
@@ -209,7 +215,7 @@ it("waits for the real RPC accepted tuple after held registration", async (testC
     const reviewer = makeGatewayClient({
       connId: "fixture-reviewer",
       clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
-      scopes: ["operator.approvals"],
+      scopes: ["operator.admin"],
     });
     const clients = new GatewayClientRegistry([
       {

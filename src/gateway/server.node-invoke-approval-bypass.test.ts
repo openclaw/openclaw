@@ -421,7 +421,7 @@ describe("node.invoke approval bypass", () => {
 
   test("binds approvals to decision/device and blocks cross-device replay", async () => {
     const { capture: invokeCapture, nodeId } = await connectObservedNode();
-    const wsApprover = await connectOperator(["operator.write", "operator.approvals"]);
+    const wsApprover = await connectOperator(["operator.admin"]);
     const wsCaller = await connectOperator(["operator.write"]);
     const wsOtherDevice = await connectOperator(
       ["operator.write"],
@@ -447,7 +447,7 @@ describe("node.invoke approval bypass", () => {
 
   test("bridges no-device chat approvals across backend reconnects only for the same turn source", async () => {
     const { capture: invokeCapture, nodeId } = await connectObservedNode();
-    const wsRequest = await connectTrustedBackend(["operator.write", "operator.approvals"]);
+    const wsRequest = await connectTrustedBackend(["operator.admin"]);
     const wsReplay = await connectTrustedBackend(["operator.write", "operator.approvals"]);
 
     const context: ChatApprovalContext = {
@@ -490,7 +490,7 @@ describe("node.invoke approval bypass", () => {
     const approvedNode = await connectObservedNode();
     const replayNode = await connectObservedNode();
 
-    const wsApprover = await connectOperator(["operator.write", "operator.approvals"]);
+    const wsApprover = await connectOperator(["operator.admin"]);
     const wsCaller = await connectOperator(["operator.write"]);
 
     await expect

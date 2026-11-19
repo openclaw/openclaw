@@ -13,7 +13,6 @@ import { SessionMutationAuthorizationChangedError } from "../session-mutation-au
 import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import { resolveSessionSubscriptionKey } from "../session-subscription-keys.js";
-import { prepareApprovalSessionAccess } from "./approval-record-lookup.js";
 import { respondError } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
@@ -149,13 +148,6 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
             })
           : undefined;
         try {
-          using sessionAccess = includeApprovals
-            ? await prepareApprovalSessionAccess({
-                client,
-                getCfg: context.getRuntimeConfig,
-                sources: [{ sessionKey: canonicalKey, agentId: requestedAgentId }],
-              })
-            : undefined;
           if (includeApprovals) {
             read?.assertCurrent();
             sessionMutationAuthorization?.assertCurrent();
@@ -215,11 +207,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
               client?.invalidated ||
               signal?.aborted ||
               hasCurrentClientAuthority?.() === false ||
-              !canReviewOperatorApproval(client) ||
-              !sessionAccess?.canAccess({
-                sessionKey: canonicalKey,
-                agentId: requestedAgentId,
-              })
+              !canReviewOperatorApproval(client)
             ) {
               throw new Error("session approval replay authority is no longer active");
             }

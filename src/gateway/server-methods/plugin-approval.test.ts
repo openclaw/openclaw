@@ -9,6 +9,10 @@ import {
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
+import { prepareApprovalSessionAccess } from "./approval-record-lookup.js";
+import { createApprovalClientLookup } from "./approval-request.test-support.js";
+import { createApprovalSessionFixture } from "./approval.test-support.js";
 import { createPluginApprovalHandlers } from "./plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -26,6 +30,7 @@ function createClient(
     connId?: string;
     clientId?: string;
     deviceId?: string;
+    profileId?: string;
     scopes?: string[];
     approvalRuntime?: boolean;
     pluginApprovalRequestOwnerId?: string;
@@ -33,6 +38,7 @@ function createClient(
 ): GatewayRequestHandlerOptions["client"] {
   return {
     connId: params.connId ?? "conn-test-client",
+    ...(params.profileId ? { authenticatedUserProfile: gatewayProfile(params.profileId) } : {}),
     connect: {
       client: { id: params.clientId ?? "test-client", displayName: "Test Client" },
       ...(params.deviceId ? { device: { id: params.deviceId } } : {}),
@@ -109,7 +115,8 @@ function createOwnedClient(owner: "owner" | "other" = "owner", scopes?: string[]
     connId: `conn-${owner}`,
     clientId: `client-${owner}`,
     deviceId: `device-${owner}`,
-    scopes,
+    profileId: owner,
+    scopes: scopes ?? ["operator.approvals"],
   });
 }
 
@@ -119,14 +126,22 @@ async function registerApproval(
     title?: string;
     id?: string;
     allowedDecisions?: PluginApprovalRequestPayload["allowedDecisions"];
+    owner?: "owner" | "other";
   } = {},
 ) {
   const request = {
     title: params.title ?? "T",
     description: "D",
+    ...(params.owner ? { agentId: "main", sessionKey: "agent:main:approval-fixture" } : {}),
     ...(params.allowedDecisions ? { allowedDecisions: params.allowedDecisions } : {}),
   };
   const record = approvalManager.create(request, 60_000, params.id);
+  if (params.owner) {
+    record.requestedByProfileId = params.owner;
+    record.requestedByDeviceId = `device-${params.owner}`;
+    record.requestedByConnId = `conn-${params.owner}`;
+    record.requestedByClientId = `client-${params.owner}`;
+  }
   await approvalManager.register(record, 60_000);
   return record;
 }
@@ -135,12 +150,7 @@ async function registerOwnedApproval(
   approvalManager: ExecApprovalManager<PluginApprovalRequestPayload>,
   params: { title: string; id?: string; owner?: "owner" | "other" },
 ) {
-  const record = await registerApproval(approvalManager, { title: params.title, id: params.id });
-  const owner = params.owner ?? "owner";
-  record.requestedByDeviceId = `device-${owner}`;
-  record.requestedByConnId = `conn-${owner}`;
-  record.requestedByClientId = `client-${owner}`;
-  return record;
+  return registerApproval(approvalManager, { ...params, owner: params.owner ?? "owner" });
 }
 
 function broadcastCall(opts: GatewayRequestHandlerOptions, index = 0) {
@@ -440,25 +450,31 @@ describe("createPluginApprovalHandlers", () => {
       await settle({ id, pending }, "deny");
     });
 
-    it("binds an initiating TUI as the least-privilege approval reviewer", async () => {
-      const reviewerClient = createClient({
-        connId: "conn-tui-reviewer",
-        clientId: "openclaw-tui",
-        deviceId: "device-tui-reviewer",
-        scopes: ["operator.approvals"],
+    it("binds a session creator's TUI as the least-privilege approval reviewer", async (test) => {
+      const { sessionKey } = await createApprovalSessionFixture(test);
+      const reviewerClient = expectDefined(
+        createClient({
+          connId: "conn-tui-reviewer",
+          clientId: "openclaw-tui",
+          deviceId: "device-tui-reviewer",
+          profileId: "session-creator",
+          scopes: ["operator.approvals"],
+        }),
+        "TUI reviewer",
+      );
+      using sessionAccess = await prepareApprovalSessionAccess({
+        client: reviewerClient,
+        cfg: {},
+        sources: [{ sessionKey, agentId: "main" }],
       });
       const broadcastToConnIds = vi.fn();
       const context = {
         ...createApprovalContext(),
         broadcastToConnIds,
-        getApprovalClientConnIds: ({
-          filter,
-        }: {
-          filter: (client: GatewayRequestHandlerOptions["client"]) => boolean;
-        }) =>
-          filter(reviewerClient)
-            ? new Set([reviewerClient?.connId ?? "conn-tui-reviewer"])
-            : new Set<string>(),
+        getApprovalClientConnIds: createApprovalClientLookup([reviewerClient], {
+          cfg: {},
+          sessionAccess,
+        }),
       } as unknown as GatewayRequestHandlerOptions["context"];
       const requestClient = createClient({
         connId: "conn-approval-runtime",
@@ -468,7 +484,7 @@ describe("createPluginApprovalHandlers", () => {
         approvalRuntime: true,
       });
       const { pending, id } = await startRequest(
-        { approvalReviewerDeviceIds: ["device-tui-reviewer"] },
+        { sessionKey, agentId: "main", approvalReviewerDeviceIds: ["device-tui-reviewer"] },
         { client: requestClient, context },
       );
 
@@ -513,7 +529,8 @@ describe("createPluginApprovalHandlers", () => {
   });
 
   describe("plugin.approval.list", () => {
-    it("lists only plugin approvals owned by the caller", async () => {
+    it("lists only plugin approvals raised by the caller's profile", async (test) => {
+      await createApprovalSessionFixture(test);
       await registerOwnedApproval(manager, { title: "Visible", id: "plugin:visible" });
       await registerOwnedApproval(manager, {
         title: "Hidden",
@@ -537,7 +554,8 @@ describe("createPluginApprovalHandlers", () => {
       );
     });
 
-    it("returns not found for approvals hidden from the caller", async () => {
+    it("returns not found for approvals hidden from the caller", async (test) => {
+      await createApprovalSessionFixture(test);
       const record = await registerOwnedApproval(manager, { title: "T" });
       await manager.resolve(record.id, "allow-once");
 
@@ -579,10 +597,11 @@ describe("createPluginApprovalHandlers", () => {
       });
       const record = await registerApproval(manager);
 
-      const opts = createMockOptions("plugin.approval.resolve", {
-        id: record.id,
-        decision: "deny",
-      });
+      const opts = createMockOptions(
+        "plugin.approval.resolve",
+        { id: record.id, decision: "deny" },
+        { client: createClient({ scopes: ["operator.admin"] }) },
+      );
       await invokeHandler(resolveHandlers, opts);
 
       expect(opts.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
@@ -601,7 +620,8 @@ describe("createPluginApprovalHandlers", () => {
       });
     });
 
-    it("resolves only plugin approvals owned by the caller", async () => {
+    it("resolves only plugin approvals raised by the caller's profile", async (test) => {
+      await createApprovalSessionFixture(test);
       const visible = await registerOwnedApproval(manager, {
         title: "Visible",
         id: "plugin:abcd-visible",
@@ -641,10 +661,11 @@ describe("createPluginApprovalHandlers", () => {
         allowedDecisions: ["allow-once", "deny"],
       });
 
-      const respond = await call("resolve", {
-        id: record.id,
-        decision: "allow-always",
-      });
+      const respond = await call(
+        "resolve",
+        { id: record.id, decision: "allow-always" },
+        { client: createClient({ scopes: ["operator.admin"] }) },
+      );
       const error = expectResponseRejected(respond);
       expect(error).toMatchObject({
         code: "INVALID_REQUEST",
@@ -658,10 +679,11 @@ describe("createPluginApprovalHandlers", () => {
       await registerApproval(manager, { title: "A", id: "plugin:abc-1111" });
       await registerApproval(manager, { title: "B", id: "plugin:abc-2222" });
 
-      const respond = await call("resolve", {
-        id: "plugin:abc",
-        decision: "deny",
-      });
+      const respond = await call(
+        "resolve",
+        { id: "plugin:abc", decision: "deny" },
+        { client: createClient({ scopes: ["operator.admin"] }) },
+      );
       expect(expectResponseRejected(respond)).toMatchObject({
         code: "INVALID_REQUEST",
         message: "unknown or expired approval id",

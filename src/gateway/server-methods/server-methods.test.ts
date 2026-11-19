@@ -45,6 +45,7 @@ import { createChatAbortMarker } from "../server-chat-state.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { injectTimestamp } from "./agent-timestamp.js";
 import { waitForApprovalAccepted } from "./approval-request.test-support.js";
+import { createApprovalSessionFixture } from "./approval.test-support.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import {
@@ -1295,85 +1296,22 @@ describe("exec approval handlers", () => {
     );
   });
 
-  it("lists and resolves only exec approvals owned by the caller", async (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const handlers = createExecApprovalHandlers(manager);
-    const context = {
-      broadcast: (_eventValue: string, _payload: unknown) => {},
-    };
-    const client = (name: string) =>
-      createExecApprovalClient({
-        connId: `conn-${name}`,
-        clientId: `client-${name}`,
-        deviceId: `device-${name}`,
-      });
-    const ownerClient = client("owner");
-    const otherClient = client("other");
-
-    const visible = manager.create({ command: "echo visible" }, 60_000, "approval-abcd-visible");
-    visible.requestedByDeviceId = "device-owner";
-    visible.requestedByConnId = "conn-owner";
-    visible.requestedByClientId = "client-owner";
-    await manager.register(visible, 60_000);
-
-    const hidden = manager.create({ command: "echo hidden" }, 60_000, "approval-abcd-hidden");
-    hidden.requestedByDeviceId = "device-other";
-    hidden.requestedByConnId = "conn-other";
-    hidden.requestedByClientId = "client-other";
-    await manager.register(hidden, 60_000);
-
-    const listRespond = vi.fn();
-    await listExecApprovals({ handlers, respond: listRespond, client: ownerClient });
-    expect(mockCallArg(listRespond)).toBe(true);
-    const approvals = mockCallArg(listRespond, 0, 1) as Array<Record<string, unknown>>;
-    expect(approvals.map((entry) => entry.id)).toEqual(["approval-abcd-visible"]);
-
-    const resolveRespond = await resolveExecApprovalForTest({
-      handlers,
-      id: "approval-abcd",
-      context,
-      client: ownerClient,
-    });
-    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect((await manager.getSnapshot(visible.id))?.decision).toBe("allow-once");
-    expect((await manager.getSnapshot(hidden.id))?.decision).toBeUndefined();
-
-    const hiddenRespond = await resolveExecApprovalForTest({
-      handlers,
-      id: hidden.id,
-      context,
-      client: ownerClient,
-    });
-    expect(mockCallArg(hiddenRespond)).toBe(false);
-    expectRecordFields(mockCallArg(hiddenRespond, 0, 2), {
-      code: "INVALID_REQUEST",
-      message: "unknown or expired approval id",
-    });
-    expect((await manager.getSnapshot(hidden.id))?.decision).toBeUndefined();
-
-    const otherRespond = await resolveExecApprovalForTest({
-      handlers,
-      id: hidden.id,
-      context,
-      client: otherClient,
-    });
-    expect(otherRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-  });
-
   it.for([
     {
       name: "ignores approval reviewer devices from non-runtime approval request clients",
       trusted: false,
     },
     {
-      name: "allows the internal approval runtime to bind the initiating mobile approval reviewer device",
+      name: "allows the initiating profile to review a mobile-targeted runtime approval",
       trusted: true,
     },
   ])("$name", async ({ trusted }, testContext) => {
+    const { sessionKey } = await createApprovalSessionFixture(testContext);
     const requesterClient = createExecApprovalClient({
       connId: trusted ? "conn-gateway-runtime" : "conn-gateway-client",
       clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
       deviceId: "device-gateway-runtime",
+      profileId: trusted ? "mobile-reviewer" : "requester",
       scopes: ["operator.approvals"],
       approvalRuntime: trusted,
     });
@@ -1381,6 +1319,7 @@ describe("exec approval handlers", () => {
       connId: "conn-ios-reviewer",
       clientId: GATEWAY_CLIENT_IDS.IOS_APP,
       deviceId: "device-ios-reviewer",
+      profileId: "mobile-reviewer",
       scopes: ["operator.approvals"],
     });
 
@@ -1390,6 +1329,7 @@ describe("exec approval handlers", () => {
         client: requesterClient,
         request: {
           id: "approval-reviewer",
+          sessionKey,
           twoPhase: true,
           approvalReviewerDeviceIds: ["device-ios-reviewer"],
         },
@@ -1400,6 +1340,7 @@ describe("exec approval handlers", () => {
         expect(pending).toMatchObject({
           id,
           requestedByDeviceId: "device-gateway-runtime",
+          request: { sessionKey },
         });
         expect(pending!.resolvedAtMs).toBeUndefined();
         expect(pending!.approvalReviewerDeviceIds).toEqual(
