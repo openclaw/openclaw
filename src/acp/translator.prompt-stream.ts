@@ -28,6 +28,7 @@ import type {
   AcpPendingPrompt,
 } from "./translator.prompt-state.js";
 import type { GatewayChatContentBlock } from "./translator.replay.js";
+import { AcpTranslatorSessionMessages } from "./translator.session-messages.js";
 import type { AcpTranslatorSessionState } from "./translator.session-state.js";
 import type { AcpTranslatorSessionUpdates } from "./translator.session-updates.js";
 
@@ -69,10 +70,9 @@ export class AcpTranslatorPromptStream {
   private readonly pendingPrompts = new Map<string, AcpPendingPrompt>();
   private readonly pendingPromptAdmissions = new Map<string, AcpPendingPromptAdmission>();
   private readonly settlingPromptKeys = new Set<string>();
-  /** Session key each ACP session subscribed on the current Gateway connection. */
-  private readonly messageSubscriptions = new Map<string, string>();
   private readonly agentEvents: AcpTranslatorAgentEvents;
   private readonly disconnects: AcpTranslatorDisconnects;
+  private readonly sessionMessages: AcpTranslatorSessionMessages;
   private stopped = false;
 
   constructor(
@@ -100,6 +100,13 @@ export class AcpTranslatorPromptStream {
       (sessionId, runId) => this.getPendingPrompt(sessionId, runId),
       (sessionId, pending, result) => this.settleRecoveredPrompt(sessionId, pending, result),
       (pending, error, options) => this.rejectPendingPrompt(pending, error, options),
+      log,
+    );
+    this.sessionMessages = new AcpTranslatorSessionMessages(
+      gateway,
+      (sessionKey, runId) => this.findPendingBySessionKey(sessionKey, runId),
+      (pending) => this.getPendingPrompt(pending.sessionId, pending.idempotencyKey) === pending,
+      (pending, text) => this.emitPromptChunk(pending, "agent_message_chunk", text),
       log,
     );
   }
@@ -134,8 +141,7 @@ export class AcpTranslatorPromptStream {
   }
 
   handleGatewayDisconnect(reason: string): void {
-    // The Gateway drops a connection's subscriptions when it closes.
-    this.messageSubscriptions.clear();
+    this.sessionMessages.handleGatewayDisconnect();
     this.disconnects.handleGatewayDisconnect(reason);
   }
 
@@ -199,6 +205,13 @@ export class AcpTranslatorPromptStream {
         }
       }
 
+      if (pending.transcriptSync) {
+        // A terminal frame can omit text this run already published as transcript.
+        await pending.transcriptSync;
+        if (this.getPendingPrompt(pending.sessionId, pending.idempotencyKey) !== pending) {
+          return;
+        }
+      }
       const atTokenLimit = payload.stopReason === "length" || payload.stopReason === "max_tokens";
       if (state === "final") {
         const stopReason: StopReason = atTokenLimit ? "max_tokens" : "end_turn";
@@ -219,6 +232,10 @@ export class AcpTranslatorPromptStream {
             : "end_turn";
         await this.finishPrompt(pending.sessionId, pending, stopReason, { interruption });
       }
+      return;
+    }
+    if (evt.event === "session.message") {
+      await this.sessionMessages.handleSessionMessage(evt.payload);
       return;
     }
     if (evt.event === "exec.approval.requested") {
@@ -308,16 +325,8 @@ export class AcpTranslatorPromptStream {
       }
 
       const deliver = readBool(params["_meta"], ["deliver"]);
-      if (deliver && this.messageSubscriptions.get(session.sessionId) !== session.sessionKey) {
-        // Runs that deliver to an external channel are hidden from operator
-        // broadcasts; the Gateway streams them only to session message
-        // subscribers. A run in flight across a reconnect still settles
-        // through disconnect recovery but loses its live text.
-        await this.gateway.request("sessions.messages.subscribe", {
-          key: session.sessionKey,
-          subscriptionId: `acp:${session.sessionId}`,
-        });
-        this.messageSubscriptions.set(session.sessionId, session.sessionKey);
+      if (deliver) {
+        await this.sessionMessages.subscribe(session);
         if (!this.ownsPromptAdmission(admission)) {
           return { stopReason: "cancelled" };
         }
@@ -449,20 +458,7 @@ export class AcpTranslatorPromptStream {
   }
 
   async releaseSessionMessages(sessionId: string): Promise<void> {
-    const sessionKey = this.messageSubscriptions.get(sessionId);
-    if (sessionKey === undefined) {
-      return;
-    }
-    this.messageSubscriptions.delete(sessionId);
-    try {
-      await this.gateway.request("sessions.messages.unsubscribe", {
-        key: sessionKey,
-        subscriptionId: `acp:${sessionId}`,
-      });
-    } catch (err) {
-      // A closed Gateway connection already dropped its subscriptions.
-      this.log(`sessions.messages.unsubscribe failed for ${sessionId}: ${String(err)}`);
-    }
+    await this.sessionMessages.release(sessionId);
   }
 
   async cancel(params: CancelNotification): Promise<void> {

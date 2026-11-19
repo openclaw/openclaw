@@ -1,10 +1,31 @@
 import { describe, expect, it } from "vitest";
+import type { Mock } from "vitest";
 import { expectOversizedPromptRejected } from "./translator.bridge-test-helpers.js";
 import {
   createChatEvent,
   createPendingPromptHarness,
   DEFAULT_SESSION_KEY,
 } from "./translator.prompt-harness.test-support.js";
+import { createPromptScenario } from "./translator.scenario.test-support.js";
+
+function messageChunks(sessionUpdate: Mock): string[] {
+  return sessionUpdate.mock.calls.flatMap(([{ update }]) =>
+    update.sessionUpdate === "agent_message_chunk" && update.content.type === "text"
+      ? [update.content.text]
+      : [],
+  );
+}
+
+function assistantTranscript(runId: string, id: string, text: string, truncated?: true) {
+  return {
+    sessionKey: DEFAULT_SESSION_KEY,
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text }],
+      __openclaw: { runId, id, ...(truncated ? { truncated } : {}) },
+    },
+  };
+}
 
 describe("acp final chat snapshots", () => {
   it.each(["Hello", "A rewritten snapshot that is longer"])(
@@ -75,6 +96,46 @@ describe("acp final chat snapshots", () => {
       ]);
     },
   );
+});
+
+describe("acp session message transcript", () => {
+  it("completes a reply whose chat final omits the published transcript text", async () => {
+    const { event, chat, active, sessionUpdate } = createPromptScenario();
+    const { result, runId } = await active();
+    await chat(runId, { state: "delta", message: { content: [{ type: "text", text: "BRA" }] } });
+    // Retirement of the committed live text, then the transcript copy.
+    await chat(runId, { state: "delta", replace: true, deltaText: "", message: { content: [] } });
+    await event("session.message", assistantTranscript(runId, "m1", "BRAVO"));
+    await event("session.message", assistantTranscript(runId, "m1", "BRAVO"));
+    await event("session.message", assistantTranscript("other-run", "m2", "BRAVO CHARLIE"));
+    await chat(runId, { state: "final" });
+    await expect(result).resolves.toEqual({ stopReason: "end_turn" });
+    expect(messageChunks(sessionUpdate)).toEqual(["BRA", "VO"]);
+  });
+
+  it("joins the run's transcript messages and reads truncated ones in full", async () => {
+    const { event, chat, active, request, sessionUpdate } = createPromptScenario({
+      request: (method, params) =>
+        method === "chat.message.get" && params?.messageId === "m2"
+          ? { ok: true, message: assistantTranscript("run", "m2", "second part").message }
+          : {},
+    });
+    const { result, runId } = await active();
+    await event("session.message", assistantTranscript(runId, "m1", "first part"));
+    // The final frame arrives while the truncated message's full read is in flight.
+    const truncated = event(
+      "session.message",
+      assistantTranscript(runId, "m2", "second\n...", true),
+    );
+    await chat(runId, { state: "final" });
+    await truncated;
+    await expect(result).resolves.toEqual({ stopReason: "end_turn" });
+    expect(messageChunks(sessionUpdate)).toEqual(["first part", "\n\nsecond part"]);
+    expect(request).toHaveBeenCalledWith("chat.message.get", {
+      sessionKey: DEFAULT_SESSION_KEY,
+      messageId: "m2",
+    });
+  });
 });
 
 describe("acp prompt size hardening", () => {

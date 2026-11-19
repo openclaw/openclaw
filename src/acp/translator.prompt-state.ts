@@ -22,6 +22,11 @@ export type AcpPendingPrompt = {
   preamblePreview?: { itemId: string; text: string; sent: string };
   sentThought?: string;
   streamMessage?: unknown;
+  /** Assistant transcript text of this run, from `session.message` on a subscribed session. */
+  transcriptText?: string;
+  transcriptMessageIds?: Set<string>;
+  /** Settles after every `session.message` received so far for this run is applied. */
+  transcriptSync?: Promise<void>;
   toolCalls?: Map<string, AcpPendingToolCall>;
 };
 

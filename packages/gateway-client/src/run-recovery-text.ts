@@ -122,35 +122,46 @@ export async function recoverTerminalReply(params: {
           return { unavailable: "full-message-unavailable" };
         }
       }
-      const content = typeof message.text === "string" ? message.text : message.content;
-      if (typeof content !== "string" && !Array.isArray(content)) {
+      const text = readAssistantReplyText(message);
+      if (text === undefined) {
         return { unavailable: "reply-text-unavailable" };
       }
-      const text =
-        typeof content === "string"
-          ? content
-          : content
-              .flatMap((block) => {
-                const part = asRecord(block);
-                return (part.type === "text" ||
-                  part.type === "input_text" ||
-                  part.type === "output_text") &&
-                  typeof part.text === "string"
-                  ? [part.text]
-                  : [];
-              })
-              .join("\n");
-      // Match the live item boundary: existing provider newlines supply the padding.
-      if (outputText && text) {
-        const trailing = outputText.endsWith("\n\n") ? 2 : outputText.endsWith("\n") ? 1 : 0;
-        const leading = text.startsWith("\n\n") ? 2 : text.startsWith("\n") ? 1 : 0;
-        outputText += "\n".repeat(Math.max(0, 2 - trailing - leading));
-      }
-      outputText += text;
+      outputText = appendAssistantReplyText(outputText, text);
     }
     return { outputText };
   } catch {
     signal.throwIfAborted();
     return { unavailable: "history-request-failed" };
   }
+}
+
+/** Text of one transcript assistant message; undefined when it has no readable content. */
+export function readAssistantReplyText(message: Record<string, unknown>): string | undefined {
+  const content = typeof message.text === "string" ? message.text : message.content;
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  return content
+    .flatMap((block) => {
+      const part = asRecord(block);
+      return (part.type === "text" || part.type === "input_text" || part.type === "output_text") &&
+        typeof part.text === "string"
+        ? [part.text]
+        : [];
+    })
+    .join("\n");
+}
+
+/** Joins a run's assistant messages the way the live stream joins its items. */
+export function appendAssistantReplyText(outputText: string, text: string): string {
+  // Match the live item boundary: existing provider newlines supply the padding.
+  if (!outputText || !text) {
+    return outputText + text;
+  }
+  const trailing = outputText.endsWith("\n\n") ? 2 : outputText.endsWith("\n") ? 1 : 0;
+  const leading = text.startsWith("\n\n") ? 2 : text.startsWith("\n") ? 1 : 0;
+  return outputText + "\n".repeat(Math.max(0, 2 - trailing - leading)) + text;
 }
