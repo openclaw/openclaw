@@ -26,6 +26,7 @@ import {
   normalizeCodexContextFilePath,
   type CodexWorkspaceBootstrapContext,
 } from "./attempt-workspace-context.js";
+import { resolveGatewayOnlySkillDirs } from "./dynamic-tool-content.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
@@ -429,13 +430,9 @@ function withoutGatewayOnlySkillLocations(
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&apos;");
   const names = new Set(
-    skills
-      .filter(
-        (skill) =>
-          skill.source === "openclaw-library" &&
-          !skill.filePath.startsWith(`${remoteRoot.replace(/\/+$/u, "")}/`),
-      )
-      .map((skill) => `    <name>${escape(skill.name)}</name>`),
+    [...resolveGatewayOnlySkillDirs(skills, remoteRoot).keys()].map(
+      (name) => "    <name>" + escape(name) + "</name>",
+    ),
   );
   const note = readable
     ? "Stored on the Gateway: read it with skills_read by name."
