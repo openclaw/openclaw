@@ -164,7 +164,7 @@ it.each(["failed delivery", "self downgrade"] as const)(
       expect((await listSystemChanges({})).entries).toEqual([
         expect.objectContaining({
           kind: "operation",
-          source: "users-rpc",
+          source: "config-rpc",
           summary: `Role for profile ${changed.id} changed from "administrator" to "reader" by profile ${requester.id}`,
         }),
       ]);
@@ -283,12 +283,12 @@ it("lists committed role assignments, not refused or unchanged ones, in change h
     expect((history.payload as { entries: unknown[] }).entries).toEqual([
       expect.objectContaining({
         kind: "operation",
-        source: "users-rpc",
+        source: "config-rpc",
         summary: `Role for profile ${target.id} cleared (was "reader") ${by}`,
       }),
       expect.objectContaining({
         kind: "operation",
-        source: "users-rpc",
+        source: "config-rpc",
         summary: `Role for profile ${target.id} changed from no role to "reader" ${by}`,
       }),
     ]);

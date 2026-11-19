@@ -8,7 +8,6 @@ authoring dates (2026), not package publication dates.
 
 ## Unreleased
 
-- Add `users-rpc` to `openclaw.changes.list` change sources for committed `users.setRole` role assignments. Additive; protocol stays v4.
 - Add optional `source` to the `talk.catalog` `transcription` group: `streaming`, `streaming-auto`, `voice-model`, or `media-understanding`, naming the path Talk transcription uses, and optional `mediaProviders` with the `tools.media` audio providers' readiness when Talk uses another path. Additive; protocol stays v4.
 - **Breaking:** retire A2UI widgets and the generic registered-renderer API. Stored A2UI widgets are backed up and deleted by Doctor; recreate them as HTML widgets. The v4 registered-content wire declarations remain for parsing older messages and reporting the retired operation, not for rendering or persistence.
 - Keep wire protocol v4 after widget retirement. The retired `registered` widget-put shape remains wire-valid but returns an actionable HTML replacement error without mutating the board; surviving widget responses retain v4-compatible shapes. General clients remain on v4, and authenticated nodes and lightweight probes retain the v3 compatibility window.

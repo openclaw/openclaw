@@ -192,7 +192,6 @@ export const SystemChangeSourceSchema = stringLiteralUnion([
   "system-agent",
   "doctor",
   "config-rpc",
-  "users-rpc",
   "cli",
   "plugin-install",
   "external",

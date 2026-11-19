@@ -208,7 +208,8 @@ function toSystemAgentCandidate(
       id: `${SYSTEM_AGENT_AUDIT_SCOPE}:${record.sequence}`,
       at: parseDateStringTimestampMs(record.value.timestamp) ?? record.createdAt,
       kind: "operation",
-      source: record.value.operation === ROLE_ASSIGNMENT_OPERATION ? "users-rpc" : "system-agent",
+      // Role assignments arrive through the Gateway admin API; v4 has no narrower source.
+      source: record.value.operation === ROLE_ASSIGNMENT_OPERATION ? "config-rpc" : "system-agent",
       summary: record.value.summary,
     },
     transition: transitionKey(record.value.configHashBefore, record.value.configHashAfter),

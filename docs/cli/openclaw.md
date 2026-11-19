@@ -227,11 +227,14 @@ and role assignments. The config journal detects external edits while the
 Gateway is watching, during an OpenClaw-owned write, or at the next startup
 after an offline edit.
 
-Each committed `users.setRole` change is listed with source `users-rpc`. Its
-summary names the target profile, the previous and new role (or that the role
-was cleared), and the requester's profile, or its device when it has no
-profile. Refused requests and requests that leave the role unchanged are not
-recorded.
+A committed `users.setRole` change is listed as an operation with source
+`config-rpc` (shown as "settings"). Its summary names the target profile, the
+previous and new role (or that the role was cleared), and the requester's
+profile, or its device when it has no profile. Refused requests and requests
+that leave the role unchanged are not recorded. Recording is best effort: if
+the history write fails after the role committed, the role change still
+succeeds and the Gateway logs a warning, so a missing entry does not prove the
+role is unchanged. Check `users.list` for the current role.
 
 History is stored in the `diagnostic_events` table of the shared
 `~/.openclaw/state/openclaw.sqlite` database, under the `system-agent-audit`

@@ -136,7 +136,6 @@ const enPluginManagement = {
         systemAgent: "system-agent",
         doctor: "doctor",
         settings: "settings",
-        roles: "roles",
         cli: "CLI",
         pluginInstall: "plugin install",
         manualEdit: "manual edit",

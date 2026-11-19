@@ -10,7 +10,6 @@ const CHANGE_SOURCE_LABELS = {
   "system-agent": "custodian.history.sources.systemAgent",
   doctor: "custodian.history.sources.doctor",
   "config-rpc": "custodian.history.sources.settings",
-  "users-rpc": "custodian.history.sources.roles",
   external: "custodian.history.sources.manualEdit",
   cli: "custodian.history.sources.cli",
   "plugin-install": "custodian.history.sources.pluginInstall",
