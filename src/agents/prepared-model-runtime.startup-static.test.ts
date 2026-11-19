@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockSubsystemLogger } from "../../test/helpers/mock-subsystem-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -13,6 +14,7 @@ import {
 } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { registerResolvedAgentDir, unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type * as ModelCatalog from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -88,6 +90,7 @@ const mocks = await vi.hoisted(async () => {
     mode: "api-key",
   }));
   return {
+    agentDir: "",
     model,
     authStorage,
     modelRegistry,
@@ -216,13 +219,13 @@ vi.mock("../plugins/synthetic-auth.runtime.js", async (importOriginal) => ({
 }));
 
 vi.mock("./legacy-inherited-auth-dir.js", () => ({
-  resolveLegacyInheritedAuthDir: () => "/tmp/prepared-static-agent",
+  resolveLegacyInheritedAuthDir: () => mocks.agentDir,
 }));
 
 vi.mock("./agent-scope-config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-scope-config.js")>()),
   listAgentIds: () => ["default"],
-  resolveAgentDir: () => "/tmp/prepared-static-agent",
+  resolveAgentDir: () => mocks.agentDir,
   resolveAgentWorkspaceDir: () => "/tmp/prepared-static-workspace",
 }));
 
@@ -280,13 +283,13 @@ const { resolveThinkingProfile } = await import("../auto-reply/thinking.js");
 const inputFor = (config: OpenClawConfig) => ({
   agentId: "default",
   config,
-  agentDir: "/tmp/prepared-static-agent",
+  agentDir: mocks.agentDir,
   workspaceDir: "/tmp/prepared-static-workspace",
 });
 const snapshotFor = (config: OpenClawConfig) =>
   getPreparedModelRuntimeSnapshot({
     ...inputFor(config),
-    inheritedAuthDir: "/tmp/prepared-static-agent",
+    inheritedAuthDir: mocks.agentDir,
   });
 const refresh = (config: OpenClawConfig) =>
   refreshPreparedModelRuntimeSnapshots(config, {
@@ -309,8 +312,12 @@ async function withScopedCatalogCache<T>(read: () => Promise<T>): Promise<T> {
   }
 }
 
+const tempDirs = createTempDirTracker();
 beforeEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
+  mocks.agentDir = tempDirs.make("openclaw-prepared-static-agent-");
+  // The resolver mock must publish the reverse ownership mapping its real counterpart owns.
+  registerResolvedAgentDir({ agentId: "default", agentDir: mocks.agentDir });
   bindPluginMetadataSnapshotCache(mocks.metadataSnapshot, getPluginCache());
   mocks.loadAgentRuntimePluginRegistryHandle
     .mockReset()
@@ -319,6 +326,11 @@ beforeEach(async () => {
   mocks.modelRegistry.find.mockReset();
   mocks.resolveStaticCatalogModel.mockReturnValue(undefined);
   mocks.resolveProviderPolicySurface.mockReset().mockReturnValue(null);
+});
+afterEach(async () => {
+  await resetPreparedModelRuntimeSnapshotsForTest();
+  unregisterResolvedAgentDir({ agentId: "default", agentDir: mocks.agentDir });
+  tempDirs.cleanup();
 });
 
 describe("prepared model runtime Gateway catalog mode", () => {
