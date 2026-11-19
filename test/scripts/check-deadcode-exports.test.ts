@@ -300,6 +300,18 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     expect(compile(source, path.join(path.dirname(file), `other.${kind}`))).toBe("");
   });
 
+  it("ignores full validation imports from an unrelated checkout", () => {
+    const file = ".github/workflows/full-release-validation.yml";
+    const source = replaceFixture(
+      fs.readFileSync(file, "utf8"),
+      "./workflow/scripts/full-release-validation-policy.mjs",
+      "./other/scripts/full-release-validation-policy.mjs",
+    );
+    expect(knipConfig.compilers.yml(source, file)).not.toContain(
+      "resolveReleaseQualificationScope",
+    );
+  });
+
   it("models the workflow planner without retaining removed consumers", () => {
     const file = ".github/workflows/plugin-prerelease.yml";
     const source = fs.readFileSync(file, "utf8");

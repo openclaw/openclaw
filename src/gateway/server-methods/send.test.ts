@@ -247,7 +247,7 @@ function mockDeliverySuccess(messageId: string) {
   mocks.deliverOutboundPayloads.mockResolvedValue([{ messageId, channel: "slack" }]);
 }
 
-const { registerMessageThreadAddressingPlugin, registerMessageActionPlugin } =
+const { registerMessageThreadAddressingPlugin, registerMessageActionPlugin, routePlugin } =
   createMessageMethodPluginFixtures(mocks);
 
 async function expectRejectedSend(params: Record<string, unknown>, message: string) {
@@ -269,22 +269,6 @@ function fixedStoreContext(): GatewayRequestContext {
       defaults: { sessionStore: { agentId: "ops" } },
     },
   }));
-}
-
-function routePlugin(channel: string, config: Partial<ChannelPlugin["config"]> = {}) {
-  return {
-    id: channel,
-    actions: { handleAction: true },
-    outbound: { sendPoll: mocks.sendPoll },
-    config: {
-      listAccountIds: (cfg: { channels?: Record<string, { accounts?: object }> }) => {
-        const ids = Object.keys(cfg.channels?.[channel]?.accounts ?? {});
-        return ids.length ? ids : ["default"];
-      },
-      resolveAccount: (_cfg: unknown, accountId: string) => ({ accountId, enabled: true }),
-      ...config,
-    },
-  };
 }
 
 function mockMutableMessageRouteAccounts(resolveDefaultAccountId: (channel: string) => string) {
@@ -390,10 +374,11 @@ describe("gateway send conversation ownership", () => {
             : `agent:${agentId ?? "main"}:${channel ?? "main"}:resolved`,
       }),
     );
-    mocks.resolveMessageChannelSelection.mockResolvedValue({
-      channel: "slack",
-      configured: ["slack"],
-    });
+    mocks.resolveMessageChannelSelection.mockImplementation(async ({ channel = "slack" }) => ({
+      channel,
+      plugin: mocks.getChannelPlugin(channel),
+      configured: [channel],
+    }));
     mocks.dispatchChannelMessageAction.mockResolvedValue({
       details: { action: "handled" },
     });
@@ -1384,7 +1369,7 @@ describe("gateway send conversation ownership", () => {
     expect(actionCall?.requesterSenderId).toBe("blocked-sender");
     expect(actionCall?.mediaAccess.workspaceDir).toBe(TEST_AGENT_WORKSPACE);
     expect(actionCall?.mediaAccess).not.toHaveProperty("readFile");
-    expect(actionCall).not.toHaveProperty("mediaReadFile");
+    expect(actionCall?.mediaReadFile).toBeUndefined();
   });
 
   it("applies signed sender aliases to gateway send media policy", async () => {
@@ -1438,12 +1423,9 @@ describe("gateway send conversation ownership", () => {
 
         expect(firstRespondCall(respond)[0]).toBe(true);
         const actionCall = lastDispatchChannelMessageActionCall();
-        expect(actionCall).toMatchObject({
-          requesterSenderId: "allowed-id",
-          requesterSenderName: "Blocked Sender",
-          requesterSenderUsername: "blocked-user",
-          requesterSenderE164: "+15551234567",
-        });
+        expect(actionCall?.requesterSenderId).toBe("allowed-id");
+        // The runner consumes signed aliases into media policy before provider dispatch;
+        // prove the resulting access below rather than forwarding private identity fields.
         expect(actionCall?.params).toMatchObject({ mediaUrl: workspaceFile });
         expect(actionCall?.params).not.toHaveProperty("buffer");
         const mediaAccess = actionCall?.mediaAccess;

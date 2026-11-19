@@ -173,6 +173,8 @@ const repositoryScriptEntries = [
   ".github/workflows/openclaw-stable-main-closeout.yml!",
   // Prepared publication imports its verifier from the frozen release harness.
   ".github/workflows/openclaw-release-publish.yml!",
+  // Release validation imports shared policy from its trusted workflow checkout.
+  ".github/workflows/full-release-validation.yml!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/actions/setup-node-env/seed-bun-from-image.mjs!",
