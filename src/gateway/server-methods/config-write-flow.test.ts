@@ -38,7 +38,9 @@ vi.mock("../../secrets/runtime-state.js", async (importOriginal) => ({
 }));
 
 const billingMocks = vi.hoisted(() => ({
-  collect: vi.fn((_params: { before: OpenClawConfig; after: OpenClawConfig }): string[] => []),
+  collect: vi.fn(
+    async (_params: { before: OpenClawConfig; after: OpenClawConfig }): Promise<string[]> => [],
+  ),
 }));
 
 // The comparator owns its own tests; these cases prove only the Gateway write wiring.
@@ -187,7 +189,7 @@ const cliModel = (runtime: string): OpenClawConfig => ({
 
 it("returns billing-route warnings for a committed model write without logging them early", async () => {
   const warning = "Billing route changed for agents.defaults.subagents.model (agent main).";
-  billingMocks.collect.mockReset().mockReturnValue([warning]);
+  billingMocks.collect.mockReset().mockResolvedValue([warning]);
   const warn = vi.fn();
   const result = await commitGatewayConfigWrite({
     snapshot: writeSnapshot(cliModel("claude-cli")),
@@ -204,7 +206,7 @@ it("returns billing-route warnings for a committed model write without logging t
 });
 
 it("adds and logs billing-route warnings only on a successful reply", async () => {
-  billingMocks.collect.mockReset().mockReturnValue(["route moved"]);
+  billingMocks.collect.mockReset().mockResolvedValue(["route moved"]);
   const warn = vi.fn();
   const respond = vi.fn();
   const { reply } = await commitGatewayConfigWrite({
@@ -225,9 +227,7 @@ it("adds and logs billing-route warnings only on a successful reply", async () =
 });
 
 it("keeps the committed write when the billing comparison fails or has nothing to compare", async () => {
-  billingMocks.collect.mockReset().mockImplementation(() => {
-    throw new Error("auth store unavailable");
-  });
+  billingMocks.collect.mockReset().mockRejectedValue(new Error("auth store unavailable"));
   const warn = vi.fn();
   const failed = await commitGatewayConfigWrite({
     snapshot: writeSnapshot(cliModel("claude-cli")),

@@ -253,15 +253,16 @@
     color var(--duration-fast) ease;
 }
 
-.plugin-catalog-chip:hover,
-.plugin-catalog-chip.is-active {
+.plugin-catalog-chip:hover {
   border-color: var(--border-strong);
   background: var(--bg-hover);
   color: var(--text-strong);
 }
 
 .plugin-catalog-chip.is-active {
-  background: var(--bg-elevated);
+  border-color: var(--text);
+  background: var(--text);
+  color: var(--bg);
 }
 
 .plugin-catalog-chip > span {
