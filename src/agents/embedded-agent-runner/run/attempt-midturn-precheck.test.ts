@@ -143,7 +143,7 @@ describe("provider request admission", () => {
     ${"late response identity"}            | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...largerVisible, asyncFragments: true }}
     ${"synthetic assistant tail"}          | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ syntheticAssistant: true, boundarySafe: true, pressure: "maintenance" }}
     ${"opaque reasoning"}                  | ${15_000} | ${12_000}  | ${16_000} | ${false} | ${{ opaque: true, completionTokens: 16_000 }}
-    ${"opaque reasoning + system tweak"}   | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ opaque: true, completionTokens: 16_000, tweakSystem: true, boundarySafe: true, pressure: "maintenance" }}
+    ${"opaque reasoning + system tweak"}   | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ opaque: true, completionTokens: 16_000, tweakSystem: true, boundarySafe: true, pressure: "overflow" }}
     ${"projected measured tail"}           | ${14_000} | ${100_000} | ${16_000} | ${true}  | ${{}}
     ${"projected unavailable usage"}       | ${0}      | ${100_000} | ${2_000}  | ${true}  | ${{}}
     ${"oversized measured tail"}           | ${23_000} | ${12_000}  | ${16_000} | ${false} | ${{ boundarySafe: true, pressure: "maintenance" }}
@@ -511,6 +511,11 @@ describe("provider request admission", () => {
         expect(pendingPrecheck !== null).toBe(!fits);
         if (pressure) {
           expect(pendingPrecheck?.pressure).toBe(pressure);
+          if (pressure === "overflow") {
+            expect(pendingPrecheck?.estimatedPromptTokens).toBeGreaterThan(model.contextWindow);
+          } else {
+            expect(pendingPrecheck?.estimatedPromptTokens).toBeLessThanOrEqual(model.contextWindow);
+          }
         }
         if (oversizedAssembly) {
           expect(pendingPrecheck).toMatchObject({

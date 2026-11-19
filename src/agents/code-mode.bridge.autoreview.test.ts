@@ -73,15 +73,16 @@ describe("Auto Review parent execution allowance", () => {
         }),
         "Auto Review",
       );
+      const toolHookContext = {
+        runId: harness.runId,
+        sessionKey: harness.sessionKey,
+        watchdogAttempt,
+        getRunAbortDeadlineAtMs: () => (parent === "finite" ? bound : undefined),
+      };
       const surface = applyCodeModeCatalog({
         ...harness,
-        tools: [...harness.tools, wrapToolWithBeforeToolCallHook(review, { runId: harness.runId })],
-        toolHookContext: {
-          runId: harness.runId,
-          sessionKey: harness.sessionKey,
-          watchdogAttempt,
-          getRunAbortDeadlineAtMs: () => (parent === "finite" ? bound : undefined),
-        },
+        tools: [...harness.tools, wrapToolWithBeforeToolCallHook(review, toolHookContext)],
+        toolHookContext,
       });
       const exec = expectDefined(
         surface.tools.find((entry) => entry.name === "exec"),
@@ -108,11 +109,22 @@ describe("Auto Review parent execution allowance", () => {
           new Set(["autoreview", "exec"]),
         );
         vi.setSystemTime(bound + SESSION_WATCHDOG_QUIET_TOOL_MS - 1);
-        expect((await operation.watchdog.tick(Date.now())).action).toBe("observe");
+        expect(await operation.watchdog.tick(Date.now())).toEqual({
+          action: "warn",
+          reason: "no_semantic_progress",
+          deadlineAtMs: bound + SESSION_WATCHDOG_QUIET_TOOL_MS,
+        });
+        expect(operation.abortSignal.reason).toBeUndefined();
+        expect(cancel).not.toHaveBeenCalled();
         vi.setSystemTime(bound + SESSION_WATCHDOG_QUIET_TOOL_MS + 1);
         await operation.watchdog.tick(Date.now());
         await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
-        expect(operation.abortSignal.reason).toMatchObject({ staleReason: "no_activity" });
+        expect(operation.abortSignal.reason).toMatchObject({
+          name: "AbortError",
+          code: "OPENCLAW_SESSION_WATCHDOG",
+          message: "Reply operation stalled",
+        });
+        expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
         await settled;
       } finally {
         harness.runAbortController.abort();
