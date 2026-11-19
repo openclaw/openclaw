@@ -4,6 +4,7 @@ import path from "node:path";
 import type { SandboxContext } from "../agents/sandbox/types.js";
 import { withWorktreeGitConfig } from "../agents/worktrees/checkout-git-config.js";
 import { requireGit, runGit } from "../agents/worktrees/git.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 
 /** Where the conversation's own files live: inside its sandbox, or on the Gateway host. */
 export type CarrySource =
@@ -113,17 +114,25 @@ async function bundleInSandbox(
 }
 
 /**
- * On the host a checkout's Git data must be the conversation's own: a `.git` file or
- * alternates could otherwise point Git at any repository the Gateway user can read.
+ * On the host a checkout's Git data must be the conversation's own: a `.git` file,
+ * alternates or a symlink inside the Git data could otherwise point Git at any
+ * repository the Gateway user can read. Git never creates symlinks in its own data,
+ * so ordinary clones and linked worktrees pass.
  */
 async function ownsGitData(directory: string, root: string, guard: { signal?: AbortSignal }) {
   const [gitDir, commonDir] = await Promise.all([
     requireGit(directory, ["rev-parse", "--absolute-git-dir"], guard),
     requireGit(directory, ["rev-parse", "--path-format=absolute", "--git-common-dir"], guard),
   ]);
-  for (const dir of [gitDir, commonDir]) {
-    const relative = path.relative(root, await fs.realpath(dir));
+  for (const dir of new Set([gitDir, commonDir])) {
+    const real = await fs.realpath(dir);
+    const relative = path.relative(root, real);
     if (relative.startsWith("..") || path.isAbsolute(relative)) {
+      return false;
+    }
+    // Git data too large or unreadable to walk cannot be shown to be its own.
+    const entries = await listDirectoryTreeStrict(real).catch(() => undefined);
+    if (!entries || entries.some(({ dirent }) => dirent.isSymbolicLink())) {
       return false;
     }
   }
@@ -160,7 +169,7 @@ async function bundleOnHost(
   }
   if (!(await ownsGitData(directory, root, guard))) {
     throw new Error(
-      `${checkout} keeps Git data outside this conversation's workspace; nothing was moved.`,
+      `${checkout} keeps Git data outside this conversation's workspace, or too large or unreadable to check; nothing was moved.`,
     );
   }
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-carry-index-"));
