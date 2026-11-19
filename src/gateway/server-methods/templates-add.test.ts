@@ -4,10 +4,6 @@ import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
 import type { CronJob } from "../../cron/types.js";
 import { ClawHubSourceError } from "../../templates/clawhub-source.js";
 import {
-  templateCronGatewayJobMatchesRef,
-  type PersistedTemplateCronRef,
-} from "../../templates/cron.js";
-import {
   TemplateGatewayPlanBlockedError,
   TemplateGatewayPlanChangedError,
 } from "../../templates/gateway-add-apply.js";
@@ -492,34 +488,5 @@ it.each([false, true])(
       expect(captureOwnerProfileId).toHaveBeenCalledWith("template-owner");
       expect(request[0]?.[0]).toBe(true);
     }
-  },
-);
-
-it.each([undefined, "template-owner"])(
-  "matches only the captured native ownership (%s)",
-  (ownerProfileId) => {
-    const ref: PersistedTemplateCronRef = {
-      schemaVersion: "openclaw.templateCronRef.v1",
-      agentId,
-      manifestId: "daily-brief",
-      declarationKey: schedule.declarationKey,
-      status: "complete",
-      job: { automation: schedule },
-      createdAtMs: 1,
-      updatedAtMs: 1,
-      nativeOwnership: { ownerProfileId },
-    };
-    const job = {
-      ...schedule,
-      ownerProfileId,
-      id: "job-1",
-      createdAtMs: 1,
-      updatedAtMs: 1,
-      state: {},
-    };
-    expect(templateCronGatewayJobMatchesRef(agentId, ref, job)).toBe(true);
-    expect(
-      templateCronGatewayJobMatchesRef(agentId, ref, { ...job, ownerProfileId: "other-owner" }),
-    ).toBe(false);
   },
 );

@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronWithinActiveHours } from "../cron/active-hours.js";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
+import { toPublicCronJob } from "../cron/public-job.js";
 import { CronService } from "../cron/service.js";
 import { createNoopLogger } from "../cron/service.test-harness.js";
 import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
@@ -67,7 +68,9 @@ function createTemplateCronAdapter(cron: CronService) {
       if (!normalized) {
         throw new Error("invalid cron input");
       }
-      return await cron.add(normalized, { commitGuard: options?.commitGuard });
+      const createdActor = { type: "human", source: "profile", id: "template-owner" } as const;
+      options?.captureOwnerProfileId?.(createdActor.id);
+      return await cron.add(normalized, { createdActor, commitGuard: options?.commitGuard });
     },
     list: async () => ({ jobs: await cron.list({ includeDisabled: true }) }),
     get: async (id) => {
@@ -415,6 +418,7 @@ async function portableSource(fixture: OpenClawTestState) {
 
 it.each([
   { every: "5m", changed: "none" },
+  { every: "5m", changed: "lost-reply" },
   { every: "0m", changed: "none" },
   { every: "5m", changed: "source" },
   { every: "5m", changed: "definition" },
@@ -495,7 +499,11 @@ it.each([
                 }
                 throw new Error("Second automation could not be added");
               }
-              return gateway.add(input, options);
+              const added = await gateway.add(input, options);
+              if (changed === "lost-reply") {
+                throw new Error("cron.add reply lost after commit");
+              }
+              return added;
             },
             writeScratch:
               changed === "missing-scratch-adapter"
@@ -554,6 +562,24 @@ it.each([
         }
         expect(result.status, result.error?.message).toBe("complete");
         expect(jobs).toHaveLength(2);
+        for (const ref of result.cronJobs) {
+          const job = await cron.readJob(ref.schedulerJobId!);
+          expect(job?.createdActor).toEqual({
+            type: "human",
+            source: "profile",
+            id: "template-owner",
+          });
+          expect(toPublicCronJob(job!)).not.toHaveProperty("createdActor");
+          expect(cronInstall.templateCronGatewayJobMatchesRef(plan.agent.finalId, ref, job)).toBe(
+            true,
+          );
+          expect(
+            cronInstall.templateCronGatewayJobMatchesRef(plan.agent.finalId, ref, {
+              ...job,
+              createdActor: { type: "human", source: "profile", id: "different-owner" },
+            }),
+          ).toBe(false);
+        }
         expect(jobs.every((job) => job.enabled === (every !== "0m"))).toBe(true);
         expect(jobs.find((job) => job.name === "Summary")?.payload).toMatchObject({
           kind: "agentTurn",

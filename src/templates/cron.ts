@@ -123,6 +123,14 @@ export function templateCronGatewayJobMatchesRef(
   if (!value || typeof value !== "object") {
     return false;
   }
+  // Creator provenance is scheduler-private, not a public ownerProfileId field.
+  // Read it only inside this operation before projecting the public definition.
+  const actor = (value as Partial<CronStoredJob>).createdActor;
+  const ownerProfileId =
+    actor?.type === "human" && actor.source === "profile" ? actor.id : undefined;
+  if (ref.nativeOwnership && ref.nativeOwnership.ownerProfileId !== ownerProfileId) {
+    return false;
+  }
   const live = cronJobDefinitionFromReadView(value as Partial<CronJob>);
   const expected = normalizeCronJobCreate(templateCronGatewayInput(agentId, ref));
   if (
@@ -149,7 +157,6 @@ export function templateCronGatewayJobMatchesRef(
   applyDefaultCronToolsAllow(comparableLive);
   const expectedWithPolicy = {
     ...expected,
-    ...ref.nativeOwnership,
     ...(comparableLive.scheduledToolPolicy
       ? { scheduledToolPolicy: createTrustedCronScheduledToolPolicy() }
       : {}),
