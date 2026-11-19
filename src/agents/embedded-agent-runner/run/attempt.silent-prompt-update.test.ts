@@ -1,4 +1,4 @@
-import { streamOpenAICompletions } from "@openclaw/ai/internal/openai";
+import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/internal/openai";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { Context, Model } from "../../../llm/types.js";
@@ -8,7 +8,6 @@ import { convertToLlm } from "../../sessions/messages.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
-import { createFakeStream } from "./attempt-stream.test-helpers.js";
 import { wrapStreamFnSanitizeMalformedToolCalls } from "./attempt-tool-call-replay-sanitization.js";
 import { buildSystemUpdateMessage } from "./runtime-context-prompt.js";
 
@@ -78,21 +77,21 @@ async function send(
     modelId: model.id,
     model,
   });
+  // Capture the live payload object each real transport builds, before serialization.
   let sent: unknown[] | undefined;
-  const transport = (streamModel: Model, context: Context) => {
-    if (streamModel.api !== "openai-completions") {
-      sent = structuredClone(context.messages);
-      return createFakeStream({ events: [], resultMessage: reply("done", 9) }) as never;
-    }
-    return streamOpenAICompletions(streamModel as Model<"openai-completions">, context, {
-      apiKey: "fixture-transport-value",
-      cacheRetention: "none",
-      onPayload(payload) {
-        sent = (payload as { messages: unknown[] }).messages;
-        throw new Error("stop after payload capture");
-      },
-    });
+  const streamOptions = {
+    apiKey: "fixture-transport-value",
+    cacheRetention: "none" as const,
+    onPayload(payload: unknown) {
+      const body = payload as { messages?: unknown[]; input?: unknown[] };
+      sent = body.messages ?? body.input;
+      throw new Error("stop after payload capture");
+    },
   };
+  const transport = (streamModel: Model, context: Context) =>
+    streamModel.api === "openai-completions"
+      ? streamOpenAICompletions(streamModel as Model<"openai-completions">, context, streamOptions)
+      : streamOpenAIResponses(streamModel as Model<"openai-responses">, context, streamOptions);
   const messages = normalizeMessagesForLlmBoundary(history, {
     timezone: "UTC",
     inHistorySystemUpdates: policy.inHistorySystemUpdates,
@@ -130,12 +129,13 @@ describe("prompt updates on routes without in-history system messages", () => {
       const previous = await send(route, history);
       const next = await send(route, [...history, reply("OK one", 0), ...nextTurn]);
       expect(JSON.stringify(next.slice(0, previous.length))).toBe(JSON.stringify(previous));
-      // The provider sees only the plain user fields; the marker never serializes.
-      expect(previous.at(-1)).toStrictEqual({
-        role: "user",
-        content: expect.anything(),
-        ...(route.api === "openai-completions" ? {} : { timestamp: expect.any(Number) }),
-      });
+      // The update reaches the payload with exactly the keys of an ordinary user item.
+      const ordinary = previous.find((item) => JSON.stringify(item).includes("OK one"));
+      expect(
+        Reflect.ownKeys(Object(previous.at(-1)))
+          .map(String)
+          .toSorted(),
+      ).toEqual(Reflect.ownKeys(Object(ordinary)).map(String).toSorted());
     });
 
     it(`${route.family} still merges unmarked consecutive user text`, async () => {
