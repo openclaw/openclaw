@@ -479,7 +479,10 @@ describe("visible session placement and authority", () => {
     const tool = createSessionsSpawnTool({
       config,
       callGateway: callGateway as never,
-      registerRun: vi.fn(async () => {}),
+      registerRun: vi.fn(async () => ({
+        status: "new-row-committed" as const,
+        attempted: { runId: "device-run", childSessionKey: key, generation: 1, createdAt: 0 },
+      })),
       countActiveRuns: () => 0,
     });
     const result = await withCloudGateway(() =>

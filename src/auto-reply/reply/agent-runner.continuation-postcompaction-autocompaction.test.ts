@@ -14,7 +14,10 @@ import {
 import { abortEmbeddedAgentRun } from "../../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
-import { scheduleSessionMaintenance } from "../../agents/session-maintenance/run.js";
+import {
+  prepareSessionMaintenanceRequest,
+  scheduleSessionMaintenance,
+} from "../../agents/session-maintenance/run.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions.js";
 import {
@@ -393,7 +396,11 @@ describe("runReplyAgent :: post-compaction delegate survives same-turn auto-comp
 
 describe("runReplyAgent :: pressure warning to post-compaction handoff", () => {
   const WINDOW = 200_000;
+  // Upstream interns every report subtree when it shares an actor entry (eee22b41b0).
   const report = {
+    systemPrompt: { chars: 0, projectContextChars: 0, nonProjectContextChars: 0 },
+    injectedWorkspaceFiles: [],
+    skills: { promptChars: 0, entries: [] },
     tools: { entries: [{ name: "continue_delegate" }, { name: "request_compaction" }] },
   } as unknown as SessionEntry["systemPromptReport"];
 
@@ -536,7 +543,7 @@ describe("runReplyAgent :: pressure warning to post-compaction handoff", () => {
   const refused = { ok: false, compacted: false, reason: "fixture refused" };
 
   /** A session past the trigger, with a delegate staged and a refresh its workspace supplies. */
-  async function armPreflight(compaction?: object, inRunCompactions = 0) {
+  async function armPreflight(compaction?: object, inRunCompactions = 0, tokens = 150_000) {
     const armed = await createPressureRun(ARMED_KEY, 150_000);
     const { run, sessionStore, storePath } = armed;
     Object.assign(run.config.agents.defaults, {
@@ -545,7 +552,7 @@ describe("runReplyAgent :: pressure warning to post-compaction handoff", () => {
     const workspaceDir = (run.followupRun.run.workspaceDir = custodyState.stateDir());
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), `## Session Startup\n\n${REFRESH}\n`);
     await stagePostCompactionDelegate(ARMED_KEY, { task: "lifeboat", createdAt: Date.now() });
-    const crossed = (await crossTrigger(storePath, ARMED_KEY, 150_000))!;
+    const crossed = (await crossTrigger(storePath, ARMED_KEY, tokens))!;
     sessionStore[ARMED_KEY] = crossed;
     runEmbeddedAgentMock.mockReset().mockImplementation(async (attempt) => {
       attempt.onAutoCompactionSucceeded(inRunCompactions);
@@ -571,12 +578,20 @@ describe("runReplyAgent :: pressure warning to post-compaction handoff", () => {
     expect(countEvents("Queued 0 post-compaction")).toBe(emptyReleases);
   }
 
+  // Upstream #200714: a failed preflight compaction fails the turn only when the request cannot
+  // fit the context window; one that still fits proceeds. Either way the delegate stays staged.
   it.each([
     { outcome: "a benign skip", result: skipped, reply: "Reply" },
-    { outcome: "a required compaction's failure", result: refused, reply: "couldn't shorten it" },
+    {
+      outcome: "a required compaction's failure",
+      result: refused,
+      reply: "couldn't shorten it",
+      tokens: WINDOW + 10_000,
+    },
+    { outcome: "a failed compaction whose request still fits", result: refused, reply: "Reply" },
     { outcome: "a context_bounded return", result: refused, reply: "Reply", byteLimit: "32kb" },
-  ])("keeps the delegate staged after $outcome", async ({ byteLimit, reply, result }) => {
-    const armed = await armPreflight({ maxActiveTranscriptBytes: byteLimit });
+  ])("keeps the delegate staged after $outcome", async ({ byteLimit, reply, result, tokens }) => {
+    const armed = await armPreflight({ maxActiveTranscriptBytes: byteLimit }, 0, tokens);
     compactState.compactEmbeddedAgentSessionMock.mockResolvedValueOnce(result);
 
     const replies = [await armed.turn()].flat();
@@ -651,17 +666,21 @@ describe("runReplyAgent :: pressure warning to post-compaction handoff", () => {
         thinkingCatalog: undefined,
         senderIsOwner: false,
       });
+      // Upstream prepares the maintenance source cohort before the synchronous scheduler.
+      const request = await prepareSessionMaintenanceRequest({
+        prepared: { cfg, sessionKey: ARMED_KEY, storePath, timeoutMs: 60_000 },
+        followupRun,
+        sessionId,
+        lifecycleRevision: crossed.lifecycleRevision,
+        lifecycleGeneration: command.lifecycleGeneration,
+        startedAt: Date.now(),
+      });
+      if (!request) {
+        throw new Error("session maintenance source unavailable");
+      }
       withPluginRuntimeGatewayRequestScope(
         { pluginRegistry: createEmptyPluginRegistry(), isWebchatConnect: () => false },
-        () =>
-          scheduleSessionMaintenance({
-            prepared: { cfg, sessionKey: ARMED_KEY, storePath, timeoutMs: 60_000 },
-            followupRun,
-            sessionId,
-            lifecycleRevision: crossed.lifecycleRevision,
-            lifecycleGeneration: command.lifecycleGeneration,
-            startedAt: Date.now(),
-          }),
+        () => scheduleSessionMaintenance(request),
       );
       await waitForSessionMaintenance(ARMED_KEY);
 
