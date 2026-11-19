@@ -125,10 +125,10 @@ a newer commit during a build, that obsolete background build is cancelled and
 settled before another pass. A session arriving during preparation
 waits for the same build; later checkouts reuse `node_modules` and the default
 projection manifest. Other selected commits
-still run dependency installation on first use. When the frozen lockfile and Git
-attributes are unchanged, OpenClaw clones a prepared template into a separate generation,
+still run dependency installation on first use. When Git attributes are unchanged, OpenClaw clones a prepared template into a separate generation,
 imports only the new Git objects, and checks out the source delta before reinstalling
-into its retained dependencies.
+into its retained dependencies against the selected frozen lockfile.
+A lockfile change updates dependencies without rematerializing unchanged source files.
 Repeat installation still runs repository lifecycle scripts when manifests and
 lockfiles are unchanged. Refresh reuses compressed Git objects without searching
 the entire snapshot for new deltas; obsolete source objects are still removed.
@@ -144,8 +144,8 @@ log timestamp to find their start. A builder message inside that interval is not
 evidence of a template that was ready before the request began.
 The `snapshot` phase measures the content manifest, not the native filesystem clone.
 Nested phase durations are inclusive; do not add them to their parent duration.
-Concurrent requests for that commit share the refresh. Lockfile or attribute changes
-build a fresh template. Refresh never changes the source generation, including while
+Concurrent requests for that commit share the refresh. Attribute changes
+build a fresh template so checkout transforms also apply to unchanged blobs. Refresh never changes the source generation, including while
 another session is cloning it. Each
 clone still receives only the selected source snapshot in its private Git object
 store. Shutdown cancels preparation and

@@ -3,7 +3,6 @@ import {
   createToolCallOccurrenceQueue,
   extractToolCallsFromAssistant,
   extractToolResultId,
-  extractToolResultIds,
 } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 /**
  * Tool call id normalization and extraction helpers.
@@ -57,7 +56,7 @@ function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string
   return alphanumericOnly.length > 0 ? alphanumericOnly : "sanitizedtoolid";
 }
 
-export { extractToolCallsFromAssistant, extractToolResultId, extractToolResultIds };
+export { extractToolCallsFromAssistant, extractToolResultId };
 
 export { hasReplayToolCallInput as hasToolCallInput };
 

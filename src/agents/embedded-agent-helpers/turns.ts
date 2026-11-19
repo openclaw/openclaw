@@ -262,7 +262,7 @@ function validateTurnsWithConsecutiveMerge<T, B>(params: {
   return result.length === messages.length ? messages : result;
 }
 
-export function validateGeminiTurnsWithAdapter<T, B>(
+function validateGeminiTurnsWithAdapter<T, B>(
   messages: T[],
   adapter: ReplayTurnAdapter<T, B>,
 ): T[] {
@@ -274,7 +274,7 @@ export function validateGeminiTurnsWithAdapter<T, B>(
   });
 }
 
-export function mergeConsecutiveUserMessagesWithAdapter<T, B>(
+function mergeConsecutiveUserMessagesWithAdapter<T, B>(
   messages: T[],
   adapter: ReplayTurnAdapter<T, B>,
   options: { preserveContextBoundaries?: boolean } = {},
@@ -290,7 +290,7 @@ export function mergeConsecutiveUserMessagesWithAdapter<T, B>(
   });
 }
 
-export function validateAnthropicTurnsWithAdapter<T, B>(
+function validateAnthropicTurnsWithAdapter<T, B>(
   messages: T[],
   adapter: ReplayTurnAdapter<T, B>,
   options: { mergeConsecutiveTurns?: boolean; mergeConsecutiveUserTurns?: boolean } = {},

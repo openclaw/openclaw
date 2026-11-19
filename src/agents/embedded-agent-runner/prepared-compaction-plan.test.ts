@@ -1,11 +1,11 @@
 import { expect, it, vi } from "vitest";
 import { prepareCompactionFloor } from "../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import { compactWithoutSummary } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { renderConversationEntriesWithinBudget } from "../../../packages/agent-core/src/harness/compaction/conversation-serialization.js";
 import {
   collectConversationMessageFact,
   collectConversationRangeDescriptors,
   MAX_SUMMARY_INPUT_CHARS,
-  renderConversationEntriesWithinBudget,
   serializeConversationEntry,
   serializeConversationWithinBudget,
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";

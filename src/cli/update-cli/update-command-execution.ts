@@ -696,6 +696,12 @@ export async function executeMutableUpdate(
     result,
     failure,
     mutationStarted,
+    // A Git release starts nothing from the candidate before its restart. A package
+    // candidate opens state only through its Doctor or the --no-restart boot check.
+    // The in-place Git runner rewrites the serving checkout, so it stays conservative.
+    candidateOpenedState:
+      params.gitRelease !== true &&
+      (params.updateInstallKind !== "package" || doctorEntered || !params.shouldRestart),
     preManagedServiceStop,
     ownedManagedUpdateContext,
     recoveryEnv,

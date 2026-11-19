@@ -484,7 +484,3 @@ export async function prepareEmbeddedCompactionSession(
     },
   };
 }
-
-export type PreparedEmbeddedCompaction = Awaited<
-  ReturnType<typeof prepareEmbeddedCompactionSession>
->;

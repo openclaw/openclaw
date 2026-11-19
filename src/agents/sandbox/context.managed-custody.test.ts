@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { create as createTar } from "tar";
+import { create as createTar } from "tar/raw";
 import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { useWorkspaceFilesystemBlock } from "../../../test/helpers/workspace-filesystem-block.js";
