@@ -382,9 +382,14 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       requester,
       readCurrent: requesterCurrent.readCurrent,
     });
+    let dispatchAccepted = false;
     const isRequesterCurrent = () => {
       if (!sourceReceiptAdmission.isRequesterCurrent()) {
         return false;
+      }
+      // The accepted turn owns delivery; normal requester-run turnover cannot revoke it.
+      if (dispatchAccepted) {
+        return true;
       }
       if (followup) {
         try {
@@ -490,13 +495,16 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       ) {
         return true;
       }
-      if (!isBatchDeliveryClosed() && isRequesterCurrent()) {
+      const deliveryClosed = isBatchDeliveryClosed();
+      if (!deliveryClosed && isRequesterCurrent()) {
         return false;
       }
-      // Requester turnover closes this attempt, not the child's pending question.
-      if (!pauseNotice || isBatchDeliveryClosed() || !sourceReceiptAdmission.isRequesterCurrent()) {
-        await completeBatch(settledBatch, state);
+      if (!deliveryClosed && sourceReceiptAdmission.isRequesterCurrent()) {
+        // Turnover before acceptance leaves findings owed to the same session's next turn.
+        await params.transitionBatch(settledBatch, state, refreshBatch);
+        return true;
       }
+      await completeBatch(settledBatch, state);
       return true;
     };
     if (
@@ -516,7 +524,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       });
     }
     let dispatchPrepared = false;
-    let dispatchAccepted = false;
     const attemptCount =
       state.status === "dispatching" ? state.attemptCount : Math.max(1, state.attemptCount + 1);
     let delivery: Awaited<ReturnType<typeof deliverSubagentAnnouncement>>;

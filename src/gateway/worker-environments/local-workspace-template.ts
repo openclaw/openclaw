@@ -380,9 +380,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
           : undefined;
       if (
         !changedPaths ||
-        changedPaths.some(
-          (entry) => entry === "pnpm-lock.yaml" || path.posix.basename(entry) === ".gitattributes",
-        )
+        changedPaths.some((entry) => path.posix.basename(entry) === ".gitattributes")
       ) {
         return false;
       }

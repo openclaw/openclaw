@@ -440,6 +440,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs!",
   // published-driver-update-docker.sh launches this managed-update proof inside Docker.
   "scripts/e2e/lib/upgrade-survivor/published-driver.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/published-driver-plugin-publication.mjs!",
   "scripts/e2e/lib/upgrade-survivor/published-plugin-registry.mjs!",
   "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs!",
   // The compiler below exposes the runner's inline Node imports.
