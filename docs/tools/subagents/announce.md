@@ -7,6 +7,10 @@ read_when:
   - You are reading a child transcript from inside an agent turn
 ---
 
+An ordinary requester run ending or a later follow-up taking over does not discard
+the waiting results. An accepted completion turn keeps its delivery; findings not
+yet accepted remain pending for the requester's next turn.
+
 ## Announce
 
 Sub-agents report back through completion delivery:
