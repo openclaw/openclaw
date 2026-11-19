@@ -14,6 +14,7 @@ import { isAgentToolExecutionAvailable } from "../../agent-tool-availability.js"
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
+import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 
@@ -93,7 +94,16 @@ async function prepareTools(overrides: Partial<EmbeddedRunAttemptInternalParams>
   resources.defer(() => result.toolSurfaceRuntime.cleanup());
   resources.defer(() => result.releaseTools("test-complete"));
   const tools = result.toolsRaw;
+  const catalog = await prepareEmbeddedAttemptToolCatalog({
+    attempt,
+    setup: createAttemptSetupFixture({ sandboxSessionKey: sessionKey }),
+    preparedToolBase: result,
+    bundleTools: { clientTools: undefined, uncompactedEffectiveTools: tools },
+    abortSignal: result.toolAbortSignal,
+    executeCodeModeTool: async () => ({ content: [], details: {} }),
+  });
   return {
+    emptyAllowlistError: catalog.emptyExplicitToolAllowlistError?.message,
     listed: tools.map((tool) => tool.name).toSorted(),
     callable: tools
       .filter(isAgentToolExecutionAvailable)
@@ -162,4 +172,10 @@ it("keeps the session's tools listed on a scheduled run and refuses the rest vis
   // A refused MCP tool keeps its provenance, so the catalog still treats it as MCP.
   const mcp = run.tools.find((tool) => tool.name === "world__calendar_list")!;
   expect(getPluginToolMeta(mcp)?.mcp?.serverName).toBe("world");
+});
+
+it("still fails a scheduled run whose allowlist matches no tool", async () => {
+  const run = await prepareTools({ ...scheduled, toolsAllow: ["query_db"] });
+  expect(run.emptyAllowlistError).toContain("No callable tools remain");
+  expect(run.emptyAllowlistError).toContain("runtime toolsAllow: query_db");
 });

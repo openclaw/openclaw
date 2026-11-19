@@ -449,7 +449,12 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       constructedToolsRaw = applyEmbeddedAttemptToolsAllow(boundTools, effectiveToolsAllow, {
         toolMeta: (tool) => getPluginToolMeta(tool),
       });
-      if (scheduledToolsAllowGated) {
+      // An allowlist that matches nothing keeps today's narrowed list, so the run still
+      // fails with "No callable tools remain" instead of running with every tool refused.
+      if (
+        scheduledToolsAllowGated &&
+        constructedToolsRaw.some((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name))
+      ) {
         const allowed = new Set(constructedToolsRaw);
         constructedToolsRaw = boundTools.map((tool) =>
           allowed.has(tool)
