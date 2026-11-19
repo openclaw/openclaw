@@ -1,4 +1,5 @@
-import { expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -18,6 +19,8 @@ import {
   registerSystemAgent,
 } from "./approval.handlers.test-support.js";
 import { createContext } from "./approval.test-support.js";
+import { createExecApprovalHandlers } from "./exec-approval.js";
+import { createPluginApprovalHandlers } from "./plugin-approval.js";
 import type { GatewayClient } from "./types.js";
 
 it("enforces durable creator/raiser ownership across generic lookup, resolution, history and each pending family", async () => {
@@ -166,4 +169,83 @@ it("enforces durable creator/raiser ownership across generic lookup, resolution,
       }
     },
   );
+});
+
+it("denies legacy unprofiled approval readers while preserving admin and internal-runtime readers", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    const managers = createManagers({ env: state.env });
+    const handlers = {
+      ...createExecApprovalHandlers(managers.exec),
+      ...createPluginApprovalHandlers(managers.plugin),
+    };
+    const readers = [
+      { client: createClient({ deviceId: "requester-device" }), allowed: false },
+      { client: createClient({ scopes: ["operator.admin"] }), allowed: true },
+      { client: createClient({ internal: true }), allowed: true },
+    ];
+    const request = async (method: string, client: GatewayClient | null, id?: string) => {
+      const respond = vi.fn();
+      await expectDefined(
+        handlers[method],
+        "approval reader",
+      )({
+        req: { id: "reader", type: "req", method },
+        params: id ? { id } : {},
+        respond,
+        client,
+        context: createContext(),
+        isWebchatConnect: () => false,
+      });
+      return expectDefined(respond.mock.calls[0], "approval reader response");
+    };
+    try {
+      const bound = await registerExec(managers.exec, { id: "legacy-device" });
+      const unbound = await registerExec(managers.exec, {
+        id: "legacy-unbound",
+        requester: { deviceId: null, clientId: null },
+        reviewerDeviceIds: [],
+      });
+      const plugin = await registerPlugin(managers.plugin, { id: "plugin:legacy-device" });
+      for (const { client, allowed } of readers) {
+        for (const [kind, ids] of [
+          ["exec", [bound.record.id, unbound.record.id]],
+          ["plugin", [plugin.record.id]],
+        ] as const) {
+          const [ok, result] = await request(`${kind}.approval.list`, client);
+          expect.soft(ok).toBe(true);
+          expect
+            .soft(result)
+            .toEqual(allowed ? ids.map((id) => expect.objectContaining({ id })) : []);
+        }
+        for (const { record } of [bound, unbound]) {
+          const [ok, , error] = await request("exec.approval.get", client, record.id);
+          expect.soft(ok).toBe(allowed);
+          if (!allowed) {
+            expect.soft(error).toMatchObject({ details: { reason: "APPROVAL_NOT_FOUND" } });
+          }
+        }
+      }
+      await managers.exec.resolve(bound.record.id, "deny");
+      await managers.exec.resolve(unbound.record.id, "deny");
+      await managers.plugin.resolve(plugin.record.id, "deny");
+      for (const { client, allowed } of readers) {
+        for (const [kind, id] of [
+          ["exec", bound.record.id],
+          ["exec", unbound.record.id],
+          ["plugin", plugin.record.id],
+        ] as const) {
+          const [ok, result, error] = await request(`${kind}.approval.waitDecision`, client, id);
+          expect.soft(ok).toBe(allowed);
+          expect
+            .soft(allowed ? result : error)
+            .toMatchObject(
+              allowed ? { id, decision: "deny" } : { message: "approval expired or not found" },
+            );
+        }
+      }
+    } finally {
+      await cleanupApprovalHandlerFixtures();
+    }
+  });
 });

@@ -1,4 +1,4 @@
-684
+772
 # Issue #201526 part D: real-Gateway proof of creator/admin vs invited/team-writer
 # permission changes and per-turn approval audiences; shared lookup/resolve/history
 # and event/push boundaries for exec, plugin and system-agent approvals; authenticated
@@ -8,3 +8,6 @@
 # CI follow-up: preserve custody/revocation tests with real requester profiles and
 # session provenance, prove filtered subscription replay, and align cumulative
 # migration/PostgreSQL fixtures with v41 without weakening catalog preservation.
+# Legacy-reader regression exercises actual exec/plugin list, lookup and wait RPCs
+# for device-matching/unbound records and preserves admin/internal-runtime readers;
+# the existing plugin wait fixture now uses an authenticated requesting profile.

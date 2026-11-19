@@ -85,7 +85,7 @@ export function createExecApprovalHandlers(
         manager,
         inputId: params.id,
         client,
-        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+        getCfg: context.getRuntimeConfig,
         exposeAmbiguousPrefixError: true,
       });
       authority.assertCurrent();
@@ -119,7 +119,7 @@ export function createExecApprovalHandlers(
         manager,
         client,
         approvalKind: "exec",
-        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+        getCfg: context.getRuntimeConfig,
       });
       authority.assertCurrent();
       respond(true, approvals, undefined);
@@ -416,7 +416,7 @@ export function createExecApprovalHandlers(
         manager,
         inputId: params.id,
         client,
-        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+        getCfg: context.getRuntimeConfig,
         respond,
         resolveTerminalReason: (snapshot) => {
           const runId = normalizeOptionalString(snapshot.request.runId);

@@ -67,7 +67,7 @@ export function createPluginApprovalHandlers(
         manager,
         client,
         approvalKind: "plugin",
-        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+        getCfg: context.getRuntimeConfig,
       });
       authority.assertCurrent();
       respond(true, approvals, undefined);
@@ -260,7 +260,7 @@ export function createPluginApprovalHandlers(
         manager,
         inputId: params.id,
         client,
-        ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+        getCfg: context.getRuntimeConfig,
         respond,
       });
     },
