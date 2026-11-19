@@ -1,0 +1,6 @@
+# Exact net test-line growth from PR #197116 (visible child sessions persist their
+# clamped thinking level). The integrated spawn-to-creation cases in
+# server.sessions.agent-model-catalog.test.ts drive the real sessions.create handler
+# with one shared prepared catalog, covering both runtime-row mismatch directions,
+# both logical-reasoning mismatch directions, and the automatic-tier omission.
+571
