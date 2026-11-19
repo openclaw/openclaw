@@ -633,9 +633,14 @@ function mockPackingEntries(entries: readonly PackingEntry[], timingName = (name
 }
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
-  it.each([false, true])(
-    "keeps the scheduled main inventory within its reserved compact capacity (extra group: %s)",
-    (extraGroup) => {
+  it.each(
+    ["hybrid", "github"].flatMap((runnerBackend) =>
+      [false, true].map((extraGroup) => ({ runnerBackend, extraGroup })),
+    ),
+  )(
+    "keeps the scheduled main inventory within its reserved compact capacity ($runnerBackend, extra group: $extraGroup)",
+    ({ runnerBackend, extraGroup }) => {
+      vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", "bun-all");
       const original = fullSuiteVitestShards.slice();
       if (extraGroup) {
         // A new isolated group must not exhaust main's capacity on arrival.
@@ -658,7 +663,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           compactMode: "pull-request",
           compactNodeJobCap: 77 - workerRows.length,
           mainValidation: true,
-          runnerBackend: "hybrid",
+          runnerBackend,
         });
         const jobs = [...compactRows, ...workerRows];
         expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
@@ -1844,7 +1849,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         .flatMap(jobGroups)
         .filter((group) => group.shard_name.replace(/-hosted-\d+$/u, "") === owner);
     const inherited = select();
-    expect(inherited).toHaveLength(2);
+    expect(inherited).toHaveLength(4);
     expectEvery(inherited, (group) => workers(group) === "2");
     const parallelParent = required(
       parseCompactSplitTimingKey(inherited[0]!.timing_key!)?.parentShardName,
@@ -1858,16 +1863,19 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       serialEnv,
     );
     timings[serialGeneration.timingKeys[0]!] = 500;
-    expect(select()).toHaveLength(2);
-    timings[serialGeneration.timingKeys[1]!] = 500;
+    expect(select()).toEqual(inherited);
+    for (const key of serialGeneration.timingKeys) {
+      timings[key] = 250;
+    }
     expect(select()).toHaveLength(4);
     timings[`${owner}-parallel-native-serial`] = 440;
     timings[parallelParent] = 440;
     const measured = select();
-    expect(measured).toHaveLength(3);
+    // Full inventory retains the file bound even when timing permits three groups.
+    expect(measured).toHaveLength(4);
     expectSameEntries(measured.flatMap(requiredPatterns), inherited.flatMap(requiredPatterns));
     const reduced = select(false);
-    expect(reduced).toHaveLength(measured.length);
+    expect(reduced).toHaveLength(3);
     expectSameEntries(
       reduced.flatMap(requiredPatterns),
       measured.flatMap(requiredPatterns).filter((file) => !isReleaseOnlyRuntimeTestFile(file)),

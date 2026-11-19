@@ -27,6 +27,7 @@ import {
   type CodexWorkspaceBootstrapContext,
 } from "./attempt-workspace-context.js";
 import type { CodexAgentsMdSnapshot, CodexNativeModelContext } from "./client-workspace-state.js";
+import { withoutGatewayOnlySkillLocations } from "./gateway-only-skills.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions, isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
@@ -451,6 +452,7 @@ export function renderCodexSkillsInstructions(params: {
   attempt: EmbeddedRunAttemptParams;
   skillsPrompt?: string;
   dynamicTools?: readonly CodexDynamicToolSpec[];
+  remoteWorkspaceRoot?: string;
 }): string | undefined {
   if (!shouldIncludeAgentHarnessRuntimeContext(params.attempt)) {
     return undefined;
@@ -460,9 +462,18 @@ export function renderCodexSkillsInstructions(params: {
       normalizeLowercaseStringOrEmpty(tool.name),
     ),
   );
-  const prompt = params.skillsPrompt?.trim();
   const search = names.has("skills_search");
   const read = names.has("skills_read");
+  const trimmed = params.skillsPrompt?.trim();
+  const prompt =
+    trimmed && params.remoteWorkspaceRoot
+      ? withoutGatewayOnlySkillLocations(
+          trimmed,
+          params.attempt.skillsSnapshot?.resolvedSkills ?? [],
+          params.remoteWorkspaceRoot,
+          read,
+        )
+      : trimmed;
   if (!prompt && !search) {
     return undefined;
   }

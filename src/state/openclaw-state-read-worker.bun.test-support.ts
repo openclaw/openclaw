@@ -70,7 +70,14 @@ async function read(location = filename, checkFreshAdmission = false) {
         location,
         checkFreshAdmission,
       },
-      { signal: new AbortController().signal, assertCurrent: admission.assertCurrent },
+      {
+        signal: new AbortController().signal,
+        assertCurrent: admission.assertCurrent,
+        acquire: <T>(operation: () => T) => {
+          admission.assertCurrent();
+          return operation();
+        },
+      },
     );
     if ("error" in outcome) {
       throw outcome.error;

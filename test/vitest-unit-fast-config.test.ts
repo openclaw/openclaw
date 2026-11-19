@@ -358,6 +358,15 @@ describe("unit-fast vitest lane", () => {
     });
   });
 
+  it("isolates side-effect imports of stateful e2e mock helpers", () => {
+    const file =
+      "src/auto-reply/reply.directive.directive-behavior.shows-current-verbose-level-verbose-has-no.test.ts";
+    expect(paths.resolveUnitFastTestIncludePattern(file)).toBeNull();
+    expect(paths.resolveUnitFastIsolatedTestIncludePattern(file)).toBe(file);
+    const consumer = "src/agents/agent-tools.before-tool-call.params.test.ts";
+    expect(paths.resolveUnitFastTestIncludePattern(consumer)).toBe(consumer);
+  });
+
   it("routes fake-timer unit-fast tests through the serial fake-timer lane", () => {
     const fakeTimerFiles = unitFastAnalysis
       .filter((entry) => entry.unitFast && entry.reasons.includes("fake-timers"))

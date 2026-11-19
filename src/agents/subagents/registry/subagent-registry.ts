@@ -1,6 +1,5 @@
 import { getRuntimeConfig } from "../../../config/config.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
-import { registerSystemEventStoreOwner } from "../../../infra/system-event-ownership.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -13,6 +12,7 @@ import { findSessionControllerOperationByRunId } from "../../../sessions/session
 import { runInDetachedAsyncContext } from "../../../shared/detached-async-context.js";
 import { reconcileRetiredSubagentCancellation } from "../completion/subagent-completion-admission.store.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
+import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { emitSubagentProgressEndedHook } from "./subagent-registry-completion.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
@@ -26,7 +26,7 @@ import {
   ANNOUNCE_EXPIRY_MS,
   GATEWAY_ADMISSION_RETRY_DELAY_MS,
 } from "./subagent-registry-helpers.js";
-import { suspendReplacedStoreNotifications } from "./subagent-registry-lifecycle-cleanup.js";
+import { completeSubagentRunAttempt } from "./subagent-registry-lifecycle-completion.js";
 import { subagentRegistryLog as log } from "./subagent-registry-lifecycle-log.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
@@ -154,28 +154,20 @@ const {
   settleRequesterTurnAfterSessionSpawns,
   startSubagentAnnounceCleanupFlow,
 } = subagentLifecycleController;
-function suspendReplacedNotificationsInBackground(): void {
-  void suspendReplacedStoreNotifications(subagentLifecycleController.options).catch(
-    (error: unknown) => {
-      log.warn("subagent notification retirement is deferred", { error });
-    },
-  );
-}
-registerSystemEventStoreOwner(
-  Symbol.for("openclaw.subagentNotifications"),
-  suspendReplacedNotificationsInBackground,
-);
 
 export function resumeSubagentRun(runId: string) {
   if (!runId) {
     return;
   }
   const entry = subagentRuns.get(runId);
-  if (
-    !entry ||
-    resumedRuns.has(getSubagentRunRuntimeKey(entry)) ||
-    subagentRuns.isCompletionAuthorityRetired(entry)
-  ) {
+  if (!entry || resumedRuns.has(getSubagentRunRuntimeKey(entry))) {
+    return;
+  }
+  if (subagentRuns.isCompletionAuthorityRetired(entry)) {
+    // A retired owner cannot deliver, but its yielded batch still owes a visible failure.
+    if (entry.requesterSettleWake) {
+      resumeRequesterSettleWake(runId, entry);
+    }
     return;
   }
   if (entry.killReconciliation) {
@@ -585,7 +577,7 @@ export {
   resolveRootSubagentRequester,
 } from "./subagent-registry-read.js";
 
-/** The root resume input owns reconciliation; shutdown children settle without parent notices. */
+/** Shutdown interrupts execution; the completion owner still owes the requester its outcome. */
 export async function terminateLiveSubagentsForShutdown(
   resolveGatewayContext: GatewayContextResolver,
 ): Promise<void> {
@@ -598,10 +590,12 @@ export async function terminateLiveSubagentsForShutdown(
   );
   await Promise.all(
     entries.map((entry) =>
-      markSubagentRunTerminated({
+      // Shutdown joins this terminal write after new-root admission has closed.
+      completeSubagentRunAttempt(subagentLifecycleController, {
         runId: entry.runId,
-        reason: "Gateway stopped",
-        suppressTaskDelivery: true,
+        reason: SUBAGENT_ENDED_REASON_ERROR,
+        outcome: { status: "error", error: "Gateway stopped" },
+        triggerCleanup: false,
         suppressSessionEffects: true,
       }),
     ),

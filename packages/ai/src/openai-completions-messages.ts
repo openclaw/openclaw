@@ -16,6 +16,7 @@ import {
   extractToolResultText,
 } from "./providers/tool-result-text.js";
 import type { ResolvedOpenAICompletionsCompat } from "./transports/openai-completions-compat.js";
+import { toolCallThoughtSignatureReplay } from "./transports/openai-completions-replay.js";
 import {
   hasRuntimeContextMarker,
   isRuntimeContextMessage,
@@ -230,6 +231,7 @@ export function convertMessages(
             name: toolCall.name,
             arguments: JSON.stringify(toolCall.arguments),
           },
+          ...toolCallThoughtSignatureReplay(model, msg, toolCall.thoughtSignature),
         }));
         const reasoningDetails = toolCalls.flatMap((toolCall) => {
           const signature = toolCall.thoughtSignature;

@@ -356,6 +356,25 @@ it.each(["single", "batch"] as const)(
     ),
 );
 
+it("lets a nested background write borrow its foreground admission without self-draining", async ({
+  signal,
+}) => {
+  const { options, order, record } = makeFixture();
+  const controller = new AbortController();
+  const pending = write(options, async () => {
+    order.push("foreground");
+    await workerWrite(options, record("background"), undefined, controller.signal, "background");
+    order.push("settled");
+  });
+  try {
+    await withinTest(pending, signal);
+    expect(order).toEqual(["foreground", "background", "settled"]);
+  } finally {
+    controller.abort(new Error("test cleanup"));
+    await Promise.allSettled([pending]);
+  }
+}, 2_000);
+
 it.each([false, true])(
   "defers background writes behind later foreground work (abort=%s)",
   async (abort) => {

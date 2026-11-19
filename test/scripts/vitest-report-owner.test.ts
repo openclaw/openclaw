@@ -134,6 +134,55 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     },
   }).concurrent;
 
+  reportTest(
+    "replays file-backed Gateway phases, plugin loaders and named E2E together",
+    { timeout: 60000 },
+    async ({ expect, reports }) => {
+      const result = await reports.run("file-backed-suites");
+      expect(result.code, result.stderr).toBe(0);
+      expect(inventory(json(result.output))).toEqual([
+        ...expected,
+        ["delta/one", "passed"],
+        ["gamma/one", "passed"],
+      ]);
+      const index = json(path.join(result.reportSet!, "index.json"));
+      expect(index.complete).toBe(true);
+      expect(index.entries).toHaveLength(3);
+      const captures: VitestReportCapture[] = index.entries.map(
+        (entry: { attempts: { json: string }[] }) =>
+          json(entry.attempts.at(-1)!.json + ".capture.json"),
+      );
+      const replay: VitestReportCapture = json(
+        path.join(result.reportSet!, "aggregate.json.capture.json"),
+      );
+      expect(serialized(replay.projects)).toEqual(
+        serialized(captures.flatMap((capture) => capture.projects)),
+      );
+      expect(serialized(replay.modules)).toEqual(
+        serialized(captures.flatMap((capture) => capture.modules)),
+      );
+      expect(
+        replay.projects
+          .map((capturedProject) => {
+            if (typeof capturedProject.config !== "string") {
+              throw new Error("Expected a file-backed replay project");
+            }
+            return path.basename(capturedProject.config);
+          })
+          .toSorted(),
+      ).toEqual([
+        "vitest.e2e.config.ts",
+        "vitest.gateway-server-native.config.ts",
+        "vitest.plugins-native-loader.config.ts",
+        "vitest.plugins-source.config.ts",
+      ]);
+      expect(replay.projects.every((capturedProject) => capturedProject.name.length > 0)).toBe(
+        true,
+      );
+      expect(index.merge).toMatchObject({ code: 0, signal: null });
+    },
+  );
+
   reportTest.for([
     ["serial", "projects", false, "SIGABRT", 134],
     ["parallel", "projects", false, "SIGABRT", 134],

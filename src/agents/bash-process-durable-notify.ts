@@ -13,7 +13,6 @@ import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context
 /** Restart completions are fresh host input, never restored requester continuations. */
 export async function prepareAdoptedDurableProcessNotification(
   session: ProcessSession,
-  persistedSessionId: string,
 ): Promise<void> {
   session.notifySessionTarget = undefined;
   const { agentId, sessionKey } = session;
@@ -45,16 +44,12 @@ export async function prepareAdoptedDurableProcessNotification(
         assertCurrent: assertNotificationsEnabled,
       }),
     );
-    if (target.sessionId !== persistedSessionId) {
-      session.notifyOnExit = false;
-      return;
-    }
     const entry = await readSessionEntryReadOnlyInWorker(
       { agentId, sessionKey, storePath: target.storePath },
       assertNotificationsEnabled,
     );
     if (
-      entry?.sessionId !== persistedSessionId ||
+      !entry ||
       entry.archivedAt !== undefined ||
       entry.incognito ||
       (isSubagentEnvelopeSession(sessionKey, { entry }) &&
@@ -63,8 +58,7 @@ export async function prepareAdoptedDurableProcessNotification(
       session.notifyOnExit = false;
       return;
     }
-    // Session-event admission pins this generation and prepares the principal's
-    // current authority at execution; config changes also remain live at effects.
+    // The chat key follows transcript successors; admission prepares current authority.
     session.notifySessionTarget = target;
   } catch {
     session.notifyOnExit = false;

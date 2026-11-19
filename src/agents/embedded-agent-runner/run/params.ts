@@ -36,6 +36,7 @@ import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhaseInfo } from "../execution-phase.js";
+import type { SessionForkRequest } from "../session-fork-request.js";
 import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
@@ -169,6 +170,8 @@ export type RunEmbeddedAgentParams = Pick<
   toolsAllow?: string[];
   /** Preserve the visible tool schemas while allowing execution only for these names. */
   toolExecutionAllow?: readonly string[];
+  /** Set only by `runSessionFork`: each request replays the source session's request first. */
+  sessionForkRequest?: SessionForkRequest;
   /** Host-stamped exact-run capability for late Codex creator-authority capture. */
   cronCreatorAuthorityCapability?: CronCreatorAuthorityCapability;
   /** Ephemeral reason fresh local-operator cron authority cannot survive this queued turn. */

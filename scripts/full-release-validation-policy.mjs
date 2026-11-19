@@ -50,7 +50,10 @@ function validateReleaseAdvisoryJobs(value, expected = []) {
   return expected;
 }
 
-export function validateReleaseManifestAdvisoryJobs(manifest) {
+export function validateReleaseManifestAdvisoryJobs(
+  manifest,
+  { deferWaiverPolicy = false, waiverPolicy } = {},
+) {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw new Error("Release advisory manifest is invalid");
   }
@@ -68,10 +71,12 @@ export function validateReleaseManifestAdvisoryJobs(manifest) {
       throw new Error("Release advisory child evidence is invalid");
     }
     if (
+      !deferWaiverPolicy &&
       evaluateReleaseChildPolicy({
-        child: { ...normalCi, key: "normalCi" },
+        child: { ...normalCi, key: "normalCi", runAttempt: normalCi.effectiveRunAttempt },
         targetVersion: manifest.validationInputs?.targetVersion,
         targetSha: manifest.targetSha,
+        waiverPolicy,
       }).blockingJobs.length > 0
     ) {
       throw new Error("Release manifest contains failed selected job evidence");
@@ -1609,8 +1614,8 @@ function blockerIndex(issues) {
   return issues.map((issue) => jsonSha256(blockerEvidence(issue))).toSorted();
 }
 
-export function terminalPolicyPass(child, targetVersion, targetSha) {
-  const policy = evaluateReleaseChildPolicy({ child, targetVersion, targetSha });
+export function terminalPolicyPass(child, targetVersion, targetSha, waiverPolicy) {
+  const policy = evaluateReleaseChildPolicy({ child, targetVersion, targetSha, waiverPolicy });
   return (
     child.status === "completed" &&
     child.jobs.every((job) => job.status === "completed") &&
@@ -1628,6 +1633,20 @@ export function planReleaseChildRerun({ childKey, jobs }) {
     .toSorted();
   if (failed.length === 0) {
     throw new Error(`${childKey} has no blocking failed job to rerun`);
+  }
+  // Plugin packs and their readback evidence are attempt-bound. The planning
+  // root owns every pack/verification/seal dependency, so rerun it rather than
+  // mixing a retried leaf with packages from the original attempt.
+  if (childKey === "artifact:plugin-npm") {
+    const root = jobs.filter((job) => job.name === "preview_plugins_npm");
+    if (
+      root.length !== 1 ||
+      root[0].status !== "completed" ||
+      !["success", "failure"].includes(root[0].conclusion)
+    ) {
+      throw new Error("Plugin artifact planning root is missing or ambiguous");
+    }
+    return { failed, mode: "producer", producer: "preview_plugins_npm" };
   }
   // Receipt publication is best-effort at the workflow boundary. A green child
   // can therefore need only this failed metadata job, never its passing workloads.

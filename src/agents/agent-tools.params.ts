@@ -94,6 +94,23 @@ export const REQUIRED_PARAM_GROUPS = {
   ],
 } as const;
 
+/** Models send `optional: false` for a required read; the read schema accepts only `true`. */
+export function prepareReadToolParams(args: unknown): unknown {
+  const record = getToolParamsRecord(args);
+  if (record?.optional !== false) {
+    return args;
+  }
+  // Preserve explicit required intent as a present field through validation.
+  // Unlike omission, this must not enable the implicit daily-journal default.
+  return { ...record, optional: undefined };
+}
+
+/** Canonical daily-memory journals, which a read without `optional` treats as optional. */
+export function isDailyMemoryReadPath(filePath: string): boolean {
+  const normalized = process.platform === "win32" ? filePath.replace(/\\/g, "/") : filePath;
+  return /^(?:\.\/)*memory\/\d{4}-\d{2}-\d{2}\.md$/u.test(normalized);
+}
+
 function stripMalformedXmlArgValueSuffix(value: string): string {
   return value.includes("</arg_value>") ? value.replace(XML_ARG_VALUE_SUFFIX_RE, "") : value;
 }

@@ -27,6 +27,7 @@ import {
   createCodexDynamicToolBridge,
   projectCodexExecutableDynamicTools,
 } from "./dynamic-tools.js";
+import { resolveGatewayOnlySkillDirs } from "./gateway-only-skills.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
 import type { NativePendingChild } from "./native-subagent-monitor-types.js";
 import {
@@ -494,6 +495,13 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       contextWindowTokens: params.contextTokenBudget ?? params.model.contextWindow,
       workspaceDir: effectiveWorkspace,
       remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
+      gatewayOnlySkillDirs: resolveGatewayOnlySkillDirs(
+        [
+          ...(runtimeParams.skillsSnapshot?.resolvedSkills ?? []),
+          ...(runtimeParams.skillsSnapshot?.discoverySkills ?? []),
+        ],
+        connection.appServer.remoteWorkspaceRoot,
+      ),
       remoteWorkspaceRequestTimeoutMs: connection.appServer.requestTimeoutMs,
       sessionId: params.sessionId,
       sessionKey: contextSessionKey,

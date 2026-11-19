@@ -140,6 +140,11 @@ describe("Gateway completed requester replay", () => {
         expect(model.effectCalls()).toBe(1);
         expect(model.failures()).toEqual([]);
         await expect(fs.readFile(effectPath, "utf8")).resolves.toBe("effect\n");
+      } catch (error) {
+        // Preserve the restarted process failure before fixture teardown removes its state.
+        throw new Error(String(error) + "\nGateway after restart: " + instance.logs(), {
+          cause: error,
+        });
       } finally {
         await disconnectGatewayClient(restoredClient);
         await instance.stopGateway();

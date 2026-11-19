@@ -15,6 +15,7 @@ import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.j
 import { schemaAdmission } from "../infra/sqlite-schema-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { assertionSucceeds } from "../shared/assertion.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createPermitPool } from "../shared/permit-pool.js";
@@ -189,12 +190,7 @@ class AgentDatabaseStartupAdmission {
         throw new Error("Prepared startup state schema changed before source inspection");
       }
     };
-    try {
-      assertCurrent();
-      return assertCurrent;
-    } catch {
-      return undefined;
-    }
+    return assertionSucceeds(assertCurrent) ? assertCurrent : undefined;
   }
 
   /** Joins startup work already scheduled before a background consumer begins. */
@@ -662,6 +658,8 @@ class AgentDatabaseStartupAdmission {
             });
           }
         } finally {
+          // Published admission callbacks can retain this scope after recovery completes.
+          preparation.recoverInputs = undefined;
           finishInputs();
         }
         // End the admission borrow and publication turn before advisory repair.

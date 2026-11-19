@@ -443,10 +443,16 @@ export type RunBtwSideQuestionParams = Omit<
   | "agentId"
   | "workspaceDir"
   | "toolsAllow"
+  | "toolCalls"
   | "authProfileId"
   | "authProfileIdSource"
 > & {
   agentId: string;
+  /**
+   * A tool-free session fork. Built-in runtime sessions run it here (`runSessionFork`); a
+   * harness with its own side-question fork (Codex) runs it with every tool call denied.
+   */
+  sessionFork?: () => Promise<{ text: string }>;
   assertCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Background consumers collect usage without recording a user-facing reply. */

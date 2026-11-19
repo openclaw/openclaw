@@ -916,6 +916,29 @@ describe("previous release update compatibility", () => {
     return { root, inventory };
   }
 
+  it("records deferred plugin migration imports that a shipped updater can execute after swap", () => {
+    const { inventory } = recordImportedFixture(
+      '(await import("./state-worker-abcdefgh.mjs")).runOpenClawStateWorkerOperation',
+      {
+        "state-worker-abcdefgh.mjs":
+          "//#region src/state/openclaw-state-worker-store.ts\nexport function runOpenClawStateWorkerOperation() {}\n",
+      },
+      undefined,
+      "src/infra/deferred-plugin-migrations.ts",
+    );
+    expect(inventory.releases[0]?.chunks).toMatchObject([
+      {
+        path: "state-worker-abcdefgh.mjs",
+        imports: [
+          {
+            owner: "src/infra/deferred-plugin-migrations.ts",
+            exports: ["runOpenClawStateWorkerOperation"],
+          },
+        ],
+      },
+    ]);
+  });
+
   it.each([
     "generated",
     "historical",

@@ -1,10 +1,8 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import type { SessionEntry } from "../../agents/sessions/session-manager-types.js";
 import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { CombinedSessionStoreTopologyRequest } from "./combined-store.types.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
-import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
 import {
   measureSessionStoreTargetInventoryInputBytes,
@@ -109,6 +107,14 @@ function reader<Input extends object, Request extends SessionHistoryWorkerPrepar
   };
 }
 const readers: Readers & ThisType<ReaderContext> = {
+  discoverTranscriptFacts: reader(
+    (input) => ({ kind: "transcript-facts-discover", ...input }),
+    (value) => value.result,
+  ),
+  probeTranscriptFacts: reader(
+    (input) => ({ kind: "transcript-facts-probe", ...input }),
+    (value) => value.result,
+  ),
   readAgentToolUsage: reader(
     (input) => ({ kind: "agent-tool-usage", ...input }),
     (value) => value.status,
@@ -293,13 +299,21 @@ const readers: Readers & ThisType<ReaderContext> = {
     (input) => ({ kind: "cold-storage-inventory", ...input }),
     (value) => value,
   ),
-  searchTranscripts(params, readIndexStatus) {
+  searchTranscripts(params, readIndexStatus, filterCandidates) {
     return this.runRequest(
       () => ({ kind: "transcript-search", params }),
       JSON.stringify(params).length * 2,
       (value) => value.result,
       undefined,
       async (request, signal) => {
+        if (
+          filterCandidates &&
+          Array.isArray(request) &&
+          request.length <= 26 &&
+          request.every((key): key is string => typeof key === "string")
+        ) {
+          return { input: await filterCandidates(request), timeoutMs: 60_000 };
+        }
         if (request !== "transcript-index-status") {
           throw new Error("Unexpected transcript search status request");
         }
@@ -350,39 +364,11 @@ const readers: Readers & ThisType<ReaderContext> = {
     );
   },
   async readPreparedCompaction(input, signal) {
-    const decoder = createSessionTranscriptHydrationDecoder({});
     return await this.runRequest(
       () => ({ kind: "compaction-preparation", ...input }),
       JSON.stringify(input).length * 2,
-      (value) => {
-        if (value.status !== "prepared") {
-          return value;
-        }
-        const decoded = decoder.finish({
-          kind: "full",
-          version: value.version,
-          eventCount: value.retainedEventCount,
-        });
-        if (decoded.kind !== "full") {
-          throw new Error("Prepared retained context did not complete its hydration");
-        }
-        const retained: SessionEntry[] = [];
-        for (const event of decoded.snapshot.events) {
-          if (!isIndexedSessionEntry(event)) {
-            throw new Error("Prepared retained context contains an invalid session entry");
-          }
-          retained.push(event);
-        }
-        const { retainedEventCount: _count, ...prepared } = value;
-        return { ...prepared, plan: { ...value.plan, retained } };
-      },
+      (value) => value,
       signal,
-      input.operation.kind === "plan"
-        ? (raw) => {
-            // SAFETY: The paired native hydration producer owns this envelope.
-            decoder.accept(raw as SessionTranscriptHydrationChunk);
-          }
-        : undefined,
     );
   },
   readMaintenance: reader(

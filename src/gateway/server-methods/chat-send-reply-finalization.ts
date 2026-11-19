@@ -375,6 +375,8 @@ export async function finalizeChatSendDispatchedReplies(
     }
     if (hasVisibleAssistantFinalMessage(message)) {
       emitFirstAssistantServerTiming();
+      // Reply dispatch owns completion, so drain paced text before terminal cleanup.
+      context.chatRunState.flushPendingText(clientRunId);
     }
     broadcastChatTerminal({
       terminalEntry: params.terminalEntry,

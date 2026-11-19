@@ -55,7 +55,10 @@ import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-age
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { prepareRestartCompletionCustody } from "./session-restart-resume-custody.js";
+import {
+  hasInterruptedCommittedRequesterSettleInput,
+  prepareRestartCompletionCustody,
+} from "./session-restart-resume-custody.js";
 import {
   discoverRestartSessionStores,
   prepareRestartStores,
@@ -69,10 +72,12 @@ import {
   recordRestartYieldFailure,
 } from "./session-restart-resume-failure.js";
 import { createRestartResumeSummary } from "./session-restart-resume-log.js";
-import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
+import { GATEWAY_RESTART_RESUME_TEXT } from "./session-restart-resume-prompt.js";
+import {
+  captureSessionRestartOperatorSource,
+  prepareSessionSystemTurnAuthority,
+} from "./session-system-turn-authority.js";
 
-const GATEWAY_RESTART_RESUME_TEXT =
-  "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue. Child runs do not resume independently. Inspect their saved work; send a fresh instruction to the same retained child session when appropriate. A stopped execution is not a yielded pause, and restarting it does not transfer workspace or publication ownership.";
 // Old shutdown bumped updatedAt, but abandoned cycles can survive for weeks. Limit adoption
 // to six hours before process start; longer stops lose this one-time upgrade resume.
 // Remove this bridge once stable includes the graceful-restart redesign (#185730).
@@ -85,6 +90,7 @@ type SessionIdentity = {
   sessionId?: string;
   needsResume: boolean;
   parked?: boolean;
+  operatorSource?: NonNullable<InternalSessionEntry["resumeAfterRestart"]>["operatorSource"];
 };
 
 /** Snapshot only live owners after admission closes, before shutdown aborts them. */
@@ -142,9 +148,13 @@ async function persistRunningSessions(
         sessionId: root.sessionKey === input.sessionKey ? input.sessionId : undefined,
         needsResume: input.needsResume !== false,
         parked: input.parked,
+        operatorSource: root.sessionKey === input.sessionKey ? input.operatorSource : undefined,
       });
     } else {
       existing.needsResume ||= !input.parked && input.needsResume !== false;
+      if (root.sessionKey === input.sessionKey && input.operatorSource) {
+        existing.operatorSource = input.operatorSource;
+      }
     }
   };
   for (const operation of activeSessionOperations()) {
@@ -165,6 +175,7 @@ async function persistRunningSessions(
       agentId: operation.agentId,
       sessionId: operation.sessionId,
       storePath: target?.physicalStorePath ?? target?.storeScope,
+      operatorSource: captureSessionRestartOperatorSource(operation),
       // Completed replies can retain execution custody only to settle workspace uploads.
       needsResume:
         (!operation.result || restartAborted) && !hasCommittedReplyOperationOutcome(operation),
@@ -249,6 +260,8 @@ async function persistRunningSessions(
                 resumeAfterRestart: {
                   queuedInputIds: queued.queuedInputIds,
                   queuedInputSources: queued.queuedInputSources,
+                  operatorSource:
+                    session.operatorSource ?? entry.resumeAfterRestart?.operatorSource,
                 },
               },
             });
@@ -492,12 +505,21 @@ async function resumeRestartStore(
           sessionKeys: [sessionKey],
           assertCommitAllowed: assertRecoveryCurrent,
           requireWriteSuccess: true,
-          update: (current) => {
+          update: async (current) => {
             const selected = current.find((row) => row.sessionKey === sessionKey)?.entry;
             if (!selected) {
               return { result: undefined };
             }
-            const parked = resolveSessionYieldWait(sessionKey, selected, agentId);
+            let parked = resolveSessionYieldWait(sessionKey, selected, agentId);
+            if (
+              parked &&
+              (await hasInterruptedCommittedRequesterSettleInput(
+                { ...target, agentId, sessionKey, sessionId: selected.sessionId },
+                selected,
+              ))
+            ) {
+              parked = undefined;
+            }
             const skip = restartResumeSkipReason(sessionKey, selected);
             const orphanedRun =
               (!parked || parked === "resume") &&
@@ -596,6 +618,7 @@ async function resumeRestartStore(
               sessionKey,
               sessionId: entry.sessionId,
               preserveRecordedSource: true,
+              operatorSource: marker.operatorSource,
               assertCurrent: () => signal.throwIfAborted(),
             });
             admissionStage = "target";

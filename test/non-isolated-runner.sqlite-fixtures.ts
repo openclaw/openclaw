@@ -33,7 +33,11 @@ import { captureOpenClawStateReadSource } from ${JSON.stringify(import.meta.reso
 import { closeOpenClawStateDatabaseAsync } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-cache.ts"))};
 async function useReadPool() {
   const transport = captureOpenClawStateReadSource().createTransport({ type: "backup.runs" });
-  const authority = { signal: new AbortController().signal, assertCurrent() {} };
+  const authority = {
+    signal: new AbortController().signal,
+    assertCurrent() {},
+    acquire<T>(operation: () => T): T { return operation(); },
+  };
   try {
     expect(await transport.startRead({
       context: {

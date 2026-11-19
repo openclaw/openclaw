@@ -79,9 +79,9 @@ export function isConfirmedLowercasedLegacyAlias(
   }
   const { baseSessionKey, threadId } = parseThreadSessionSuffix(normalizedKey);
   const normalizedBaseKey = baseSessionKey ?? normalizedKey;
-  const targetMatches = entryDeliveryTargets(entry).some((target) =>
-    normalizedBaseKey.includes(target),
-  );
+  const targetMatches = requiresFoldedSessionKeyAliasProof(normalizedBaseKey)
+    ? entryDeliveryTargets(entry).some((target) => normalizedBaseKey.includes(target))
+    : deliveryContextFromSession(entry)?.channel === "matrix";
   if (!targetMatches) {
     return false;
   }
@@ -102,7 +102,11 @@ export function hasMismatchedCaseSensitiveDeliveryProof(
   const normalizedBaseKey = baseSessionKey ?? normalizedKey;
   const targets = entryDeliveryTargets(entry);
   // Existing delivery metadata is treated as proof against folding to a different opaque target.
-  if (targets.length > 0 && !targets.some((target) => normalizedBaseKey.includes(target))) {
+  if (
+    requiresFoldedSessionKeyAliasProof(normalizedBaseKey) &&
+    targets.length > 0 &&
+    !targets.some((target) => normalizedBaseKey.includes(target))
+  ) {
     return true;
   }
   const storedThreadId = entryThreadId(entry);
@@ -141,6 +145,15 @@ export function resolveDeliveryProvenCanonicalSessionKey(
     }
   }
   if (peerStart < 0) {
+    // A Matrix DM may use the main session rather than a room-keyed base.
+    const threadId = entryThreadId(entry);
+    if (
+      channel === "matrix" &&
+      threadId.startsWith("$") &&
+      parsedThread.threadId?.toLowerCase() === threadId.toLowerCase()
+    ) {
+      return normalizeStoreSessionKey(`${baseSessionKey}:thread:${threadId}`);
+    }
     return normalizedKey;
   }
   const storedPeerId = baseSessionKey.slice(peerStart);

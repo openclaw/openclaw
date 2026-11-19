@@ -24,7 +24,8 @@ import {
 
 export { isUpdateCompatibilityChunk } from "./update-compat-contract.mjs";
 const HASHED_CHUNK = /-[A-Za-z0-9_-]{8}\.m?js$/;
-const POST_SWAP_OWNER = /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup(?:-scope)?\.ts$)/;
+const POST_SWAP_OWNER =
+  /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup(?:-scope)?\.ts$|infra\/deferred-plugin-migrations\.ts$)/;
 const STANDALONE_CHUNK_PREFIXES = Object.keys(standaloneRuntimeProcessBuildEntries).flatMap(
   (name) => {
     const { chunkFileNames } = getStandaloneRuntimeProcessOutputOptions(name);
@@ -588,6 +589,18 @@ function currentOrigin(
   const info = graph.info(file);
   if (info.imports.has(origin.symbol) || info.exports.has(origin.symbol)) {
     throw new Error(`Cannot resolve current source binding ${origin.module}:${origin.symbol}`);
+  }
+  // The published 9.36 lease dispatcher moved in 5b4fdfcb22cf without a runtime
+  // re-export, to keep storage independent of dispatch. Preserve its recorded ABI
+  // only while 9.36 remains in the supported first-hop inventory.
+  if (
+    origin.module === "src/state/openclaw-state-lease-worker-storage.ts" &&
+    origin.symbol === "runWithOpenClawStateLeaseWorker"
+  ) {
+    const operation = path.join(sourceDir, "src/state/openclaw-state-lease-worker-operation.ts");
+    if (fs.existsSync(operation)) {
+      return graph.origin(operation, origin.symbol) ?? origin;
+    }
   }
   return origin;
 }

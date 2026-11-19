@@ -39,14 +39,13 @@ export async function discoverRestartSessionStores(
   const { context, signal } = params;
   signal.throwIfAborted();
   const cfg = context.getRuntimeConfig();
-  const inventory = prepareSessionStoreTargetInventoryRead(
-    prepareSessionStoreTargetInventory(
-      cfg,
-      listConfiguredSessionStoreAgentIds(cfg),
-      env,
-      "configured",
-    ),
+  const inventoryRequest = prepareSessionStoreTargetInventory(
+    cfg,
+    listConfiguredSessionStoreAgentIds(cfg),
+    env,
+    "configured",
   );
+  const inventory = prepareSessionStoreTargetInventoryRead(inventoryRequest);
   return inventory.withRead(
     async (snapshot) =>
       snapshot.agents.flatMap(({ reads }) =>
@@ -54,7 +53,7 @@ export async function discoverRestartSessionStores(
           ...target,
           storePath: database.path,
           physicalAgentId: database.agentId,
-          ...(env ? { env } : {}),
+          env: inventoryRequest.env,
         })),
       ),
     () => signal.throwIfAborted(),

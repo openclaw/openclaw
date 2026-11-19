@@ -189,9 +189,10 @@ export function assertPackageTree(expected, actual, { tightenPermissions = false
         changed(relative, field === "content" && prior.kind === "link" ? "link target" : field);
       }
     }
-    // Current full-fingerprint publication clears exactly group/other access.
-    // A writable fixture must not silently accept failed or partial tightening.
-    const mode = tightenPermissions && prior.kind !== "link" ? prior.mode & 0o7700 : prior.mode;
+    // Current full-fingerprint publication clears exactly group/other write access.
+    // It keeps read/execute, so a non-root service can still run a root-owned install.
+    // A writable fixture must not silently accept failed, partial, or excess tightening.
+    const mode = tightenPermissions && prior.kind !== "link" ? prior.mode & 0o7755 : prior.mode;
     if (mode !== observed.mode) {
       changed(
         relative,

@@ -89,6 +89,14 @@ describe("agent run session target", () => {
     },
   );
 
+  it("preserves a Matrix DM thread identity through stored target resolution", async () => {
+    const sessionId = "matrix-dm-thread";
+    const sessionKey = "agent:main:main:thread:$MixedCaseEvent";
+    await seed(sessionId, sessionKey);
+
+    await expectKeyedTarget({ agentId: "main", sessionId, sessionKey }, sessionKey);
+  });
+
   it("resolves an existing keyed row before creating a session-id compatibility key", async () => {
     const sessionId = "2fb701ef-6425-4c48-9b6f-5a170aa2477e";
     const sessionKey = "agent:main:telegram:direct:reporter";

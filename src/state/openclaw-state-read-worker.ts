@@ -347,22 +347,25 @@ class StateReadTransport {
       const task = pool.pool.runTask(
         async () => {
           const physicalLocation = resolveSqliteDatabaseFilePath(location);
-          const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation, [], undefined, () =>
-            authority.assertCurrent(),
-          );
+          await authority.acquire(() => undefined);
+          const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation, [], undefined, () => {
+            authority.signal.throwIfAborted();
+            context.admission.assertCurrent();
+          });
           if (turn) {
             releaseAdmission = await turn;
           }
           try {
-            authority.assertCurrent();
-            // Queue admission can outlive the captured file at this pathname.
-            if (expectedIdentity !== undefined) {
-              assertDatabaseFileIdentity(await stat(physicalLocation, { bigint: true }), {
-                key: expectedIdentity,
-              });
-              authority.assertCurrent();
-            }
-            return request;
+            return await authority.acquire(async () => {
+              // Queue admission can outlive the captured file at this pathname.
+              if (expectedIdentity !== undefined) {
+                assertDatabaseFileIdentity(await stat(physicalLocation, { bigint: true }), {
+                  key: expectedIdentity,
+                });
+                authority.assertCurrent();
+              }
+              return request;
+            });
           } catch (error) {
             releaseAdmission?.();
             releaseAdmission = undefined;

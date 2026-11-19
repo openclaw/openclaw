@@ -1,23 +1,13 @@
-import type { Model } from "@openclaw/llm-core";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions.js";
 import { isGoogleGemini3ThinkingLevelModel } from "../internal/google-model-family.js";
-import type { ProviderContext } from "../provider-types.js";
+import type { ProviderModel } from "../provider-types.js";
+import type { AssistantMessage } from "../types.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { requiresReasoningContentReplay } from "./openai-completions-reasoning-replay.js";
 import {
   GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
-
-function isGoogleOpenAICompatModel(model: OpenAIModeModel): boolean {
-  const endpointClass = detectOpenAICompletionsCompat(model as Model<"openai-completions">)
-    .capabilities.endpointClass;
-  return (
-    model.provider === "google" ||
-    endpointClass === "google-generative-ai" ||
-    endpointClass === "google-vertex"
-  );
-}
 
 const GOOGLE_COMPAT_THOUGHT_SIGNATURE_ELLIPSIS_RE = /[\u2026]|\.\.\./;
 const GOOGLE_COMPAT_THOUGHT_SIGNATURE_BASE64_RE = /^[A-Za-z0-9+/=]+$/;
@@ -29,63 +19,39 @@ function hasGoogleCompatThoughtSignatureTruncationFootprint(value: string): bool
   );
 }
 
-function injectToolCallThoughtSignatures(
-  outgoingMessages: ChatCompletionMessageParam[],
-  context: ProviderContext,
-  model: OpenAIModeModel,
-): void {
-  if (!isGoogleOpenAICompatModel(model)) {
-    return;
+// Resolve against the exact source occurrence, before IDs can alias another turn.
+export function toolCallThoughtSignatureReplay(
+  model: Pick<ProviderModel, "api" | "provider" | "id" | "baseUrl" | "reasoning" | "compat">,
+  message: Pick<AssistantMessage, "api" | "provider" | "model">,
+  thoughtSignature: string | undefined,
+) {
+  const endpointClass = detectOpenAICompletionsCompat(model).capabilities.endpointClass;
+  const google =
+    model.provider === "google" ||
+    endpointClass === "google-generative-ai" ||
+    endpointClass === "google-vertex";
+  const fallback =
+    google && isGoogleGemini3ThinkingLevelModel(model.id)
+      ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
+      : undefined;
+  const sameRoute =
+    message.api === model.api && message.provider === model.provider && message.model === model.id;
+  let signature = sameRoute ? thoughtSignature : undefined;
+  // Encrypted reasoning details (JSON) replay through reasoning_details instead.
+  if (!google && signature?.trimStart().startsWith("{")) {
+    signature = undefined;
   }
-  const sigById = new Map<string, string>();
-  const fallbackSig = isGoogleGemini3ThinkingLevelModel(model.id)
-    ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
-    : undefined;
-  for (const msg of context.messages ?? []) {
-    if (msg.role !== "assistant") {
-      continue;
-    }
-    if (!Array.isArray(msg.content)) {
-      continue;
-    }
-    for (const block of msg.content) {
-      if (block.type !== "toolCall") {
-        continue;
-      }
-      const id = block.id;
-      const sig = block.thoughtSignature;
-      if (typeof id === "string" && typeof sig === "string" && sig.length > 0) {
-        const isSameRoute =
-          msg.api === model.api && msg.provider === model.provider && msg.model === model.id;
-        if (!isSameRoute && !fallbackSig) {
-          continue;
-        }
-        sigById.set(id, isSameRoute ? sig : (fallbackSig ?? sig));
-      }
-    }
+  signature ||= fallback;
+  if (signature && hasGoogleCompatThoughtSignatureTruncationFootprint(signature.trim())) {
+    signature = fallback;
   }
-  if (sigById.size === 0 && !fallbackSig) {
-    return;
+  if (!signature) {
+    return undefined;
   }
-  for (const message of outgoingMessages) {
-    const toolCalls = "tool_calls" in message ? message.tool_calls : undefined;
-    if (!Array.isArray(toolCalls)) {
-      continue;
-    }
-    for (const toolCall of toolCalls) {
-      let sig = sigById.get(toolCall.id) ?? fallbackSig;
-      if (sig) {
-        const trimmed = sig.trim();
-        if (hasGoogleCompatThoughtSignatureTruncationFootprint(trimmed)) {
-          sig = fallbackSig;
-        }
-      }
-      if (!sig) {
-        continue;
-      }
-      Object.assign(toolCall, { extra_content: { google: { thought_signature: sig } } });
-    }
-  }
+  // Compatible proxies get only signatures issued on this route; adapters may move them.
+  return google
+    ? { extra_content: { google: { thought_signature: signature } } }
+    : { provider_specific_fields: { thought_signature: signature } };
 }
 
 export const COMPLETIONS_REASONING_REPLAY_FIELDS = [
@@ -143,14 +109,12 @@ function shouldPreserveOpenRouterReasoningReplay(model: OpenAIModeModel): boolea
 // strip them for stock OpenAI before a follow-up request hits the wire.
 export function applyCompletionsReplay(
   outgoingMessages: ChatCompletionMessageParam[],
-  context: ProviderContext,
   model: OpenAIModeModel,
   compat: {
     requiresReasoningContentOnAssistantMessages: boolean;
     thinkingFormat: string;
   },
 ): void {
-  injectToolCallThoughtSignatures(outgoingMessages, context, model);
   const preserveOpenRouterReasoning =
     compat.thinkingFormat === "openrouter" && shouldPreserveOpenRouterReasoningReplay(model);
   const preserveReasoningContent =

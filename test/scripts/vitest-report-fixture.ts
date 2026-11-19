@@ -21,6 +21,7 @@ export const reportChunkTestFiles: readonly string[] = Array.from(
 );
 
 export type ReportFixtureMode =
+  | "file-backed-suites"
   | "overlap"
   | "serial"
   | "parallel"
@@ -342,6 +343,69 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
         "beta",
         `const config = {root:${JSON.stringify(root)},test:{projects:[${JSON.stringify(other)},${JSON.stringify(beta)}]}};`,
       );
+    }
+    if (mode === "file-backed-suites") {
+      // These synthetic suites own their complete runtime; no product build is needed.
+      env.OPENCLAW_E2E_SKIP_BUILD = "1";
+      env.OPENCLAW_VITEST_INCLUDE_FILE = path.join(root, "replay-fixture-files.json");
+      write(
+        env.OPENCLAW_VITEST_INCLUDE_FILE,
+        JSON.stringify(
+          ["alpha.test.ts", "beta.test.ts", "gamma.test.ts", "delta.test.ts"].map((file) =>
+            path.join(root, file),
+          ),
+        ),
+      );
+      const leaf = (name: string, file: string, extra = "") => {
+        const config = "test/vitest/vitest." + name + ".config.ts";
+        writeConfig(
+          path.join(root, config),
+          name,
+          "const config = {root:" +
+            JSON.stringify(root) +
+            ",test:{name:" +
+            JSON.stringify(name) +
+            ",include:[" +
+            JSON.stringify(file) +
+            "],pool:'forks',maxWorkers:1,fileParallelism:false," +
+            extra +
+            "}};",
+        );
+        return config;
+      };
+      const container = (name: string, projects: string[]) => {
+        const config = "test/vitest/vitest." + name + ".config.ts";
+        writeConfig(
+          path.join(root, config),
+          name,
+          "const config = {root:" +
+            JSON.stringify(root) +
+            ",test:{name:" +
+            JSON.stringify(name) +
+            ",projects:" +
+            JSON.stringify(projects) +
+            "}};",
+        );
+        return config;
+      };
+      write(
+        path.join(root, "gamma.test.ts"),
+        "import {test,expect} from 'vitest';test('gamma/one',()=>expect(1).toBe(1));",
+      );
+      write(
+        path.join(root, "delta.test.ts"),
+        "import {test,expect} from 'vitest';test('delta/one',()=>expect(1).toBe(1));",
+      );
+      const gateway = container("gateway", [
+        container("gateway-server", [
+          leaf("gateway-server-native", "alpha.test.ts", "sequence:{groupOrder:0},"),
+        ]),
+      ]);
+      const plugins = container("plugins", [
+        leaf("plugins-source", "beta.test.ts"),
+        leaf("plugins-native-loader", "gamma.test.ts", "execArgv:[],"),
+      ]);
+      targets = [gateway, plugins, leaf("e2e", "delta.test.ts")];
     }
     if (mode === "chunks") {
       const files = reportChunkTestFiles;

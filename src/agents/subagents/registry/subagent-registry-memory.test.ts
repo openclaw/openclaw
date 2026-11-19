@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDirectChatContext } from "../../../gateway/server-chat.agent-events.test-helpers.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -44,6 +45,26 @@ function createRun(runId: string, overrides: Partial<SubagentRunRecord> = {}): S
 }
 
 afterEach(() => subagentRuns.clear());
+
+it.each(["distinct gateway", "retired"] as const)("partitions completion custody by %s", (kind) => {
+  const first = createRun("first");
+  const second = createRun("second");
+  const context = createDirectChatContext();
+  const resolve = () => context;
+  bindGatewayContextResolver(first, resolve);
+  bindGatewayContextResolver(
+    second,
+    kind === "retired" ? resolve : () => createDirectChatContext(),
+  );
+  subagentRuns.set(first.runId, first);
+  subagentRuns.set(second.runId, second);
+  if (kind === "retired") {
+    subagentRuns.retireCompletionAuthority(second);
+  }
+  expect(
+    subagentRuns.selectCompletionAuthorityBatch([first, second], first).map((entry) => entry.runId),
+  ).toEqual(["first"]);
+});
 
 it("prepares list-owner facts once per view without lending authority to display rows or old incarnations", () => {
   const entry = createRun("shared-read-owner");

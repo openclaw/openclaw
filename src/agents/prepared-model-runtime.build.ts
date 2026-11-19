@@ -130,6 +130,29 @@ async function buildSnapshotBatch(
     pluginGeneration: PreparedModelRuntimePluginGeneration,
     catalogFacts: PreparedModelRuntimeCatalogFacts,
   ) => {
+    const { input, inventoryOwner } = candidate;
+    if (
+      inventoryOwner?.provenance === "configured" &&
+      !input.readOnly &&
+      (inventoryOwner.catalogInventory ||
+        inventoryOwner.catalogAttempt ||
+        input.config.gateway?.controlUi?.enabled !== false)
+    ) {
+      const agentId = input.agentId ?? resolveAuthProfileDatabaseOwnerId(input.agentDir);
+      const env = agentFacts.env;
+      // Background catalog saves must not create the shared session database underneath
+      // the first chat's missing-store facts. Admit local storage before publishing its
+      // configured owner; provider discovery remains asynchronous. Existing read-only
+      // startup admissions already have a database and must not borrow write permission.
+      if (!readAgentDatabaseAdmissionRefusal(agentId, { env })) {
+        await prepareOpenClawAgentDatabaseExecution(
+          { agentId, path: resolveAuthProfileDatabasePath(input.agentDir), env },
+          () => assertBuildCurrent(input),
+          candidate.retirementSignal,
+        );
+        assertBuildCurrent(input);
+      }
+    }
     const catalogAccess = await createFullModelCatalogAccess(
       {
         catalogOwner: candidate.catalogOwner,

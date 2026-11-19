@@ -241,6 +241,7 @@ function resolveSelectedProviderOwnerPluginIds(params: {
         ? {
             registry: params.metadataSnapshot.index,
             manifestRegistry: params.metadataSnapshot.manifestRegistry,
+            normalizePluginId: params.metadataSnapshot.normalizePluginId,
           }
         : {}),
     }),

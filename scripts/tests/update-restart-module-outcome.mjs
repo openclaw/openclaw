@@ -183,6 +183,8 @@ async function fixture({
       return { verification: { ...observed.verification, recovery: observed.recovery } };
     },
     recordUpdateRunStep: () => {},
+    // No earlier run owes a step. Recording or settling one would be an unexpected call.
+    readOwedUpdateSteps: () => [],
     async runUpdatedInstallGatewayCommand(activation, command) {
       commandCalls++;
       events.push("command:" + command);
@@ -214,6 +216,15 @@ async function fixture({
         params.onVerified?.(Date.now());
       }
       return verification;
+    },
+    withUpdateStateReleasedAcrossRestart: async (selectedRun, restart) => {
+      assert.equal(selectedRun, run);
+      events.push("state-release");
+      try {
+        return await restart();
+      } finally {
+        events.push("state-readmit");
+      }
     },
     withOwnedManagedUpdateEnv: async (_env, action) => action(),
     acquireWithWait: ({ acquire }) => acquire(),
@@ -317,6 +328,8 @@ async function fixture({
     "../daemon-cli/restart-health-probe",
     "../../utils/absolute-deadline",
     "update-command-post-update-maintenance",
+    "update-command-owed",
+    "../../infra/update-run-owed-step",
     "../../infra/update-candidate-predecessor-stop",
     // Recovery and reporting stay real; only their I/O uses finite fixture facts.
     "update-command-failure-recovery",
@@ -705,3 +718,12 @@ for (const failure of ["missing-module", "ENOENT", "verified-result-control"]) {
     assert.deepEqual(disk.unexpected, []);
   });
 }
+
+void test("finishUpdate releases state around restart and readiness verification", async () => {
+  const f = await fixture();
+  assert.equal((await f.finish()).status, "ok");
+  assert.ok(f.events.includes("state-release"), "the real restart caller must release state");
+  assert.ok(f.events.indexOf("state-release") < f.events.indexOf("verification"));
+  assert.ok(f.events.indexOf("verification") < f.events.indexOf("state-readmit"));
+  assert.deepEqual(f.unexpected, []);
+});

@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { PreparedModelRuntimePluginGenerationRetiredError } from "../../agents/prepared-model-runtime-admission-errors.js";
+import { PluginInstanceUnavailableError } from "../../plugins/plugin-instance-error.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resolvePluginProvidersCore } from "../../plugins/providers.runtime.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -189,3 +192,96 @@ describe.each(["followup", "collect"] as const)("queued %s", (mode) => {
     }
   });
 });
+
+it.each(["followup", "collect"] as const)(
+  "resolves the current provider for queued %s input after its predecessor scope closes and retires",
+  async (mode) => {
+    const released = createDeferred();
+    const started = createDeferred();
+    const key = `generation-reload-${mode}`;
+    const original = captureActivePluginRegistrySnapshot();
+    const predecessor = new PluginInstance("queue-generation-fixture");
+    const successor = new PluginInstance("queue-generation-fixture");
+    const stale = createEmptyPluginRegistry();
+    const current = createEmptyPluginRegistry();
+    const retiredHook = predecessor.wrap(() => "retired");
+    stale.providers.push({
+      pluginId: "queue-generation-fixture",
+      source: "synthetic",
+      provider: {
+        id: "queue-generation-fixture",
+        label: "Fixture",
+        auth: [],
+        formatApiKey: retiredHook,
+      },
+    });
+    const currentHook = vi.fn(() => "current provider reply");
+    current.providers.push({
+      pluginId: "queue-generation-fixture",
+      source: "synthetic",
+      provider: {
+        id: "queue-generation-fixture",
+        label: "Fixture",
+        auth: [],
+        formatApiKey: successor.wrap(currentHook),
+      },
+    });
+    const scope = new PluginInvocationScope(stale, [predecessor], { retained: true });
+    const queued = createQueueTestRun({ prompt: "accepted before reload" });
+    const delivered: Array<{ prompt: string; reply: string | undefined }> = [];
+    try {
+      setActivePluginRegistry(stale);
+      scope.run(() =>
+        withPluginRuntimeGenerationScope(
+          {
+            metadataSnapshot: createPluginMetadataSnapshotFixture(),
+            pluginRegistry: stale,
+          },
+          () => {
+            expect(enqueueFollowupRun(key, queued, { mode, debounceMs: 0, cap: 50 })).toBe(true);
+            scheduleFollowupDrain(key, async (run) => {
+              started.resolve();
+              await released.promise;
+              try {
+                const provider = resolvePluginProvidersCore({ registryScope: "loaded" })[0];
+                delivered.push({
+                  prompt: run.prompt,
+                  reply: provider?.formatApiKey?.({
+                    type: "api_key",
+                    provider: "queue-generation-fixture",
+                    key: "synthetic-only",
+                  }),
+                });
+              } catch (error) {
+                // Stop fixture retries so a broken drain reports an assertion failure.
+                clearFollowupQueue(key);
+                throw error;
+              }
+            });
+          },
+        ),
+      );
+      await started.promise;
+      expect(getExistingFollowupQueue(key)?.items).toEqual([queued]);
+      scope.release();
+      await predecessor.dispose();
+      expect(() => retiredHook()).toThrow(PluginInstanceUnavailableError);
+      setActivePluginRegistry(current);
+      released.resolve();
+      // 2026.10.10's queue owner settles the drained item by retiring its queue.
+      await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
+      expect(delivered).toHaveLength(1);
+      expect(delivered[0]?.prompt).toContain("accepted before reload");
+      expect(delivered[0]?.reply).toBe("current provider reply");
+      expect(currentHook).toHaveBeenCalledOnce();
+      expect(getExistingFollowupQueue(key)).toBeUndefined();
+    } finally {
+      released.resolve();
+      clearFollowupQueue(key);
+      scope.release();
+      await predecessor.dispose();
+      await successor.dispose();
+      restoreActivePluginRegistrySnapshot(original);
+    }
+  },
+);

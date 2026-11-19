@@ -19,11 +19,17 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import { type WorktreeAllocationGuard, withWorktreeAllocationLease } from "./allocation.js";
+import {
+  type WorktreeAllocationGuard,
+  withWorktreeAllocationLease,
+  withWorktreeMutationLease,
+} from "./allocation.js";
 import * as checkout from "./checkout-materialize.js";
 import { evictManagedWorktree } from "./eviction.js";
 import { requireGit } from "./git.js";
+import { readWorktreeSlotCount } from "./pending-slots.js";
 import * as registryReads from "./registry-read.js";
+import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { resolveRepository } from "./repository-paths.js";
 import { worktreeRunLeaseScope } from "./run-lease-owner.js";
@@ -125,6 +131,110 @@ describe("managed worktree cap eviction", () => {
       },
     });
   }
+
+  it("admits a new checkout while capacity eviction is snapshotting another checkout", async ({
+    signal,
+  }) => {
+    await createFixture("slow-victim");
+    config.worktreeMaxCount = 0;
+    const entered = createDeferred();
+    const release = createDeferred();
+    const capture = snapshotHost.captureManagedWorktreeSnapshot;
+    vi.spyOn(snapshotHost, "captureManagedWorktreeSnapshot").mockImplementationOnce(
+      async (input) => {
+        entered.resolve();
+        await release.promise;
+        return capture(input);
+      },
+    );
+    const collecting = service.gc({ signal });
+    try {
+      await withinTest(entered.promise, signal);
+      // Capacity is now available; the unrelated snapshot must not retain allocation custody.
+      config.worktreeMaxCount = 3;
+      const created = await service.create({
+        repoRoot,
+        name: "concurrent",
+        baseRef: "HEAD",
+        signal,
+        waitBudget: { remainingMs: 0 },
+      });
+      expect(await read(created.path)).toBe("base\n");
+    } finally {
+      release.resolve();
+      await collecting;
+    }
+  });
+
+  it("preserves the victim and refuses capacity when snapshot hydration fails", async () => {
+    const victim = await createFixture("unhydrated");
+    await fs.writeFile(path.join(victim.path, "unsaved.txt"), "retain these bytes\n");
+    vi.spyOn(snapshotHost, "captureManagedWorktreeSnapshot").mockRejectedValue(
+      new Error("object hydration failed"),
+    );
+    await expect(create("refused")).rejects.toThrow(/cap 1 reached/);
+    expect(await liveIds()).toEqual([victim.id]);
+    expect(await read(victim.path, "unsaved.txt")).toBe("retain these bytes\n");
+    expect(leases(victim.id)).toEqual([]);
+  });
+
+  it("refuses a victim whose activity generation changed after selection", async () => {
+    const victim = await createFixture("reused");
+    await updateRegistryWorktree(env, victim.id, { lastActiveAt: victim.lastActiveAt + 1 });
+    await expect(
+      withWorktreeMutationLease({ env, id: victim.id }, (guard) => evict(victim, guard)),
+    ).rejects.toThrow(/binding changed/);
+    expect(await liveIds()).toEqual([victim.id]);
+    expect(await read(victim.path)).toBe("base\n");
+  });
+
+  it("counts a paused restore once while admitting an unrelated creation", async ({ signal }) => {
+    const victim = await createFixture("restore-pending");
+    await service.remove({ id: victim.id, reason: "fixture" });
+    config.worktreeMaxCount = 2;
+    const entered = createDeferred();
+    const release = createDeferred();
+    const materializeCheckout = checkout.materializeManagedWorktree;
+    vi.spyOn(checkout, "materializeManagedWorktree").mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return materializeCheckout(...args);
+    });
+    const restoring = service.restore({ id: victim.id, signal });
+    try {
+      await withinTest(entered.promise, signal);
+      expect(await readWorktreeSlotCount(env)).toBe(1);
+      const other = await service.create({
+        repoRoot,
+        name: "beside-restore",
+        baseRef: "HEAD",
+        signal,
+        waitBudget: { remainingMs: 0 },
+      });
+      const lease = await acquireWorktreeRunLease(other.id, { env });
+      try {
+        await expect(
+          service.create({
+            repoRoot,
+            name: "overflow",
+            baseRef: "HEAD",
+            signal,
+            waitBudget: { remainingMs: 0 },
+          }),
+        ).rejects.toThrow(/timed out/);
+        expect(await readWorktreeSlotCount(env)).toBe(2);
+        release.resolve();
+        await restoring;
+        expect(await readWorktreeSlotCount(env)).toBe(2);
+        expect((await liveIds()).toSorted()).toEqual([victim.id, other.id].toSorted());
+      } finally {
+        await lease.release();
+      }
+    } finally {
+      release.resolve();
+      await restoring;
+    }
+  });
 
   it.each(["claim", "snapshot"] as const)(
     "retains uncertain %s custody after caller cancellation",

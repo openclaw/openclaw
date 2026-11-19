@@ -38,12 +38,12 @@ test("retains package backups after unverified post-swap module failures", async
     const report = await readFile(junitReport, "utf8");
     // Read only the native reporter's aggregate attributes, not fixture stdout.
     const summary = report.match(/<testsuites\b[^>]*>/)?.[0];
-    expect(summary).toMatch(/\btests="19"/);
+    expect(summary).toMatch(/\btests="20"/);
     expect(summary).toMatch(/\bfailures="0"/);
     expect(summary).toMatch(/\bskipped="0"/);
     expect(report.trimEnd()).toMatch(/<\/testsuites>$/);
   } else {
-    expect(stdout).toMatch(/^# tests 19$/m);
+    expect(stdout).toMatch(/^# tests 20$/m);
     expect(stdout).toContain("# fail 0");
     expect(stdout).toMatch(/^# skipped 0$/m);
   }

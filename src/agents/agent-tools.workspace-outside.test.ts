@@ -57,6 +57,22 @@ describe("memory filesystem policy", () => {
     }
   });
 
+  it("preserves a required daily journal through argument preparation and execution", async () => {
+    const read = createOpenClawReadTool(createReadTool(workspaceDir));
+    const filePath = "memory/2099-12-31.md";
+    const prepare = (args: unknown) => read.prepareArguments?.(args) ?? args;
+    const implicit = await read.execute("implicit-daily", prepare({ path: filePath }));
+    expect(implicit.details).toEqual({
+      kind: "not_found",
+      status: "not_found",
+      path: filePath,
+      optional: true,
+    });
+    await expect(
+      read.execute("required-daily", prepare({ path: filePath, optional: false })),
+    ).rejects.toThrow("File not found");
+  });
+
   it.each([true, false])(
     "validates memory append paths after suffix stripping (valid: %s)",
     async (valid) => {

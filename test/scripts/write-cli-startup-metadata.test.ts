@@ -713,8 +713,9 @@ finally:
     {
       mode: "timeout",
       timeoutMs: 500,
-      terminal: "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
-      error: "render failed: timed out after 500ms",
+      terminal:
+        "process.stderr.write('unrelated-private-stderr\\nroot-help: importing\\nroot-help: rendering\\n'); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+      error: "render failed: timed out after 500ms (last phase: root-help: rendering)",
     },
     {
       mode: "nonzero exit",
@@ -727,12 +728,16 @@ finally:
     async ({ timeoutMs, terminal, error }, { signal }) => {
       const tempRoot = createTempDir("openclaw-startup-metadata-descendants-");
       const markerPath = path.join(tempRoot, "grandchild.pid");
-      await expect(
-        spawnHelp(["--input-type=module", "--eval", descendantScript(markerPath, terminal)], {
+      const result = spawnHelp(
+        ["--input-type=module", "--eval", descendantScript(markerPath, terminal)],
+        {
           cwd: tempRoot,
+          stderrPhases: ["root-help: importing", "root-help: rendering", "root-help: rendered"],
           timeoutMs,
-        }),
-      ).rejects.toThrow(error);
+        },
+      );
+      await expect(result).rejects.toThrow(error);
+      await expect(result).rejects.not.toThrow("unrelated-private-stderr");
       const grandchildPid = Number(readFileSync(markerPath, "utf8"));
       expect(Number.isInteger(grandchildPid)).toBe(true);
       expect(grandchildPid).toBeGreaterThan(0);

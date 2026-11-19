@@ -15,7 +15,12 @@ execution gets one ordinary system input asking the agent to inspect current
 state and continue. Recorded yield waits stay parked when their wake source
 survives; a lost source produces a visible failure instead.
 The transcript remains the agent's context; the Gateway does not reconstruct or
-replay the old execution.
+replay the old execution. For a captured interrupted turn, the shutdown marker
+retains its original requester's bounded authentication source. Startup revalidates
+that source and current session access before admitting the continuation; a shared
+session's owner or another participant cannot replace it. A revoked or unavailable
+source fails recovery rather than falling back to another person. Older markers
+without a captured source keep the session-principal recovery policy.
 
 If the interrupted turn left a managed workspace pending, its recovery input waits
 for the workspace owner to finish preparation before starting the turn. Setup
@@ -76,7 +81,9 @@ without resuming it or replaying a pending final; startup reports an aggregate
 count per agent instead of repeating warnings for each such session.
 
 After a clean shutdown, the Gateway waits for final cleanup and flushes file logs
-and output pipes. On macOS and Linux, any remaining referenced handles get a
+and output pipes. Shared-state leases finish their cleanup before the SQLite worker
+host closes. Completed orderly cleanup preserves exit status 0; cleanup failures
+still produce a failed exit. On macOS and Linux, any remaining referenced handles get a
 one-second final drain before the process logs remaining handle types and re-raises
 `SIGTERM`. Failed or retained
 cleanup keeps its existing deadline and exit-status handling.
@@ -598,9 +605,16 @@ call. Later model requests can contain the text as conversation history. The
 agent checks the transcript and current state before continuing; effects are not
 guaranteed exactly once.
 
-For a session with a human owner, the input uses that recorded principal's current
-role, scopes, and session access, narrowed by the session's current permission mode
-and tool policy. When no owner is set, the human creator is used. On a Gateway
+For a captured interrupted turn, the input revalidates the original requester's
+authentication source and current session access, bounded by that source's original
+scopes, model limits, and current policy. Its accepted access-grant custody is
+resumed rather than requested anew. A revoked or unavailable captured source
+prevents resume; the session owner or a later participant cannot replace it.
+
+For older markers without a captured source, a session with a human owner uses
+that recorded principal's current role, scopes, and session access, narrowed by the
+session's current permission mode and tool policy. When no owner is set, the human
+creator is used. On a Gateway
 without `gateway.roles`, a profile has no authority of its own: the input uses the
 authenticated connection the person last sent from in that session (its device,
 sign-in method and scopes), revalidated against current pairing, auth and profile
@@ -610,7 +624,9 @@ principal or lost access prevents automatic resume. An admission failure records
 a visible interruption notice in the existing session, with a bounded, redacted
 diagnostic. The warning identifies the session, interrupted run, and admission
 stage. Resolve the reported error, then send a new message to continue. Archived
-or deleted sessions remain skipped with a log entry.
+or deleted sessions remain skipped with a log entry. Settling an obsolete marker
+without a recorded yield wait does not read or restore its cold transcript; the
+cleared marker does not trigger recovery again on the next restart.
 The Gateway never substitutes an administrator. A recorded connection is only a basis for
 revalidation, never a saved grant.
 Sessions with no human principal use ordinary system-event authority; if it lacks
@@ -619,9 +635,11 @@ a needed capability, the agent must ask for an authorized input.
 WebChat uses the same session and transcript. An unanswered accepted user prompt
 stays in history as its original entry, separate from the restart input. Channel
 sessions use their current delivery route so normal replies return to the
-conversation. The resume input inherits no old browser connection, approval, or
-requester authority snapshot; on a Gateway without roles it uses only the current,
-revalidated authority of the person's recorded device. A resumed Control UI task
+conversation. The resume input does not replay an old browser connection or
+unfinished tool approval. Captured source facts are a revalidation basis, not a
+portable grant; markers without those facts use the legacy principal policy above.
+On a Gateway without roles, recovery still requires the current, revalidated
+authority of the recorded device. A resumed Control UI task
 can update pinned dashboard widgets under that admitted authority without a
 connected browser. Inline widgets still require a connected capable client.
 
@@ -648,6 +666,12 @@ Graceful shutdown marks the root requester of a running child, then cancels the
 child through the ordinary abort path. The child settles terminally without a
 shutdown completion announcement or a "subagent failed" notice to its parent.
 Children are not adopted or independently resumed at startup.
+
+Collector children retain their captured results. If shutdown recorded a terminal
+child before its collector result finished publishing, startup completes that
+record from the saved outcome. A resumed parent's `agents_wait` reads these
+recorded results, including stopped children, without waiting for a new execution
+or completion event. This does not restore the child's retired tool authority.
 
 A child that already ended its execution with `sessions_yield waitFor:"message"`
 keeps its paused task across restart. Shutdown marks that session directly;
@@ -683,11 +707,14 @@ turn. Normal delivery records the receipt so another restart cannot deliver it
 again. Archived, replaced, reset, or unauthorized requesters cannot acquire this
 custody.
 
-If shutdown interrupts the requester while it is processing a captured child
-result, that settle input keeps its completion obligation. Startup resumes the
-same input under fresh authority instead of also sending a generic restart
-input. Its original transcript entry and completion receipt prevent duplicate
-handoffs across later restarts. An intentional Stop still ends the obligation.
+If shutdown interrupts the requester after a captured child result was committed
+to its transcript, that result is already delivered. The Gateway resumes the
+interrupted requester turn under fresh authority with its normal restart input,
+using the committed result in the saved conversation. The registry settles its
+receipt without submitting the result again. Unconsumed results remain owned by
+the registry. The transcript and completion receipt prevent duplicate handoffs
+across later restarts. A requester that deliberately yielded remains parked for
+its children. An intentional Stop still ends the obligation.
 
 When an external continuation source is gone, such as a requester that finished
 or was released without continuing its message-waiting child, the wait closes

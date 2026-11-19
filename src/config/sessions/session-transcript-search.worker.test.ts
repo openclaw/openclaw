@@ -34,10 +34,8 @@ import {
   isSessionTranscriptIndexReconcileRunning,
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
-import {
-  searchSessionTranscripts,
-  searchSessionTranscriptsReadOnlySync,
-} from "./session-transcript-search.js";
+import { searchSessionTranscripts } from "./session-transcript-search.js";
+import { searchSessionTranscriptsReadOnlySync } from "./session-transcript-search.worker.js";
 import {
   clearDatabaseWorkerIdleRetirement,
   historyLane,
@@ -76,7 +74,7 @@ async function searchFixture(
   };
 }
 
-it("reenters the projection writer from a cold search's retained read admission", async () => {
+it("reenters the cold projection writer and keeps search independent of foreground readers", async (context) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const { storePath, database, request } = await searchFixture(
       state,
@@ -85,18 +83,37 @@ it("reenters the projection writer from a cold search's retained read admission"
       "Cold search needle",
     );
     await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
-    const reader = retainSessionHistoryWorkerDatabase(database);
-    const readStatus = (signal: AbortSignal) =>
-      projectionWriter.readSessionTranscriptIndexStatus(
-        database,
-        reader.owner.assertCurrent,
-        signal,
-      );
+    const release = createDeferred();
+    const readers = [historyLane, sessionStoreLane].map((lane) => {
+      const reader = retainSessionHistoryWorkerDatabase(database, lane);
+      const entered = createDeferred();
+      const work = reader.owner.searchTranscripts(request, async (signal) => {
+        const status = await projectionWriter.readSessionTranscriptIndexStatus(
+          database,
+          reader.owner.assertCurrent,
+          signal,
+        );
+        entered.resolve();
+        await release.promise;
+        return status;
+      });
+      void work.catch(() => {});
+      return { reader, entered: entered.promise, work };
+    });
+    let search: ReturnType<typeof searchSessionTranscripts> | undefined;
     try {
-      const result = await reader.owner.searchTranscripts(request, readStatus);
-      expect(result.hits).toMatchObject([{ messageId: "cold-needle" }]);
+      await withinTest(Promise.all(readers.map(({ entered }) => entered)), context.signal);
+      search = searchSessionTranscripts(request, database);
+      const expected = { hits: [{ messageId: "cold-needle" }], indexing: false };
+      expect(await withinTest(search, context.signal)).toMatchObject(expected);
+      release.resolve();
+      for (const { work } of readers) {
+        expect(await withinTest(work, context.signal)).toMatchObject(expected);
+      }
     } finally {
-      reader.release();
+      release.resolve();
+      await Promise.allSettled([...readers.map(({ work }) => work), ...(search ? [search] : [])]);
+      readers.forEach(({ reader }) => reader.release());
       await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
     }
   });
@@ -118,8 +135,10 @@ it("keeps a warmed search reader through discovery and retires it through its ca
     );
     const reader = retainSessionHistoryWorkerDatabase(database);
     const search = () =>
-      reader.owner.searchTranscripts(request, () =>
-        projectionWriter.readSessionTranscriptIndexStatus(database),
+      reader.owner.searchTranscripts(
+        { ...request, filterCandidates: true },
+        () => projectionWriter.readSessionTranscriptIndexStatus(database),
+        async (keys) => keys.map(() => true),
       );
     try {
       const initial = await search();

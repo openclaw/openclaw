@@ -41,6 +41,7 @@ export function createE2EVitestConfig(env: Record<string, string | undefined> = 
     ...base,
     test: {
       ...baseTest,
+      name: "e2e",
       pool: "forks",
       // Abandoned Gateway cleanup retains process-global owners, not just modules.
       // Retire the process between files instead of resetting a still-closing owner.

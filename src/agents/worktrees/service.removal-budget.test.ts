@@ -173,7 +173,7 @@ it("backs off shared-repository snapshots after a missing-object failure", async
 it.each([
   ["promised", 1],
   ["promised-retry", 2],
-  ["unpromised", 0],
+  ["unpromised", 1],
   ["checksum", 1],
   ["byte-limited", 1],
   ["index-limited", 1],
@@ -668,9 +668,20 @@ describe("nested eviction", () => {
         "external checkout data",
       );
       config.worktreeMaxCount = 1;
-      await service.gc();
-      expect(registry(outer.id)?.removedAt).toEqual(expect.any(Number));
-      expect(await liveIds()).toEqual([replacement.id]);
+      const result = await service.gc();
+      expect(result).toMatchObject({
+        removed: [replacement.id],
+        outcome: "partial",
+        limitsSatisfied: true,
+        issues: [
+          { id: outer.id, reason: expect.stringContaining("cannot be snapshotted losslessly") },
+        ],
+      });
+      expect(registry(outer.id)?.removedAt).toBeUndefined();
+      expect(await liveIds()).toEqual([outer.id]);
+      expect(await requireGit(source, ["show", `${retired.snapshotRef}:unsaved.txt`])).toBe(
+        "external checkout data",
+      );
     },
   );
 

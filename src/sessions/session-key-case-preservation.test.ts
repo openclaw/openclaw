@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { resolveSessionStoreEntryCore } from "../config/sessions/store-entry.js";
+import {
+  resolveDeliveryProvenCanonicalSessionKey,
+  resolveSessionStoreEntryCore,
+} from "../config/sessions/store-entry.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { buildAgentPeerSessionKey } from "../routing/session-key.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
@@ -112,6 +115,28 @@ it.each([
   expect(r.legacyKeys).toContain(key);
   expect(r.existing).toBe(value);
 });
+
+it.each(["agent:main:main", "agent:main:matrix:direct:@alice:example.org"])(
+  "preserves Matrix event threads and proves folded aliases under %s",
+  (base) => {
+    const key = `${base}:thread:${EVENT}`;
+    const folded = key.toLowerCase();
+    const value = entry("room:!DmRoom:example.org", 50, EVENT);
+    expect(normalize(key)).toBe(key);
+    expect(requiresFoldedSessionKeyAliasProof(key)).toBe(true);
+    expect(resolveDeliveryProvenCanonicalSessionKey(folded, value)).toBe(key);
+    expect(resolveEntry(folded, value, key)).toMatchObject({
+      normalizedKey: key,
+      existing: value,
+      legacyKeys: [folded],
+    });
+    const sibling = entry("room:!DmRoom:example.org", 100, EVENT.toLowerCase());
+    expect(resolveEntry(folded, sibling, key).existing).toBeUndefined();
+    expect(
+      resolveEntry(folded, { sessionId: "unproven", updatedAt: 100 }, key).existing,
+    ).toBeUndefined();
+  },
+);
 
 it("keeps freshest legacy lowercase Signal group aliases", () => {
   const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";

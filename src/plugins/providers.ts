@@ -2,6 +2,11 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
+import {
+  normalizePluginsConfigWithResolverCore,
+  type NormalizePluginId,
+  type NormalizedPluginsConfig,
+} from "./config-normalization-shared.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
@@ -24,6 +29,8 @@ import { createPluginIdScopeSet } from "./plugin-scope.js";
 import { getProviderOwnerIndex } from "./provider-owner-index.js";
 
 type ProviderManifestLoadParams = {
+  /** Prepared resolver for this exact installed index and manifest view. */
+  normalizePluginId?: NormalizePluginId;
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
@@ -32,7 +39,6 @@ type ProviderManifestLoadParams = {
   metadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry"> &
     Partial<Pick<PluginMetadataSnapshot, "owners" | "byPluginId">>;
 };
-type NormalizedPluginsConfig = ReturnType<typeof normalizePluginsConfigWithRegistry>;
 type ProviderRegistryLoadParams = ProviderManifestLoadParams & {
   onlyPluginIds?: readonly string[];
 };
@@ -118,9 +124,11 @@ function resolveProviderOwnerPluginIds(
     ? new Set(params.pluginIds)
     : resolveProviderSurfacePluginIdSet({ ...params, registry });
   const scope = params.pluginIds ? null : createPluginIdScopeSet(params.onlyPluginIds);
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
-    manifestRegistry: params.manifestRegistry,
-  });
+  const normalizedConfig = params.normalizePluginId
+    ? normalizePluginsConfigWithResolverCore(params.config?.plugins, params.normalizePluginId)
+    : normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
+        manifestRegistry: params.manifestRegistry,
+      });
   return listRegistryPluginIds(
     registry,
     (plugin) =>

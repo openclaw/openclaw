@@ -111,6 +111,47 @@ rebuildable artifact. This applies only to cleanup failures after import succeed
 Read, import, and verification failures still refuse the migration. Every plan
 consuming a shared source must opt in before its cleanup failures become advisory.
 
+### Explicit recovery CLI subtrees
+
+A plugin may declare optional recovery command paths in its separate Doctor
+contract, beneath a root already declared in `cliCommands`:
+
+```json
+{
+  "doctorContract": {
+    "recoveryCli": [["matrix", "doctor"]]
+  }
+}
+```
+
+Each path is nonempty and contains plain command names (letters, digits,
+underscores, or hyphens, starting with a letter or digit). Whitespace, flags,
+wildcards, and filesystem or evaluation syntax are rejected. Duplicate paths
+are coalesced. Omitting the declaration or using an empty array exposes no
+recovery CLI.
+
+Export one `registerRecoveryCli` function from `doctor-contract-api`, typed as
+`PluginDoctorRecoveryCliRegistrar` from
+`openclaw/plugin-sdk/runtime-doctor-migrations`. The host calls it once per
+declared subtree with `program` already mounted at that exact path, `parentPath`,
+selected `config`, `env`, `stateDir`, and
+`context.openPluginStateKeyedStore`. The store adapter is bound to this plugin;
+the registrar receives no full plugin API or Gateway runtime. Add child commands
+to `program`; do not create the declared path again.
+
+The existing CLI owner selects this surface only when a structured pending-state
+migration refusal withheld the selected enabled plugin's normal entrypoints.
+Disabled, denied, quarantined, missing, and otherwise failed plugins do not gain
+this route. An admitted normal root takes precedence. Doctor's existing artifact
+preparation retains source provenance and command callback lifetime.
+
+Discovery and registration must only install command metadata and handlers;
+they must not invoke a detector, migrate state, open a store, recover a snapshot,
+or start a client. Perform explicit recovery only inside its command action,
+with plugin-owned account selection, consent, locking and validation. Reuse that
+operation from the ordinary CLI. This export is separate from `stateMigrations`:
+Doctor repair flags and update repair never authorize it.
+
 The Codex plugin sets `doctorHealthChecks: true` when its public API exports
 health-check registration. Doctor checks the selected plugin's trust before
 loading this surface. Older installed versions without the declaration skip

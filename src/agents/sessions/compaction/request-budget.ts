@@ -3,7 +3,7 @@ import {
   resolveSummaryFloorChars,
   type PreparedCompactionFloor,
 } from "../../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
-import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction-summary-budget.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { PromptOptions } from "../agent-session-types.js";
@@ -134,7 +134,10 @@ export function estimateCompactedRequestTokens(
 export function replayTokenBudget(
   session: {
     agent: {
-      state: Pick<Parameters<typeof createCompactionRequestBudget>[0], "systemPrompt" | "tools">;
+      state: Pick<
+        Parameters<typeof createCompactionRequestBudget>[0],
+        "systemPrompt" | "tools" | "fixedTokenPressure"
+      >;
     };
   },
   model: { contextWindow?: number },
@@ -144,12 +147,13 @@ export function replayTokenBudget(
   if (!model.contextWindow || model.contextWindow <= 0) {
     return undefined;
   }
-  const { systemPrompt, tools } = session.agent.state;
+  const { systemPrompt, tools, fixedTokenPressure } = session.agent.state;
   const budget = createCompactionRequestBudget({
     contextWindow: 0,
     reserveTokens: 0,
     systemPrompt,
     tools,
+    fixedTokenPressure,
   });
   const remaining =
     model.contextWindow - settings.reserveTokens - estimateCompactedRequestTokens(messages, budget);
@@ -180,28 +184,32 @@ export function commitSessionCompactionSummary(
   );
 }
 
-export function assertCompactionRequestCanFit(
-  messages: AgentMessage[],
+/** Lazy scalar estimates preserve the public array estimator's short-circuit call order. */
+export function assertCompactionRequestCanFitFromTokens(
+  historyTokens: number | (() => number),
   budget: CompactionRequestBudget | undefined,
   hasCompactableHistory: boolean,
 ): void {
   // Try useful history reduction for pending input; only fixed overhead is unreclaimable here.
   if (budget && (!hasCompactableHistory || budget.fixedTokens > budget.contextWindow)) {
-    const requestTokens = estimateCompactedRequestTokens(messages, budget);
+    const requestTokens =
+      budget.fixedTokens +
+      budget.pendingTokens +
+      (typeof historyTokens === "function" ? historyTokens() : historyTokens);
     if (requestTokens > budget.contextWindow) {
-      const historyTokens = requestTokens - budget.fixedTokens - budget.pendingTokens;
+      const retainedTokens = requestTokens - budget.fixedTokens - budget.pendingTokens;
       throw new Error(
         `The estimated foreground request budget still exceeds the ${budget.contextWindow}-token model window ` +
-          `(fixed instructions and tools: ${budget.fixedTokens}; pending input: ${budget.pendingTokens}; retained history: ${historyTokens}). ` +
+          `(fixed instructions and tools: ${budget.fixedTokens}; pending input: ${budget.pendingTokens}; retained history: ${retainedTokens}). ` +
           "No further history compaction can make this request fit. Use /context detail to reduce fixed context, shorten the request, or select a larger-context model.",
       );
     }
   }
 }
 
-export function resolveCompactionRetentionBudget(
+export function resolveCompactionRetentionBudgetFromTokens(
   budget: CompactionRequestBudget,
-  messages: AgentMessage[],
+  historyTokens: number | (() => number),
   maxSummaryChars = MAX_COMPACTION_SUMMARY_CHARS,
 ) {
   const preferredTokens =
@@ -209,7 +217,9 @@ export function resolveCompactionRetentionBudget(
   // Fixed prompt and pending input cannot be reclaimed. An approximate reserve
   // target must not prevent useful history reduction for an accepted request.
   const maxTokens =
-    preferredTokens <= 0 ? estimateCompactionHistoryTokens(messages, budget) - 1 : preferredTokens;
+    preferredTokens <= 0
+      ? (typeof historyTokens === "function" ? historyTokens() : historyTokens) - 1
+      : preferredTokens;
   const summaryTokens = estimateCompactionHistoryTokens([
     {
       role: "compactionSummary",

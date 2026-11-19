@@ -30,6 +30,7 @@ import {
   maintenanceConfig,
   setTranscriptActivity,
 } from "./session-cold-storage.test-support.js";
+import { readPreparedSessionCompactionInWorker } from "./session-compaction-prepared.js";
 
 let state: OpenClawTestState;
 let fixture: Awaited<ReturnType<typeof createSessionColdStorageFixture>>;
@@ -379,4 +380,22 @@ it("retains an embedded archive when its window gains an admitted owner after pr
     admission?.release();
     await admission?.released;
   }
+});
+
+it("restores the captured cold source for native compaction preflight", async () => {
+  await expect(maintain()).resolves.toMatchObject({ archivedTranscripts: 1 });
+  expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeDefined();
+  const prepared = await readPreparedSessionCompactionInWorker(fixture.scope, {
+    kind: "preflight",
+  });
+  expect(prepared.status).toBe("preflight");
+  if (prepared.status !== "preflight") {
+    throw new Error("Expected restored preflight");
+  }
+  expect(prepared.source.entries.map((entry) => entry.id)).toEqual([
+    "history-user",
+    "history-assistant",
+  ]);
+  expect(prepared.reads.extractedRows).toBe(3);
+  expectHistoryUnchanged();
 });

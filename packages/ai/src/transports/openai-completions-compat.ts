@@ -156,7 +156,7 @@ export function resolveOpenAIPromptCacheKeySupport(model: {
 /** Detects endpoint capabilities and defaults for an OpenAI-completions model. */
 export function detectOpenAICompletionsCompat(
   model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id" | "reasoning"> & {
-    compat?: { supportsStore?: boolean } | null;
+    compat?: AiProviderRequestPolicyInput["compat"];
   },
   resolveCapabilities?: (input: AiProviderRequestPolicyInput) => AiProviderRequestCapabilities,
 ) {

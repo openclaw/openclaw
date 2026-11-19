@@ -1,0 +1,3 @@
+# Four-line runtime-import barrier in existing manifest CLI tests.
+# Preserves descriptor and legacy fallback assertions while rejecting eager runtime loading.
+4

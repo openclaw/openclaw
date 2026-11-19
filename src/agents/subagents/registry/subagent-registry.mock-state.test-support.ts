@@ -7,7 +7,7 @@ import type {
   SessionEntryReadScope,
 } from "../../../config/sessions/session-accessor.js";
 import type { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
-import type { prepareSessionGenerationFacts } from "../../../config/sessions/session-delivery-generation.js";
+import type { prepareLeaseFacts } from "../../../config/sessions/session-delivery-generation.js";
 import type { captureSessionEntryCurrentRead } from "../../../config/sessions/session-entry-current-runtime.js";
 import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
 import type { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
@@ -180,9 +180,9 @@ export function createSubagentRegistryMockState() {
       loadSessionEntryReadOnly: mocks.loadSessionEntry,
       patchSessionEntryCore: mocks.patchSessionEntryCore,
     },
-    prepareSessionGenerationFacts: (
-      input: Parameters<typeof prepareSessionGenerationFacts>[0],
-    ): ReturnType<typeof prepareSessionGenerationFacts> => {
+    prepareLeaseFacts: (
+      input: Parameters<typeof prepareLeaseFacts>[0],
+    ): ReturnType<typeof prepareLeaseFacts> => {
       let active = true;
       const assertCurrent = () => {
         const entry = mocks.readSessionCurrent(input);

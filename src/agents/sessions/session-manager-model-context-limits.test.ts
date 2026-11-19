@@ -13,7 +13,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import { readSessionForkTurn } from "../session-fork-run.js";
+import { markRunningToolCalls, readSessionForkTurn } from "../session-fork-run.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { withSessionState } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
@@ -776,3 +776,27 @@ it.each([false, true])(
     );
   },
 );
+
+it("shows a fork a still-running tool call as pending without writing the source", async () => {
+  await withHistory("fork-running-tool", async ({ scope, source, verifyRead }) => {
+    source.appendMessage(makeUserMessage("Run the probe", 1));
+    // One call of the batch finished; the other is still running.
+    appendCalls(source, "done", "running");
+    appendResult(source, "done", "done-output");
+    await verifyRead(async () => {
+      const fork = await SessionManager.openModelContextAsync(scope);
+      await markRunningToolCalls(fork);
+      const results = fork
+        .buildSessionContext()
+        .messages.filter((message) => message.role === "toolResult");
+      expect(results).toMatchObject([
+        { toolCallId: "done", content: [{ text: "done-output" }] },
+        {
+          toolCallId: "running",
+          isError: false,
+          content: [{ text: "This tool call is still running. Its result is not available yet." }],
+        },
+      ]);
+    });
+  });
+});

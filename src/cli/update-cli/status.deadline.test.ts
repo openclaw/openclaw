@@ -24,7 +24,13 @@ const overrides = {
     checkUpdateStatus: mocks.check,
     formatGitInstallLabel: () => undefined,
   },
-  "../../infra/update-run-status.js": { readUpdateRunStatus: mocks.run },
+  "../../infra/update-run-status.js": {
+    readUpdateRunStatusWithOwedSteps: async (onStatus: (status: unknown) => void) => {
+      const status = await mocks.run();
+      onStatus(status);
+      return status;
+    },
+  },
   "../../infra/update-recovery-backup-status.js": { inspectUpdateRecoveryBackups: async () => [] },
   "../../infra/deferred-plugin-migrations.js": {
     readDeferredPluginMigrationsAsync: async () => [],

@@ -5,11 +5,13 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import * as processGroups from "../process/supervisor/service-child-group-ownership.js";
+import { getActiveOpenClawStateDatabaseReadSnapshotAsync } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { withArtifactPreservingStateSnapshot } from "../state/openclaw-state-inspection-snapshot.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { isContainerEnvironment } from "./container-environment.js";
@@ -28,9 +30,10 @@ import {
   getUpdateRun,
   getUpdateRunWithReconciliationAsync,
   reconcileAbandonedUpdateRunsAsync,
+  recordUpdateRunOwedStep,
 } from "./update-run-ledger.js";
 import { loadUpdateRecovery } from "./update-run-recovery.js";
-import { readUpdateRunStatus } from "./update-run-status.js";
+import { readUpdateRunStatus, readUpdateRunStatusWithOwedSteps } from "./update-run-status.js";
 
 const admission = vi.hoisted(
   (): { created?: () => void; beforeGrant?: (stage: string) => void } => ({}),
@@ -333,6 +336,54 @@ it.each([
     }
   },
 );
+it("reports owed steps from the history status healed inside one inspection image", async () => {
+  const helper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+  });
+  await once(helper, "spawn");
+  const parent = readUpdateRunDriver()!;
+  const driver = readUpdateRunDriver(helper.pid)!;
+  const run = fixture({
+    trigger: "cli",
+    origin: { driver, previousDrivers: [parent], managedHandoff: { parent, helper: driver } },
+  });
+  try {
+    run.phase("validating");
+    expect(recordUpdateRunOwedStep(run.id, "service-definition", "fixture", run.options)).toBe(
+      true,
+    );
+    await closeOpenClawStateDatabaseAsync();
+    vi.stubEnv("OPENCLAW_STATE_DIR", run.options.env.OPENCLAW_STATE_DIR);
+    const exited = once(helper, "exit");
+    helper.kill("SIGKILL");
+    await exited;
+    vi.spyOn(processGroups, "readProcessGroupMembers").mockImplementation(function* () {
+      yield {
+        pid: process.pid,
+        pgid: process.pid,
+        state: "S",
+        command: { ppid: process.ppid, argv: [process.execPath] },
+      };
+    });
+    const status = await withArtifactPreservingStateSnapshot(
+      new AbortController().signal,
+      async () => {
+        // The image predates healing, as when another status section read first.
+        expect(await getActiveOpenClawStateDatabaseReadSnapshotAsync()).toBeDefined();
+        return readUpdateRunStatusWithOwedSteps(() => {});
+      },
+    );
+    expect(status).toMatchObject({
+      lastRun: { runId: run.id, status: "failed", reason: "handoff-terminated" },
+    });
+    // A failed run owes nothing; the pre-heal image still shows it running and owing.
+    expect(status).not.toHaveProperty("owedSteps");
+  } finally {
+    if (helper.exitCode === null && helper.signalCode === null) {
+      helper.kill("SIGKILL");
+    }
+  }
+});
 it("settles expired legacy history through the history reader", async () => {
   const run = await expiredLegacyRun();
   const reconciled = (await run.history()).run;

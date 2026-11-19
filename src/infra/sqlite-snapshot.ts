@@ -16,6 +16,7 @@ import { formatErrorMessage } from "./errors.js";
 import { openNodeSqliteDatabase, resolveSqliteFilesystemPath } from "./node-sqlite.js";
 import { pathEntryExists } from "./path-existence.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
+import { retireSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 import { copySqliteFile } from "./sqlite-file-copy.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
@@ -27,9 +28,9 @@ import {
   prepareSqliteReadOnlyLocationInProcess,
   prepareSqliteReadOnlyCopyInProcess,
 } from "./sqlite-readonly-location.js";
+import { copyFileExclusive } from "./sqlite-snapshot-exclusive-copy.js";
 import {
   assertExpectedContent,
-  assertMutationFingerprintUnchanged,
   assertOpenFileIdentity,
   assertOpenFileIdentitySync,
   assertPublishedFileIdentitySync,
@@ -95,51 +96,6 @@ async function assertRegularSourceFile(
 async function assertTargetAbsent(targetPath: string): Promise<void> {
   if (await pathEntryExists(targetPath)) {
     throw new Error(`SQLite snapshot target already exists: ${targetPath}`);
-  }
-}
-
-async function copyFileExclusive(
-  source: FileHandle,
-  sourcePath: string,
-  targetPath: string,
-  expectedContent: SqliteFileContent,
-  beforeByteCopy?: PublishVerifiedSqliteFileOptions["beforeByteCopy"],
-): Promise<BigIntStats> {
-  const sourceFingerprint = await source.stat({ bigint: true });
-  let target: Awaited<ReturnType<typeof fs.open>> | undefined;
-  let targetIdentity: BigIntStats | undefined;
-  try {
-    const publication = await copySqliteFile(sourcePath, targetPath, sourceFingerprint, {
-      beforeByteCopy,
-    });
-    target = await fs.open(targetPath, "r+");
-    // Native receipts retain exact Windows file IDs beyond Number precision.
-    const openedIdentity = await target.stat({ bigint: true });
-    if (!sameFileIdentity(publication, openedIdentity)) {
-      throw new Error(`SQLite snapshot target changed during publication: ${targetPath}`);
-    }
-    targetIdentity = openedIdentity;
-    await assertMutationFingerprintUnchanged(
-      source,
-      sourceFingerprint,
-      targetPath,
-      expectedContent,
-    );
-    await target.sync();
-    const currentIdentity = await fs.lstat(targetPath, { bigint: true });
-    if (!sameFileIdentity(targetIdentity, currentIdentity)) {
-      throw new Error(`SQLite snapshot target changed during publication: ${targetPath}`);
-    }
-    return currentIdentity;
-  } catch (error) {
-    if (targetIdentity) {
-      await target?.close().catch(() => undefined);
-      target = undefined;
-      removePublishedTargetIfOwned(targetPath, targetIdentity);
-    }
-    throw error;
-  } finally {
-    await target?.close().catch(() => undefined);
   }
 }
 
@@ -779,6 +735,8 @@ async function verifyAndPublishSqliteSnapshot(
     );
   } finally {
     if (!privateSourcePath) {
+      // The staged copy was admitted when opened; deleting it alone keeps its bytes until exit.
+      retireSqliteDatabaseAdmissionForPath(stagedPath);
       await fs.rm(stagingDir, { force: true, recursive: true }).catch(() => undefined);
     }
   }

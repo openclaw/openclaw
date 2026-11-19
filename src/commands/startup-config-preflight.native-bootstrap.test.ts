@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   readMacNodeWorkerProofRows,
   seedMacNodeWorkerProofState,
@@ -29,6 +29,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import * as stateReadPool from "../state/openclaw-state-read-pool.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
@@ -77,7 +78,7 @@ it.each([false, true])(
       if (routed) {
         seedMacNodeWorkerProofState(state.statePath("state", "openclaw.sqlite"));
         ambientDatabase = fs.readFileSync(state.statePath("state", "openclaw.sqlite"));
-        fs.mkdirSync(selectedRoot);
+        fs.mkdirSync(selectedRoot, { mode: 0o700 });
         fs.writeFileSync(selectedConfig, JSON.stringify(config));
         await state.writeConfig({ env: { vars: { OPENCLAW_STATE_DIR: selectedRoot } } });
         delete process.env.OPENCLAW_STATE_DIR;
@@ -86,8 +87,17 @@ it.each([false, true])(
       const configBefore = fs.readFileSync(selectedConfig, "utf8");
       const databasePath = path.join(selectedRoot, "state", "openclaw.sqlite");
       const nativeRows = seedMacNodeWorkerProofState(databasePath);
+      const measured: string[] = [];
+      const ready = await runStartupConfigPreflight({
+        gateway: true,
+        observe: false,
+        measure: async (name, run) => {
+          measured.push(name);
+          return await run();
+        },
+      });
 
-      const ready = await runStartupConfigPreflight({ gateway: true, observe: false });
+      expect(measured).toContain("doctor.config-preflight.webhook-completion-read");
 
       expect(ready.snapshot.valid).toBe(true);
       expect(ready.snapshot.path).toBe(selectedConfig);
@@ -241,37 +251,117 @@ async function holdForeignStateOwner(
   return { exited };
 }
 
+it.each([
+  ["schema-lease", "native-bootstrap"],
+  ["offline-maintenance", "native-bootstrap"],
+  ["schema-lease", "webhook-completion-read"],
+  ["offline-maintenance", "webhook-completion-read"],
+  ["schema-lease", "after-webhook-completion-read"],
+  ["offline-maintenance", "after-webhook-completion-read"],
+] as const)("handles a foreign %s held before %s", async (holder, stage) => {
+  await withOpenClawTestState({ label: `gateway-foreign-${holder}` }, async (state) => {
+    await state.writeConfig({ gateway: { mode: "local" }, plugins: { enabled: false } });
+    const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
+    await closeOpenClawStateDatabaseAsync();
+    const stop = new AbortController();
+    let foreignOwner: Promise<unknown> | undefined;
+    let preparations = 0;
+    const ready = runStartupConfigPreflight({
+      gateway: true,
+      observe: false,
+      // The second preparation runs after read admission, right before native bootstrap.
+      beforeStatePreparation: async () => {
+        if (++preparations === 2 && stage === "native-bootstrap") {
+          foreignOwner = (await holdForeignStateOwner(databasePath, holder, stop.signal)).exited;
+        }
+        return true;
+      },
+      measure: async (name, run) => {
+        if (
+          stage === "webhook-completion-read" &&
+          name === "doctor.config-preflight.webhook-completion-read"
+        ) {
+          foreignOwner = (await holdForeignStateOwner(databasePath, holder, stop.signal)).exited;
+        }
+        const result = await run();
+        if (
+          stage === "after-webhook-completion-read" &&
+          name === "doctor.config-preflight.webhook-completion-read"
+        ) {
+          foreignOwner = (await holdForeignStateOwner(databasePath, holder, stop.signal)).exited;
+        }
+        return result;
+      },
+    });
+    try {
+      if (holder === "schema-lease") {
+        await expect(ready).resolves.toMatchObject({ snapshot: { valid: true } });
+      } else {
+        await expect(ready).rejects.toBeInstanceOf(StateDatabaseOfflineMaintenanceError);
+      }
+      expect(foreignOwner).toBeDefined();
+    } finally {
+      stop.abort();
+      await foreignOwner;
+      await closeOpenClawStateDatabaseAsync();
+    }
+  });
+});
+
 it.each(["schema-lease", "offline-maintenance"] as const)(
-  "handles a foreign %s held after Gateway read admission",
+  "handles a foreign %s acquired at worker-handoff without redispatch",
   async (holder) => {
-    await withOpenClawTestState({ label: `gateway-foreign-${holder}` }, async (state) => {
+    await withOpenClawTestState({ label: "gateway-worker-handoff" }, async (state) => {
       await state.writeConfig({ gateway: { mode: "local" }, plugins: { enabled: false } });
       const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
       await closeOpenClawStateDatabaseAsync();
       const stop = new AbortController();
       let foreignOwner: Promise<unknown> | undefined;
-      let preparations = 0;
-      const ready = runStartupConfigPreflight({
-        gateway: true,
-        observe: false,
-        // The second preparation runs after read admission, right before native bootstrap.
-        beforeStatePreparation: async () => {
-          if (++preparations === 2) {
-            foreignOwner = (await holdForeignStateOwner(databasePath, holder, stop.signal)).exited;
-          }
-          return true;
-        },
-      });
+      let dispatches = 0;
+      const createPool = stateReadPool.createStateReadPool;
+      const poolSpy = vi
+        .spyOn(stateReadPool, "createStateReadPool")
+        .mockImplementation((...args) => {
+          const pool = createPool(...args);
+          const runTask = pool.runTask;
+          pool.runTask = (input, options) =>
+            runTask(async () => {
+              const request = typeof input === "function" ? await input() : input;
+              if (
+                request.command.type === "machineState.read" &&
+                request.command.input.key === `webhookListeners:${state.configPath}`
+              ) {
+                dispatches += 1;
+                if (dispatches === 1) {
+                  // Host admission passed; the real worker still has to admit its native read.
+                  foreignOwner = (await holdForeignStateOwner(databasePath, holder, stop.signal))
+                    .exited;
+                }
+              }
+              return request;
+            }, options);
+          return pool;
+        });
       try {
+        const ready = runStartupConfigPreflight({
+          gateway: true,
+          observe: false,
+        });
         if (holder === "schema-lease") {
           await expect(ready).resolves.toMatchObject({ snapshot: { valid: true } });
         } else {
-          await expect(ready).rejects.toBeInstanceOf(StateDatabaseOfflineMaintenanceError);
+          // Ordinary worker errors preserve their name/message, not their prototype.
+          await expect(ready).rejects.toMatchObject({
+            name: "StateDatabaseAccessError",
+            message: expect.stringContaining(databasePath + " is undergoing offline maintenance"),
+          });
         }
         expect(foreignOwner).toBeDefined();
+        expect(dispatches).toBe(1);
       } finally {
         stop.abort();
         await foreignOwner;
+        poolSpy.mockRestore();
         await closeOpenClawStateDatabaseAsync();
       }
     });

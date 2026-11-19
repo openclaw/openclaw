@@ -207,7 +207,7 @@ it.each([false, true])(
       await recover();
 
       expect(visible).toEqual(["pre-reset answer"]);
-      expect(retained.sessionGeneration).toEqual({ ...scope, sessionId, lifecycleRevision });
+      expect(retained.sessionGeneration).toEqual(scope);
       // Ordinary followups have no terminal receipt; send or permanent rejection retires the row.
       expect(
         getDeliveryQueueEntryStatus(outboundDeliveryQueueName(retained), retained.id, stateDir),

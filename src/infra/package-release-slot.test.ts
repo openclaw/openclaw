@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { resolveOpenClawInstallationRootSync } from "./openclaw-root.js";
 import {
   readPackageReleaseSlotSync,
@@ -170,10 +171,33 @@ describe.skipIf(process.platform === "win32")("release link lifecycle", () => {
     ]);
   });
 
+  it("removes the waiting link and its release when adoption is refused before the exchange", async () => {
+    const fixture = createPackageReleasePrefixFixture(dir);
+    fixture.writePlainPackage("2026.11.3", "build-old");
+    const before = await capturePackageReleaseSlot(fixture.slot);
+
+    await expect(
+      adoptPackageReleaseSlot({
+        slot: fixture.slot,
+        releasePrefix: await createPackageReleasePrefix(fixture.prefix, "2026.11.3"),
+        expected: before,
+        assertCurrent: () => {
+          throw new Error("lease lost");
+        },
+      }),
+    ).rejects.toThrow("lease lost");
+
+    expect(await capturePackageReleaseSlot(fixture.slot)).toEqual(before);
+    expect(fs.readdirSync(path.join(fixture.prefix, "releases"))).toEqual([]);
+    expect(fs.readdirSync(fixture.globalRoot)).toEqual(["openclaw"]);
+  });
+
   it("keeps the leftover link when adoption can neither finish nor move the directory back", async () => {
     const fixture = createPackageReleasePrefixFixture(dir);
     fixture.writePlainPackage("2026.11.3", "build-old");
     const before = await capturePackageReleaseSlot(fixture.slot);
+    // A platform without an exchange route adopts with two renames.
+    mockProcessPlatform("freebsd");
     const rename = fsp.rename.bind(fsp);
     let renames = 0;
     // The directory moves into releases/; every later rename fails.

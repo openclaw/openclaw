@@ -90,7 +90,6 @@ async function replacementFixture(options?: {
       id: "telegram",
       durableFinal: {
         capabilities: { text: true, media: true, payload: true, messageSendingHooks: true },
-        replayAmbiguousFinalText: true,
       },
       send: {
         text: sendText,
@@ -121,7 +120,6 @@ async function replacementFixture(options?: {
     agentId: "main",
     payload: { text: "Saved final answer" },
     info: { kind: "final" },
-    retryAmbiguousFinalText: true,
     ctxPayload: {
       CommandAuthorized: true,
       CommandTurn: { kind: "normal", source: "message", authorized: false },

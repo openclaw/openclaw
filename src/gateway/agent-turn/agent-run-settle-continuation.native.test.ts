@@ -319,22 +319,32 @@ describe("requester-settle processing survives later user turns", () => {
     },
   );
 
-  it("reopens the same consumed settle input after the shutdown owner interrupts it", async () => {
+  it.each([false, true])("reopens interrupted completion input (direct=%s)", async (direct) => {
+    const prepareCompletion = (overrides: Partial<TurnParams> = {}) =>
+      prepare({
+        ...(direct
+          ? {
+              settleWakeReplay: undefined,
+              subagentCompletions: [{ runId: "child", sessionKey: sourceSessionKey }],
+            }
+          : {}),
+        ...overrides,
+      });
     const controller = new AbortController();
-    const original = await prepare({ abortSignal: controller.signal });
+    const original = await prepareCompletion({ abortSignal: controller.signal });
     await original.recorder!.persistApproved();
     controller.abort(createAgentRunRestartAbortError());
     await original.recorder!.waitForPendingInputSettlement!();
     expect(completion(original)).toMatchObject({ reason: "cancelled", stopReason: "restart" });
     await release(original, "interrupted");
     rotateAgentEventLifecycleGeneration();
-    const replay = await prepare();
+    const replay = await prepareCompletion();
     expectNoReconciliation(replay);
     await replay.recorder!.persistApproved();
     await expectUserInputs(scope(), 1);
     await complete(replay);
     await release(replay);
-    await expectCompletedReplay(await loadTranscriptEvents(scope()));
+    await expectCompletedReplay(await loadTranscriptEvents(scope()), prepareCompletion);
   });
 
   it("cannot publish a cancellation after losing completion authority", async () => {

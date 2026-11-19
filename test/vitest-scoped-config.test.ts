@@ -6,6 +6,7 @@ import { minimatch } from "minimatch";
 import { globSync } from "tinyglobby";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveConfig } from "vitest/node";
+import { withEnvAsync } from "../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { normalizeConfigPath } from "./helpers/vitest-config-paths.js";
 import { createAgentsCoreIsolatedVitestConfig } from "./vitest/vitest.agents-core-isolated.config.ts";
@@ -435,7 +436,20 @@ describe("scoped vitest configs", () => {
     expect(testConfig.dir).toBe(path.join(process.cwd(), "src", "plugins"));
     expect(testConfig.include).toEqual(["**/*.test.ts"]);
     expect(testConfig.exclude).toContain("contracts/**");
-    const resolved = await resolveConfig({ config: false }, defaultPluginsConfig);
+    const includeFile = path.join(tempDirs.make("openclaw-plugin-loader-config-"), "include.json");
+    fs.writeFileSync(includeFile, JSON.stringify(["src/plugins/**/*.test.ts"]));
+    const resolved = await withEnvAsync({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile }, () =>
+      resolveConfig({ config: "test/vitest/vitest.plugins.config.ts" }),
+    );
+    expect(
+      resolved.test.resolvedProjects.map(({ viteConfig }) =>
+        normalizeConfigPath(viteConfig.configFile),
+      ),
+    ).toEqual([
+      "test/vitest/vitest.plugins-source.config.ts",
+      "test/vitest/vitest.plugins-native-loader.config.ts",
+    ]);
+    expect(resolved.test.resolvedProjects.every((project) => !project.inline)).toBe(true);
     const projects = resolved.test.resolvedProjects.map(({ projectConfig }) => projectConfig);
     expect(
       projects.map((project) => ({

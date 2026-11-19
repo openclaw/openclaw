@@ -13,9 +13,10 @@ import { convertToLlm, convertToLlmWithBlockImages } from "../../sessions/messag
 import {
   createToolResultPromptProjectionState,
   recordToolResultPromptProjection,
+  type ToolResultPromptProjectionState,
 } from "../session-prompt-state.js";
 import { bindToolResultPromptProjectionKeys } from "../tool-result-projection-key.js";
-import { replayToolResultPromptProjections } from "../tool-result-projection-replay.js";
+import { projectToolResultMessages } from "../tool-result-truncation.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import { materializeProviderContext } from "./images.js";
 import {
@@ -26,6 +27,15 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const MP4_HEADER = Buffer.from("0000001c6674797069736f6d0000000069736f6d0000000000000000", "hex");
+// Projects with a copy of the state, leaving the original's pruning state unchanged.
+const replayToolResultPromptProjections = (
+  messages: AgentMessage[],
+  state: ToolResultPromptProjectionState,
+) =>
+  projectToolResultMessages({
+    messages,
+    projectionState: createToolResultPromptProjectionState(state),
+  }).messages;
 
 function userMessage(text: string, timestamp: number) {
   return { role: "user" as const, content: [{ type: "text" as const, text }], timestamp };

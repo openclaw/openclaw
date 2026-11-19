@@ -8,9 +8,18 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import type { OpenClawPluginToolContext } from "../plugins/types.js";
+import * as childAdapter from "../process/supervisor/adapters/child.js";
+import * as processSupervisor from "../process/supervisor/index.js";
+import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import { readNestedToolActivity } from "../sessions/nested-tool-activity.js";
+import { SESSION_WATCHDOG_QUIET_TOOL_MS } from "../sessions/session-controller.watchdog-state.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 import type { CodeModeExecutorId } from "./code-mode-executor-types.js";
 import { disposeAllCodeModeRuns, waitForPendingBridgeSettlement } from "./code-mode-state.js";
 import { createSubscribedCodeModeHarness as subscribeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
@@ -28,6 +37,7 @@ import { countActiveToolExecutions } from "./embedded-agent-subscribe.handlers.t
 import { SessionManager } from "./sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { fakeTool } from "./test-helpers/fake-tool.js";
+import { DEFAULT_AGENT_TIMEOUT_MS } from "./timeout.js";
 import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
@@ -118,6 +128,254 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     await resetCodeModeTestState();
     clearRuntimeConfigSnapshot();
   });
+
+  it.each([
+    { name: "default timeout", args: {}, stopPhase: undefined },
+    {
+      name: "explicit timeout",
+      args: { timeoutSeconds: 1800 },
+      stopPhase: undefined,
+    },
+    {
+      name: "disabled timeout during preparation",
+      args: { timeoutSeconds: 0 },
+      stopPhase: "preparing",
+    },
+    {
+      name: "disabled timeout after spawn",
+      args: { timeoutSeconds: 0 },
+      stopPhase: "running",
+    },
+    {
+      name: "service preparation",
+      args: { background: true },
+      stopPhase: "preparing",
+    },
+  ] as const)("attributes sandbox exec liveness: $name", async ({ args, stopPhase }) => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(10);
+    const supervisor = createProcessSupervisor();
+    vi.spyOn(processSupervisor, "getProcessSupervisor").mockReturnValue(supervisor);
+    const completed = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
+    const kill = vi.fn((signal?: NodeJS.Signals) => {
+      completed.resolve({ code: null, signal: signal ?? "SIGTERM" });
+    });
+    const adapter: Awaited<ReturnType<typeof childAdapter.createChildAdapter>>["adapter"] = {
+      supportsRawOutput: true,
+      onStdout: () => undefined,
+      onStderr: () => undefined,
+      onExit: () => undefined,
+      onError: () => undefined,
+      wait: () => completed.promise,
+      kill,
+      dispose: () => undefined,
+    };
+    const preparing = createDeferred();
+    const preparation = createDeferred();
+    const spawned = createDeferred();
+    let processStartedAt = 0;
+    vi.spyOn(childAdapter, "createChildAdapter").mockImplementation(async () => {
+      processStartedAt = Date.now();
+      spawned.resolve();
+      return { adapter, ready: Promise.resolve() };
+    });
+    const harness = createHarness({ name: "real-exec-deadline", timeoutMs: 2_000 });
+    const operation = harness.replyOperation;
+    operation.setPhase("running");
+    const cancel = vi.fn(() => {
+      harness.runAbortController.abort();
+      operation.complete();
+    });
+    operation.attachBackend({ kind: "embedded", runId: harness.runId, cancel });
+    const watchdogAttempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
+    const target = createExecTool({
+      host: "sandbox",
+      allowBackground: true,
+      notifyOnExit: false,
+      preparedStoreEnvironment: { env: {} },
+      preparedSubagentExecution: false,
+      sandbox: {
+        containerName: "synthetic-sandbox",
+        workspaceDir: process.cwd(),
+        containerWorkdir: "/workspace",
+        buildExecSpec: async () => {
+          preparing.resolve();
+          await preparation.promise;
+          return {
+            argv: ["synthetic-sandbox", "sleep", "3600"],
+            env: {},
+            cwd: process.cwd(),
+            stdinMode: "pipe-closed",
+            prepareCurrent: async () => {},
+          };
+        },
+      },
+    });
+    const surface = applyCodeModeCatalog({
+      ...harness,
+      tools: [...harness.tools, wrapToolWithBeforeToolCallHook(target, { runId: harness.runId })],
+      toolHookContext: { runId: harness.runId, sessionKey: harness.sessionKey, watchdogAttempt },
+    });
+    const outer = expectDefined(
+      surface.tools.find((entry) => entry.name === "exec"),
+      "exec",
+    );
+    const execution = outer.execute(
+      "real-deadline-cell",
+      {
+        code: `return await exec(${JSON.stringify({ command: "sleep 3600", ...args })});`,
+        awaitResults: true,
+      },
+      harness.runAbortController.signal,
+    );
+    const settled = execution.catch((error: unknown) => error);
+    try {
+      await preparing.promise;
+      if (stopPhase !== "running") {
+        await vi.advanceTimersByTimeAsync(900_001);
+        await operation.watchdog.tick(Date.now());
+        // Stop recovery includes asynchronous persistence; keep the same outcome assertion
+        // without imposing the default one-second filesystem scheduling deadline.
+        await vi.waitFor(
+          () => expect(operation.watchdog.snapshot().recovery?.status).not.toBe("pending"),
+          { timeout: 5_000 },
+        );
+      }
+      if (stopPhase === "preparing") {
+        await vi.waitFor(() => expect(operation.abortSignal.aborted).toBe(true));
+      } else {
+        expect(operation.abortSignal.reason).toBeUndefined();
+        if (!stopPhase) {
+          await vi.advanceTimersByTimeAsync(99_999);
+        }
+        preparation.resolve();
+        await spawned.promise;
+        await vi.advanceTimersByTimeAsync(0);
+        if (stopPhase === "running") {
+          await vi.advanceTimersByTimeAsync(900_001);
+          await operation.watchdog.tick(Date.now());
+          await vi.waitFor(() => expect(operation.abortSignal.aborted).toBe(true));
+        } else {
+          // Cross the dispatch allowance too: spawn must publish its later enforced deadline.
+          await vi.advanceTimersByTimeAsync(processStartedAt + 1_800_000 - 1 - Date.now());
+          await operation.watchdog.tick(Date.now());
+          expect(operation.abortSignal.reason).toBeUndefined();
+          expect(kill).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(2);
+          const result = resultDetails(await execution);
+          expect(result, JSON.stringify(result)).toMatchObject({
+            status: "completed",
+            value: { status: "failed", failureKind: "overall-timeout" },
+          });
+          expect(kill).toHaveBeenCalledWith("SIGTERM");
+          expect(cancel).not.toHaveBeenCalled();
+        }
+      }
+    } finally {
+      harness.runAbortController.abort();
+      preparation.resolve();
+      completed.resolve({ code: null, signal: "SIGTERM" });
+      await settled;
+      await supervisor.shutdown();
+      resetProcessRegistryForTests();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it.each(["finite", "unlimited"] as const)(
+    "keeps quiet nested Auto Review alive within its %s parent allowance, then reaps a hang",
+    async (parent) => {
+      await import("./session-placement-admission.js");
+      const { createAutoReviewTool } = await loadBundledPluginFacade<{
+        createAutoReviewTool: (context: OpenClawPluginToolContext<2>) => AnyAgentTool | null;
+      }>({ pluginId: "autoreview", artifactBasename: "api.js" });
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(10);
+      const harness = createHarness({ name: `review-${parent}`, timeoutMs: 2_000 });
+      const operation = harness.replyOperation;
+      operation.setPhase("running");
+      const cancel = vi.fn(() => {
+        harness.runAbortController.abort();
+        operation.complete();
+      });
+      operation.attachBackend({ kind: "embedded", runId: harness.runId, cancel });
+      const watchdogAttempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
+      const bound = parent === "finite" ? 1_800_000 : Date.now() + DEFAULT_AGENT_TIMEOUT_MS;
+      const started = createDeferred();
+      const review = expectDefined(
+        createAutoReviewTool({
+          assertInvocationCurrent() {},
+          assertCompleteResult() {},
+          modelExecution: {
+            cliEntryPath: "/fixture/openclaw.mjs",
+            async run() {
+              throw new Error("The stalled helper must not start a reviewer");
+            },
+          },
+          sandbox: {
+            workspaceDir: "/guest/repo",
+            installedSkillRoots: { autoreview: "/protected/autoreview" },
+            run: async ({ signal }) => {
+              started.resolve();
+              return await new Promise<never>((_, reject) => {
+                signal?.addEventListener(
+                  "abort",
+                  () => reject(new DOMException("Cancelled", "AbortError")),
+                  { once: true },
+                );
+              });
+            },
+          },
+        }),
+        "Auto Review",
+      );
+      const surface = applyCodeModeCatalog({
+        ...harness,
+        tools: [...harness.tools, wrapToolWithBeforeToolCallHook(review, { runId: harness.runId })],
+        toolHookContext: {
+          runId: harness.runId,
+          sessionKey: harness.sessionKey,
+          watchdogAttempt,
+          getRunAbortDeadlineAtMs: () => (parent === "finite" ? bound : undefined),
+        },
+      });
+      const exec = expectDefined(
+        surface.tools.find((entry) => entry.name === "exec"),
+        "exec",
+      );
+      const execution = wrapToolWithBeforeToolCallHook(exec, { watchdogAttempt }).execute(
+        "review-cell",
+        { code: "return await autoreview({ mode: 'local' });", awaitResults: true },
+        harness.runAbortController.signal,
+      );
+      // Observe cancellation immediately, including the pre-fix watchdog abort.
+      const settled = execution.catch((error: unknown) => error);
+      try {
+        await started.promise;
+        // Drive the owning watchdog boundary independently of bridge timers.
+        vi.setSystemTime(Date.now() + SESSION_WATCHDOG_QUIET_TOOL_MS + 1);
+        await operation.watchdog.tick(Date.now());
+        await vi.waitFor(() =>
+          expect(operation.watchdog.snapshot().recovery?.status).not.toBe("pending"),
+        );
+        expect(operation.abortSignal.reason).toBeUndefined();
+        expect(cancel).not.toHaveBeenCalled();
+        expect(new Set(operation.watchdog.snapshot().tools.map((entry) => entry.toolName))).toEqual(
+          new Set(["autoreview", "exec"]),
+        );
+        vi.setSystemTime(bound + SESSION_WATCHDOG_QUIET_TOOL_MS - 1);
+        expect((await operation.watchdog.tick(Date.now())).action).toBe("observe");
+        vi.setSystemTime(bound + SESSION_WATCHDOG_QUIET_TOOL_MS + 1);
+        await operation.watchdog.tick(Date.now());
+        await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+        expect(operation.abortSignal.reason).toMatchObject({ code: "OPENCLAW_SESSION_WATCHDOG" });
+        await settled;
+      } finally {
+        harness.runAbortController.abort();
+        await settled;
+      }
+    },
+  );
 
   it.each(executors)(
     "%s admits nested activity when consecutive assistant responses reuse exec_0",
