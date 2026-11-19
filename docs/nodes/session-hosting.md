@@ -179,6 +179,18 @@ installed supervisor recognizing their tool names. Updated nodes continue
 advertising the Gateway tools expected by older Gateways, preserving those
 tools when the node is updated first.
 
+Hosted turns can offer `exec` and `process` on the hosting device only when the
+effective exec host is `gateway`. `auto` resolves to `gateway` without sandboxing,
+but to `sandbox` when sandboxing is active. If the effective host is `node` or
+`sandbox`, hosted turns keep the allowed file tools but have no `exec` or
+`process`, and the Gateway logs `Worker exec/process withheld`.
+
+Check both `agents.entries.<id>.tools.exec.host` (or the global `tools.exec.host`)
+and any session exec-host override, which takes precedence over agent settings.
+Use `gateway` for worker-local commands only when the session does not require
+sandboxing; keep turns that require sandboxing on the Gateway instead. To retain
+node-routed exec for Gateway-local work, use separate per-agent exec-host settings.
+
 This setting enables supervised session turns on the paired device, including
 Gateway-owned workspace transfer and result reconciliation. The Gateway prepares
 the tool definitions and filesystem policy before the worker starts using tools.
