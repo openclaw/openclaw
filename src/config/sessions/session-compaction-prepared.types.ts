@@ -72,7 +72,7 @@ type PreparedCompactionReplayMetadata = {
   needsGoogleTurnOrderingMarker: boolean;
 };
 
-export type SessionPreparedCompactionBody =
+type SessionPreparedCompactionBody =
   | { status: "rendered"; conversation: BoundedConversation }
   | {
       status: "finalized";

@@ -11,7 +11,7 @@ import {
   buildOpenAIResponsesCompactionReplayPlan,
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
-  createOpenAIResponsesCompactionSourceReader,
+  resolveNewestOpenAIResponsesCompactionReplay,
   CompactionReplayRefreshRequiredError,
   type OpenAIResponsesReplayMode,
 } from "./openai-responses-compaction-replay.js";
@@ -69,22 +69,23 @@ const convert = (context: Context, replayMode: OpenAIResponsesReplayMode = "chec
   });
 
 describe("Responses retained-user compaction replay", () => {
-  it("resolves immutable publication from the host active at row read, not reader creation", () => {
+  it("resolves immutable publication from the active host", () => {
     const replay = freezeJsonSnapshot(compactionState("openai-responses-compaction"));
-    const read = createOpenAIResponsesCompactionSourceReader(model, replayIdentity);
-    const before = read(replay, 0);
+    const owner = createAssistant("", replay);
+    const read = () => resolveNewestOpenAIResponsesCompactionReplay([owner], model, replayIdentity);
+    const before = read();
     assert(before?.mode === "compacted-prefix");
     expect(getResponsesCompactionInputIdentity(before.item)).toBeUndefined();
     runWithAiTransportHost(
       createAiTransportHost({ immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData } }),
       () => {
-        const during = read(replay, 0);
+        const during = read();
         assert(during?.mode === "compacted-prefix");
         expect(getResponsesCompactionInputIdentity(during.item)).toBeDefined();
         expect(Object.isFrozen(during.item)).toBe(true);
       },
     );
-    const after = read(replay, 0);
+    const after = read();
     assert(after?.mode === "compacted-prefix");
     expect(getResponsesCompactionInputIdentity(after.item)).toBeUndefined();
     expect(Object.isFrozen(after.item)).toBe(false);

@@ -28,7 +28,7 @@ export function normalizeUserMessageContent(rawContent: unknown): string | undef
   return typeof content === "string" ? content.replace(/\s+/g, " ").trim() : undefined;
 }
 
-export function duplicateUserMessageSignature(
+function duplicateUserMessageSignature(
   message: unknown,
 ): { key: string; timestamp: number } | undefined {
   if (!isRecord(message) || message.role !== "user" || typeof message.timestamp !== "number") {
