@@ -168,6 +168,30 @@ export function selectBoundedModelRequests(
   let selected = candidates.slice(
     cut === candidates.length || cut > latestTurnStart || trailingPromptOnly ? fallbackCut : cut,
   );
+  // An in-turn retry rehydrates from here after its tool frames outgrew the cap. A suffix
+  // that starts inside the current turn would drop the request the retry must still answer.
+  const turnStart = candidates.findLastIndex(
+    ({ entry }) => entry.type === "message" && entry.message.role === "user",
+  );
+  if (turnStart >= 0 && turnStart < candidates.length - selected.length) {
+    const turnRequest = candidates[turnStart]!;
+    const reserved =
+      (sizes.get(turnRequest.entry) ?? readSizes([turnRequest]).get(turnRequest.entry)!) +
+      (boundary ? sizes.get(boundary.entry)! : 0);
+    try {
+      const tail = selectBoundedModelRequests(candidates.slice(turnStart + 1), readSizes, {
+        ...limits,
+        maxBytes: limits.maxBytes - reserved,
+        maxEvents: limits.maxEvents - (boundary ? 2 : 1),
+      });
+      return boundary ? [boundary, turnRequest, ...tail] : [turnRequest, ...tail];
+    } catch (error) {
+      // A request that cannot fit beside any frame keeps the plain suffix.
+      if (!(error instanceof RangeError)) {
+        throw error;
+      }
+    }
+  }
   // A discarded prefix no longer needs savings from retained tool results.
   // Recount after turn/frame closure, then restore newest affordable bodies.
   let retainedBytes = boundary ? sizes.get(boundary.entry)! : 0;
