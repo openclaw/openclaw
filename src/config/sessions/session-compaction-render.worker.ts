@@ -129,18 +129,20 @@ export async function withCompactionSourceRows<T>(
             }
           }
         }
+        function* readSequencesAfter(seq: number) {
+          for (const row of iterateSqliteQuerySync(
+            database.db,
+            source.select("seq").where("seq", ">", seq).orderBy("seq", "asc"),
+          )) {
+            yield row.seq;
+          }
+        }
         return consume({
           database,
           reads,
           readEntry,
           readEntries,
-          readEntriesAfter: (seq) => {
-            const rows = iterateSqliteQuerySync(
-              database.db,
-              source.select("seq").where("seq", ">", seq).orderBy("seq", "asc"),
-            );
-            return Array.from(readEntries(Iterator.from(rows).map((row) => row.seq)));
-          },
+          readEntriesAfter: (seq) => Array.from(readEntries(readSequencesAfter(seq))),
         });
       },
       toDatabaseOptions(request.resolvedScope),
