@@ -411,6 +411,7 @@ struct ChatSessionsCodingTests {
         "steer-local", "steer-foreign",
         "foreign-final", "foreign-final-first", "foreign-final-last", "steer-foreign-final",
         "foreign-ordinary", "foreign-ordinary-after", "foreign-result", "legacy-result",
+        "foreign-mixed-after", "foreign-empty-after",
         "post-final-owned", "post-final-foreign",
         "post-final-missing", "post-final-unresolved", "post-final-commentary",
     ])
@@ -420,6 +421,7 @@ struct ChatSessionsCodingTests {
         let foldsNested = [
             "same", "input-only", "final-only", "reply-only", "steer-local",
             "foreign-final-first", "foreign-final-last", "foreign-ordinary-after", "post-final-owned",
+            "foreign-mixed-after", "foreign-empty-after",
         ].contains(scope)
         let wire = try Self.idleWorkWire(scope: scope)
         let decoded = try await OpenClawChatViewModel.decodeMessages(wire.map(Self.nestedRaw))
@@ -437,6 +439,13 @@ struct ChatSessionsCodingTests {
         if ["foreign-final", "steer-foreign-final"].contains(scope) {
             #expect(groups.isEmpty && settled == raw)
             return
+        }
+        if ["foreign-mixed-after", "foreign-empty-after"].contains(scope) {
+            let original = try #require(raw.first { row in
+                if case let .message(message) = row { return message.transcriptMessageID == "a-work" }
+                return false
+            })
+            #expect(settled.filter { $0.id == original.id } == [original])
         }
         let secondWork = try #require(groups.first { $0.messages.contains { $0.transcriptMessageID == "b-work" } })
         let sharesWork = foldsNested && !isSteer && !isTail
@@ -459,7 +468,11 @@ struct ChatSessionsCodingTests {
         if scope == "reply-only" { expected.insert("b-progress", at: 3) }
         if scope == "foreign-final-first" { expected.insert("foreign-answer", at: expected.count - 1) }
         if scope == "foreign-final-last" { expected.append("foreign-answer") }
-        if ["foreign-ordinary", "foreign-ordinary-after"].contains(scope) { expected.insert("a-work", at: 4) }
+        if ["foreign-ordinary", "foreign-ordinary-after", "foreign-mixed-after", "foreign-empty-after"]
+            .contains(scope)
+        {
+            expected.insert("a-work", at: 4)
+        }
         if scope == "foreign-result" { expected.insert("a-result", at: 4) }
         if isTail {
             expected = ["a-input", "a-answer", "b-input", "Worked", "b-answer"] +
@@ -548,19 +561,79 @@ struct ChatSessionsCodingTests {
         #expect(ChatTranscriptRow.collapseCompletedWork(settled, runWorking: false) == settled)
     }
 
+    @Test(arguments: ["backed", "explicit", "untagged", "invalid"])
+    @MainActor func `ios backed steer request key is not its consuming run identity`(scope: String) async throws {
+        let base = try Self.idleWorkWire(scope: "same")
+        var earlier = base[4]
+        earlier["__openclaw"] = ["id": "earlier-nested", "runId": "run-a"]
+        earlier["timestamp"] = 1
+        var current = Array(base.suffix(4))
+        let hasExplicitRun = scope == "explicit"
+        let outputRun = switch scope {
+        case "explicit", "untagged": "run-b"
+        case "invalid": "run-absent"
+        default: "run-a"
+        }
+        let target = scope == "invalid" ? "run-absent" : "run-a"
+        var inputMetadata = ["id": "b-input", "steerTargetRunId": target]
+        if hasExplicitRun { inputMetadata["runId"] = outputRun }
+        current[0]["__openclaw"] = inputMetadata
+        // chat-send-steering-custody emits a request key independently of the backing target.
+        if scope != "untagged" { current[0]["idempotencyKey"] = "steer:user" }
+        for index in 1...3 {
+            var metadata = try #require(current[index]["__openclaw"] as? [String: Any])
+            metadata["runId"] = outputRun
+            current[index]["__openclaw"] = metadata
+        }
+        let decoded = try await OpenClawChatViewModel.decodeMessages(([base[0], earlier] + current).map(Self.nestedRaw))
+        let input = try #require(decoded.first { $0.transcriptMessageID == "b-input" })
+        #expect(input.idempotencyKey == (scope == "untagged" ? nil : "steer:user"))
+        #expect(input.steerTargetRunID == target)
+        #expect(input.transcriptRunID == (hasExplicitRun ? "run-b" : nil))
+        #expect(input.workRunID == (hasExplicitRun ? "run-b" : scope == "untagged" ? nil : "steer"))
+        let raw = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: decoded))
+        #expect(ChatTranscriptRow.collapseCompletedWork(raw, runWorking: true) == raw)
+        #expect(ChatTranscriptRow.collapseCompletedWork(raw, runWorking: false, activeRunIDs: [outputRun]) == raw)
+        let settled = ChatTranscriptRow.collapseCompletedWork(raw, runWorking: false)
+        if scope == "invalid" {
+            #expect(settled == raw)
+            return
+        }
+        let work = settled.compactMap { row -> [String]? in
+            if case let .completedWork(work) = row { return work.messages.compactMap(\.transcriptMessageID) }
+            return nil
+        }
+        #expect(work == [["earlier-nested"], ["b-work", "nested-row"]])
+        #expect(settled.map { row -> String in
+            if case let .message(message) = row { return message.transcriptMessageID ?? "missing-id" }
+            return "Worked"
+        } == ["a-input", "Worked", "b-input", "Worked", "b-answer"])
+        #expect(ChatTranscriptRow.collapseCompletedWork(settled, runWorking: false) == settled)
+    }
+
     @Test(arguments: [
-        "one", "reverse", "several", "missing", "foreign", "unresolved",
+        "one", "several", "missing", "foreign", "unresolved",
         "unknown-result", "legacy-final", "commentary", "ordinary", "structural", "custom",
+        "polluted-ordinary", "polluted-commentary", "polluted-final", "polluted-unknown",
     ])
     @MainActor func `ios owned nested tail can follow visible foreign finals without crossing other barriers`(
         scope: String) async throws
     {
         let base = try Self.idleWorkWire(scope: "same")
         var wire = [base[0], base[1], base[2], base[3], base[5]]
+        let hasForeignPrefix = scope.hasPrefix("polluted-")
+        if hasForeignPrefix {
+            var narration = base[1]
+            narration["__openclaw"] = ["id": "foreign-prefix", "runId": "run-a"]
+            narration["phase"] = "commentary"
+            wire.insert(narration, at: 4)
+        }
         let foreignIDs = scope == "several" ? ["foreign-0", "foreign-1", "foreign-2"] : ["foreign-0"]
         for (index, id) in foreignIDs.enumerated() {
-            var foreign = base[1]
+            var foreign = scope == "polluted-ordinary" ? base[3] : base[1]
             foreign["__openclaw"] = ["id": id, "runId": index == 1 ? "run-c" : "run-a"]
+            if ["polluted-commentary", "polluted-unknown"].contains(scope) { foreign["phase"] = "commentary" }
+            if scope == "polluted-unknown" { foreign["__openclaw"] = ["id": id] }
             foreign["timestamp"] = 5.1 + Double(index) / 10
             wire.append(foreign)
         }
@@ -597,17 +670,10 @@ struct ChatSessionsCodingTests {
             nested["content"] = try Array(#require(nested["content"] as? [[String: Any]]).prefix(1))
         }
         wire.append(nested)
-        if scope == "reverse" {
-            for index in wire.indices {
-                var metadata = try #require(wire[index]["__openclaw"] as? [String: Any])
-                metadata["runId"] = metadata["runId"] as? String == "run-a" ? "run-b" : "run-a"
-                wire[index]["__openclaw"] = metadata
-            }
-        }
         let decoded = try await OpenClawChatViewModel.decodeMessages(wire.map(Self.nestedRaw))
         let raw = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: decoded))
         let settled = ChatTranscriptRow.collapseCompletedWork(raw, runWorking: false)
-        let foldsTail = ["one", "reverse", "several", "legacy-final"].contains(scope)
+        let foldsTail = ["one", "several", "legacy-final", "polluted-final", "polluted-unknown"].contains(scope)
         let work = settled.compactMap { row -> [String]? in
             if case let .completedWork(work) = row { return work.messages.compactMap(\.transcriptMessageID) }
             return nil
@@ -621,7 +687,8 @@ struct ChatSessionsCodingTests {
             default: "unexpected"
             }
         }
-        #expect(order == ["a-input", "a-answer", "b-input", "Worked", "b-answer"] + foreignIDs +
+        #expect(order == ["a-input", "a-answer", "b-input", "Worked"] +
+            (hasForeignPrefix ? ["foreign-prefix"] : []) + ["b-answer"] + foreignIDs +
             (barrier == nil ? [] : [scope == "structural" ? "divider" : "barrier"]) +
             [foldsTail ? "Worked" : "nested-row"])
         for message in decoded where message.transcriptMessageID?.hasPrefix("foreign-") == true {
@@ -685,17 +752,26 @@ struct ChatSessionsCodingTests {
             ownFinal["__openclaw"] = ["id": "b-answer", "runId": "run-b"]
             wire.insert(ownFinal, at: scope == "foreign-final-first" ? wire.count : wire.count - 1)
         }
-        if ["foreign-ordinary", "foreign-ordinary-after", "foreign-result", "legacy-result"].contains(scope) {
+        if [
+            "foreign-ordinary", "foreign-ordinary-after", "foreign-result", "legacy-result",
+            "foreign-mixed-after", "foreign-empty-after",
+        ].contains(scope) {
             var other = work
             other["__openclaw"] = ["id": "a-work", "runId": "run-a"]
-            if !["foreign-ordinary", "foreign-ordinary-after"].contains(scope) {
+            if scope == "foreign-mixed-after" {
+                var content = try #require(work["content"] as? [[String: Any]])
+                content.insert(["type": "text", "text": "Foreign narration"], at: 0)
+                other["content"] = content
+            } else if scope == "foreign-empty-after" {
+                other["content"] = []
+            } else if !["foreign-ordinary", "foreign-ordinary-after"].contains(scope) {
                 other = [
                     "role": "toolResult", "toolCallId": "a-call", "toolName": "read", "content": "Other result",
                     "timestamp": 3.5, "__openclaw": scope == "legacy-result" ? ["id": "a-result"] :
                         ["id": "a-result", "runId": "run-a"],
                 ]
             }
-            wire.insert(other, at: scope == "foreign-ordinary-after" ? 5 : 4)
+            wire.insert(other, at: scope.hasSuffix("-after") ? 5 : 4)
         }
         if scope == "post-final-commentary" {
             wire.insert([

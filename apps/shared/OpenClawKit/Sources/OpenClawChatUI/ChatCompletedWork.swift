@@ -78,12 +78,12 @@ extension ChatTranscriptRow {
             let parts = (start...end).flatMap { cursor -> [(row: Self, kind: ChatWorkPartKind)] in
                 let row = turn[cursor]
                 guard let source = row.workMessage else { return [(row, .visible)] }
-                if source.role.lowercased() == "assistant", !source.hasWorkReplyContent,
-                   !source.content.contains(where: \.isWorkContent) { return [] }
                 let ownsWork = !ownership.fenced[index] ||
                     source.belongsToWorkRun(turnRunID, allowUnknown: !source.isNestedToolActivity)
-                let canFold = ownsWork &&
-                    ((finalIndex.map { cursor < $0 } ?? true) || !source.hasUnresolvedWork)
+                guard ownsWork else { return [(row, .visible)] }
+                if source.role.lowercased() == "assistant", !source.hasWorkReplyContent,
+                   !source.content.contains(where: \.isWorkContent) { return [] }
+                let canFold = (finalIndex.map { cursor < $0 } ?? true) || !source.hasUnresolvedWork
                 return source.workPresentationParts.map { message in
                     let kind: ChatWorkPartKind = canFold && message.isCollapsibleWork ? .work : .visible
                     return (.message(message), kind)
@@ -132,9 +132,12 @@ extension ChatTranscriptRow {
         var finalIndexes: [Int?] = []
         let runIDs = turns.enumerated().map { index, turn -> String? in
             let input = turn.first?.workMessage
+            let steerTarget = predecessors[index].flatMap { _ in input?.steerTargetRunID }
             let inputRunID = turn.first.flatMap { row -> String? in
                 guard row.startsTurn, let input = row.workMessage, !input.isNestedToolActivity else { return nil }
-                return input.workRunID
+                // A steer request key identifies the input, not the run consuming it.
+                if let explicitRunID = input.transcriptRunID, !explicitRunID.isEmpty { return explicitRunID }
+                return input.workRunID.map { steerTarget ?? $0 }
             }
             defer {
                 if input?.role.lowercased() == "user", let inputRunID { earlierInputRuns.insert(inputRunID) }
@@ -145,7 +148,6 @@ extension ChatTranscriptRow {
                 return nil
             }
             // Explicit reuse or steering may continue an earlier run; an untagged input cannot claim its late reply.
-            let steerTarget = predecessors[index].flatMap { _ in input?.steerTargetRunID }
             let acceptsReply = { (reply: OpenClawChatMessage) in
                 guard let replyRunID = reply.workRunID else { return true }
                 return replyRunID == inputRunID || replyRunID == steerTarget || !earlierInputRuns.contains(replyRunID)
@@ -176,7 +178,9 @@ extension ChatTranscriptRow {
                 guard next.belongsToWorkRun(runID, allowUnknown: false),
                       cursor == end + 1 || !next.hasUnresolvedWork else { break }
                 end = cursor
-            } else if cursor == end + 1, next.workRunID.map({ replyRuns.contains($0) }) ?? true {
+            } else if cursor == end + 1, next.belongsToWorkRun(runID, allowUnknown: true),
+                      next.workRunID.map({ replyRuns.contains($0) }) ?? true
+            {
                 end = cursor
             } else {
                 // Commit this visible foreign-reply span only if it bridges to resolved local nested output.

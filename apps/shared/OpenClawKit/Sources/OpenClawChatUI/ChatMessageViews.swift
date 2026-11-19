@@ -520,7 +520,7 @@ extension ChatMessageBubble {
             }
 
             if !toolActivityItems.isEmpty {
-                ChatToolActivityList(items: toolActivityItems)
+                ChatToolActivityList(items: toolActivityItems, isNestedToolActivity: self.message.isNestedToolActivity)
                     .padding(.horizontal, 4)
             }
 

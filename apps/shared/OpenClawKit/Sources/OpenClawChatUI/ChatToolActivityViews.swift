@@ -555,6 +555,12 @@ struct ChatDiffStatChips: View {
 struct ChatToolActivityList: View {
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     let items: [ChatToolActivityItem]
+    private let isNestedToolActivity: Bool
+
+    init(items: [ChatToolActivityItem], isNestedToolActivity: Bool = false) {
+        self.items = items
+        self.isNestedToolActivity = isNestedToolActivity
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: self.isDesktopLayout ? 6 : 2) {
@@ -564,7 +570,7 @@ struct ChatToolActivityList: View {
             }
             let quiet = self.items.indices.filter { !self.items[$0].isVisible }
             if !quiet.isEmpty {
-                DisclosureGroup {
+                let disclosure = DisclosureGroup {
                     ForEach(quiet, id: \.self) { index in
                         ChatToolActivityRow(item: self.items[index]).equatable()
                     }
@@ -575,7 +581,13 @@ struct ChatToolActivityList: View {
                 }
                 .tint(.secondary)
                 #if os(iOS)
-                .disclosureGroupStyle(ChatInlineDisclosureStyle())
+                if self.isNestedToolActivity {
+                    disclosure.disclosureGroupStyle(ChatInlineDisclosureStyle())
+                } else {
+                    disclosure
+                }
+                #else
+                disclosure
                 #endif
             }
         }
