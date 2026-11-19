@@ -405,9 +405,7 @@ const QueuedProducedDeliveryFields = {
         .strict(),
     )
     .optional(),
-  preparedMediaBlocks: z
-    .record(z.string(), z.array(z.record(z.string(), z.unknown())))
-    .optional(),
+  preparedMediaBlocks: z.record(z.string(), z.array(z.record(z.string(), z.unknown()))).optional(),
   suppressTextDelivery: z.literal(true).optional(),
   idempotencyKey: z.string().optional(),
   owner: z

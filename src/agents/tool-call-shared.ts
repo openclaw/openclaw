@@ -437,8 +437,9 @@ function readContinueDelegateSnapshot(
     return undefined;
   }
   if (
-    sanitizeTranscriptToolCallBlock(block, { preserveLegacyContinueDelegateAttachmentName: true }) !==
-    block
+    sanitizeTranscriptToolCallBlock(block, {
+      preserveLegacyContinueDelegateAttachmentName: true,
+    }) !== block
   ) {
     return "unredacted";
   }
@@ -453,7 +454,9 @@ export const agentMessageToolReplayAdapter: ToolReplayAdapter<AgentMessage, unkn
     message && "content" in message && Array.isArray(message.content) ? message.content : undefined,
   block: (message, block) => {
     const facts = collectReplayToolBlockFacts(message, block);
-    const continueDelegateSnapshot = facts.toolCall ? readContinueDelegateSnapshot(block) : undefined;
+    const continueDelegateSnapshot = facts.toolCall
+      ? readContinueDelegateSnapshot(block)
+      : undefined;
     return continueDelegateSnapshot ? { ...facts, continueDelegateSnapshot } : facts;
   },
   withContent(message, content, repair) {

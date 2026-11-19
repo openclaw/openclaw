@@ -220,11 +220,7 @@ function sqliteReadOnlyWorkerArgv(args: string[]) {
   );
   return {
     runtimeGeneration,
-    argv: [
-      ...resolveRuntimeWorkerArgv(moduleUrl),
-      SQLITE_READONLY_CHILD_ARG,
-      ...args,
-    ],
+    argv: [...resolveRuntimeWorkerArgv(moduleUrl), SQLITE_READONLY_CHILD_ARG, ...args],
   };
 }
 
