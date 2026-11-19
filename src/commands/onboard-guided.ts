@@ -85,6 +85,10 @@ async function runGuidedOnboardingFlow(
   }
   const existingConfig =
     snapshot.exists && snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
+  // Migrations add an implicit agent roster, so only the pre-migration view shows authored setup.
+  const unconfigured = isUnconfiguredConfigSource(
+    snapshot.sourceConfigBeforeMigrations ?? existingConfig,
+  );
   const custodianMode = (deps.handoffMode ?? "hatch") === "hatch";
   const localOnboarding = custodianMode
     ? await import("../state/local-onboarding-state.js")
@@ -94,7 +98,7 @@ async function runGuidedOnboardingFlow(
   const previousLocalSetup = localOnboarding?.readLocalOnboardingState(snapshot.path);
   const offerQuickstart =
     custodianMode &&
-    (!snapshot.exists || isUnconfiguredConfigSource(existingConfig)) &&
+    (!snapshot.exists || unconfigured) &&
     // An interrupted setup's ask-first consent must survive; quick start assumes full discovery.
     existingConfig.wizard?.accessMode !== "guarded" &&
     opts.nonInteractive !== true &&
@@ -145,7 +149,7 @@ async function runGuidedOnboardingFlow(
   const replacePreviousSetup =
     !snapshot.exists ||
     (previousLocalSetup?.status === "pending" && localSetup === undefined) ||
-    (previousLocalSetup?.status === "completed" && isUnconfiguredConfigSource(existingConfig));
+    (previousLocalSetup?.status === "completed" && unconfigured);
   const handoffAgentId = firstAgent?.team
     ? normalizeAgentId(firstAgent.name)
     : resumingSetup && hasAuthoredRoster
@@ -547,6 +551,7 @@ async function runGuidedOnboardingFlow(
             : undefined,
         ),
       );
+      applyProgress.stop();
       if (applied.lines.length > 0) {
         await prompter.note(applied.lines.join("\n"), t("wizard.guided.localSetupTitle"));
       }
@@ -578,7 +583,6 @@ async function runGuidedOnboardingFlow(
         throw new Error("Setup wrote an invalid OpenClaw config.");
       }
       persistedConfig = appliedSnapshot.sourceConfig ?? appliedSnapshot.config;
-      applyProgress.stop(t("wizard.guided.setupDone"));
     } catch (error) {
       applyProgress.stop(failureTitle);
       if (teamCoordinatorId) {

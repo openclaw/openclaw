@@ -1,6 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import chromeExtensionManifest from "../../../chrome-extension/manifest.json" with { type: "json" };
+import { useAutoCleanupTempDirTracker } from "../../../test-support.js";
 import type { ProfileContext } from "../server-context.js";
 import { makeBrowserProfile } from "../server-context.test-harness.js";
 import { createRouteFixture } from "./request.test-support.js";
@@ -126,6 +129,32 @@ function trackLaunch(
 }
 
 describe("basic browser routes", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it.skipIf(process.platform !== "linux")(
+    "doctor diagnoses an executable that cannot load without launching a browser",
+    async () => {
+      const executablePath = path.join(tempDirs.make("browser-doctor-"), "chrome");
+      fs.writeFileSync(
+        executablePath,
+        "#!/bin/sh\necho 'error while loading shared libraries: libnss3.so: cannot open shared object file' >&2\nexit 127\n",
+        { mode: 0o700 },
+      );
+      const state = makeState({ executablePath });
+      const report = await callRoute({ state, route: "/doctor" });
+      expect(report.ok).toBe(false);
+      expect(report.checks).toContainEqual(
+        expect.objectContaining({
+          id: "managed-executable",
+          status: "fail",
+          summary: expect.stringContaining("libnss3.so"),
+        }),
+      );
+      expect(JSON.stringify(report.checks)).not.toContain("launchable");
+      expect((await callRoute({ state })).detectError).toBeNull();
+    },
+  );
+
   beforeEach(() => {
     graphics.endpoint.mockReset();
     graphics.read.mockReset();

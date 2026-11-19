@@ -1,19 +1,12 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { t } from "../../i18n/index.ts";
-import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
-import { formatUiError } from "../../lib/format-error.ts";
-import type { SessionPatch, SessionPatchResult } from "../../lib/sessions/patch.ts";
 import {
   resolveUiDefaultAgentId,
   resolveUiSessionRowAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { showToast } from "../../lib/toast.ts";
 import type { SessionsPageMutationResult } from "./mutation-runner.ts";
 import type { SessionsPageRequestScope } from "./request-scope.ts";
-
-registerSessionOrganizationEnglish();
 
 /** Page lifetime adapts to the same archive owner used by sidebar and chat. */
 export function createSessionsArchive(host: {
@@ -25,13 +18,6 @@ export function createSessionsArchive(host: {
   publishError: (scope: SessionsPageRequestScope, error: unknown) => SessionsPageMutationResult;
   refresh: (scope: SessionsPageRequestScope) => Promise<unknown>;
   agentId: (key: string, context: ApplicationContext) => string | undefined;
-  patch: (
-    key: string,
-    patch: SessionPatch,
-    scope: SessionsPageRequestScope,
-    expectedSessionId: string | undefined,
-    options: { onConfirmed?: (result: SessionPatchResult) => void; sessionScope?: boolean },
-  ) => Promise<SessionsPageMutationResult>;
 }) {
   async function archive(
     row: GatewaySessionRow,
@@ -71,106 +57,37 @@ export function createSessionsArchive(host: {
       if (!choice) {
         return;
       }
-      if (choice.kind === "tree" || scope.gateway.snapshot.phase !== "connected") {
-        return await operations.archiveConfirmedSessionsWithUndo(
-          {
-            sessionData: {
-              isSessionMutationScopeCurrent: () => host.isCurrent(scope),
-              publishSessionMutationError: (_candidate, error) => {
-                host.publishError(scope, error);
-              },
-              refreshSidebarSessions: async () => {
-                await host.refresh(scope);
-              },
+      return operations.archiveConfirmedSessionsWithUndo(
+        {
+          sessionData: {
+            isSessionMutationScopeCurrent: () => host.isCurrent(scope),
+            publishSessionMutationError: (_candidate, error) => {
+              host.publishError(scope, error);
             },
-            pruneSidebarSessionEntry: (key) => {
-              scope.context.navigation.update({
-                sidebarEntries: scope.context.navigation.snapshot.sidebarEntries.filter(
-                  (entry) => entry !== "session:" + key,
-                ),
-              });
+            refreshSidebarSessions: async () => {
+              await host.refresh(scope);
             },
-            selectSession: (key) => {
-              selectApplicationSession({
-                selection: scope.context.agentSelection,
-                gateway: scope.gateway,
-                sessionKey: key,
-                agentId: host.agentId(key, scope.context),
-              });
-            },
-            sidebarSessionStatusFilter: () => "all",
           },
-          choice.kind === "tree" ? choice.rows : [session],
-          mutationScope,
-        );
-      }
-      const archiveSessions = scope.sessions;
-      const archiveAgentId = host.agentId(row.key, scope.context);
-      const { key, sessionId, pinned } = row;
-      const connection = archiveSessions.captureConnectionScope();
-      if (!connection) {
-        return;
-      }
-      const undoPins = operations.captureSessionArchivePins(mutationScope, [key]);
-      // Confirmation and Undo outlive the page, but keep the admitted connection and incarnation.
-      const onConfirmed = (result: SessionPatchResult) => {
-        if (
-          !archiveSessions.isConnectionScopeCurrent(connection) ||
-          result.entry.sessionId !== sessionId
-        ) {
-          return;
-        }
-        scope.context.navigation.update({
-          sidebarEntries: scope.context.navigation.snapshot.sidebarEntries.filter(
-            (entry) => entry !== "session:" + key,
-          ),
-        });
-        showToast({
-          message: t("sessionsView.sessionArchived"),
-          actionLabel: t("common.undo"),
-          onAction: () => {
-            if (!archiveSessions.isConnectionScopeCurrent(connection)) {
-              return;
-            }
-            void undoPins
-              .restore(async () => {
-                const receipt = Promise.withResolvers<readonly string[]>();
-                const restored = await archiveSessions.patch(
-                  key,
-                  { archived: false, ...(pinned === true ? { pinned: true } : {}) },
-                  {
-                    agentId: archiveAgentId,
-                    expectedSessionId: sessionId,
-                    onConfirmed: (confirmed) =>
-                      receipt.resolve(confirmed.entry.sessionId === sessionId ? [key] : []),
-                    onDeferredSettled: () => receipt.resolve([]),
-                  },
-                );
-                if (restored && "queued" in restored) {
-                  return receipt.promise;
-                }
-                return restored?.entry.sessionId === sessionId ? [key] : [];
-              })
-              .catch((error: unknown) => {
-                if (archiveSessions.isConnectionScopeCurrent(connection)) {
-                  showToast({ severity: "error", message: formatUiError(error) });
-                }
-              });
+          pruneSidebarSessionEntry: (key) => {
+            scope.context.navigation.update({
+              sidebarEntries: scope.context.navigation.snapshot.sidebarEntries.filter(
+                (entry) => entry !== "session:" + key,
+              ),
+            });
           },
-        });
-      };
-      const finishArchive = scope.sessions.beginArchive(row.key, row.sessionId);
-      if (!finishArchive) {
-        return;
-      }
-      try {
-        return await host.patch(row.key, { archived: true }, scope, row.sessionId, {
-          onConfirmed,
-          sessionScope: true,
-        });
-      } finally {
-        finishArchive();
-      }
+          selectSession: (key) => {
+            selectApplicationSession({
+              selection: scope.context.agentSelection,
+              gateway: scope.gateway,
+              sessionKey: key,
+              agentId: host.agentId(key, scope.context),
+            });
+          },
+          sidebarSessionStatusFilter: () => "all",
+        },
+        choice.kind === "tree" ? choice.rows : [session],
+        mutationScope,
+      );
     } catch (error) {
       return host.publishError(scope, error);
     }

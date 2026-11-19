@@ -29,6 +29,7 @@ const GEMINI_4_TEMPLATE_IDS = ["gemini-4-argon"] as const;
 const GOOGLE_PROVIDER_PREFIX = "google/";
 const GOOGLE_NON_TEXT_MODEL_ID_MARKERS = [
   "-image",
+  "nano-banana",
   "-tts",
   "-live",
   "-embedding",

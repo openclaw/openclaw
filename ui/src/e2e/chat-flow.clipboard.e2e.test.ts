@@ -219,7 +219,7 @@ suite.define(() => {
           expect(await copy.isDisabled()).toBe(false);
           expect(await copy.getAttribute("aria-busy")).toBeNull();
           expect(await copy.getAttribute("aria-label")).toBe(
-            transport === "failure" ? "Copy failed" : "Copied!",
+            transport === "failure" ? "Couldn’t copy. Try again." : "Copied",
           );
           await expectClipboard(page, 1, transport === "modern" ? 0 : 1, text);
           await page.keyboard.press("Enter");
@@ -299,9 +299,11 @@ suite.define(() => {
         await expectClipboard(page, 1, 0, text);
         expect(await copy.count()).toBe(1);
         expect(await copy.isDisabled()).toBe(false);
-        expect(await menu.getByRole("menuitem", { name: "Copy failed", exact: true }).count()).toBe(
-          0,
-        );
+        expect(
+          await menu
+            .getByRole("menuitem", { name: "Couldn’t copy. Try again.", exact: true })
+            .count(),
+        ).toBe(0);
         await page.keyboard.press("Escape");
         expect(await menu.count()).toBe(0);
       });
@@ -332,7 +334,7 @@ suite.define(() => {
           .getByRole("menuitem", { name: label, exact: true })
           .click();
 
-        const alert = page.getByRole("alert").filter({ hasText: "Copy failed" });
+        const alert = page.getByRole("alert").filter({ hasText: "Couldn’t copy. Try again." });
         await alert.waitFor({ state: "visible", timeout: 10_000 });
         await expectClipboard(page, 1, 1, value);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
@@ -396,7 +398,9 @@ suite.define(() => {
           await copy.click();
           await page.locator(".agent-chat__composer-combobox textarea").focus();
           await page.mouse.move(0, 0);
-          const feedback = message.getByRole("status").filter({ hasText: "Copy failed" });
+          const feedback = message
+            .getByRole("status")
+            .filter({ hasText: "Couldn’t copy. Try again." });
           await feedback.waitFor({ state: "visible" });
           // Include child controls: their fade can outlive the footer transition.
           await message.evaluate(async (group) => {

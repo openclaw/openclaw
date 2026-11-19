@@ -1,4 +1,4 @@
-import { assert, describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
@@ -7,6 +7,7 @@ import {
   SummaryOutputBudgetError,
   type SessionTreeEntry,
 } from "../types.js";
+import type { CompactionRetentionConstraints } from "./compaction-cut-point.js";
 import {
   calculateContextTokens,
   compactWithoutSummary,
@@ -16,6 +17,7 @@ import {
   findCutPoint,
   getLastAssistantUsage,
   prepareCompaction,
+  type CompactionSettings,
   shouldCompact,
 } from "./compaction.js";
 import {
@@ -212,7 +214,7 @@ describe("session-entry compaction budgeting", () => {
   });
 
   it("omits private shell history from a genuine split-turn summary prefix", () => {
-    const latestRequest = `request-start ${"x".repeat(1_000)} request-end`;
+    const latestRequest = `request-start ${"x".repeat(1_000)} request-end token=FAKEtok12345`;
     const entries: SessionTreeEntry[] = [
       userEntry(latestRequest, 0),
       assistantEntry("earlier work", 1, 10),
@@ -235,7 +237,7 @@ describe("session-entry compaction budgeting", () => {
     });
     expect(preparation.latestUnresolvedUserRequest).toHaveLength(800);
     expect(preparation.latestUnresolvedUserRequest).toMatch(
-      /^request-start .+\[\.\.\. latest user request truncated \.\.\.\].+ request-end$/s,
+      /^request-start .+\[\.\.\. latest user request truncated \.\.\.\].+ request-end \[redacted\]$/s,
     );
     expect(preparation).not.toHaveProperty("splitTurnCompleted");
     expect(JSON.stringify(preparation)).not.toContain("private output");
@@ -657,4 +659,15 @@ describe("compactWithoutSummary", () => {
     expect(summary).toContain(JSON.stringify(sourceAsk));
     expect(result.ok && result.value.firstKeptEntryId).toBe("kept-entry");
   });
+});
+
+it("keeps source observers outside the public preparation contract", () => {
+  expectTypeOf<Parameters<typeof prepareCompaction>>().toEqualTypeOf<
+    [
+      pathEntries: SessionTreeEntry[],
+      settings: CompactionSettings,
+      requestState?: "unresolved",
+      constraints?: CompactionRetentionConstraints,
+    ]
+  >();
 });

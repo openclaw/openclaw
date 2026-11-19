@@ -8,6 +8,7 @@ import type {
   RealtimeVoiceProviderPlugin,
   SpeechProviderPlugin,
 } from "../../../plugins/types.js";
+import { createApprovalClient } from "../../server-methods/approval-request.test-support.js";
 import { callGatewayHandler as callGatewayHandlerOnce } from "../../server-methods/skills.test-helpers.js";
 import { talkHandlers } from "./index.js";
 
@@ -78,10 +79,17 @@ vi.mock("../../../realtime-transcription/provider-registry.js", async (importOri
     registry.transcription.find((provider) => provider.id === id),
 }));
 
+const client = createApprovalClient({
+  connId: "catalog-reader",
+  clientId: "cli",
+  scopes: ["operator.read"],
+});
+
 // Existing catalog contract cases consume the documented warming retry before inspecting rows.
 async function readCatalog(cfg: OpenClawConfig, params: Record<string, unknown> = {}) {
   const context = { getRuntimeConfig: () => cfg };
-  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", params, { context });
+  const read = () =>
+    callGatewayHandlerOnce(talkHandlers, "talk.catalog", params, { context, client });
   const result = await read();
   if (
     asOptionalRecord(asOptionalRecord(result.error)?.details)?.reason !== "talk-catalog-warming"
@@ -207,7 +215,7 @@ it("single-flights cold discovery and isolates owner/model snapshots", async () 
   const readiness = createDeferred<boolean>();
   const readAvailability = vi.fn(() => readiness.promise);
   registry.realtime = [realtimeProvider(readAvailability, "slow")];
-  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
+  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context, client });
   expectWarming(await read());
   await vi.advanceTimersByTimeAsync(6_000);
   const waiting = await Promise.all(Array.from({ length: 20 }, read));
@@ -222,10 +230,15 @@ it("single-flights cold discovery and isolates owner/model snapshots", async () 
   expect(readAvailability).toHaveBeenCalledTimes(1);
   const otherOwner = { getRuntimeConfig: () => cfg };
   expect(
-    await callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context: otherOwner }),
+    await callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context: otherOwner, client }),
   ).toMatchObject({ ok: false });
   expect(
-    await callGatewayHandlerOnce(talkHandlers, "talk.catalog", { model: "other" }, { context }),
+    await callGatewayHandlerOnce(
+      talkHandlers,
+      "talk.catalog",
+      { model: "other" },
+      { context, client },
+    ),
   ).toMatchObject({ ok: false });
   await vi.advanceTimersByTimeAsync(0);
 });
@@ -237,7 +250,7 @@ it("serves the last catalog during one slow refresh and publishes its late succe
   const pending = createDeferred<boolean>();
   const readiness = vi.fn(async () => true);
   registry.providers = [speechProvider(readiness, "slow")];
-  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
+  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context, client });
   expectWarming(await read());
   await vi.advanceTimersByTimeAsync(0);
   const first = await read();
@@ -264,7 +277,7 @@ it("retries failed cold discovery before the client's warming window expires", a
     throw new Error("temporary discovery failure");
   });
   registry.providers = [speechProvider(async () => true)];
-  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
+  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context, client });
   expect((await read()).ok).toBe(false);
   await vi.advanceTimersByTimeAsync(0);
   await vi.advanceTimersByTimeAsync(1_000);
@@ -297,7 +310,8 @@ it.each(["speech", "realtime", "transcription"] as const)(
         registry.transcription.push({ ...provider, createSession: unexpectedSession });
       }
     }
-    const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
+    const read = () =>
+      callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context, client });
     expect((await read()).ok).toBe(false);
     await nextTurn();
     const expectedRows = (configured: boolean) => ({

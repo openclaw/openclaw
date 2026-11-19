@@ -1,12 +1,53 @@
 import { parseAutomationResult } from "../cron/automation-result.js";
+import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import {
   getAgentRunContext,
   getAgentRunContextOwnership,
   hasAgentRunContextExecutionOwner,
   getAgentRunLifecycleGeneration,
+  listAgentRunsForSession,
   validateAgentRunDelegatedAuthority,
 } from "./agent-run-registry.js";
 import type { AutomationResult } from "./agent-run-registry.types.js";
+
+export const CRON_RUN_ENDED_ERROR = "cron run has ended; inspect the result in its run record";
+
+/**
+ * A cron run is one-shot: once its executor's own run (the one carrying the job invocation) no
+ * longer owns execution, it has finalized and no later turn may start there. An accepted
+ * follow-up turn on the same session does not keep the origin alive. Results stay in their
+ * durable records.
+ */
+export function isEndedCronRun(sessionKey: string): boolean {
+  // The run id is part of the key, so the key alone names this run's one executor; callers
+  // that have not resolved a physical session id yet get the same answer.
+  return (
+    isCronRunSessionKey(sessionKey) &&
+    !listAgentRunsForSession({ sessionKey, anySessionId: true }).some(
+      (run) =>
+        getAgentRunContext(run.runId)?.cronRunsByJobId?.size &&
+        hasAgentRunContextExecutionOwner(run.runId),
+    )
+  );
+}
+
+/**
+ * Checks a producer's acceptance condition and the ended-cron-run rule now, and returns both for
+ * the admission owner to recheck until it accepts (and then clears) the occurrence.
+ */
+export function cronRunAcceptance(
+  sessionKey: string,
+  producer: (() => void) | undefined,
+): (() => void) | undefined {
+  const assertAccepted = () => {
+    producer?.();
+    if (isEndedCronRun(sessionKey)) {
+      throw new Error(CRON_RUN_ENDED_ERROR);
+    }
+  };
+  assertAccepted();
+  return assertAccepted;
+}
 
 /** Presentation reads the existing invocation; it never decides execution or delivery. */
 export function readAutomationDisplayState(

@@ -12,10 +12,10 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createProgressiveList } from "../../lib/reactive/progressive-list.ts";
-import { PluginArtTile } from "./consent-dialog.tsx";
 import { renderPluginCompatibilityNotices } from "./overview.tsx";
 import { renderPluginStateWord } from "./plugin-card.tsx";
 import { pluginRowKey, renderPluginRowMessage } from "./plugin-row-message.tsx";
+import { PluginArtTile } from "./presentation.tsx";
 import { PluginRetryError } from "./settings-retry-error.tsx";
 import type { InventoryProps } from "./settings-view.tsx";
 
@@ -85,55 +85,58 @@ function InstalledRows(
         }
       >
         <For each={visible.items()} keyed={(plugin) => plugin.id}>
-          {(plugin) => (
-            <article
-              class="settings-row settings-row--nav plugins-settings-row oc-settings-row"
-              data-plugin-id={plugin().id}
-              onClick={(event: Event) => {
-                const target = event.target;
-                if (!(target instanceof Element) || !target.closest("button, a")) {
-                  props.onOpenPlugin(plugin().id);
-                }
-              }}
-            >
-              <PluginArtTile
-                registerIcon={props.registerIcon}
-                slug={plugin().id}
-                name={plugin().name}
-                iconUrl={props.iconUrls[plugin().id]}
-                onIconError={() => props.onIconError(plugin().id)}
-                loading={props.iconLoading?.(plugin().id)}
-              />
-              <div class="settings-row__text oc-settings-row-content">
-                <a
-                  class="settings-row__text plugins-settings-row__link"
-                  href={props.pluginHref(plugin().id)}
-                  onClick={(event: MouseEvent) =>
-                    handleNavigationClick(event, () => props.onOpenPlugin(plugin().id))
+          {(plugin) => {
+            const state = createMemo(() => plugin().state);
+            return (
+              <article
+                class="settings-row settings-row--nav plugins-settings-row oc-settings-row"
+                data-plugin-id={plugin().id}
+                onClick={(event: Event) => {
+                  const target = event.target;
+                  if (!(target instanceof Element) || !target.closest("button, a")) {
+                    props.onOpenPlugin(plugin().id);
                   }
-                >
-                  <span class="settings-row__title oc-settings-row-title">{plugin().name}</span>
-                  <span class="settings-row__desc oc-settings-row-description">
-                    {plugin().description || t("pluginsPage.optionalCapability")}
+                }}
+              >
+                <PluginArtTile
+                  registerIcon={props.registerIcon}
+                  slug={plugin().id}
+                  name={plugin().name}
+                  iconUrl={props.iconUrls[plugin().id]}
+                  onIconError={() => props.onIconError(plugin().id)}
+                  loading={props.iconLoading?.(plugin().id)}
+                />
+                <div class="settings-row__text oc-settings-row-content">
+                  <a
+                    class="settings-row__text plugins-settings-row__link"
+                    href={props.pluginHref(plugin().id)}
+                    onClick={(event: MouseEvent) =>
+                      handleNavigationClick(event, () => props.onOpenPlugin(plugin().id))
+                    }
+                  >
+                    <span class="settings-row__title oc-settings-row-title">{plugin().name}</span>
+                    <span class="settings-row__desc oc-settings-row-description">
+                      {plugin().description || t("pluginsPage.optionalCapability")}
+                    </span>
+                  </a>
+                  {renderPluginCompatibilityNotices(plugin().compatibilityNotices)}
+                </div>
+                <div class="settings-row__control oc-settings-row-control">
+                  {(() => {
+                    const value = state();
+                    return value === "not-installed" ? null : renderPluginStateWord(value);
+                  })()}
+                  <span class="settings-row__chevron" aria-hidden="true">
+                    <i
+                      class="session-css-icon"
+                      style={{ "mask-image": sessionIconMask("chevronRight", 1.6) }}
+                    />
                   </span>
-                </a>
-                {renderPluginCompatibilityNotices(plugin().compatibilityNotices)}
-              </div>
-              <div class="settings-row__control oc-settings-row-control">
-                {(() => {
-                  const state = plugin().state;
-                  return state === "not-installed" ? null : renderPluginStateWord(state);
-                })()}
-                <span class="settings-row__chevron" aria-hidden="true">
-                  <i
-                    class="session-css-icon"
-                    style={{ "mask-image": sessionIconMask("chevronRight", 1.6) }}
-                  />
-                </span>
-              </div>
-              {renderPluginRowMessage(props.messages[pluginRowKey(plugin().id)])}
-            </article>
-          )}
+                </div>
+                {renderPluginRowMessage(props.messages[pluginRowKey(plugin().id)])}
+              </article>
+            );
+          }}
         </For>
       </Show>
     </div>

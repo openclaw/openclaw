@@ -21,7 +21,7 @@ We use [team.openclaw.ai](https://team.openclaw.ai) as a multiplayer claw and sh
 workspace for OpenClaw itself. Maintainers and agents work through repository
 changes in the same conversations:
 
-1. **Start a repository task.** Choose the OpenClaw project in **New conversation**
+1. **Start a repository task.** Choose the OpenClaw project in **New session**
    and select **Worktree** for a [managed branch and checkout](/concepts/managed-worktrees).
    Give the agent a concrete change and the checks that demonstrate it works.
 2. **Work together.** Teammates with access can open the session, add context,
@@ -124,7 +124,9 @@ To let teammates read selected sessions from a personal Gateway without controll
 
 ### Step 5: Bound what each person can do
 
-Named operator roles bind authenticated profiles to a policy: which sessions they can touch, which agents they can use, a maximum set of operator scopes, and whether their new sessions must be sandboxed:
+Setting the optional `gateway.roles.default` enables named operator roles for
+authenticated profiles. Definitions alone do not enforce profile assignments.
+Each role supplies a policy: which sessions they can touch, which agents they can use, a maximum set of operator scopes, and whether their new sessions must be sandboxed:
 
 ```json5
 {
@@ -151,7 +153,15 @@ Named operator roles bind authenticated profiles to a policy: which sessions the
 
 Give guests the session-only `operator.sessions.write` scope, which also permits reading. `operator.read` and `operator.write` are Gateway-wide: they add channel sends, node and computer control, logs, the user directory, and other shared surfaces that a guest does not need. With `sessions.others: "view"`, guests can still read every shared session, including tool output. Keep sensitive work in draft sessions.
 
-Assign roles with the `users.setRole` Gateway method; see [Named operator roles](/gateway/operator-scopes#named-operator-roles) for the full policy surface and [Permission modes](/gateway/permission-modes) for per-session tool posture. To admit and expire individual outside guests, see [Invite guests](#invite-guests).
+For these profile-based connections, assign roles with the `users.setRole` Gateway method; see [Named operator roles](/gateway/operator-scopes#named-operator-roles) for the full policy surface and [Permission modes](/gateway/permission-modes) for per-session tool posture. To admit and expire individual outside guests, see [Invite guests](#invite-guests).
+
+For [OpenClaw ID members](/concepts/experimental-features#member-roles), manage roles
+on **Access** instead. Turning on OpenClaw ID installs editable `operator`,
+`viewer`, and `guest` definitions without setting a named default. Member connections
+use their membership role even without that default; another sign-in method uses
+its own policy, not a union of both roles. A missing member definition blocks
+connection. With a role catalog present, `openclaw doctor` can check local membership
+and offer to restore missing presets while the Gateway is stopped.
 
 #### Coding as a guest
 
@@ -159,7 +169,10 @@ A sandbox-required guest can work without an administrator role. With the defaul
 `workspaceAccess: "none"`, file and shell tools use a writable private workspace,
 not the shared agent workspace. Managed skill instructions stay read-only.
 Child sessions inherit the parent's sandbox requirement, even when the agent's
-default sandbox mode is off.
+default sandbox mode is off. This contains exec and file tools, not the whole
+Gateway host. Review the [sandbox exclusions](/gateway/operator-scopes#sandbox-exclusions),
+including Code Mode, CLI backends, paired-node commands, worker credentials,
+shared transcripts, and shared GitHub publication.
 
 Local container sandboxes have no network by default. If guests need to clone
 public repositories or install project-local dependencies, explicitly enable
@@ -472,7 +485,7 @@ Visitor Access requires `gateway.roles.default` to be a restricted guest role:
 default: "guest",
 definitions: {
   guest: {
-    sessions: { others: "view" },
+    sessions: { others: "invited" },
     agents: ["assistant"],
     scopes: ["operator.sessions.write"],
     sandbox: "required",
@@ -489,6 +502,13 @@ then asks the agent to call `visitor_invite` with a GitHub login or email and an
 optional note, such as a session link to start from. The result includes short
 invitation text to hand to the guest: who invited them, the sign-in address from
 `gateway.publicOrigin`, the identity to sign in with, the expiry, and the note.
+
+This role sees its own sessions and sessions where it is a member. The session
+creator or an administrator can invite a guest with a selected human @mention.
+Access starts when the message is committed, not when it enters the send queue.
+Remove the guest from session members to revoke access. Explicit public links
+still expose only the sanitized transcript. The session-only scope permits
+changes to the guest's own sessions, not to sessions they were invited to read.
 
 Guests can create sandboxed sessions on the listed agents and publish open or
 explicitly requested draft pull requests from their own sessions through the
@@ -558,9 +578,12 @@ take effect before their normal expiry.
 #### Configure GitHub access for repository work
 
 Install `gh` for the Gateway service account. In **Settings → Profile → GitHub
-connections**, an administrator chooses **For the system** to connect the shared
-publication account. An agent can have an administrative override under
-**Agents → Tools**. Verify the selected account before publishing.
+accounts**, an administrator changes the **Shared agent account**, used by
+every agent without its own account for its commands, dashboard data, and
+**Publish PR** unless you choose My GitHub. To give one agent a different account, such
+as a token limited to a fork, choose **Give its own account** on that agent's row;
+the shared account and other agents stay unchanged. Verify the account before
+publishing.
 
 **My GitHub** is a separate personal connection for explicitly selected
 publication. It does not change the shared shell account or establish verified

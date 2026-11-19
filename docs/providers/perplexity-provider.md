@@ -17,7 +17,7 @@ This page covers the Perplexity **provider** setup. For the Perplexity **tool** 
 
 | Property    | Value                                                                  |
 | ----------- | ---------------------------------------------------------------------- |
-| Type        | Web search provider (not a model provider)                             |
+| Type        | Web search and native Decision provider                                |
 | Auth        | `PERPLEXITY_API_KEY` (native) or `OPENROUTER_API_KEY` (via OpenRouter) |
 | Config path | `plugins.entries.perplexity.config.webSearch.apiKey`                   |
 | Overrides   | `plugins.entries.perplexity.config.webSearch.baseUrl` / `.model`       |
@@ -119,6 +119,40 @@ Native-only filters return a descriptive error on the chat-completions path.
     gets neither.
   </Accordion>
 </AccordionGroup>
+
+## Decision models
+
+The same plugin also connects directly to Perplexity's [Decisions API](https://docs.perplexity.ai/docs/decisions/quickstart),
+using the separate [Decision role](/concepts/decision-models), not Sonar chat completions.
+This requires a plugin/host release containing this integration and the prepared
+Decision V2 contract; older installed versions may provide search only.
+
+Connect with `openclaw models auth login --provider perplexity-decisions --method api-key`
+or provide `PERPLEXITY_API_KEY` to the Gateway process. Decision auth uses normal
+the separate `perplexity-decisions` provider profiles; it does **not** reuse the plugin's web-search key,
+`OPENROUTER_API_KEY`, or Sonar search routing. Existing web-search setup remains
+independent. Connecting the key leaves chat and Decision selections unchanged.
+
+Select `perplexity-decisions/pplx-decider-v1.2` in the Decision picker or set
+`agents.defaults.decisionModel` to that reference. Calls use
+`POST https://api.perplexity.ai/v1/decisions` with native `state` and named
+`questions` fields. This is **not** the OpenAI Decisions request format despite
+the matching endpoint suffix.
+
+The adapter supports text/JSON evidence, Boolean probabilities, 2–255 Choice
+options, 2–10 Score levels, and up to 128 questions. JSON state is serialized as
+text rather than interpreted as native image parts. Image input, Flash/latest
+aliases, web grounding, sorting, tags, boxes, and reasoning switches are not
+exposed by this adapter. Perplexity documents a 256K-token state-plus-question
+limit and may group questions internally; there is no client-side splitting,
+truncation, or retry. Normal proxy/TLS policy, cancellation, total deadlines,
+and dispatch-time authority checks apply.
+
+Results preserve expected fractional Score values, original distributions,
+provider-specific confidence, served model identity, and reported token usage.
+Confidence is not the chosen option's probability or a correctness guarantee.
+Use [current API prices](https://docs.perplexity.ai/docs/decisions/quickstart#pricing)
+and reported usage, not benchmark cost per task, for billing expectations.
 
 ## Related
 

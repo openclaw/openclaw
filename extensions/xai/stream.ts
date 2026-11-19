@@ -1,4 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { sanitizeInlineImageDataUrl } from "openclaw/plugin-sdk/inline-image-data-url-runtime";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
@@ -8,6 +9,7 @@ import {
   createPayloadPatchStreamWrapper,
   createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
+  wrapProviderPayloadHook,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveXaiFastModelId } from "./fast-mode.js";
@@ -15,22 +17,20 @@ import { XAI_BASE_URL } from "./model-definitions.js";
 import { isXaiGrokProxyBaseUrl } from "./provider-catalog.js";
 import { isXaiProviderId } from "./provider-id.js";
 
+/**
+ * Floor advertised by the Grok OAuth proxy. A missing `x-grok-client-version`
+ * is reported as `(none)`; an OpenClaw version is rejected the same way.
+ */
+export const XAI_GROK_OAUTH_CLIENT_VERSION = "1.0.13";
+
 function isXaiEndpoint(model: Parameters<StreamFn>[0], endpoint: string): boolean {
   return isXaiProviderId(model.provider) && model.baseUrl?.trim().replace(/\/+$/u, "") === endpoint;
 }
 
-function createXaiGrokOAuthHeadersWrapper(
-  baseStreamFn: StreamFn | undefined,
-  clientVersion: string | undefined,
-): StreamFn {
+function createXaiGrokOAuthHeadersWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  const normalizedClientVersion = clientVersion?.trim();
   return (model, context, options) => {
-    if (
-      !normalizedClientVersion ||
-      !isXaiProviderId(model.provider) ||
-      !isXaiGrokProxyBaseUrl(model.baseUrl)
-    ) {
+    if (!isXaiProviderId(model.provider) || !isXaiGrokProxyBaseUrl(model.baseUrl)) {
       return underlying(model, context, options);
     }
     // The Grok OAuth proxy requires its CLI identity and a concrete catalog model.
@@ -39,7 +39,7 @@ function createXaiGrokOAuthHeadersWrapper(
       ...options,
       headers: mergeTransportHeaders(options?.headers, {
         "X-XAI-Token-Auth": "xai-grok-cli",
-        "x-grok-client-version": normalizedClientVersion,
+        "x-grok-client-version": XAI_GROK_OAUTH_CLIENT_VERSION,
         "x-grok-model-override": model.id,
       }),
     });
@@ -184,17 +184,90 @@ function createXaiToolPayloadCompatibilityWrapper(baseStreamFn: StreamFn | undef
   });
 }
 
-export function wrapXaiProviderStream(
-  ctx: ProviderWrapStreamFnContext,
-  runtime?: { clientVersion?: string },
-): StreamFn | undefined {
+async function normalizeXaiGifPayload(payload: Record<string, unknown>) {
+  const originalInput = payload.input;
+  if (!Array.isArray(originalInput)) {
+    return payload;
+  }
+  let input: unknown[] | undefined;
+  for (let index = 0; index < originalInput.length; index += 1) {
+    const record = asOptionalRecord(originalInput[index]);
+    const key = record?.type === "function_call_output" ? "output" : "content";
+    const parts = record?.[key];
+    if (!Array.isArray(parts)) {
+      continue;
+    }
+    let content: unknown[] | undefined;
+    for (let partIndex = 0; partIndex < parts.length; partIndex += 1) {
+      const image = asOptionalRecord(parts[partIndex]);
+      if (image?.type !== "input_image") {
+        continue;
+      }
+      const source = asOptionalRecord(image.source);
+      const url =
+        typeof image.image_url === "string"
+          ? image.image_url
+          : source?.type === "base64" &&
+              typeof source.media_type === "string" &&
+              typeof source.data === "string"
+            ? `data:${source.media_type};base64,${source.data}`
+            : undefined;
+      const canonical = url && sanitizeInlineImageDataUrl(url);
+      if (!canonical?.startsWith("data:image/gif;base64,")) {
+        continue;
+      }
+      // Encode the first frame in this request projection, never in retained history.
+      const { resizeToJpeg } = await import("openclaw/plugin-sdk/media-runtime");
+      const bytes = await resizeToJpeg({
+        buffer: Buffer.from(canonical.slice(canonical.indexOf(",") + 1), "base64"),
+        maxSide: 1200,
+        quality: 85,
+      });
+      const data = bytes.toString("base64");
+      content ??= [...parts];
+      content[partIndex] =
+        typeof image.image_url === "string"
+          ? { ...image, image_url: `data:image/jpeg;base64,${data}` }
+          : { ...image, source: { ...source, media_type: "image/jpeg", data } };
+    }
+    if (content) {
+      input ??= [...originalInput];
+      input[index] = { ...record, [key]: content };
+    }
+  }
+  return input ? { ...payload, input } : payload;
+}
+
+function createXaiGifCompatibilityWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!isXaiProviderId(model.provider) || model.api !== "openai-responses") {
+      return underlying(model, context, options);
+    }
+    return underlying(model, context, {
+      ...options,
+      onPayload: wrapProviderPayloadHook(
+        options?.onPayload,
+        (payload, replacement) => {
+          const selected = asOptionalRecord(replacement === undefined ? payload : replacement);
+          return selected ? normalizeXaiGifPayload(selected) : replacement;
+        },
+        undefined,
+        true,
+      ),
+    });
+  };
+}
+
+export function wrapXaiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
   const extraParams = ctx.extraParams;
   const toolStreamEnabled = extraParams?.tool_stream !== false;
   return composeProviderStreamWrappers(
     ctx.streamFn,
-    (streamFn) => createXaiGrokOAuthHeadersWrapper(streamFn, runtime?.clientVersion),
+    (streamFn) => createXaiGrokOAuthHeadersWrapper(streamFn),
     (streamFn) => xaiReasoning.wrapStreamFn?.({ ...ctx, streamFn }) ?? streamFn ?? streamSimple,
     createXaiToolPayloadCompatibilityWrapper,
+    createXaiGifCompatibilityWrapper,
     Boolean(
       extraParams &&
       (Object.hasOwn(extraParams, "fastMode") || Object.hasOwn(extraParams, "fast_mode")),
@@ -218,5 +291,17 @@ export function wrapXaiProviderStream(
       }),
     createPlainTextToolCallCompatWrapper,
     (streamFn) => createToolStreamWrapper(streamFn, toolStreamEnabled),
+  );
+}
+
+/** Probes and other tool-less completions never enter `wrapStreamFn`. */
+export function wrapXaiSimpleCompletionStream(
+  ctx: ProviderWrapStreamFnContext,
+): StreamFn | undefined {
+  return composeProviderStreamWrappers(
+    ctx.streamFn,
+    (streamFn) => createXaiGrokOAuthHeadersWrapper(streamFn),
+    (streamFn) => xaiReasoning.wrapStreamFn?.({ ...ctx, streamFn }) ?? streamFn ?? streamSimple,
+    createXaiToolPayloadCompatibilityWrapper,
   );
 }

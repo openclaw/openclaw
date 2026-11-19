@@ -103,6 +103,9 @@ it("keeps successor sweeps and diary publication owned after another registratio
       (entry) => entry.service.id === "memory-core-dreaming",
     )?.service;
     assert(service);
+    if (service?.apiVersion !== 2) {
+      throw new Error("Expected service API version 2");
+    }
     const scheduler = createTestPluginServiceScheduler();
     const context = {
       config,

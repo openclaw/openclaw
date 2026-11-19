@@ -1,28 +1,82 @@
+import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
+import {
+  prepareSessionSourceEffect,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type {
   FsSafeCopyReply,
   FsSafeProvisionCopy,
+  FsSafeProvisionCopyInput,
 } from "../../infra/fs-safe-copy-worker-contract.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { createWorkerMutationAuthority } from "../../infra/worker-mutation-authority.js";
 import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { installWorkspaceFilesystemEvidence } from "../workspace-state-guard.js";
+import {
+  recordWorktreePreparationFailure,
+  setWorktreePreparationCopyDetails,
+  startWorktreePreparationPhase,
+} from "./preparation-timing.js";
+import type { WorktreeWorkerAuthority } from "./types.js";
 
 type Runtime = {
   pool?: WorkerTaskPool<FsSafeProvisionCopy, FsSafeCopyReply>;
   closing?: Promise<void>;
 };
 
-export async function copyProvisionedPathsInWorker(
+type CopyOptions = {
+  signal?: AbortSignal;
+  assertCurrent?: SessionSourceAssertion;
+  workerAuthority?: WorktreeWorkerAuthority;
+};
+
+export function copyProvisionedPathsInWorker(
   source: string,
   destination: string,
   paths: readonly string[],
-  options: { signal?: AbortSignal; assertCurrent?: () => void },
+  options: CopyOptions,
+): Promise<string[]> {
+  return runCopyInWorker({ type: "provision", source, destination, paths }, options);
+}
+
+export async function cloneRefsTreeInWorker(
+  source: string,
+  destination: string,
+  options: import("./filesystem-backend.types.js").WorktreeFilesystemOptions,
+): Promise<void> {
+  await runCopyInWorker(
+    { type: "refs-copy", source, destination, paths: [], nativeMode: getFsSafeNativeConfig().mode },
+    { ...options, assertCurrent: options.commitGuard },
+  );
+}
+
+async function runCopyInWorker(
+  command: FsSafeProvisionCopyInput,
+  options: CopyOptions,
 ): Promise<string[]> {
   const assertCurrent = () => {
     options.signal?.throwIfAborted();
-    options.assertCurrent?.();
+    if (prepared) {
+      prepared.assertCurrent();
+    } else {
+      options.assertCurrent?.();
+    }
+    options.signal?.throwIfAborted();
   };
-  assertCurrent();
+  options.signal?.throwIfAborted();
+  options.assertCurrent?.();
+  const prepared = options.assertCurrent
+    ? await prepareSessionSourceEffect(options.assertCurrent)
+    : undefined;
+  await using _ = { [Symbol.asyncDispose]: async () => await prepared?.release?.() };
+  const workspaceEvidence = [
+    ...new Set([
+      ...(options.workerAuthority?.workspaceEvidence ?? []),
+      ...(prepared?.workspaceEvidence ?? []),
+    ]),
+  ];
   const runtime = resolveGlobalSingleton<Runtime>(
     Symbol.for("openclaw.worktreeProvisionCopies"),
     () => ({}),
@@ -46,49 +100,67 @@ export async function copyProvisionedPathsInWorker(
     maxWorkers: 2,
     idleTimeoutMs: 30_000,
   }));
-  const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
-  let failure: { error: unknown } | undefined;
-  const refuse = () => {
-    failure ??= { error: options.signal?.reason };
-    Atomics.store(decision, 0, 2);
-    Atomics.notify(decision, 0);
-  };
-  options.signal?.addEventListener("abort", refuse, { once: true });
+  const authority = createWorkerMutationAuthority(assertCurrent, options.signal);
+  // Until the first mutation request, time includes pool admission, worker startup,
+  // and filesystem preflight. Do not report it as time spent copying file bytes.
+  const finishWait = startWorktreePreparationPhase("provisionCopyWait");
+  let finishCopy: (() => void) | undefined;
   try {
     const reply = await pool.run(
-      { type: "provision", source, destination, paths, decision: decision.buffer },
+      {
+        ...command,
+        decision: authority.buffer,
+        workspaceEvidence,
+        stateOwnerPath: options.workerAuthority?.stateOwnerPath,
+      },
       {
         signal: options.signal,
-        inputBytes: paths.reduce((bytes, pathname) => bytes + Buffer.byteLength(pathname), 0),
+        inputBytes: command.paths.reduce(
+          (bytes, pathname) => bytes + Buffer.byteLength(pathname),
+          0,
+        ),
         onNotification: () => {
-          try {
-            if (failure) {
-              throw failure.error;
-            }
-            assertCurrent();
-            Atomics.compareExchange(decision, 0, 0, 1);
-          } catch (error) {
-            failure ??= { error };
-            Atomics.store(decision, 0, 2);
+          if (authority.onNotification() && !finishCopy) {
+            finishWait();
+            finishCopy = startWorktreePreparationPhase("provisionCopy");
           }
-          Atomics.notify(decision, 0);
         },
       },
     );
-    if (failure) {
-      throw failure.error;
+    if ("copyDetails" in reply && reply.copyDetails) {
+      setWorktreePreparationCopyDetails(reply.copyDetails);
     }
+    authority.throwIfRefused();
     assertCurrent();
     if (reply.type === "failed") {
       throw Object.assign(new Error(reply.message), { code: reply.code });
     }
-    if (reply.type !== "provisioned") {
+    if (
+      (command.type === "provision" && reply.type !== "provisioned") ||
+      (command.type === "refs-copy" && reply.type !== "written")
+    ) {
       throw new Error("Worktree provisioning returned no completion receipt");
     }
-    return reply.paths;
+    if (
+      workspaceEvidence &&
+      (reply.type === "written" || reply.type === "provisioned") &&
+      reply.workspaceEvidence
+    ) {
+      installWorkspaceFilesystemEvidence(workspaceEvidence, reply.workspaceEvidence);
+    }
+    return reply.type === "provisioned" ? reply.paths : [];
   } catch (error) {
-    throw failure ? failure.error : error;
+    let cause = error;
+    try {
+      authority.throwIfRefused();
+    } catch (refused) {
+      cause = refused;
+    }
+    recordWorktreePreparationFailure(finishCopy ? "provisionCopy" : "provisionCopyWait", cause);
+    throw cause;
   } finally {
-    options.signal?.removeEventListener("abort", refuse);
+    finishWait();
+    finishCopy?.();
+    authority.dispose();
   }
 }

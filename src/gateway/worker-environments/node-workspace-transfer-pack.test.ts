@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { requireGit } from "../../agents/worktrees/git.js";
 import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
+import * as workspaceCommands from "../../node-host/node-worker-workspace-commands.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   commitWorkspace,
@@ -78,6 +79,37 @@ async function createGitTransfer() {
 }
 
 describe("node workspace Git pack downloads", () => {
+  it("preserves the previous workspace when a successful Git index listing is capped", async () => {
+    await using fixture = await createGitTransfer();
+    const workspaceDir = path.join(fixture.root, "node-workspace");
+    await fs.mkdir(workspaceDir);
+    await fs.writeFile(path.join(workspaceDir, "previous.txt"), "preserve me");
+    const original = workspaceCommands.runWorkspaceCommand;
+    vi.spyOn(workspaceCommands, "runWorkspaceCommand").mockImplementation((params) =>
+      original(params.argv.includes("ls-files") ? { ...params, maxOutputBytes: 8 } : params),
+    );
+    await expect(
+      runNodeWorkerWorkspaceTransfer({
+        gatewayUrl: fixture.gatewayUrl,
+        environmentId: "environment",
+        workspaceDir,
+        manifestHome: fixture.root,
+        transfer: {
+          direction: "download",
+          token: fixture.prepared.token,
+          manifestRef: fixture.prepared.snapshot.manifestRef,
+        },
+      }),
+    ).rejects.toMatchObject({
+      message: "workspace-transfer-failed: transfer did not complete",
+      cause: expect.objectContaining({
+        message: expect.stringContaining("command output was truncated"),
+      }),
+    });
+    expect(await fs.readdir(workspaceDir)).toEqual(["previous.txt"]);
+    expect(await fs.readFile(path.join(workspaceDir, "previous.txt"), "utf8")).toBe("preserve me");
+  });
+
   it("imports and recaptures a Git workspace beyond the Windows path limit", async () => {
     await using fixture = await createGitTransfer();
     const { token, snapshot } = fixture.prepared;

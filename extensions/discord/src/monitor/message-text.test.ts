@@ -61,13 +61,13 @@ describe("resolveDiscordMessageText", () => {
   const label = "a$'b $& big$$money a$`b";
   it.each([
     [
-      "literal replacement tokens",
-      "Hello <@1> and <@!1>, meet <@2>!",
+      "literal replacement tokens outside code",
+      "Hello <@1> and <@!1>, meet <@2>! `<@1> <@!2>`\n```text\n<@!1> <@2>\n```",
       [
         { id: "1", globalName: label, username: "fallback" },
         { id: "2", username: label },
       ],
-      `Hello @${label} and @${label}, meet @${label}!`,
+      `Hello @${label} and @${label}, meet @${label}! \`<@1> <@!2>\`\n\`\`\`text\n<@!1> <@2>\n\`\`\``,
     ],
     ["user IDs when names are absent", "Hello <@1> and <@!1>!", [{ id: "1" }], "Hello @1 and @1!"],
   ] as const)("resolves mentions with %s", (_name, content, mentionedUsers, expected) => {

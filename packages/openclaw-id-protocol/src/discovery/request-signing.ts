@@ -61,7 +61,7 @@ export type RequestSignatureCheck =
 
 /**
  * Verifies a signed request. The caller then checks that `keyid` is the key it expects
- * (the claw's registered K_gw, or a device key bound to the signed-in account).
+ * (the claw's registered K_gw, a bound device D, or node W represented as ed25519:).
  * Replays inside the skew window are possible; endpoints that change state are idempotent
  * or sequence-checked.
  */

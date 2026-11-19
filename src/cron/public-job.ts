@@ -9,6 +9,7 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
     ownerTransferPending: _ownerTransferPending,
     sourceConversation: _sourceConversation,
     streamSandbox: _streamSandbox,
+    streamOperatorSource: _streamOperatorSource,
     skillLibrarySelections: _skillLibrarySelections,
     createdActor: _createdActor,
     toolsAllowProvenance: _toolsAllowProvenance,
@@ -23,6 +24,8 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
   delete state.pluginCommandBinding;
   delete state.queuedAtMs;
   delete state.runningReceiptId;
+  delete state.conditionCheckReceiptId;
+  delete state.runSlotWaitReceiptId;
   delete state.startupCatchupAtMs;
   delete state.pacedNextRunAtMs;
   delete state.forcePreservedNextRunAtMs;

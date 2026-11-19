@@ -64,8 +64,11 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, openSync: vi.fn(actual.openSync) };
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { openSync: vi.fn(actual.openSync) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");

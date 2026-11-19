@@ -26,6 +26,7 @@ const CompactCronJobSchema = closedObject({
   id: job.id,
   name: job.name,
   agentId: job.agentId,
+  cyberAccessProgram: job.cyberAccessProgram,
   // Protocol-v4 compact replies from older Gateways omit the update timestamp.
   updatedAtMs: Type.Optional(job.updatedAtMs),
   declarationKey: job.declarationKey,
@@ -44,6 +45,7 @@ const CompactCronJobSchema = closedObject({
     Type.Literal("event"),
   ]),
   streamExecutionHost: job.streamExecutionHost,
+  reauthorizationRequired: job.reauthorizationRequired,
   schedule: Type.Optional(
     Type.Union(
       job.schedule.anyOf.filter((schema) =>
@@ -61,6 +63,7 @@ const CompactCronJobSchema = closedObject({
   lastTriggerEvalAtMs: job.state.properties.lastTriggerEvalAtMs,
   lastMeaningfulResult: job.state.properties.lastMeaningfulResult,
   autoDisabled: job.state.properties.autoDisabled,
+  admissionDeferred: job.state.properties.admissionDeferred,
   lastDelivered: job.lastDelivered,
   lastDeliveryStatus: job.lastDeliveryStatus,
   lastDeliveryError: job.lastDeliveryError,
@@ -106,6 +109,7 @@ const CronStatusOutputSchema = closedObject({
   storage: Type.Optional(Type.Literal("sqlite")),
   sqlitePath: Type.Optional(Type.String()),
   jobs: Type.Optional(Type.Integer({ minimum: 0 })),
+  reauthorizationRequired: Type.Optional(Type.Integer({ minimum: 0 })),
   nextWakeAtMs: Type.Optional(nullableNumber),
 });
 

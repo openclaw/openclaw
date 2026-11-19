@@ -1,16 +1,34 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { WebSocket } from "ws";
+import { buildDeviceAuthPayloadV3 } from "../packages/gateway-client/src/device-auth.js";
+import { rawDataToString } from "../packages/gateway-client/src/websocket-data.js";
+import type { ResponseFrame } from "../packages/gateway-protocol/src/schema/frames.js";
+import { isRetryableGatewayStartupUnavailableError } from "../packages/gateway-protocol/src/startup-unavailable.js";
+import { PROTOCOL_VERSION } from "../packages/gateway-protocol/src/version.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import type { GatewayClientOptions } from "../src/gateway/client.js";
 import type { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
-import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
+import {
+  loadOrCreateDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+  signDevicePayload,
+} from "../src/infra/device-identity.js";
 import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
+import { VERSION } from "../src/version.js";
 import { acquireGatewayTestClient } from "./helpers/gateway-client.js";
 import { readRequestText, respondJson } from "./helpers/gateway-integration-fixtures.js";
+import {
+  acquireGatewayTestWebSocket,
+  closeGatewayTestWebSocket,
+} from "./helpers/gateway-websocket.js";
 import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
 import type { OpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
+import { createDeferred } from "./helpers/promise.js";
 
 export const restartEnv = {
   OPENAI_API_KEY: undefined,
@@ -245,6 +263,119 @@ export async function readRestartTrace(tracePath: string): Promise<string[]> {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return [];
     }
+    throw error;
+  }
+}
+
+/**
+ * Connect as a trusted-proxy person over a raw socket: the Gateway client refuses edge
+ * identity headers on plain ws://, while restart fixtures serve loopback HTTP.
+ */
+export async function connectProxiedRestartOperator(
+  instance: OpenClawTestInstance,
+  params: { user: string; origin: string; scopes: string[]; signal: AbortSignal },
+) {
+  const identity = loadOrCreateDeviceIdentity({
+    path: instance.state.path("proxied", params.user, "client", "credentials.sqlite"),
+  });
+  const socket = new WebSocket(instance.url, {
+    headers: {
+      origin: params.origin,
+      "x-forwarded-user": params.user,
+      "x-forwarded-proto": "https",
+      "x-forwarded-for": "198.51.100.40",
+    },
+  });
+  const challenge = createDeferred<string>();
+  void challenge.promise.catch(() => {});
+  const pending = new Map<string, ReturnType<typeof createDeferred<ResponseFrame>>>();
+  const fail = (error: Error) => {
+    challenge.reject(error);
+    for (const result of pending.values()) {
+      result.reject(error);
+    }
+    pending.clear();
+  };
+  const abort = () => fail(new Error("Proxied restart operator canceled"));
+  params.signal.addEventListener("abort", abort, { once: true });
+  socket.on("error", fail);
+  socket.on("close", () => fail(new Error("Proxied restart operator connection closed")));
+  socket.on("message", (data) => {
+    const frame = JSON.parse(rawDataToString(data)) as
+      | ResponseFrame
+      | { type: "event"; event: string; payload?: { nonce?: string } };
+    if (frame.type === "event" && frame.event === "connect.challenge" && frame.payload?.nonce) {
+      challenge.resolve(frame.payload.nonce);
+    } else if (frame.type === "res") {
+      pending.get(frame.id)?.resolve(frame);
+      pending.delete(frame.id);
+    }
+  });
+  // Startup-unavailable answers retry after their advertised delay; other errors fail.
+  const call = async <T = unknown>(method: string, payload: unknown): Promise<T> => {
+    for (;;) {
+      params.signal.throwIfAborted();
+      const id = randomUUID();
+      const result = createDeferred<ResponseFrame>();
+      pending.set(id, result);
+      socket.send(JSON.stringify({ type: "req", id, method, params: payload }));
+      const frame = await result.promise;
+      if (frame.ok) {
+        return frame.payload as T;
+      }
+      const retryAfterMs = frame.error?.retryAfterMs;
+      if (
+        !isRetryableGatewayStartupUnavailableError(frame.error) ||
+        typeof retryAfterMs !== "number"
+      ) {
+        throw new Error(`${method}: ${JSON.stringify(frame.error)}`);
+      }
+      await delay(retryAfterMs, undefined, { signal: params.signal });
+    }
+  };
+  const close = async () => {
+    params.signal.removeEventListener("abort", abort);
+    await closeGatewayTestWebSocket(socket);
+  };
+  try {
+    await acquireGatewayTestWebSocket(socket, 30_000, async () => {
+      const nonce = await challenge.promise;
+      const signedAt = Date.now();
+      const client = {
+        id: "openclaw-control-ui" as const,
+        version: VERSION,
+        platform: "web",
+        mode: "webchat" as const,
+      };
+      const payload = buildDeviceAuthPayloadV3({
+        deviceId: identity.deviceId,
+        clientId: client.id,
+        clientMode: client.mode,
+        platform: client.platform,
+        role: "operator",
+        scopes: params.scopes,
+        token: null,
+        nonce,
+        signedAtMs: signedAt,
+      });
+      await call("connect", {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client,
+        role: "operator",
+        scopes: params.scopes,
+        device: {
+          id: identity.deviceId,
+          publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+          signature: signDevicePayload(identity.privateKeyPem, payload),
+          signedAt,
+          nonce,
+        },
+      });
+    });
+    return { call, close };
+  } catch (error) {
+    await close();
     throw error;
   }
 }

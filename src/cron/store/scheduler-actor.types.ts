@@ -17,6 +17,10 @@ export type CronScheduleMaintenanceOptions = {
 export type CronSchedulerConfig = {
   cronEnabled: boolean;
   preparingAgentIds?: string[];
+  /** See `cron.drainQueue`. */
+  busyConversationJobIds?: string[];
+  /** See `cron.drainQueue`. */
+  memoryAllowsExtraRun?: boolean;
   cronConfig?: CronConfig;
   defaultAgentId?: string;
   configuredChannels?: string[];
@@ -57,6 +61,8 @@ export type CronSchedulerOperations = {
       snapshot: CronSchedulerSnapshot;
       skipJobIds?: string[];
       deferAgentWork?: boolean;
+      /** Slots due at or after this process went live are late, not downtime catch-up. */
+      liveSinceMs?: number;
     };
     output: CronSchedulerResult;
   };

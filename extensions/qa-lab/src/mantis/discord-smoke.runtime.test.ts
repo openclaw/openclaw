@@ -193,6 +193,7 @@ describe("mantis discord smoke runtime", () => {
 
     expect(result.status).toBe("fail");
     expect(await readError(result)).toContain("Missing OPENCLAW_QA_DISCORD_GUILD_ID");
+    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 
   it("fails when the channel is not in the configured guild", async () => {

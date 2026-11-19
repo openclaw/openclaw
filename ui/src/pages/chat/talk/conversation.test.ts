@@ -62,32 +62,16 @@ describe("realtime Talk conversation", () => {
     ]);
   });
 
-  it("inserts spacing between adjacent transcript fragments", () => {
-    update("user", "Turn off", false, { nowMs: 1 });
-    update("user", "the lights", false, { nowMs: 2 });
+  it.each([
+    ["Turn off", "the lights", "Turn off the lights"],
+    ["Meet in Istanbul", "Istanbul tomorrow", "Meet in Istanbul tomorrow"],
+    ["Meet in İstanbul", "İstanbul tomorrow", "Meet in İstanbul tomorrow"],
+    ["Ready.", "What next?", "Ready. What next?"],
+  ])("joins user fragments %s and %s", (first, next, text) => {
+    update("user", first, false, { nowMs: 1 });
+    update("user", next, false, { nowMs: 2 });
 
-    expect(state.entries).toMatchObject([
-      { role: "user", text: "Turn off the lights", isStreaming: true },
-    ]);
-  });
-
-  it("inserts spacing after punctuation-ended user transcript fragments", () => {
-    state = updateRealtimeTalkConversation(state, {
-      role: "user",
-      text: "Ready.",
-      final: false,
-      nowMs: 1,
-    });
-    state = updateRealtimeTalkConversation(state, {
-      role: "user",
-      text: "What next?",
-      final: false,
-      nowMs: 2,
-    });
-
-    expect(state.entries).toMatchObject([
-      { role: "user", text: "Ready. What next?", isStreaming: true },
-    ]);
+    expect(state.entries).toMatchObject([{ role: "user", text, isStreaming: true }]);
   });
 
   it("keeps per-character assistant deltas verbatim across punctuation boundaries", () => {

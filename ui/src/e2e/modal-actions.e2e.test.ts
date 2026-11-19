@@ -1,10 +1,8 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  createControlUiMockSameOriginGatewayScript,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
 import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -73,7 +71,7 @@ suite.define(() => {
       async ({ page }) => {
         await page.addInitScript(createControlUiMockSameOriginGatewayScript());
         const config = { plugins: { entries: { workboard: { enabled: true } } } };
-        const gateway = await installMockGateway(page, {
+        const gateway = await installNativePluginMockGateway(page, {
           ...workboardUi,
           methodResponses: {
             "config.get": {
@@ -139,7 +137,9 @@ suite.define(() => {
       { viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce" },
       async ({ page }) => {
         const available = { channel: "stable", currentVersion: "1.0.0", latestVersion: "2.0.0" };
-        const gateway = await installMockGateway(page, { deferredMethods: ["update.run"] });
+        const gateway = await installNativePluginMockGateway(page, {
+          deferredMethods: ["update.run"],
+        });
         await page.goto(suite.server.baseUrl + "chat");
         await gateway.waitForRequest("sessions.messages.subscribe");
         await gateway.setMethodResponse("update.status", { updateAvailable: available });
@@ -150,7 +150,7 @@ suite.define(() => {
         );
         await issue.locator("summary").click();
         await issue.locator(".sidebar-update-card__action").click();
-        const modal = modalFor(page, "Update Gateway");
+        const modal = modalFor(page, "Update and restart?");
         for (const width of [1440, 390, 320]) {
           await page.setViewportSize({ width, height: 1000 });
           await inspectActions(page, modal, "openclaw-modal-actions");

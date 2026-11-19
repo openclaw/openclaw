@@ -1,2 +1,0 @@
-32
-# Prove trusted ripgrep setup precedes both database inventory callers and a failed setup blocks differential guards.

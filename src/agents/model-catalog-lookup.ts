@@ -202,6 +202,26 @@ export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" 
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+/**
+ * Finds the row a CLI-native selector (for example Claude Code's `fable`)
+ * resolves to, as published by the CLI's own model menu in `params.nativeModelAliases`.
+ */
+export function findModelByNativeAlias<
+  T extends Pick<ModelCatalogEntry, "provider" | "id" | "params">,
+>(catalog: readonly T[], provider: string, alias: string): T | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  const trimmed = alias.trim();
+  const matches = catalog.filter((entry) => {
+    const aliases = entry.params?.nativeModelAliases;
+    return (
+      normalizeProviderId(entry.provider) === normalizedProvider &&
+      Array.isArray(aliases) &&
+      aliases.includes(trimmed)
+    );
+  });
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 /** Finds a model entry, requiring uniqueness when provider is omitted. */
 export function findModelCatalogEntry(
   catalog: ModelCatalogEntry[],

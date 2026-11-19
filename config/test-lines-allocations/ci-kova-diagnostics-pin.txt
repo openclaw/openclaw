@@ -1,2 +1,0 @@
-# Preserve source-defined historical diagnostics without weakening report-gate checks.
-116

@@ -361,6 +361,7 @@ export function buildPluginManifestRecord(params: {
     catalog: normalizeManifestCatalog({
       featured: params.manifest.catalog?.featured ?? officialCatalogManifest?.catalog?.featured,
       order: params.manifest.catalog?.order ?? officialCatalogManifest?.catalog?.order,
+      sidebar: params.manifest.catalog?.sidebar,
     }),
     ...resolvePortablePluginIcons({
       rootDir: params.candidate.rootDir,

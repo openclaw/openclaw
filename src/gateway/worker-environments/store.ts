@@ -513,6 +513,9 @@ export async function createWorkerEnvironmentStore(
     ensurePreparedIntent({ assertCurrent, ...input }: Input<"ensurePreparedIntent">) {
       return mutate("workerEnvironments.ensurePreparedIntent", { input }, assertCurrent);
     },
+    refreshPreparedProject({ assertCurrent, ...input }: Input<"refreshPreparedProject">) {
+      return mutate("workerEnvironments.refreshPreparedProject", { input }, assertCurrent);
+    },
     requestPreparedDestroy({ assertCurrent, ...input }: Input<"requestPreparedDestroy">) {
       return mutate("workerEnvironments.requestPreparedDestroy", { input }, assertCurrent);
     },

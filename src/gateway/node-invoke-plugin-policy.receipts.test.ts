@@ -1,6 +1,11 @@
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { configureRuntimeActionDecisionSink } from "../audit/runtime-action-decision.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -19,6 +24,7 @@ const PLUGIN_ID = "secret-demo-plugin";
 const COMMAND = "secret.demo.read";
 let receipts: DecisionReceiptV1[];
 let clearReceipts: () => void;
+let authorityScenario: Promise<void> | undefined;
 
 function fixture(commands = [COMMAND], runId = "run-node-receipt") {
   const node = createNodeSession({
@@ -92,7 +98,10 @@ describe("plugin node action receipts", () => {
       return true;
     });
   });
-  afterEach(() => {
+  afterEach(async () => {
+    // Join the original scenario before removing its receipt sink and registry.
+    await Promise.allSettled(authorityScenario ? [authorityScenario] : []);
+    authorityScenario = undefined;
     clearReceipts();
     resetPluginRuntimeStateForTest();
   });
@@ -140,36 +149,56 @@ describe("plugin node action receipts", () => {
     expect(receipts).toEqual([]);
   });
 
-  it.each(["allowed", "denied", "throws"] as const)(
+  it.for(["allowed", "denied", "throws"] as const)(
     "does not attribute a late %s policy result after runtime authority closes",
-    async (outcome) => {
-      const { promise: policyStarted, resolve: markPolicyStarted } = createDeferred();
+    (outcome, testContext) => {
+      const policyStarted = createDeferred();
       const policyWait = createDeferred();
-      registerPolicy(async () => {
-        markPolicyStarted();
-        await policyWait.promise;
-        if (outcome === "throws") {
-          throw new Error("late policy failure");
-        }
-        return outcome === "allowed"
-          ? { ok: true, payload: "done" }
-          : { ok: false, code: "PLUGIN_DENIED", message: "denied" };
-      });
+      const lateError = new Error("late policy failure");
       let authorityActive = true;
-      const { context, invoke, run } = fixture(undefined, `run-node-policy-${outcome}`);
-      context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
-      const resultPromise = run();
-      await policyStarted;
-      authorityActive = false;
-      policyWait.resolve();
-
-      if (outcome === "throws") {
-        await expect(resultPromise).rejects.toThrow("late policy failure");
-      } else {
-        await expect(resultPromise).resolves.toMatchObject({ ok: outcome === "allowed" });
-      }
-      expect(invoke).not.toHaveBeenCalled();
-      expect(receipts).toEqual([]);
+      let operation: ReturnType<ReturnType<typeof fixture>["run"]> | undefined;
+      authorityScenario = runQaGatewayTestFixture(
+        testContext,
+        async () => {
+          registerPolicy(async () => {
+            policyStarted.resolve();
+            await policyWait.promise;
+            if (outcome === "throws") {
+              throw lateError;
+            }
+            return outcome === "allowed"
+              ? { ok: true, payload: "done" }
+              : { ok: false, code: "PLUGIN_DENIED", message: "denied" };
+          });
+          const { context, invoke, run } = fixture(undefined, `run-node-policy-${outcome}`);
+          context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
+          operation = run();
+          await withinTest(
+            awaitGateBeforeSettlement(
+              policyStarted.promise,
+              operation,
+              "Plugin invocation ended before policy entry",
+            ),
+            testContext.signal,
+          );
+          authorityActive = false;
+          policyWait.resolve();
+          await withinTest(
+            outcome === "throws"
+              ? expect(operation).rejects.toBe(lateError)
+              : expect(operation).resolves.toMatchObject({ ok: outcome === "allowed" }),
+            testContext.signal,
+          );
+          expect(invoke).not.toHaveBeenCalled();
+          expect(receipts).toEqual([]);
+        },
+        () => {
+          authorityActive = false;
+          policyWait.resolve();
+        },
+        () => Promise.allSettled(operation ? [operation] : []),
+      );
+      return authorityScenario;
     },
   );
 });

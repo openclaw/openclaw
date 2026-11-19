@@ -18,13 +18,13 @@ it.each([
   [40, 40],
   [200, 100],
 ])(
-  "bounds OS readings and reports available space on the home volume (available=%s)",
-  (availableMemory, expectedFreeMemory) => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  "bounds OS readings and reports available space on the home volume (free=%s)",
+  (freeMemory, expectedFreeMemory) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     vi.spyOn(os, "cpus").mockReturnValue([]);
     vi.spyOn(os, "loadavg").mockReturnValue([1.25, -1, 100_001]);
     vi.spyOn(os, "totalmem").mockReturnValue(100.4);
-    vi.spyOn(process, "availableMemory").mockReturnValue(availableMemory);
+    vi.spyOn(os, "freemem").mockReturnValue(freeMemory);
     const disk = vi.spyOn(diskSpace, "tryReadDiskSpace").mockReturnValue({
       targetPath: os.homedir(),
       checkedPath: os.homedir(),
@@ -45,13 +45,6 @@ it.each([
     expect(validateNodeHostStatsPayload(stats)).toBe(true);
   },
 );
-
-it("falls back to free memory when available memory is unsupported", () => {
-  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-  vi.spyOn(process, "availableMemory").mockReturnValue(0);
-  vi.spyOn(os, "freemem").mockReturnValue(4096);
-  expect(sampleNodeHostStats().memoryFreeBytes).toBe(4096);
-});
 
 it.each(["linux", "win32"] as const)("keeps host-wide memory readings on %s", (platform) => {
   vi.spyOn(process, "platform", "get").mockReturnValue(platform);

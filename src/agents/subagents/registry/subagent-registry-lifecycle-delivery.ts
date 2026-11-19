@@ -18,7 +18,11 @@ import {
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
-import { ensureCompletionState, ensureDeliveryState } from "./subagent-delivery-state.js";
+import {
+  ensureCompletionState,
+  ensureDeliveryState,
+  recordRequesterHandoff,
+} from "./subagent-delivery-state.js";
 import { capFrozenResultText } from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleCommonContext,
@@ -105,6 +109,9 @@ export const recordAnnounceDeliveryResult = (
   }
   deliveryState.disposition =
     delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");
+  if (delivery.reason === "completion_handoff_pending") {
+    recordRequesterHandoff(entry);
+  }
 };
 
 export const hasPriorRequesterDeliveryMirror = async (

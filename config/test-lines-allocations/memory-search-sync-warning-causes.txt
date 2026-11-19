@@ -1,2 +1,0 @@
-# Search bootstrap and background refresh preserve nested failure details and formatter redaction.
-45

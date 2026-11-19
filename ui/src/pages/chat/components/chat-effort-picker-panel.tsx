@@ -1,5 +1,6 @@
-import { For, Show, createMemo, onSettled } from "solid-js";
+import { For, createMemo, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import type { ChatFastModeSelectValue } from "../../../lib/chat/model-select-state.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -119,27 +120,12 @@ type ChatEffortPickerPanelProps = Pick<
     sliderUnanchored: boolean;
     reasoningValueText: string;
     reasoningValueLabel: string;
-    defaultThinkingValue: string;
     speedOptions: { value: ChatFastModeSelectValue; label: string; disabled?: boolean }[];
     selectedSpeed: string;
     onlyStop: ChatEffortPickerParams["thinking"]["options"][number] | undefined;
     onlyStopSelected: boolean;
   };
 };
-
-/** Marks the default level so the trigger can show only the effective level. */
-function EffortDefaultBadge(props: { level: string; defaultLevel: string }) {
-  return (
-    <Show when={props.defaultLevel !== "" && props.level === props.defaultLevel}>
-      <span
-        class="chat-controls__permission-default-badge"
-        style={{ "margin-inline-start": "6px" }}
-      >
-        {t("chat.modelControls.default")}
-      </span>
-    </Show>
-  );
-}
 
 export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
   const view = () => props.view;
@@ -324,44 +310,38 @@ export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
       {props.accessProgram && <ChatAccessProgramControl {...props.accessProgram} />}
       {view().showReasoning && (
         <div class="chat-controls__reasoning-panel">
-          <div class="chat-controls__reasoning-head">
-            <span class="chat-controls__effort-heading">{t("chat.modelControls.effort")}</span>
-            <span
-              ref={(element) => (valueLabel = element)}
-              class="chat-controls__effort-value"
-              data-inherited={!view().hasThinkingOverride ? "true" : "false"}
-              aria-hidden="true"
-            >
+          <MenuHeading
+            label={t("chat.modelControls.effort")}
+            trailing={
               <span
-                ref={(element) => (committedLabel = element)}
-                data-chat-thinking-preview-committed
+                ref={(element) => (valueLabel = element)}
+                class="oc-menu-heading__value chat-controls__effort-value"
+                data-inherited={!view().hasThinkingOverride ? "true" : "false"}
+                aria-hidden="true"
               >
-                {view().reasoningValueText}
-                <EffortDefaultBadge
-                  level={view().selectedThinkingValue || view().defaultThinkingValue}
-                  defaultLevel={view().defaultThinkingValue}
-                />
+                <span
+                  ref={(element) => (committedLabel = element)}
+                  data-chat-thinking-preview-committed
+                >
+                  {view().reasoningValueText}
+                </span>
+                <For each={view().sliderStops} keyed={(stop) => stop.value}>
+                  {(stop, index) => (
+                    <span
+                      ref={elementRef<HTMLSpanElement>((element) => {
+                        previewLabels.add(element);
+                        return () => previewLabels.delete(element);
+                      })}
+                      data-chat-thinking-preview-index={index()}
+                      hidden
+                    >
+                      {formatEffortLabel(stop().label)}
+                    </span>
+                  )}
+                </For>
               </span>
-              <For each={view().sliderStops} keyed={(stop) => stop.value}>
-                {(stop, index) => (
-                  <span
-                    ref={elementRef<HTMLSpanElement>((element) => {
-                      previewLabels.add(element);
-                      return () => previewLabels.delete(element);
-                    })}
-                    data-chat-thinking-preview-index={index()}
-                    hidden
-                  >
-                    {formatEffortLabel(stop().label)}
-                    <EffortDefaultBadge
-                      level={stop().value}
-                      defaultLevel={view().defaultThinkingValue}
-                    />
-                  </span>
-                )}
-              </For>
-            </span>
-          </div>
+            }
+          />
           {view().sliderStops.length > 1 ? (
             <div
               ref={elementRef<HTMLDivElement>((element) => {
@@ -522,7 +502,7 @@ export function ChatEffortPickerPanel(props: ChatEffortPickerPanelProps) {
       )}
       {props.fastMode.supported && (
         <div class="chat-controls__speed-panel chat-controls__speed-panel--inline">
-          <span class="chat-controls__effort-heading">{t("chat.modelControls.speed")}</span>
+          <span class="oc-menu-heading__label">{t("chat.modelControls.speed")}</span>
           <ChatPreferenceSegments
             kind="speed"
             label={t("chat.modelControls.speed")}

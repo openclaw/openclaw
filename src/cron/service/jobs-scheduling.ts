@@ -717,7 +717,10 @@ export function nextWakeAtMs(state: CronServiceState): number | undefined {
       isTimeScheduledJob(job) &&
       hasScheduledNextRunAtMs(job.state.nextRunAtMs)
     ) {
-      nextWake = Math.min(nextWake ?? Infinity, job.state.nextRunAtMs);
+      nextWake = Math.min(
+        nextWake ?? Infinity,
+        Math.max(job.state.nextRunAtMs, job.state.admissionDeferred?.retryAtMs ?? 0),
+      );
     }
   }
   return nextWake;

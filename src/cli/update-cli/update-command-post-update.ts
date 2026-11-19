@@ -21,6 +21,7 @@ import {
   completePostUpdateMaintenance,
   parkPostUpdateService,
   preparePostUpdateService,
+  reportCurrentCoreServiceSkip,
   settlePostUpdateWindowsAutoStartFailure,
   resumePostUpdateWindowsAutoStart,
 } from "./update-command-post-update-maintenance.js";
@@ -29,7 +30,6 @@ import { assertUpdateCommandPackageFinalization } from "./update-command-recover
 import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import {
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
-  recordServiceReconciliationWarning,
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
   recordUpdateResultNextAction,
@@ -49,6 +49,7 @@ import {
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
 } from "./update-command-service.js";
+import { withUpdateStateReleasedAcrossRestart } from "./update-command-state-handoff.js";
 import * as terminal from "./update-command-terminal-publication.js";
 import {
   captureUpdateCommandTerminalRecord,
@@ -447,12 +448,17 @@ async function finishSettledUpdate(
       }
 
       const postUpdateRoot = params.result.root ?? params.root;
+      const completeMaintenance = () =>
+        completePostUpdateMaintenance(params, resultWithPostUpdate, assertCurrent, {
+          root: postUpdateRoot,
+        });
       // A current core may converge plugins online, parking before fresh Doctor.
-      // A replaced core keeps convergence in its original stopped interval.
+      // A replaced core keeps convergence in its original stopped interval; a switched
+      // Git release converges after it verified, never stranding plugins on a failed trial.
       const deferPluginConvergence =
         shouldRestart &&
         params.preManagedServiceStop?.serviceMutationAllowed !== false &&
-        params.coreAlreadyCurrent === true &&
+        (params.coreAlreadyCurrent === true || params.gitRelease === true) &&
         params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "owned";
       const runsPostActivationInspections =
         shouldRestart &&
@@ -481,20 +487,8 @@ async function finishSettledUpdate(
       if (!deferPluginConvergence) {
         ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins());
         if (params.coreAlreadyCurrent) {
-          if (
-            params.preManagedServiceStop?.serviceUpdateVerdict?.kind === "absent" &&
-            params.preManagedServiceStop.serviceMutationSkipMessage
-          ) {
-            // An absent service needs no repair. Keep the explanation without
-            // reporting a service-install command as completed maintenance.
-            defaultRuntime.error(params.preManagedServiceStop.serviceMutationSkipMessage);
-          } else if (params.preManagedServiceStop?.serviceMutationSkipMessage) {
-            recordServiceReconciliationWarning(
-              resultWithPostUpdate,
-              params.preManagedServiceStop.serviceEnv ?? process.env,
-              params.preManagedServiceStop.serviceMutationSkipMessage,
-            );
-          }
+          reportCurrentCoreServiceSkip(params, resultWithPostUpdate);
+          await completeMaintenance();
           return resultWithPostUpdate;
         }
       }
@@ -543,9 +537,17 @@ async function finishSettledUpdate(
         await restoreWindowsAutoStart(resultWithPostUpdate);
       }
       let verificationFailure = "restart-unhealthy";
+      // The new build's boot upgrade may replace the shared state database file.
+      // Without a restart nothing replaces it during this update; keep the open handles.
+      const restartService = (restartParams: Parameters<typeof maybeRestartService>[0]) =>
+        restartParams.shouldRestart
+          ? withUpdateStateReleasedAcrossRestart(params.opts.run, () =>
+              maybeRestartService(restartParams),
+            )
+          : maybeRestartService(restartParams);
       const restart = async () => {
         const restarted = await forward(() =>
-          maybeRestartService({
+          restartService({
             onGatewayStartAttempted,
             originalManagedServiceRuntime: params.originalManagedServiceRuntime,
             shouldRestart: shouldRestart && restartContext.serviceMutationAllowed,
@@ -691,20 +693,7 @@ async function finishSettledUpdate(
           }),
         );
       }
-      if (deferPluginConvergence) {
-        return resultWithPostUpdate;
-      }
-      const maintenanceFailure = await completePostUpdateMaintenance(
-        params,
-        resultWithPostUpdate,
-        assertCurrent,
-        { root: postUpdateRoot, sentinel: sentinelOptions, activationVerified },
-      );
-      if (maintenanceFailure) {
-        const reported = await reportResult(maintenanceFailure.result, false, undefined, false);
-        throw createFailure(reported, maintenanceFailure.detail, undefined, 1);
-      }
-
+      await completeMaintenance();
       return resultWithPostUpdate;
     } catch (error) {
       if (
@@ -715,11 +704,7 @@ async function finishSettledUpdate(
           cause: error,
         });
       }
-      if (
-        (error instanceof UpdateCommandFailure &&
-          (!activationVerified || error.result.reason !== "wrapper-retirement-failed")) ||
-        hasCommandProcessCleanupError(error)
-      ) {
+      if (error instanceof UpdateCommandFailure || hasCommandProcessCleanupError(error)) {
         // Unsettled commands may still change files. Keep intent/material for fenced reconciliation.
         throw error;
       }

@@ -68,6 +68,12 @@ function configAt(path: string, value: unknown): unknown {
   return path.split(".").reduceRight<unknown>((child, key) => ({ [key]: child }), value);
 }
 const schemaCases: Array<[string, unknown, boolean]> = [
+  ["update.auto.schedule", "30 3 * * *", true],
+  ["update.auto.schedule", "15 4 * * MON", true],
+  ["update.auto.schedule", "*/5 * * * *", true],
+  ["update.auto.schedule", "not cron", false],
+  ["update.auto.schedule", "70 25 * * *", false],
+  ["update.auto.schedule", "", false],
   [
     "models.providers.ds4",
     {
@@ -108,6 +114,8 @@ const schemaCases: Array<[string, unknown, boolean]> = [
     { allowPromptInjection: false, allowConversationAccess: "yes" },
     false,
   ],
+  ["plugins.entries.voice-call.hooks", { allowModelRequest: true }, true],
+  ["plugins.entries.voice-call.hooks", { allowModelRequest: "true" }, false],
   ["plugins.entries.voice-call.subagent", { allowModelOverride: "yes", allowedModels: [1] }, false],
   [
     "plugins.entries.voice-call.llm",
@@ -150,7 +158,7 @@ const schemaCases: Array<[string, unknown, boolean]> = [
   ...[
     "https://mcp-apps.example.com/path",
     "https://mcp-apps.example.com?query=1",
-    "https://user:pass@mcp-apps.example.com",
+    "https://fixture-user@mcp-apps.example.com",
     "data:text/html,hello",
   ].map((value): [string, unknown, boolean] => ["mcp.apps.sandboxOrigin", value, false]),
 ];

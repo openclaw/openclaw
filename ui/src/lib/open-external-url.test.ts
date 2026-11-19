@@ -111,6 +111,21 @@ describe("openExternalUrlSafe", () => {
 });
 
 describe("reserveExternalWindowForDeferredNavigation", () => {
+  it("forwards prepared popup features and detaches the opener", () => {
+    const popup = "popup,width=520,height=720,left=480,top=130";
+    const opened = { opener: window } as unknown as WindowProxy;
+    const open = vi.spyOn(window, "open").mockReturnValue(opened);
+    expect(reserveExternalWindowForDeferredNavigation({ popup })).toBe(opened);
+    expect(open).toHaveBeenCalledWith("about:blank", "_blank", popup);
+    expect(opened.opener).toBeNull();
+  });
+
+  it("reports a blocked prepared popup without opening another window", () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    expect(reserveExternalWindowForDeferredNavigation({ popup: "popup,width=520" })).toBeNull();
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
   it.each([undefined, true])(
     "opens an inert placeholder and detaches its opener (popup=%s)",
     (popup) => {

@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
-import { constants, realpathSync, type BigIntStats } from "node:fs";
+import { constants, fstatSync, lstatSync, realpathSync, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
+import { isMainThread } from "node:worker_threads";
 import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { sha256File } from "../../infra/directory-durability.js";
 import {
@@ -29,7 +31,11 @@ import {
   type WorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
-import { isDerivedWorkspacePath, buildCacheInputPaths } from "./workspace-path-exclusions.js";
+import {
+  isDerivedWorkspacePath,
+  isIgnoredWorkspaceBuildOutput,
+  buildCacheInputPaths,
+} from "./workspace-path-exclusions.js";
 
 type WorkspaceFileSnapshot =
   | { type: "file"; mode: number; size: number; sha256: string }
@@ -44,7 +50,7 @@ type WorkspaceFileRead = {
   maxBytes: number | ((openedSize: number) => number);
   root?: string;
   signal?: AbortSignal;
-  onIdentity?: (identity: string) => void;
+  onIdentity?: (identity: string, reusable: boolean) => void;
 };
 
 export function isPortableRootContainedSymlink(
@@ -69,7 +75,7 @@ export async function readWorkspaceFileSnapshotWithLimit(
   maxBytes: number | ((openedSize: number) => number),
   root?: string,
   signal?: AbortSignal,
-  onIdentity?: (identity: string) => void,
+  onIdentity?: (identity: string, reusable: boolean) => void,
 ): Promise<WorkspaceFileSnapshot> {
   return await readWorkspaceFile({
     expectedPath,
@@ -108,7 +114,9 @@ async function readWorkspaceFile(
   try {
     signal?.throwIfAborted();
     const { memo: hashMemo, metrics, owner = "gateway" } = activeWorkspaceHashContext() ?? {};
-    const before = await handle.stat({ bigint: true });
+    const before = isMainThread
+      ? await handle.stat({ bigint: true })
+      : fstatSync(handle.fd, { bigint: true });
     const realPath = await resolveOpenedFileRealPathForHandle(handle, expectedPath);
     if (!before.isFile() || (root && !isPathInside(root, realPath))) {
       throw new Error("Gateway workspace file changed while it was being read");
@@ -158,7 +166,9 @@ async function readWorkspaceFile(
         metrics.contentHashCount += 1;
       }
     }
-    const after = await handle.stat({ bigint: true });
+    const after = isMainThread
+      ? await handle.stat({ bigint: true })
+      : fstatSync(handle.fd, { bigint: true });
     signal?.throwIfAborted();
     if (after.size !== BigInt(size) || workspaceStatIdentity(owner, after) !== identity) {
       throw new Error("Gateway workspace file changed while it was being read");
@@ -166,7 +176,7 @@ async function readWorkspaceFile(
     if (reusable) {
       hashMemo?.set(identity, sha256);
     }
-    params.onIdentity?.(identity);
+    params.onIdentity?.(identity, reusable);
     const snapshot = {
       type: "file" as const,
       mode: gitFileMode(Number(after.mode & 0o777n)),
@@ -187,6 +197,7 @@ type ActualWorkspaceManifestOptions = {
   preserveDirectories?: ReadonlySet<string>;
   includePaths?: ReadonlySet<string>;
   buildCacheInputs?: ReadonlySet<string>;
+  gitIgnore?: { paths: ReadonlySet<string>; retainedPaths: ReadonlySet<string> };
   signal?: AbortSignal;
 };
 
@@ -194,13 +205,16 @@ type ActualWorkspaceNode = WorkerWorkspaceManifestEntry | { path: string; type: 
 
 export async function scanActualWorkspaceManifest(
   params: ActualWorkspaceManifestOptions & {
-    onEntry: (entry: ActualWorkspaceNode, identity?: string) => void;
+    onEntry: (entry: ActualWorkspaceNode, identity?: string, reusable?: boolean) => void;
     // Only repair candidates authenticated against a saved root may retain this former input.
     includeLegacyPnpmStore?: boolean;
+    unchangedProbe?: boolean;
+    btrfsSnapshot?: boolean;
+    // The caller proves content reuse through file identity or immutable template custody.
     reuseFile?: (
       entryPath: string,
       identity: string,
-      stats: Pick<BigIntStats, "dev" | "ino" | "size" | "ctimeNs">,
+      stats: Pick<BigIntStats, "dev" | "ino" | "size" | "ctimeNs" | "mode">,
     ) => Extract<WorkerWorkspaceManifestEntry, { type: "file" }> | undefined;
   },
 ): Promise<void> {
@@ -216,6 +230,24 @@ export async function scanActualWorkspaceManifest(
     throw error;
   }
   const retained = buildCacheInputPaths(params.buildCacheInputs);
+  const ignored = params.gitIgnore?.paths;
+  const isExcluded = async (relative: string): Promise<boolean> => {
+    const retainedInput = retained.has(relative) || (await isStagedInput(relative));
+    if (
+      isDerivedWorkspacePath(
+        relative,
+        retainedInput,
+        params.buildCacheInputs !== undefined,
+        params.includeLegacyPnpmStore,
+      )
+    ) {
+      return true;
+    }
+    if (!ignored?.size || retainedInput || params.gitIgnore?.retainedPaths.has(relative)) {
+      return false;
+    }
+    return isIgnoredWorkspaceBuildOutput(relative, ignored);
+  };
   let entryCount = 0;
   let totalBytes = 0;
   let manifestPathBytes = 0;
@@ -227,7 +259,12 @@ export async function scanActualWorkspaceManifest(
       throw new Error("Gateway workspace manifest exceeds its eligible byte limit");
     }
   };
-  const addEntry = (entry: ActualWorkspaceNode, bytes = 0, identity?: string): void => {
+  const addEntry = (
+    entry: ActualWorkspaceNode,
+    bytes = 0,
+    identity?: string,
+    reusable?: boolean,
+  ): void => {
     addBytes(bytes);
     manifestPathBytes += Buffer.byteLength(entry.path);
     if (manifestPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
@@ -237,7 +274,7 @@ export async function scanActualWorkspaceManifest(
     if (entryCount > MAX_WORKSPACE_INVENTORY_ENTRIES) {
       throw new Error("Gateway workspace manifest has too many entries");
     }
-    params.onEntry(entry, identity);
+    params.onEntry(entry, identity, reusable);
   };
   const scanController = new AbortController();
   const scanSignal = params.signal
@@ -258,6 +295,25 @@ export async function scanActualWorkspaceManifest(
   const hashContext = activeWorkspaceHashContext();
   const scanConcurrency = 4;
   const discoveryBatchSize = 32;
+  let metadataReads = 0;
+  let metadataYield: Promise<void> | undefined;
+  const readMetadata = !isMainThread
+    ? async (absolute: string): Promise<BigIntStats> => {
+        if (metadataYield) {
+          await metadataYield;
+        }
+        scanSignal.throwIfAborted();
+        const stats = lstatSync(absolute, { bigint: true });
+        // All discovery workers share the yield: even an included-path depth must
+        // service cancellation messages after at most one batch of synchronous reads.
+        if (++metadataReads % discoveryBatchSize === 0) {
+          metadataYield = setImmediate().then(() => {
+            metadataYield = undefined;
+          });
+        }
+        return stats;
+      }
+    : (absolute: string) => fs.lstat(absolute, { bigint: true });
   // Nested discovery batches must not replace their first failure with a later caller abort.
   let taskFailureWasFirst = false;
   const runScans = async (
@@ -294,6 +350,7 @@ export async function scanActualWorkspaceManifest(
   };
   const addFile = async (relative: string): Promise<void> => {
     let identity: string | undefined;
+    let reusable: boolean | undefined;
     const snapshot = await readWorkspaceFileSnapshotWithLimit(
       path.join(root, relative),
       (size) => {
@@ -302,12 +359,13 @@ export async function scanActualWorkspaceManifest(
       },
       root,
       scanSignal,
-      (value) => {
+      (value, canReuse) => {
         identity = value;
+        reusable = canReuse;
       },
     );
     if (snapshot.type === "file") {
-      addEntry({ path: relative, ...snapshot }, 0, identity);
+      addEntry({ path: relative, ...snapshot }, 0, identity, reusable);
       return;
     }
     throw new Error("Gateway workspace manifest exceeds its eligible byte limit");
@@ -332,10 +390,9 @@ export async function scanActualWorkspaceManifest(
           ? hashContext?.memo.get(identity)
           : undefined);
       if (sha256) {
-        // Included paths can cross a replaced parent directory even when the
-        // leaf inode still matches a prior content hash.
-        // This scan runs in the computation worker; avoid a per-file pool round trip.
-        if (realpathSync.native(absolute) !== absolute) {
+        // Accepted nodes add no changed bytes. Generic memo hits still need to
+        // reject paths crossing a replaced parent before admitting their hash.
+        if (!reusable && realpathSync.native(absolute) !== absolute) {
           throw new Error("Gateway workspace file changed while it was being read");
         }
         addEntry(
@@ -352,6 +409,9 @@ export async function scanActualWorkspaceManifest(
         if (hashContext?.metrics) {
           hashContext.metrics.memoHitCount += 1;
         }
+      } else if (params.unchangedProbe) {
+        // Stop at the first changed file instead of finishing the metadata walk.
+        await addFile(relative);
       } else {
         filePaths.push(relative);
       }
@@ -365,19 +425,12 @@ export async function scanActualWorkspaceManifest(
     includedParents: ReadonlySet<string>,
     derivedOnlyDirectories: ReadonlySet<string>,
   ): Promise<"included" | "derived-only" | "absent"> => {
-    if (
-      isDerivedWorkspacePath(
-        relative,
-        retained.has(relative) || (await isStagedInput(relative)),
-        params.buildCacheInputs !== undefined,
-        params.includeLegacyPnpmStore,
-      )
-    ) {
+    if (await isExcluded(relative)) {
       return "derived-only";
     }
     checkTraversal(relative);
     const absolute = path.join(root, relative);
-    const stats = await fs.lstat(absolute, { bigint: true }).catch((error: unknown) => {
+    const stats = await readMetadata(absolute).catch((error: unknown) => {
       if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
         return undefined;
       }
@@ -387,6 +440,11 @@ export async function scanActualWorkspaceManifest(
       return "absent";
     }
     if (stats.isDirectory() && !stats.isSymbolicLink()) {
+      if (params.btrfsSnapshot && stats.ino === 2n) {
+        throw Object.assign(new Error("Btrfs snapshot omitted a nested subvolume"), {
+          code: "WORKSPACE_SNAPSHOT_INCOMPLETE",
+        });
+      }
       if (params.preserveDirectories?.has(relative) || includedParents.has(relative)) {
         addEntry({ path: relative, type: "directory" });
         return "included";
@@ -394,15 +452,7 @@ export async function scanActualWorkspaceManifest(
       for await (const entry of await fs.opendir(absolute)) {
         scanSignal.throwIfAborted();
         const child = `${relative}/${entry.name}`;
-        if (
-          isDerivedWorkspacePath(
-            child,
-            retained.has(child) || (await isStagedInput(child)),
-            params.buildCacheInputs !== undefined,
-            params.includeLegacyPnpmStore,
-          ) ||
-          derivedOnlyDirectories.has(child)
-        ) {
+        if ((await isExcluded(child)) || derivedOnlyDirectories.has(child)) {
           return "derived-only";
         }
       }
@@ -422,20 +472,18 @@ export async function scanActualWorkspaceManifest(
       const directories: Array<string | undefined> = [];
       await runScans(0, batch.length, async (index) => {
         const relative = batch[index]!;
-        if (
-          isDerivedWorkspacePath(
-            relative,
-            retained.has(relative) || (await isStagedInput(relative)),
-            params.buildCacheInputs !== undefined,
-            params.includeLegacyPnpmStore,
-          )
-        ) {
+        if (await isExcluded(relative)) {
           hasDerivedEntry = true;
           return;
         }
         const absolute = path.join(root, relative);
-        const stats = await fs.lstat(absolute, { bigint: true });
+        const stats = await readMetadata(absolute);
         if (stats.isDirectory() && !stats.isSymbolicLink()) {
+          if (params.btrfsSnapshot && stats.ino === 2n) {
+            throw Object.assign(new Error("Btrfs snapshot omitted a nested subvolume"), {
+              code: "WORKSPACE_SNAPSHOT_INCOMPLETE",
+            });
+          }
           directories[index] = relative;
         } else {
           // Unsupported nodes and escaping links still make their directory nonempty;
@@ -513,24 +561,30 @@ export async function scanActualWorkspaceManifest(
       await walk("");
     });
   }
-  // No file readers overlap metadata selection; failures stop new admission
-  // and join all opened handles before any manifest can be returned.
+  // Captures defer file reads; probes hash misses during discovery. Both paths
+  // stop admission and join opened handles before returning or failing.
   await runScans(0, filePaths.length, (index) => addFile(filePaths[index]!));
   scanSignal.throwIfAborted();
 }
 
 export async function readActualWorkspaceManifestImpl(
   params: ActualWorkspaceManifestOptions,
+  reuseFile?: Parameters<typeof scanActualWorkspaceManifest>[0]["reuseFile"],
+  observeFile?: (path: string, identity: string, reusable?: boolean) => void,
 ): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string; rawManifest: string }> {
   const entries: WorkerWorkspaceManifestEntry[] = [];
   const directories: string[] = [];
   await scanActualWorkspaceManifest({
     ...params,
-    onEntry(entry) {
+    reuseFile,
+    onEntry(entry, identity, reusable) {
       if (entry.type === "directory") {
         directories.push(entry.path);
       } else {
         entries.push(entry);
+      }
+      if (identity !== undefined) {
+        observeFile?.(entry.path, identity, reusable);
       }
     },
   });

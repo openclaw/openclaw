@@ -74,6 +74,17 @@ export default defineSingleProviderPluginEntry({
       const baseStreamFn = createOpenRouterWrapper(ctx.streamFn, thinkingLevel);
       const extraParams = ctx.extraParams;
       return (model, context, options) => {
+        if (
+          thinkingLevel === "off" &&
+          model.api === "openai-completions" &&
+          model.id.toLowerCase() === "nvidia/nvidia-nemotron-3.5-super-vl"
+        ) {
+          // This default-on model supports an explicit off selector. Do not
+          // generalize to all DeepInfra reasoning models: some are always-on.
+          return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload }) => {
+            payload.reasoning = { enabled: false };
+          })(model, context, options);
+        }
         if (!model.id.toLowerCase().startsWith("anthropic/")) {
           return baseStreamFn(model, context, options);
         }

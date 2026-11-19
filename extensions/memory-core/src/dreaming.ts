@@ -16,7 +16,8 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { type CronServiceLike, reconcileShortTermDreamingCronJob } from "./dreaming-cron.js";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
-import type { DreamNarrativeRequest, NarrativePhaseData } from "./dreaming-narrative.js";
+import type { DreamNarrativeRequest } from "./dreaming-narrative.js";
+import type { NarrativePhaseData } from "./dreaming-phase-types.js";
 import {
   formatErrorMessage,
   formatRecallRepairDetails,

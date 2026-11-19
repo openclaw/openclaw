@@ -3,6 +3,7 @@ import { incrementCompactionCount } from "../../../auto-reply/reply/session-upda
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { getAdmittedRunDelegatedAuthority } from "../../admitted-run-context.js";
 import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-tools.js";
+import { clearBoundaryMaintenance } from "../../context-pressure.js";
 import type { ContextEngineLogicalTurnLease } from "../../harness/context-engine-logical-turn.js";
 import { forgetPromptBuildDrainCacheForRun } from "../../plugin-turn-context.js";
 import { recordAgentCleanupFailure, runAgentCleanupStep } from "../../run-cleanup-timeout.js";
@@ -111,6 +112,7 @@ export async function settleEmbeddedRun(input: {
     forgetPromptBuildDrainCacheForRun(params.runId);
   }
   clearProviderPromptState(params.runId);
+  clearBoundaryMaintenance(params.runId);
   runtime.stopRuntimeAuthRefreshTimer();
   await ownedContextEngineLease?.dispose();
   if (params.cleanupBundleMcpOnRunEnd === true) {

@@ -14,6 +14,7 @@ vi.mock("../snapshot/database-backup.js", async (importOriginal) => ({
 }));
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.unstubAllEnvs());
 const engines = ["sqlite", "postgres"];
 const families = ["state", "agent", "workboard", "logbook", "team-reports"];
 const workboardPostgres = { families: { workboard: { engine: "postgres" } } } as const;
@@ -46,6 +47,31 @@ async function createStore(file: string, engine: "sqlite" | "postgres", schema: 
     db.exec("CREATE TABLE evidence (value TEXT); INSERT INTO evidence VALUES ('retained')");
   }
 }
+
+it("admits a live SQLite store through explicit-family engine inspection without snapshot capacity", async () => {
+  const { file, context } = await store("sqlite");
+  using writer = openNodeSqliteDatabase(file);
+  writer.exec("PRAGMA journal_mode=WAL; INSERT INTO evidence VALUES ('committed in WAL')");
+  const unavailableCache = path.join(context.env.OPENCLAW_STATE_DIR, "cache-is-a-file");
+  await fs.writeFile(unavailableCache, "occupied");
+  vi.stubEnv("XDG_CACHE_HOME", unavailableCache);
+  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "0");
+  await expect(
+    admitEngines(
+      [
+        {
+          ...context,
+          config: {
+            ...context.config,
+            database: { families: { workboard: { engine: "sqlite" } } },
+          },
+        },
+      ],
+      engines,
+      families,
+    ),
+  ).resolves.toBeUndefined();
+});
 
 const reversePort = /Reverse-port to SQLite with the current binary/;
 it.each([

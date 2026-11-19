@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -162,7 +163,7 @@ async function openWorkspaceEditor(fixture: Awaited<ReturnType<typeof setupReset
 async function makeNonGitTempDir(prefix: string): Promise<string> {
   let root = await fs.realpath(os.tmpdir());
   for (;;) {
-    const checkoutRoot = findGitCheckoutRoot(root);
+    const checkoutRoot = await findGitCheckoutRoot(root);
     if (!checkoutRoot) {
       return tempDirs.make(prefix, root);
     }
@@ -284,6 +285,7 @@ test("an ordinary session created through a workspace alias can adopt without ac
   const other = path.join(root, "other");
   await fs.mkdir(workspace);
   await fs.mkdir(other);
+  await fs.writeFile(path.join(workspace, "notes.md"), "original workspace\n");
   await fs.symlink(workspace, alias, directoryLinkType);
   testState.agentConfig = { workspace: alias };
   const { storePath } = await createSessionStoreDir();
@@ -299,7 +301,9 @@ test("an ordinary session created through a workspace alias can adopt without ac
       { agentId: "main", sessionKey: key, sessionId: entry.sessionId, storePath },
       alias,
     );
-    await transcript.appendMessageAsync(makeUserMessage("Continue this conversation", 1));
+    const originalMessage = await transcript.appendMessageAsync(
+      makeUserMessage("Continue this conversation", 1),
+    );
     const context = createDirectChatContext();
     const input = {
       context,
@@ -328,10 +332,77 @@ test("an ordinary session created through a workspace alias can adopt without ac
     );
     await fs.unlink(alias);
     await fs.symlink(workspace, alias, directoryLinkType);
+    await expect(
+      adoptUnboundPullRequestWorkspace({
+        ...input,
+        async verifyBeforeBinding() {
+          await fs.unlink(alias);
+          await fs.symlink(other, alias, directoryLinkType);
+        },
+      }),
+    ).rejects.toThrow("workspace path alias points to a different current target");
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+      sessionId: entry.sessionId,
+    });
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.worktree,
+    ).toBeUndefined();
+    await fs.unlink(alias);
+    await fs.symlink(workspace, alias, directoryLinkType);
+    const workspaceStats = vi.spyOn(syncFs, "lstatSync");
     const adopted = await adoptUnboundPullRequestWorkspace(input);
     adoptedId = adopted.worktree?.id;
+    expect(workspaceStats.mock.calls.filter(([pathname]) => pathname === alias)).toHaveLength(0);
+    workspaceStats.mockRestore();
     expect(adoptedId).toBeDefined();
     expect(adopted.priorWorkspace).toMatchObject({ workspaceDir: alias, fileRoot: alias });
+    const worktree = getRegistryWorktree(process.env, adoptedId!);
+    expect(worktree).toBeDefined();
+    await fs.writeFile(path.join(worktree!.path, "notes.md"), "managed workspace\n");
+    const managedMessage = await transcript.appendMessageAsync(
+      makeUserMessage("Open the managed notes.md", 2),
+    );
+    const adoptedBefore = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+    const registryBefore = structuredClone(getRegistryWorktree(process.env, adoptedId!));
+    using client = await openWorkspaceClient(root, "operator.write", "recovery-device");
+    const continuation = await rpcReq<CreatedSession>(client.ws, "sessions.create", {
+      agentId: "main",
+      parentSessionKey: key,
+      cwd: alias,
+      worktree: false,
+      emitCommandHooks: false,
+    });
+    expect(continuation.ok, JSON.stringify(continuation.error)).toBe(true);
+    const continuationKey = requireNonEmptyString(continuation.payload?.key, "continuation key");
+    expect(continuationKey).not.toBe(key);
+    expect(continuation.payload?.entry).toMatchObject({
+      parentSessionKey: key,
+      parentSessionId: adopted.sessionId,
+      sessionRoot: workspace,
+      spawnedCwd: workspace,
+    });
+    expect(continuation.payload?.entry.worktree).toBeUndefined();
+    const history = await rpcReq<{ messages: unknown[] }>(client.ws, "chat.history", {
+      sessionKey: continuationKey,
+    });
+    expect(history.payload?.messages).toEqual([]);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toEqual(
+      adoptedBefore,
+    );
+    expect(getRegistryWorktree(process.env, adoptedId!)).toEqual(registryBefore);
+    for (const [sessionKey, messageEntryId, content] of [
+      [key, originalMessage, "original workspace\n"],
+      [key, managedMessage, "managed workspace\n"],
+      [continuationKey, undefined, "original workspace\n"],
+    ] as const) {
+      const file = await rpcReq<SessionsFilesGetResult>(client.ws, "sessions.files.get", {
+        sessionKey,
+        path: "notes.md",
+        ...(messageEntryId ? { messageEntryId } : {}),
+      });
+      expect(file.ok, JSON.stringify(file.error)).toBe(true);
+      expect(file.payload?.file.content).toBe(content);
+    }
   } finally {
     if (adoptedId) {
       await managedWorktrees.remove({
@@ -387,6 +458,9 @@ test.each([
   "sessions.create reset-in-place reports cleanup truth for $name",
   async ({ outcome }) => {
     await using fixture = await setupResetWorktree("openclaw-reset-retained-worktree-");
+    // Keep slow-operation telemetry outside the cleanup warning contract.
+    using diagnosticLogging = vi.spyOn(sessionLog, "isEnabled");
+    diagnosticLogging.mockReturnValue(false);
     using warnSpy = vi.spyOn(sessionLog, "warn").mockImplementation(() => {});
     const originalRemoveIfLossless = captureMethodCall("removeIfLossless")(
       ManagedWorktreeService.prototype,
@@ -443,6 +517,9 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
     primary: "openai/current-model",
   });
   const { workspace, storePath, scope } = fixture;
+  // Keep slow-operation telemetry outside the cleanup warning contract.
+  using diagnosticLogging = vi.spyOn(sessionLog, "isEnabled");
+  diagnosticLogging.mockReturnValue(false);
   using warnSpy = vi.spyOn(sessionLog, "warn").mockImplementation(() => {});
   const resolved = { modelProvider: "openai", model: "current-model" };
   const created = await fixture.createWorktree({ permissionMode: "workspace" });

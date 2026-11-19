@@ -43,13 +43,15 @@ export type WorkerTaskHost = {
   taskContextTransferList?(context: unknown): readonly Transferable[];
   createTaskObserver?(url: URL): (operation?: string) => WorkerTaskObservation;
   /** Return only bounded, privacy-safe labels; never retain or serialize task input. */
-  describeTask?(url: URL, input: unknown): string;
+  describeTask?(url: URL, input: unknown, operation?: string): string;
   receiveMessage(worker: WorkerLifecycle, message: unknown): boolean;
   observeResourceReply?(this: void): void;
   /** Capture diagnostics before construction detaches from the task's async context. */
   captureWorkerStartObserver?(url: URL): (() => void) | undefined;
   workerStarted(worker: WorkerLifecycle, pool: object): void;
   workerRetiring(worker: WorkerLifecycle, reason: WorkerRetirementReason): void;
+  /** Join host effects accepted by this worker before releasing its execution capacity. */
+  workerStopped?(worker: WorkerLifecycle): void | Promise<void>;
   /** Best-effort telemetry before native stop; the host bounds waiting, including synchronous service. */
   flushWorkerDiagnostics?(
     worker: WorkerLifecycle,

@@ -1,4 +1,5 @@
-import { copyFileSync, existsSync, renameSync, symlinkSync, unlinkSync } from "node:fs";
+import fs, { copyFileSync, existsSync, renameSync, symlinkSync, unlinkSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
@@ -15,6 +16,8 @@ import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { readSessionTranscriptMessageEvents } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { captureDurableSessionActor } from "../config/sessions/session-actor-durable.js";
+import { withSessionInputActor } from "../config/sessions/session-input-actor.js";
 import {
   captureExternalSessionCommitGuard,
   type SessionSourceAssertion,
@@ -23,24 +26,21 @@ import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import { createAgentCreationWitnessSource } from "../state/openclaw-agent-execution.creation-fixture.test-support.js";
-import * as agentExecution from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { prepareClientVoiceSessionClose } from "./client-voice-session-lifecycle.js";
 import { assertClientVoiceSessionOpen } from "./client-voice-session-read.js";
 import {
-  captureClientVoiceEntrySource,
   captureClientVoiceSessionSourceOptions,
   createClientVoiceSessionSource,
+  captureClientVoiceSessionWriter,
 } from "./client-voice-session-source.js";
+import * as voiceWriters from "./client-voice-session-source.js";
 import { readVoiceSessionRecord } from "./client-voice-session-store.js";
-import { captureClientVoiceSessionWriter } from "./client-voice-session-write.js";
-import * as voiceWriters from "./client-voice-session-write.js";
 import {
   recordMutation,
   recordMutationEvents,
@@ -119,69 +119,33 @@ describe("client voice session worker contract", () => {
     }
   }
 
-  it.each(["metadata", "entry"] as const)(
-    "joins pending agent initialization when capturing the Talk %s writer",
-    async (kind) => {
-      const options = captureClientVoiceSessionSourceOptions(target.agentId);
-      openOpenClawStateDatabase({ env: options.env });
-      const creator = agentExecution.captureOpenClawAgentDatabaseExecution(options);
-      let operation: Promise<unknown> | undefined;
-      let release: (() => Promise<void>) | undefined;
-      const source = createAgentCreationWitnessSource((request) => {
-        const facts = request.facts;
-        if (
-          !operation &&
-          request.stage === "prepare" &&
-          facts !== null &&
-          typeof facts === "object" &&
-          "kind" in facts &&
-          facts.kind === "shared-owner"
-        ) {
-          operation = (async () => {
-            if (kind === "metadata") {
-              const writer = captureClientVoiceSessionWriter(target);
-              release = () => writer.release();
-              return writer.mutate({
-                ...target,
-                kind: "create",
-                voiceSessionId: "voice-pending-agent",
-                origin: "client",
-                now: 1,
-              });
-            }
-            const selected = await captureClientVoiceEntrySource(target, () => {});
-            release = () => selected.execution.release();
-            await selected.execution.prepare(source);
-            return selected.execution.runExisting(source, (worker) =>
-              worker.execute({
-                type: "session.transcript.initialize",
-                input: { sessionKey: target.sessionKey, sessionId: "voice-entry" },
-              }),
-            );
-          })();
-          void operation.catch(() => {});
-        }
-      });
-      try {
-        await creator.prepare(source);
-        expect(operation).toBeDefined();
-        await expect(operation).resolves.toMatchObject(
-          kind === "metadata"
-            ? { voiceSessionId: "voice-pending-agent", status: "open" }
-            : { kind: "session-transcript-initialized", sessionKey: target.sessionKey },
-        );
-      } finally {
-        await operation?.catch(() => {});
-        await release?.();
-        await creator.release();
-      }
-    },
-  );
-
   it("persists admission, consult effects, transcript bookkeeping, and close off the caller thread", async () => {
     await seedSession(target.sessionKey);
     const voiceSessionId = "voice-worker-boundary";
     const observation = observeHostDataSql();
+    const previousStackLimit = Error.stackTraceLimit;
+    Error.stackTraceLimit = 50;
+    let filesystemCalls = 0;
+    const count = () => {
+      if (
+        /\/talk\/client-voice-(?:session(?:-write|-source|-read)?|mutation-digest-owner)\.ts:/.test(
+          new Error().stack ?? "",
+        )
+      ) {
+        filesystemCalls++;
+      }
+    };
+    const stat = fs.statSync;
+    const realpath = fs.realpathSync.native;
+    const statSpy = vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+      count();
+      return Reflect.apply(stat, fs, args);
+    });
+    const realpathSpy = vi.spyOn(fs.realpathSync, "native").mockImplementation((...args) => {
+      count();
+      return Reflect.apply(realpath, fs.realpathSync, args);
+    });
+    syncBuiltinESMExports();
     try {
       await createVoice({ voiceSessionId });
       await createVoice({ voiceSessionId });
@@ -189,7 +153,12 @@ describe("client voice session worker contract", () => {
       await appendTranscript(voiceSessionId, "user-1", "Send the update");
       await closeClientVoiceSession({ ...target, voiceSessionId, config: {} });
       expect(observation.queries.filter((sql) => /\bcache_entries\b/i.test(sql))).toEqual([]);
+      expect(filesystemCalls).toBe(0);
     } finally {
+      statSpy.mockRestore();
+      realpathSpy.mockRestore();
+      syncBuiltinESMExports();
+      Error.stackTraceLimit = previousStackLimit;
       observation.restore();
     }
     expect(readRecord(voiceSessionId)).toMatchObject({
@@ -221,15 +190,15 @@ describe("client voice session worker contract", () => {
           throw sourceError;
         },
       }));
-      const capture = agentExecution.captureOpenClawAgentDatabasePreparationExecution;
+      const capture = voiceWriters.captureClientVoiceSessionWriter;
       const captureSpy = vi
-        .spyOn(agentExecution, "captureOpenClawAgentDatabasePreparationExecution")
-        .mockImplementation((...args): ReturnType<typeof capture> => {
-          const execution = capture(...args);
-          failCleanup(execution, writerError, () => {
+        .spyOn(voiceWriters, "captureClientVoiceSessionWriter")
+        .mockImplementation((params) => {
+          const writer = capture(params);
+          failCleanup(writer, writerError, () => {
             released.push("writer");
           });
-          return execution;
+          return writer;
         });
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const runId = "acknowledged-cleanup-consult";
@@ -837,6 +806,103 @@ describe("client voice session worker contract", () => {
       } finally {
         unsubscribe();
         await writer.release();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "refuses a custom transcript alias retargeted before its effect (actor=%s)",
+    async (withActor) => {
+      await seedSession(target.sessionKey);
+      const voiceSessionId = await createVoice();
+      const database = openOpenClawAgentDatabase(target);
+      const identity = readOpenClawAgentDatabaseIdentity(database);
+      const alias = path.join(path.dirname(database.path), "voice-transcript-alias.sqlite");
+      const replacement = path.join(
+        path.dirname(database.path),
+        "voice-transcript-successor.sqlite",
+      );
+      replaceSessionEntrySync(
+        { ...target, storePath: replacement },
+        { sessionId: "voice-successor", updatedAt: 1 },
+      );
+      symlinkSync(database.path, alias);
+      const scope = { ...target, storePath: database.path, sessionId: "session-agent-main-main" };
+      const actorDatabase = { agentId: target.agentId, path: database.path };
+      const actor = withActor
+        ? await captureDurableSessionActor({
+            database: actorDatabase,
+            target: {
+              sessionKey: target.sessionKey,
+              database: {
+                kind: "file",
+                physicalIdentity: identity.identity,
+                birthtime: identity.birthtime,
+                nativeLocation: identity.canonicalPath,
+              },
+            },
+            lifetime: { assertCurrent() {}, assertReadable() {} },
+          })
+        : undefined;
+      const actorReads = actor?.storage && vi.spyOn(actor.storage, "read");
+      const actualAppend = sessionTurnMocks.actualAppendSessionTranscriptTurn;
+      if (!actualAppend) {
+        throw new Error("expected the real transcript append implementation");
+      }
+      sessionTurnMocks.appendExpectedSessionTranscriptTurn.mockImplementationOnce(
+        async (...args) => {
+          unlinkSync(alias);
+          symlinkSync(replacement, alias);
+          return actualAppend(...args);
+        },
+      );
+      const append = () =>
+        appendClientVoiceTranscript({
+          ...target,
+          sessionTarget: { sessionKey: target.sessionKey, storePath: alias },
+          voiceSessionId,
+          entryId: "retargeted-custom-alias",
+          role: "user",
+          text: "Must retain its original source",
+        });
+      try {
+        const work = actor
+          ? withSessionInputActor(
+              {
+                phase: "adoptRun",
+                acquire: async () => ({
+                  actor,
+                  target: {
+                    agentId: target.agentId,
+                    storePath: database.path,
+                    target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
+                    readSource: {
+                      agentId: target.agentId,
+                      path: identity.canonicalPath,
+                      databaseIdentity: identity.identity,
+                      databaseBirthtime: identity.birthtime,
+                    },
+                  },
+                }),
+              },
+              append,
+            )
+          : append();
+        await expect(work).rejects.toThrow(/database|identity|source|selector|path/i);
+        if (actorReads) {
+          expect(actorReads).toHaveBeenCalled();
+        }
+        expect(readSessionTranscriptMessageEvents(scope)).toEqual([]);
+        expect(
+          readSessionTranscriptMessageEvents({
+            ...target,
+            storePath: replacement,
+            sessionId: "voice-successor",
+          }),
+        ).toEqual([]);
+        expect(readRecord(voiceSessionId)?.hasUserTranscript).toBeUndefined();
+      } finally {
+        await actor?.release();
       }
     },
   );

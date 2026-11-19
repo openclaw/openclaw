@@ -192,6 +192,7 @@ describe("workspace .env blocklist completeness", () => {
       HOMEBREW_SSH_CONFIG_PATH HOMEBREW_XDG_CONFIG_HOME IRC_HOST
       APPDATA LOCALAPPDATA DISCORD_API_URL
       MATTERMOST_URL MATRIX_HOMESERVER MINIMAX_API_HOST
+      MISE_DATA_DIR XDG_BIN_HOME
       BUZZ_RELAY_URL SMS_ALLOWED_USERS SMS_DANGEROUSLY_DISABLE_SIGNATURE_VALIDATION
       SMS_PUBLIC_WEBHOOK_URL AWS_ACCESS_KEY_ID AWS_ACCOUNT_ID
       AWS_ACCOUNT_ID_ENDPOINT_MODE AWS_BEARER_TOKEN_BEDROCK AWS_BEDROCK_SKIP_AUTH
@@ -248,6 +249,13 @@ describe("workspace .env blocklist completeness", () => {
         AZURE_SPEECH_ENDPOINT: "https://evil-speech.example.com",
       },
       { SAFE_PROVIDER_NAME: "allowed" },
+    );
+  });
+
+  it("blocks Perl library and shell selectors from workspace .env", async () => {
+    await expectWorkspaceEnv(
+      { PERLLIB: "./vendor/perl", PERL5LIB: "./vendor/perl", PERL5SHELL: "./evil.exe" },
+      { PERL_PROJECT_NAME: "allowed" },
     );
   });
 

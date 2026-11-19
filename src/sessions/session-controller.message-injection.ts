@@ -16,6 +16,7 @@ import {
   MessageInjectionAuthorityError,
 } from "../auto-reply/reply/message-injection-authority.js";
 import { hasPromptImageInput } from "../media/prompt-image-input.js";
+import { recordRunInjectedInputDevice } from "../plugins/hook-requester-device.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   replyMessageInjectionTargetOwner,
@@ -334,6 +335,7 @@ async function beginPreparedReplyMessageInjectionTarget(
     requesterToolAuthority,
     toolAuthorityPreparation,
     personalToolParticipant,
+    inputRequesterDeviceId,
     assertCurrent,
     allowPendingUserInputAnswer: requestedPendingUserInputAnswer,
     inboundAudio,
@@ -489,6 +491,7 @@ async function beginPreparedReplyMessageInjectionTarget(
     const immediateRejection = {
       status: "rejected" as const,
       reason: resolved.reason,
+      ...(resolved.runtimeReason ? { runtimeReason: resolved.runtimeReason } : {}),
       ...(resolved.errorMessage ? { errorMessage: resolved.errorMessage } : {}),
     };
     const cancelPendingImage =
@@ -560,6 +563,8 @@ async function beginPreparedReplyMessageInjectionTarget(
     if (participantRecorded || !queueOptions?.isInboundUserMessage) {
       return;
     }
+    // Hooks keep reporting this run's device only while all human input came from it.
+    recordRunInjectedInputDevice(targetRunId, inputRequesterDeviceId);
     const participant = incomingOverlay
       ? {
           ...incomingOverlay,

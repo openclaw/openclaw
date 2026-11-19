@@ -6,12 +6,14 @@ import {
   type EngineConnection,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
+  assertTransactionUsable,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
   requestSqliteWorkerOperationAdmission,
   runSqliteImmediateTransactionSync,
+  type SynchronousSqliteCallback,
   type SqliteWorkerCommand,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { aggregateDay, aggregateDays, itemKey } from "./aggregate.js";
@@ -112,6 +114,17 @@ class TeamReportsDatabase {
       PRIMARY KEY (source, key)
     )${input ? " ON COMMIT PRESERVE ROWS" : " STRICT"};`),
     );
+  }
+
+  assertSettled(): void {
+    // Retire a lost native connection without clearing collection scratch between commands.
+    assertTransactionUsable(this.db);
+    if (!this.db.isOpen) {
+      throw new Error("Team Reports database is closed");
+    }
+    if (this.db.isTransaction) {
+      throw new Error("Team Reports database left an unsettled transaction");
+    }
   }
 
   resetActivity(): void {
@@ -553,7 +566,7 @@ class TeamReportsDatabase {
     }));
   }
 
-  withWriteTransaction<T>(operation: () => T): T {
+  withWriteTransaction<T>(operation: SynchronousSqliteCallback<T>): T {
     requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
     return runSqliteImmediateTransactionSync(this.db, operation, {
       withCommit(commit) {
@@ -625,6 +638,7 @@ export function createSqliteWorkerBackend(
           )
         : execute(command);
     },
+    assertSettled: () => database.assertSettled(),
     close: () => database.close(),
   };
 }

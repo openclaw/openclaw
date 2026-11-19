@@ -1,5 +1,7 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, test, vi, type Mock } from "vitest";
+import { observeCronJobCommits } from "../../test/helpers/cron/runtime-mutation.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
@@ -7,11 +9,13 @@ import type { EmbeddedAgentRunResult } from "../agents/embedded-agent-runner.js"
 import { resolveCommandReplyExpectation } from "../agents/reply-completion.js";
 import type * as CronDelivery from "../cron/delivery.js";
 import { loadCronStore } from "../cron/store.js";
+import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 import { makeCronJob } from "./server-cron.events.test-support.js";
 import { installCronRepairTurn } from "./server.cron-repair-turn.test-support.js";
 import { expectCronJobIdFromResponse } from "./server.cron.assertions.test-support.js";
 import {
   agentCommandMock,
+  gatewayReplyMock,
   cronIsolatedRun,
   prepareGatewayReplyRuntimeForTest,
   testState,
@@ -97,6 +101,7 @@ export function registerCronRepairCases(
       }
       return "NO_REPLY";
     });
+    let stopObserving: (() => void) | undefined;
     try {
       const forged = await request("agent", {
         sessionKey: ownerSessionKey,
@@ -119,6 +124,12 @@ export function registerCronRepairCases(
         failureAlert: { after: 2, mode: "announce" },
       });
       const jobId = expectCronJobIdFromResponse(await request("cron.add", repairJob));
+      const repairSettled = createDeferred();
+      stopObserving = observeCronJobCommits(jobId, (state) => {
+        if (state.lastFailureNotificationDeliveryStatus === "delivered") {
+          repairSettled.resolve();
+        }
+      });
       await run(jobId);
       await run(jobId);
       expect(await withinTest(repairOutcome.promise, signal)).toMatchObject({
@@ -128,16 +139,84 @@ export function registerCronRepairCases(
         SessionKey: ownerSessionKey,
         InputProvenance: { kind: "internal_system", sourceTool: "cron_failure_repair" },
       });
-      await vi.waitFor(async () => {
-        const stored = await loadCronStore(path.join(caseDir, "cron", "jobs.json"));
-        const repair = stored.jobs.find((job) => job.id === jobId)?.state.failureAlertIncident
-          ?.repair;
-        expect(repair).toMatchObject({ settledAtMs: expect.any(Number) });
+      await withinTest(repairSettled.promise, signal);
+      const stored = await loadCronStore(path.join(caseDir, "cron", "jobs.json"));
+      expect(stored.jobs.find((job) => job.id === jobId)?.state).toMatchObject({
+        lastFailureNotificationDeliveryStatus: "delivered",
       });
       expect(cliOutput).toHaveBeenCalledTimes(2);
       expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
     } finally {
+      stopObserving?.();
       cliOutput.mockRestore();
+    }
+  });
+  test("Stop settles scheduled work without opening a failure incident", async ({ signal }) => {
+    const ownerSessionKey = "agent:main:dashboard:stopped-cron";
+    testState.sessionStorePath = path.join(getCaseDir(), "sessions.json");
+    await writeSessionStore({
+      agentId: "main",
+      entries: {
+        [ownerSessionKey]: {
+          sessionId: "stopped-cron-owner",
+          updatedAt: Date.now(),
+          lastChannel: "webchat",
+        },
+      },
+    });
+    const { request, run } = await startCronClient();
+    await prepareGatewayReplyRuntimeForTest({ force: true });
+    const entered = createDeferred<ReplyOperation>();
+    const release = createDeferred();
+    gatewayReplyMock.mockClear();
+    installCronRepairTurn(async (params) => {
+      const operation = expectDefined(params.replyOperation, "scheduled reply owner");
+      operation.abortSignal.addEventListener("abort", () => release.resolve(), { once: true });
+      entered.resolve(operation);
+      await withinTest(release.promise, signal);
+      return "NO_REPLY";
+    });
+    const jobId = expectCronJobIdFromResponse(
+      await request(
+        "cron.add",
+        makeCronJob("stopped scheduled turn", {
+          sessionTarget: `session:${ownerSessionKey}`,
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "Wait for cancellation." },
+          owner: { agentId: "main", sessionKey: ownerSessionKey },
+          delivery: { mode: "none" },
+          failureAlert: { after: 1, cooldownMs: 0, mode: "announce" },
+        }),
+      ),
+    );
+    const finished = run(jobId);
+    try {
+      const operation = await withinTest(entered.promise, signal);
+      expect(
+        await request("sessions.abort", { key: ownerSessionKey, clearQueued: true }),
+      ).toMatchObject({
+        ok: true,
+        payload: { ok: true, status: "aborted" },
+      });
+      expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+      expect(await withinTest(finished, signal)).toMatchObject({
+        jobId,
+        action: "finished",
+        status: "error",
+      });
+      const stored = await loadCronStore(path.join(getCaseDir(), "cron", "jobs.json"));
+      const job = expectDefined(
+        stored.jobs.find((entry) => entry.id === jobId),
+        "stopped job",
+      );
+      expect(job.state.consecutiveErrors ?? 0).toBe(0);
+      expect(job.state.failureAlertIncident).toBeUndefined();
+      expect(job.state.lastFailureAlertAtMs).toBeUndefined();
+      expect(job.state.lastFailureNotificationDeliveryStatus).toBe("not-requested");
+      expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
+      expect(gatewayReplyMock).toHaveBeenCalledTimes(1);
+    } finally {
+      release.resolve();
     }
   });
 }

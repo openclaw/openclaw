@@ -14,6 +14,7 @@ import {
   validatePluginCategories,
   validatePluginRecommendedPrompts,
 } from "../../packages/plugin-package-contract/src/index.js";
+import { normalizeCommandDescriptorName } from "../cli/program/command-descriptor-utils.js";
 import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isRecord } from "../utils.js";
@@ -45,7 +46,7 @@ export {
 /** Canonical plugin manifest filename inside plugin roots. */
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
-const CORE_RESERVED_PLUGIN_IDS = new Set(["node-mcp"]);
+const CORE_RESERVED_PLUGIN_IDS = new Set(["node-mcp", "openclaw"]);
 const VALID_PLUGIN_KINDS: ReadonlySet<string> = new Set<PluginKind>(["memory", "context-engine"]);
 
 export function isCoreReservedPluginId(id: string): boolean {
@@ -112,7 +113,8 @@ function parseManifestBackupResources(
     if (
       !isRecord(entry) ||
       Object.keys(entry).some(
-        (key) => !["disposition", "scope", "relativePath", "databaseFamily"].includes(key),
+        (key) =>
+          !["disposition", "scope", "relativePath", "databaseFamily", "profile"].includes(key),
       ) ||
       !("disposition" in entry) ||
       !("scope" in entry) ||
@@ -120,12 +122,18 @@ function parseManifestBackupResources(
     ) {
       return {
         ok: false,
-        error: `backupResources[${index}] requires disposition, scope, relativePath, and optional databaseFamily`,
+        error: `backupResources[${index}] requires disposition, scope, relativePath, and optional databaseFamily or profile`,
       };
     }
-    const { disposition, scope, relativePath, databaseFamily } = entry;
+    const { disposition, scope, relativePath, databaseFamily, profile } = entry;
     if (disposition !== "include" && disposition !== "regenerable") {
       return { ok: false, error: `backupResources[${index}].disposition is invalid` };
+    }
+    if (profile !== undefined && (profile !== "local-companion" || disposition !== "regenerable")) {
+      return {
+        ok: false,
+        error: `backupResources[${index}].profile requires a local-companion regenerable resource`,
+      };
     }
     if (scope !== "state" && scope !== "agent") {
       return { ok: false, error: `backupResources[${index}].scope is invalid` };
@@ -156,8 +164,12 @@ function parseManifestBackupResources(
       scope,
       relativePath,
       ...(databaseFamily !== undefined ? { databaseFamily } : {}),
+      ...(profile !== undefined ? { profile } : {}),
     };
-    resources.set(`${scope}\0${relativePath}\0${disposition}\0${databaseFamily ?? ""}`, resource);
+    resources.set(
+      `${scope}\0${relativePath}\0${disposition}\0${databaseFamily ?? ""}\0${profile ?? ""}`,
+      resource,
+    );
   }
   return {
     ok: true,
@@ -275,6 +287,35 @@ export function loadPluginManifest(
   const contracts = capabilityNormalizers.normalizeManifestContracts(raw.contracts);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const rawDoctorContract = isRecord(raw.doctorContract) ? raw.doctorContract : undefined;
+  const cliCommands = setupNormalizers.normalizeManifestCliCommands(raw.cliCommands);
+  let recoveryCli: string[][] | undefined;
+  if (rawDoctorContract?.recoveryCli !== undefined) {
+    if (!Array.isArray(rawDoctorContract.recoveryCli)) {
+      return fail("doctorContract.recoveryCli must be an array of command paths");
+    }
+    recoveryCli = [];
+    const seen = new Set<string>();
+    for (const commandPath of rawDoctorContract.recoveryCli) {
+      if (
+        !Array.isArray(commandPath) ||
+        commandPath.length === 0 ||
+        !commandPath.every(
+          (segment) =>
+            typeof segment === "string" && normalizeCommandDescriptorName(segment) === segment,
+        ) ||
+        !cliCommands?.some(({ name }) => name === commandPath[0])
+      ) {
+        return fail(
+          "doctorContract.recoveryCli paths must use plain command names beneath a declared cliCommands root",
+        );
+      }
+      const key = commandPath.join(" ");
+      if (!seen.has(key)) {
+        seen.add(key);
+        recoveryCli.push(commandPath);
+      }
+    }
+  }
   const stateMigrations = parseDoctorStateMigrationDescriptors(rawDoctorContract?.stateMigrations);
   const doctorContract = rawDoctorContract
     ? ({
@@ -285,6 +326,7 @@ export function loadPluginManifest(
           ),
         ),
         ...(stateMigrations !== undefined ? { stateMigrations } : {}),
+        ...(recoveryCli !== undefined ? { recoveryCli } : {}),
       } as PluginManifestDoctorContract)
     : undefined;
   /** The documented V1 manifest is an input adapter, not a second catalog. */
@@ -447,7 +489,7 @@ export function loadPluginManifest(
     syntheticAuthRefs: normalizeTrimmedStringList(raw.syntheticAuthRefs),
     nonSecretAuthMarkers: normalizeTrimmedStringList(raw.nonSecretAuthMarkers),
     commandAliases: normalizeManifestCommandAliases(raw.commandAliases),
-    cliCommands: setupNormalizers.normalizeManifestCliCommands(raw.cliCommands),
+    cliCommands,
     providerUsageAuthEnvVars: capabilityNormalizers.normalizeStringListRecord(
       raw.providerUsageAuthEnvVars,
     ),

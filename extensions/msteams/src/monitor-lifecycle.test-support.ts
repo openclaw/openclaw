@@ -206,15 +206,4 @@ export function resetMSTeamsMonitorMocks() {
   ssoTokenStore.remove.mockClear();
 }
 
-export {
-  routeState,
-  createMSTeamsActivityHandler,
-  isSigninInvokeAuthorized,
-  isCardActionInvokeAuthorized,
-  runMSTeamsFileConsentInvokeHandler,
-  processSdkActivity,
-  nativeSdkState,
-  loadMSTeamsSdkWithAuth,
-  ssoTokenStore,
-  resolveAllowlistMocks,
-};
+export { routeState, loadMSTeamsSdkWithAuth };

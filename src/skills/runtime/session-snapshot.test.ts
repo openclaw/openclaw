@@ -104,15 +104,24 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     );
     const second = await resolveReusableWorkspaceSkillSnapshot(params);
 
-    expect(second.snapshot).toEqual(first.snapshot);
+    expect(second.snapshot).toBe(first.snapshot);
     expect(second.snapshot.prompt).toBe("cached skills prompt");
     expect(second.snapshot.skills).toEqual([{ name: "cached-skill" }]);
     expect(second.snapshot.resolvedSkills).toEqual([{ name: "cached-skill" }]);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(2);
 
+    buildWorkspaceSkillSnapshotMock.mockReturnValue({
+      prompt: "",
+      skills: [],
+      resolvedSkills: [],
+    });
+    const changed = await resolveReusableWorkspaceSkillSnapshot(params);
+    expect(changed.snapshot.skills).toEqual([]);
+    expect(changed.snapshot).not.toBe(first.snapshot);
+
     getSkillsSnapshotVersionMock.mockReturnValue(2);
     await resolveReusableWorkspaceSkillSnapshot(params);
-    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(3);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(4);
   });
 
   it("keeps concurrent builds separate by source host", async () => {
