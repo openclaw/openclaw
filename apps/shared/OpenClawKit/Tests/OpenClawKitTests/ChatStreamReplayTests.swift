@@ -1233,7 +1233,7 @@ struct ChatStreamReplayTests {
         let text = "The same final, with a persisted thinking block."
         let harness = try await StreamReplayHarness.bootstrapped()
         let runId = try await harness.send("history refresh")
-        harness.transport.emit(replayFinalEvent(runId: runId, text: text, timestamp: now + 1000))
+        await harness.handleAndSettle(replayFinalEvent(runId: runId, text: text, timestamp: now + 1000))
         await harness.converge("provisional reply visible before history") { vm in
             vm.pendingRunCount == 0 && vm.replayAssistantRows(text: text).count == 1
         }

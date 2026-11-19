@@ -103,6 +103,18 @@ invalid upgraded config still refuses publication. No live file is replaced or
 removed unless the upgrade copied it. If Doctor creates a template over an
 uncopied workspace file, startup leaves the original alone and reports a warning.
 
+During copy-and-swap upgrades, Doctor records carried-over scheduled jobs against
+credential databases at their eventual live paths. Reads and repairs remain on
+the private copy. The updater passes this destination directly to Doctor; no
+additional environment variable or operator configuration is needed.
+
+If an earlier upgrade already broke a scheduled job, run `openclaw doctor --fix`.
+While the applied upgrade receipt remains, Doctor can verify the saved account at
+its old path and restore it without changing the schedule, enabling the job, or
+replaying a missed run. If the receipt is gone or the account changed, Doctor
+leaves the job alone. To explicitly choose its account, use
+`openclaw automations edit <id> --model <provider/model>@<profileId>`.
+
 The copy excludes managed worktrees, configured agent workspaces, nested mounts
 and btrfs subvolumes, Knowledge stores, browser profiles, backups, and caches.
 Completed agent deletions whose journal retains files are excluded from startup
@@ -141,6 +153,13 @@ Stopped-update backup inventory verification reads registrations from
 the completed backup image while retaining filesystem inventory and source-change
 checks. The candidate must contain these changes; backup publication, integrity
 checks, migrations, and rollback rules are unchanged.
+
+Candidate Doctor checks an existing OpenClaw ID role catalog against local
+membership, offers missing preset definitions only with repair consent, and
+preserves existing definitions, the named default, and assignments. Its cron
+owner review enables named-role enforcement only when `gateway.roles.default`
+is set. These checks and repairs must be present in the candidate Doctor; the
+installed updater needs no protocol or schema change.
 
 Lazy SQLite schema catalogs load through the retained updater's module loader.
 An updater that first needs a catalog after Git activation therefore reads its
@@ -601,6 +620,14 @@ the stale backup. Existing integrity, schema, and maintenance-ownership checks
 still apply, as do checks for writes after maintenance admission. The candidate must contain
 this repair; the installed updater's capture and backup checks are unchanged.
 Empty WAL-index transitions without write evidence remain rollback-eligible.
+An outside read-only SQLite open, such as a monitoring script using `mode=ro`, can
+rebuild the WAL index over retained frames after Doctor admits a database. The
+rebuild resets only the index change counter, so Doctor still accepts that
+database at migration publication when its file identity, committed content and
+last commit checksum are unchanged, and automatic restoration stays available.
+Any commit after admission, including one that restores identical content, still
+refuses. The Doctor of the version being installed owns this check, so updates
+from older releases benefit once the target contains it.
 
 The post-plugin Doctor runs for plugin changes, deferred model retirement, and
 pending deferred plugin migrations. Before each Doctor, the updater observes its
@@ -2119,8 +2146,8 @@ which is a separate check. The next `openclaw update` settles that as well when
 no operator is needed: on a package install, or a source checkout that still
 holds exactly the build the killed update installed, the killed update was a
 command-line `openclaw update` whose process has exited, and the update lease
-store still holds its lease. On Linux and macOS hosts a restart that cleared
-that store does not block it: the killed update recorded the boot it ran in,
+store still holds its lease. On Linux and macOS hosts, outside containers, a
+restart that cleared that store does not block it: the killed update recorded the boot it ran in,
 which shows its processes gone. It reports an `interrupted-update-recovery` warning.
 If the killed update had replaced the installed version without confirming it,
 had begun rolling back on it, or left the Gateway stopped, the update first
@@ -2128,8 +2155,9 @@ finishes that version as `openclaw update repair` does (Doctor, plugin
 convergence, Gateway restart). That work is recorded on its own repair run,
 named by an `interrupted-update-finalization` warning. Then the update
 continues. A stopped Gateway is restarted only when the update would restart it
-anyway. With `--no-restart`, or when finishing fails, the update stops and
-names `openclaw update repair`.
+anyway. When that Gateway is still stopped and the update runs with
+`--no-restart`, or when finishing fails, the update stops and names
+`openclaw update repair`.
 Otherwise it stops with `Update <id> has unfinished recovery` and, when repair
 can settle it, the reason and the command to run; see
 [how a killed update is settled](/cli/update/how-updates-run#replacing-the-package-directory).

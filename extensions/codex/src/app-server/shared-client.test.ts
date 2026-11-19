@@ -20,6 +20,7 @@ import { registerSharedClientInferenceTests } from "./shared-client-inference.te
 import { retireSharedCodexAppServerClientsBeforeDesktopGeneration } from "./shared-client-lifecycle.js";
 import { registerSharedClientLifetimeTests } from "./shared-client-lifetime.test-support.js";
 import { registerSharedClientManagedFallbackTests } from "./shared-client-managed-fallback.test-support.js";
+import { registerSharedClientStartIdentityTests } from "./shared-client-start-identity.test-support.js";
 import {
   createInitializingClientHarness,
   createStartOptions,
@@ -317,6 +318,8 @@ describe("shared Codex app-server client", () => {
     mocks.resolveDefaultAgentDir.mockClear();
   });
 
+  registerSharedClientStartIdentityTests();
+
   registerSharedClientWebSocketStartupTests({
     createStartOptions,
     createInitializingClientHarness,
@@ -331,36 +334,6 @@ describe("shared Codex app-server client", () => {
         : options,
     );
   }, sendInitializeResult);
-
-  it.each(["websocket", "unix"] as const)(
-    "preserves explicit start options over the plugin endpoint for $0",
-    async (transport) => {
-      const harness = createInitializingClientHarness();
-      const startSpy = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-
-      const client = await getSharedCodexAppServerClient({
-        pluginConfig: {
-          appServer: {
-            transport,
-            url: transport === "unix" ? "unix://" : "ws://127.0.0.1:39175",
-          },
-        },
-        startOptions: createStartOptions({
-          transport: "websocket",
-          args: [],
-          url: "ws://127.0.0.1:39176",
-        }),
-        timeoutMs: 1_000,
-      });
-
-      expect(client).toBe(harness.client);
-      expect(startSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ transport: "websocket", url: "ws://127.0.0.1:39176" }),
-        expect.anything(),
-      );
-      await client.closeAndWait();
-    },
-  );
 
   it.each(["shared", "isolated"] as const)(
     "opens a native %s catalog client without selecting an OpenClaw agent",
