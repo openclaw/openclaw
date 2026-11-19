@@ -300,14 +300,14 @@ it.each<OverlayCase>([
   },
 );
 it.each(["configured", "visibility"] as const)(
-  "%s preparation refreshes provider policy and selects its physical route",
+  "%s preparation reuses provider policies across rows and refreshes them next time",
   (kind) => {
     const loadPolicy = vi.spyOn(providerPolicy, "resolveDirectBundledProviderPolicySurface");
-    const select = (scope: string) => {
-      loadPolicy.mockReturnValue({
+    const select = (rowCount: number, scope: string) => {
+      loadPolicy.mockClear().mockReturnValue({
         normalizeModelCatalogId: ({ modelId }) => modelId.replace(/^legacy-/, `${scope}-`),
       });
-      const ids = ["legacy-0"];
+      const ids = Array.from({ length: rowCount }, (_, index) => `legacy-${index}`);
       const catalog: ModelCatalogEntry[] = ["first", "second"].flatMap((owner) =>
         ids.map((_, index) => ({
           provider: "fixture",
@@ -339,9 +339,12 @@ it.each(["configured", "visibility"] as const)(
       expect(selected.map((entry) => entry.baseUrl)).toEqual(
         ids.map(() => `https://${scope}.example/v1`),
       );
+      return loadPolicy.mock.calls.length;
     };
 
-    select("first");
-    select("second");
+    const singleRowLoads = select(1, "first");
+    expect(singleRowLoads).toBeGreaterThan(0);
+    expect(select(32, "first")).toBe(singleRowLoads);
+    expect(select(32, "second")).toBe(singleRowLoads);
   },
 );

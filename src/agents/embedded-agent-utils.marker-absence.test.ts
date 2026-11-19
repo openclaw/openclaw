@@ -2,6 +2,7 @@ import { afterAll, beforeEach, expect, it, vi } from "vitest";
 import * as markdownCodeRegions from "../../packages/markdown-core/src/markdown-code-regions.js";
 import * as markdownOwnership from "../../packages/markdown-core/src/reasoning-tag-parser.js";
 import * as reasoningSyntax from "../../packages/markdown-core/src/reasoning-tag-syntax.js";
+import * as inboundMetadata from "../auto-reply/reply/strip-inbound-meta.js";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
 import { assistantVisibleTextFilters } from "../shared/text/assistant-visible-text.js";
 import { expectPrefixParity, streamChunks } from "../shared/text/streaming.test-support.js";
@@ -19,8 +20,9 @@ const ownership = vi.spyOn(markdownOwnership, "parseMarkdownOwnership");
 const regions = vi.spyOn(markdownCodeRegions, "findMarkdownCodeRegions");
 const spans = vi.spyOn(markdownCodeRegions, "findMarkdownCodeSpans");
 const canonicalWork = [reasoning, ownership, regions, spans];
-beforeEach(() => canonicalWork.forEach((spy) => spy.mockClear()));
-afterAll(() => canonicalWork.forEach((spy) => spy.mockRestore()));
+const inbound = vi.spyOn(inboundMetadata, "stripInboundMetadata");
+beforeEach(() => [...canonicalWork, inbound].forEach((spy) => spy.mockClear()));
+afterAll(() => [...canonicalWork, inbound].forEach((spy) => spy.mockRestore()));
 function characters(calls: ReadonlyArray<readonly [string, ...unknown[]]>) {
   return calls.reduce((sum, [text]) => sum + text.length, 0);
 }
@@ -104,10 +106,11 @@ it("resets rejected and activated heads after replacement", () => {
 });
 
 it.each(["[docs](https://example.com) ", "Context: "])(
-  "preserves ordinary %s with append and replacement starts",
+  "bounds inbound-metadata work after ordinary %s with append and replacement starts",
   (prefix) => {
-    const body = "The operator reads the next line. Done.";
+    const body = "The operator reads the next line. ".repeat(128) + "Done.";
     for (const replace of [false, true]) {
+      inbound.mockClear();
       const stream = createAssistantVisibleStreamText();
       if (replace) {
         stream.replace(prefix);
@@ -116,6 +119,7 @@ it.each(["[docs](https://example.com) ", "Context: "])(
       }
       streamChunks(body, 4, stream);
       expect(stream.text).toBe(prefix + body);
+      expect(characters(inbound.mock.calls)).toBeLessThan((prefix.length + body.length) * 2);
     }
   },
 );
