@@ -2,6 +2,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { registerOpenClawIdEnglish } from "../i18n/locales/en-openclaw-id.ts";
 import { formatDurationHuman } from "../lib/format-duration.ts";
+import { formatDateTimeMs } from "../lib/format.ts";
 import type {
   OpenClawIdPeopleLink,
   OpenClawIdPublication,
@@ -106,6 +107,43 @@ function joinRequestAttention(
   };
 }
 
+function recoveryUseAttention(
+  clawId: string | undefined,
+  use: NonNullable<OpenClawIdPeopleLink["recoveryUses"]>[number],
+): SidebarAttentionItem {
+  const signature = JSON.stringify([clawId, use.seq]);
+  return {
+    type: "attention",
+    category: "system",
+    kind: "openClawIdRecoveryUse",
+    severity: "warning",
+    icon: "key",
+    requiresAction: true,
+    dismissal: { kind: "openClawIdRecoveryUse", signature },
+    signature,
+    label: t("openclawId.memberUsedRecoveryKit", { name: use.memberName }),
+    detail: t("openclawId.memberRecoveryUseDetail", { browser: use.deviceLabel }),
+    meta: {
+      context: use.deviceLabel,
+      status: formatDateTimeMs(use.usedAt * 1000, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        second: "2-digit",
+        timeZoneName: "short",
+      }),
+    },
+    arrivedAtMs: use.usedAt * 1000,
+    action: {
+      kind: "navigate",
+      routeId: "plugin",
+      search: `${PEOPLE_PAGE_SEARCH}&${new URLSearchParams({ "p.member": use.accountId, "p.device": use.peerKey })}`,
+    },
+  };
+}
+
 // How often a request's time left is shown again: hourly while days remain, then each minute,
 // then every few seconds in its last hour.
 function timeLeftRefreshMs(remainingMs: number): number {
@@ -137,14 +175,59 @@ export async function readOpenClawIdAttention(
       : null;
   const key = buildOpenClawIdKeyAttention(status, link?.publication);
   const requests = link ? listJoinRequests(link) : [];
+  const browsers = link?.browserRequests ?? [];
+  const pendingBrowsers = (nowMs: number) =>
+    browsers.filter((request) => request.expiresAt * 1000 > nowMs);
   const pendingAt = (nowMs: number) => requests.filter((request) => request.decideByMs > nowMs);
   return {
     items: (nowMs) => [
       ...(key ? [key] : []),
       ...pendingAt(nowMs).map((request) => joinRequestAttention(request, nowMs)),
+      ...pendingBrowsers(nowMs).map((request): SidebarAttentionItem => ({
+        type: "attention",
+        category: "system",
+        kind: "openClawIdBrowserRequest",
+        severity: "warning",
+        icon: "monitor",
+        requiresAction: true,
+        dismissal: null,
+        signature: JSON.stringify(["member-browser", request.requestId, request.requestedAt]),
+        label: t("openclawId.browserRequestClaim", {
+          name: request.displayName || request.email || t("openclawId.browserRequestMember"),
+        }),
+        detail: [
+          t("openclawId.browserRequestContext", {
+            browser: request.label,
+            time: formatDurationHuman(request.expiresAt * 1000 - nowMs),
+          }),
+          request.email && request.email !== request.displayName ? request.email : null,
+          request.location
+            ? t("openclawId.browserRequestLocation", { location: request.location })
+            : null,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        meta: {
+          status: t("openclawId.browserRequestUnverified"),
+          context: t("openclawId.browserRequestContext", {
+            browser: request.label,
+            time: formatDurationHuman(request.expiresAt * 1000 - nowMs),
+          }),
+        },
+        arrivedAtMs: request.requestedAt * 1000,
+        action: {
+          kind: "openClawIdBrowserApproval",
+          remote: status.channel === "tunnel",
+          label: t("openclawId.approveNewDevice"),
+        },
+      })),
+      ...(link?.recoveryUses ?? []).map((use) => recoveryUseAttention(status.link.clawId, use)),
     ],
     nextChangeAt: (nowMs) => {
-      const pending = pendingAt(nowMs);
+      const pending = [
+        ...pendingAt(nowMs),
+        ...pendingBrowsers(nowMs).map((request) => ({ decideByMs: request.expiresAt * 1000 })),
+      ];
       return pending.length
         ? Math.min(
             ...pending.map((request) =>

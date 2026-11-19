@@ -150,11 +150,6 @@ function stopEntry(entry: AdoptedProcess): Promise<StopOutcome> {
   }));
 }
 
-/** Stop a process that cannot be adopted (over the cap) by its observed identity. */
-export async function killReleasedProcess(survivor: ReleasedProcess): Promise<StopOutcome> {
-  return await terminate({ pid: survivor.pid, startTime: startTimeOf(survivor.pid) });
-}
-
 /**
  * Take custody of a handed-off process: it is reaped when it exits and stopped on
  * request, session reset, or host stop. Undefined when it already exited.

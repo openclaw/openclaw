@@ -393,7 +393,7 @@ test("update.run persists the accepted handoff before parking and restarting its
           });
           return true;
         });
-      const claim = vi.spyOn(handoff, "claimManagedServiceUpdateHandoff").mockReturnValue(true);
+      const claim = vi.spyOn(handoff, "claimManagedServiceUpdateHandoff").mockResolvedValue(true);
       const schedule = vi.spyOn(restart, "scheduleGatewayRestart");
       const restartSignal = vi.fn();
       process.on("SIGUSR2", restartSignal);

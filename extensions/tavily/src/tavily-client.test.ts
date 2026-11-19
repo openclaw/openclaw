@@ -4,6 +4,7 @@ import { createStreamingResponse } from "../../test-support/streaming-error-resp
 import { runTavilyExtract, runTavilySearch } from "./tavily-client.js";
 
 const postTrustedWebToolsJson = vi.hoisted(() => vi.fn());
+const postPinnedTrustedHostWebToolsJson = vi.hoisted(() => vi.fn());
 const writeCache = vi.hoisted(() => vi.fn());
 const assertPluginCapabilitySecretAvailable = vi.hoisted(() => vi.fn());
 
@@ -28,11 +29,13 @@ function configWithWebSearch(webSearch: Record<string, unknown>): OpenClawConfig
 
 function expectNoEffects() {
   expect(postTrustedWebToolsJson).not.toHaveBeenCalled();
+  expect(postPinnedTrustedHostWebToolsJson).not.toHaveBeenCalled();
   expect(writeCache).not.toHaveBeenCalled();
 }
 
 function requestOptions() {
-  return postTrustedWebToolsJson.mock.calls[0]?.[0];
+  return (postTrustedWebToolsJson.mock.calls[0] ??
+    postPinnedTrustedHostWebToolsJson.mock.calls[0])?.[0];
 }
 
 function expectBounded(result: Record<string, unknown>, maxLength: number, token: string) {
@@ -47,6 +50,7 @@ vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-web-search")>()),
+  postPinnedTrustedHostWebToolsJson,
   postTrustedWebToolsJson,
   readCache: () => undefined,
   readCachedSearchPayload: () => undefined,
@@ -64,11 +68,13 @@ beforeEach(() => {
   writeCache.mockReset();
   vi.stubEnv("TAVILY_API_KEY", "test-key");
   vi.stubEnv("TAVILY_BASE_URL", "");
-  postTrustedWebToolsJson
-    .mockReset()
-    .mockImplementation(async (_params: unknown, parse: (r: Response) => Promise<unknown>) =>
-      parse(Response.json({ results: [] })),
-    );
+  for (const post of [postTrustedWebToolsJson, postPinnedTrustedHostWebToolsJson]) {
+    post
+      .mockReset()
+      .mockImplementation(async (_params: unknown, parse: (r: Response) => Promise<unknown>) =>
+        parse(Response.json({ results: [] })),
+      );
+  }
 });
 
 afterEach(() => vi.unstubAllEnvs());
@@ -120,6 +126,41 @@ it.each([
     timeoutSeconds,
   });
 });
+
+it.each(["https://api.tavily.com", "https://api.tavily.com/", " https://API.tavily.com/ "])(
+  "keeps the trusted endpoint guard for hosted base URL %j",
+  async (baseUrl) => {
+    vi.stubEnv("TAVILY_BASE_URL", baseUrl);
+    await run("search");
+    expect(postPinnedTrustedHostWebToolsJson).not.toHaveBeenCalled();
+    expect(postTrustedWebToolsJson).toHaveBeenCalledOnce();
+    expect(requestOptions().url).toBe("https://api.tavily.com/search");
+  },
+);
+
+it.each([
+  ["search", "https://tavily.gateway.internal", "https://tavily.gateway.internal/search"],
+  ["extract", "http://10.0.0.5:8080/tavily/", "http://10.0.0.5:8080/tavily/extract"],
+] as const)(
+  "posts %s to non-default base URL %s with exact-host trust",
+  async (kind, baseUrl, url) => {
+    vi.stubEnv("TAVILY_BASE_URL", baseUrl);
+    const controller = new AbortController();
+    await run(kind, controller.signal);
+    expect(postTrustedWebToolsJson).not.toHaveBeenCalled();
+    expect(postPinnedTrustedHostWebToolsJson).toHaveBeenCalledOnce();
+    expect(requestOptions()).toEqual({
+      url,
+      timeoutSeconds: kind === "search" ? 30 : 60,
+      apiKey: "test-key",
+      body:
+        kind === "search" ? { query: "test", max_results: 5 } : { urls: ["https://example.com"] },
+      errorLabel: kind === "search" ? "Tavily Search" : "Tavily Extract",
+      extraHeaders: { "X-Client-Source": "openclaw" },
+      signal: controller.signal,
+    });
+  },
+);
 
 it.each(["search", "extract"] as const)("rejects unavailable %s capability", async (kind) => {
   const unavailable = new Error("Tavily capability unavailable");

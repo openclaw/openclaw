@@ -362,6 +362,9 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["test/scripts/plugin-gateway-gauntlet.test.ts", 5],
   ["test/scripts/plugin-sdk-surface-report.test.ts", 6],
   ["test/scripts/pr-operation-lock.test.ts", 27],
+  // Each case bundles or builds one standalone worker. Local walls were 13s idle and 45s on a
+  // loaded host; no CI wall exists yet because source PRs did not select this file.
+  ["test/scripts/runtime-process-build-graph.test.ts", 30],
   ["test/scripts/test-projects.test.ts", 20],
   ["test/scripts/vitest-worker-artifacts.test.ts", 188],
   ["test/scripts/vitest-worker-artifacts.transforms.test.ts", 76],

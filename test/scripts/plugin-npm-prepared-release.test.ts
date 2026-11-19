@@ -182,7 +182,7 @@ function candidatePreparation(independentQ = false) {
         }
         return qPolicy;
       }
-      return qualification.client.getWorkflowSource();
+      return qualification.client.getWorkflowSource(sha, path);
     },
   };
   const params = {

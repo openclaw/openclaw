@@ -161,7 +161,7 @@ describe("remote Control UI ingress production composition", () => {
 
   beforeAll(async () => {
     state = await createOpenClawTestState({
-      label: "remote-control-ui-ingress",
+      prefix: "ingress-", // Leave room for the Unix socket beneath nested CI temporary roots.
       layout: "state-only",
     });
     const root = path.dirname(

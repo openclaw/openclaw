@@ -273,6 +273,15 @@ jobs:
             exit 1
           fi
 
+      - name: Checkout trusted approval verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted-workflow
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: scripts
+
       - name: Validate release publish approval run
         env:
           GH_TOKEN: ${{ github.token }}
@@ -301,16 +310,7 @@ jobs:
             export EXPECTED_WORKFLOW_FULL_REF="refs/heads/${EXPECTED_WORKFLOW_BRANCH}"
           fi
           RUN_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_PUBLISH_RUN_ID}" --jq '{workflowName: .name, headBranch: .head_branch, headSha: .head_sha, event, status, conclusion, url: .html_url, runAttempt: .run_attempt, repository: .repository.full_name, path}')"
-          printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
-
-      - name: Checkout trusted approval verifier
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.workflow_sha }}
-          path: trusted-workflow
-          fetch-depth: 1
-          persist-credentials: false
-          sparse-checkout: scripts
+          printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node trusted-workflow/scripts/validate-release-publish-approval.mjs
 
       - name: Verify release approval receipt
         id: receipt

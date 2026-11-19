@@ -497,6 +497,7 @@ async function validateReuse(executionPlan, signal) {
         validateReusableReleaseChild(selection, {
           repository: executionPlan.repository,
           targetSha: executionPlan.targetSha,
+          policyTargetVersion: executionPlan.targetVersion,
           workflowSha: executionPlan.workflowSha,
           role,
           inputs: selection.inputs,

@@ -124,7 +124,9 @@ To let teammates read selected sessions from a personal Gateway without controll
 
 ### Step 5: Bound what each person can do
 
-Named operator roles bind authenticated profiles to a policy: which sessions they can touch, which agents they can use, a maximum set of operator scopes, and whether their new sessions must be sandboxed:
+Setting the optional `gateway.roles.default` enables named operator roles for
+authenticated profiles. Definitions alone do not enforce profile assignments.
+Each role supplies a policy: which sessions they can touch, which agents they can use, a maximum set of operator scopes, and whether their new sessions must be sandboxed:
 
 ```json5
 {
@@ -153,7 +155,15 @@ Give guests the session-only `operator.sessions.write` scope, which also permits
 
 A guest's CLI stays within a session-only device grant. `openclaw gateway call` requests the session scope for session methods such as `sessions.list`, and `openclaw tui` connects with the grant itself. Until the grant is stored, a connection cannot know it: its request is refused with a scope-upgrade request that reports the approved scopes, and the CLI retries within them. The TUI stores the grant with the device token the Gateway returns, and later connections then fit it and file no request. `openclaw gateway call` stores no token, and a trusted-proxy Gateway returns none to the TUI, so behind trusted-proxy auth each connection is refused once before it retries. Set [`gateway.auth.trustedProxy.narrowToDeviceGrant`](/gateway/trusted-proxy-auth#approved-cli-and-tui-grants) to have the Gateway connect such devices within their grant from the first connection, with no request at all. Methods that need a Gateway-wide scope, such as `status`, and the TUI's command list and pending approvals stay unavailable.
 
-Assign roles with the `users.setRole` Gateway method; see [Named operator roles](/gateway/operator-scopes#named-operator-roles) for the full policy surface and [Permission modes](/gateway/permission-modes) for per-session tool posture. To admit and expire individual outside guests, see [Invite guests](#invite-guests).
+For these profile-based connections, assign roles with the `users.setRole` Gateway method; see [Named operator roles](/gateway/operator-scopes#named-operator-roles) for the full policy surface and [Permission modes](/gateway/permission-modes) for per-session tool posture. To admit and expire individual outside guests, see [Invite guests](#invite-guests).
+
+For [OpenClaw ID members](/concepts/experimental-features#member-roles), manage roles
+on **Access** instead. Turning on OpenClaw ID installs editable `operator`,
+`viewer`, and `guest` definitions without setting a named default. Member connections
+use their membership role even without that default; another sign-in method uses
+its own policy, not a union of both roles. A missing member definition blocks
+connection. With a role catalog present, `openclaw doctor` can check local membership
+and offer to restore missing presets while the Gateway is stopped.
 
 #### Coding as a guest
 
@@ -161,7 +171,10 @@ A sandbox-required guest can work without an administrator role. With the defaul
 `workspaceAccess: "none"`, file and shell tools use a writable private workspace,
 not the shared agent workspace. Managed skill instructions stay read-only.
 Child sessions inherit the parent's sandbox requirement, even when the agent's
-default sandbox mode is off.
+default sandbox mode is off. This contains exec and file tools, not the whole
+Gateway host. Review the [sandbox exclusions](/gateway/operator-scopes#sandbox-exclusions),
+including Code Mode, CLI backends, paired-node commands, worker credentials,
+shared transcripts, and shared GitHub publication.
 
 Local container sandboxes have no network by default. If guests need to clone
 public repositories or install project-local dependencies, explicitly enable
@@ -474,7 +487,7 @@ Visitor Access requires `gateway.roles.default` to be a restricted guest role:
 default: "guest",
 definitions: {
   guest: {
-    sessions: { others: "view" },
+    sessions: { others: "invited" },
     agents: ["assistant"],
     scopes: ["operator.sessions.write"],
     sandbox: "required",
@@ -491,6 +504,13 @@ then asks the agent to call `visitor_invite` with a GitHub login or email and an
 optional note, such as a session link to start from. The result includes short
 invitation text to hand to the guest: who invited them, the sign-in address from
 `gateway.publicOrigin`, the identity to sign in with, the expiry, and the note.
+
+This role sees its own sessions and sessions where it is a member. The session
+creator or an administrator can invite a guest with a selected human @mention.
+Access starts when the message is committed, not when it enters the send queue.
+Remove the guest from session members to revoke access. Explicit public links
+still expose only the sanitized transcript. The session-only scope permits
+changes to the guest's own sessions, not to sessions they were invited to read.
 
 Guests can create sandboxed sessions on the listed agents and publish open or
 explicitly requested draft pull requests from their own sessions through the

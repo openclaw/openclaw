@@ -8,6 +8,7 @@ import {
   createStagedInputPathMatcher,
   stagedInputPathDirectory,
 } from "../../media/staged-inputs.js";
+import { WorktreePreservationError } from "./errors.js";
 import {
   checkoutPathFromGitBytes,
   containsGitMarker,
@@ -275,7 +276,10 @@ async function collectSnapshotInventory(input: SnapshotInput): Promise<SnapshotI
       index.map((entry) => entry.path),
     ))
   ) {
-    throw new Error("nested git repositories cannot be snapshotted losslessly");
+    throw new WorktreePreservationError(
+      "nested-repository",
+      "nested git repositories cannot be snapshotted losslessly",
+    );
   }
   await requestGitWorkerEffect({
     type: "worktree.snapshot-inventory",
@@ -465,7 +469,10 @@ function assertNoProvisionedTreePaths(
   const provisioned = new Set(provisionedPaths.map((entry) => gitPathKey(Buffer.from(entry))));
   for (const entry of tree) {
     if (entry.mode === "160000") {
-      throw new Error("nested git repositories cannot be snapshotted losslessly");
+      throw new WorktreePreservationError(
+        "nested-repository",
+        "nested git repositories cannot be snapshotted losslessly",
+      );
     }
     for (let end = entry.path.length; end >= 0; end = entry.path.lastIndexOf(47, end - 1)) {
       const prefix = entry.path.subarray(0, end);

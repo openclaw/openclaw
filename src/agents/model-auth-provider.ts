@@ -27,7 +27,6 @@ import {
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
-import { assertAuthProfileMigrationReady } from "./auth-profiles/legacy-source-diagnostic.js";
 import {
   buildOAuthRefreshFailureLoginCommand,
   OAuthRefreshFailureError,
@@ -37,12 +36,10 @@ import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/or
 import { resolveAuthStorePathForDisplayAsync } from "./auth-profiles/paths.js";
 import { isNonSecretApiKeyMarker, resolveExplicitProviderNoAuth } from "./model-auth-markers.js";
 import { assertAuthModeAllowedForModel, isAuthModeAllowedForModel } from "./model-auth-policy.js";
+import { assertProviderAuthReady } from "./model-auth-provider-admission.js";
 import * as authConfig from "./model-auth-provider-config.js";
 import { resolveModelProviderAuthConfig } from "./model-auth-provider-route.js";
-import {
-  assertRuntimeProviderSecretOwnerAvailable,
-  resolveManagedSecretRefRuntimeProviderAuth,
-} from "./model-auth-runtime-config.js";
+import { resolveManagedSecretRefRuntimeProviderAuth } from "./model-auth-runtime-config.js";
 import {
   assertProviderAuthSupportsHttp,
   ProviderAuthError,
@@ -116,19 +113,6 @@ export async function resolveScopedAuthProfileStoreAsync(params: {
   });
 }
 
-function assertProviderAuthReady(params: {
-  provider: string;
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-}): void {
-  // Pending credential files own their providers' auth routes until Doctor commits
-  // and archives them; do not fall through to env/config credentials.
-  assertAuthProfileMigrationReady(params.agentDir, undefined, params.provider, params.cfg);
-  // A failed explicit ref owns the provider. Stop before profile/env discovery so requests cannot
-  // silently switch credentials while this configured owner is cold.
-  assertRuntimeProviderSecretOwnerAvailable({ cfg: params.cfg, provider: params.provider });
-}
-
 /** Resolves a stored provider-entry binding without general credential discovery. */
 export async function resolveProviderEntryApiKeyAuth(params: {
   provider: string;
@@ -143,7 +127,7 @@ export async function resolveProviderEntryApiKeyAuth(params: {
 }): Promise<ResolvedProviderAuth | undefined> {
   params.signal?.throwIfAborted();
   const { provider, cfg } = params;
-  assertProviderAuthReady(params);
+  await assertProviderAuthReady(params);
   const reference = authConfig.resolveProviderEntryApiKeyProfileReference(params);
   if (!("profileId" in reference)) {
     return undefined;
@@ -290,7 +274,7 @@ export async function resolveApiKeyForProviderCore(input: {
       resolveProviderDeprecatedAuthProfileIds({ provider, config: cfg }),
     ));
   const agentDir = params.agentDir?.trim() || (cfg ? resolveDefaultAgentDir(cfg) : undefined);
-  assertProviderAuthReady({ cfg, provider, agentDir });
+  await assertProviderAuthReady({ cfg, provider, agentDir });
   let scopedStore: AuthProfileStore | undefined = params.store;
   const getScopedStore = async (requestedProfileId?: string) =>
     (scopedStore ??= await resolveScopedAuthProfileStoreAsync({

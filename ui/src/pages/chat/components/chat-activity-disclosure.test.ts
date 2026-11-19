@@ -4,7 +4,7 @@ import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createNestedToolActivity } from "../../../../../src/sessions/nested-tool-activity.ts";
 import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-fixtures.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { attachHistoryActivity } from "../chat-history-request.ts";
+import { attachHistoryActivity } from "../chat-history-snapshot.ts";
 import { buildChatItems } from "../chat-thread-build.ts";
 import { createProps } from "../chat-thread.test-support.ts";
 import {
@@ -416,7 +416,9 @@ it("retires a live row hidden by its history projection without dropping its ima
     await settleToolBridges(summaryContainer);
   };
   await draw(false);
-  expect(summaryContainer.textContent).toContain("Process");
+  expect(summaryContainer.querySelector(".chat-activity-group__summary")?.textContent).toContain(
+    "Using tools",
+  );
   for (const expanded of [false, true]) {
     await draw(true, expanded);
     expect(summaryContainer.querySelector(".chat-activity-group__summary")).toBeNull();
@@ -545,3 +547,112 @@ it("keeps expanded historical launches readable when a new launch refreshes acti
     }
   }
 });
+
+it("groups child-chat openings with file activity while keeping autonomous launches separate", async () => {
+  const childKey = "agent:main:dashboard:child";
+  const launch = (id: string, visible: boolean) =>
+    createMessageEntry(
+      id,
+      createAssistantMessage([
+        createToolCall(id, "sessions_spawn", { label: id, task: "Read the sources.", visible }),
+        createToolResultBlock(
+          id,
+          "sessions_spawn",
+          JSON.stringify({
+            status: "accepted",
+            childSessionKey: visible ? childKey : "agent:main:subagent:worker",
+          }),
+          { isError: false },
+        ),
+      ]),
+    );
+  const group = createToolGroup("mixed-work", [
+    createMessageEntry("read", createAssistantMessage([read("source")])),
+    launch("Child", true),
+    createMessageEntry(
+      "write",
+      createAssistantMessage([
+        createToolCall("write", "write", { path: "/repo/result.ts", content: "done" }),
+      ]),
+    ),
+    launch("Worker", false),
+  ]);
+  const onOpenSession = vi.fn();
+  const draw = async (expanded: boolean) => {
+    activityRoot.render(prepareHistoryGroups([group]), {
+      ...visibleTools,
+      isToolMessageExpanded: () => expanded,
+      subagents: { onOpenSession },
+    });
+    await settleToolBridges(summaryContainer);
+  };
+  await draw(false);
+  expect(summaryContainer.querySelectorAll(".chat-activity-group__summary")).toHaveLength(1);
+  expect(summaryContainer.textContent).not.toContain("Opened child chat");
+  expect(summaryContainer.textContent).toContain("Launched Worker");
+  await draw(true);
+  expect(summaryContainer.textContent).toContain("Opened child chat");
+  expect(summaryContainer.textContent).toContain("source.ts");
+  expect(summaryContainer.textContent).toContain("result.ts");
+  const childLink = [
+    ...summaryContainer.querySelectorAll<HTMLButtonElement>(".chat-tool-row__subagent-link"),
+  ].find((link) => link.textContent === "Child")!;
+  childLink.click();
+  expect(onOpenSession).toHaveBeenCalledExactlyOnceWith(childKey);
+});
+
+it.each([
+  { status: "answered", grouped: true, wrapped: false },
+  { status: "answered", grouped: true, wrapped: true },
+  { status: "ready_to_verify", grouped: true, wrapped: false },
+  { status: "pending", grouped: false, wrapped: false },
+  { status: "cancelled", grouped: false, wrapped: false },
+  { status: "expired", grouped: false, wrapped: false },
+  { status: "action_unresolved", grouped: false, wrapped: false },
+  { status: undefined, grouped: false, wrapped: false },
+])(
+  "groups only answered questions ($status, wrapped=$wrapped)",
+  async ({ status, grouped, wrapped }) => {
+    const args = {
+      questions: [{ questionId: "format", header: "Format", question: "Which format?" }],
+    };
+    const details = {
+      status,
+      ...(status === "answered" ? { answers: { answers: { format: ["Markdown"] } } } : {}),
+    };
+    const output = status === "answered" ? "Format: Markdown" : (status ?? "Requested");
+    const result = { content: [{ type: "text", text: output }], details };
+    const name = wrapped ? "tool_call" : "ask_user";
+    const group = createToolGroup("question-work", [
+      createMessageEntry("before-question", createAssistantMessage([read("before")])),
+      createMessageEntry(
+        "question",
+        createAssistantMessage([
+          createToolCall("ask", name, wrapped ? { id: "openclaw:core:ask_user", args } : args),
+          createToolResultBlock(
+            "ask",
+            name,
+            wrapped ? JSON.stringify({ tool: { name: "ask_user" }, result }) : output,
+            { isError: false, ...(wrapped ? {} : { details }) },
+          ),
+        ]),
+      ),
+      createMessageEntry("after-question", createAssistantMessage([read("after")])),
+    ]);
+    const draw = async (expanded: boolean) => {
+      activityRoot.render(prepareHistoryGroups([group]), {
+        ...visibleTools,
+        isToolMessageExpanded: () => expanded,
+        isToolExpanded: () => expanded,
+      });
+      await settleToolBridges(summaryContainer);
+    };
+    await draw(false);
+    expect(summaryContainer.querySelectorAll(".chat-activity-group__summary")).toHaveLength(
+      grouped ? 1 : 2,
+    );
+    await draw(true);
+    expect(summaryContainer.textContent).toContain("Which format?");
+    expect(summaryContainer.textContent).toContain(output);
+  },
+);

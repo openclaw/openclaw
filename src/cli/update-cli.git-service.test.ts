@@ -1,6 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
+import * as deferredPluginMigrations from "../infra/deferred-plugin-migrations.js";
+import {
+  finishUpdateRun,
+  readOwedUpdateSteps,
+  recordUpdateRunOwedStep,
+} from "../infra/update-run-ledger.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -15,6 +21,12 @@ import {
 } from "./update-cli/update-cli-config.test-support.js";
 import { writeOpenClawPackageFixture } from "./update-cli/update-cli-package.test-support.js";
 import { createGlobalUserServiceCommand } from "./update-cli/update-command-service-state.test-support.js";
+
+// These cases cover the in-place Git runner that Windows checkouts and package-to-Git switches use.
+vi.mock("../infra/git-release-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/git-release-paths.js")>()),
+  usesGitReleases: () => false,
+}));
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
@@ -533,17 +545,18 @@ it("recovers only an untouched package service after source publication fails", 
   });
 });
 
-it("never starts the candidate after plugin post-update invalidates config", async () => {
+/** A managed Git update of a running Gateway: stop, update, converge plugins, restart. */
+async function prepareManagedGitUpdate() {
   const packageManifest = manifest(process.cwd());
   const originalManifest = await fs.readFile(packageManifest);
   onTestFinished(() => fs.writeFile(packageManifest, originalManifest));
-  const previousVersion = "1.0.0";
-  const serviceEntrypoint = await packageFixture(process.cwd(), previousVersion, true);
+  const version = "1.0.0";
+  const serviceEntrypoint = await packageFixture(process.cwd(), version, true);
   const runtimeDirectory = path.dirname(serviceEntrypoint);
-  const previousRuntimeSource = "export const previousFixtureRuntime = true;\n";
+  const source = "export const previousFixtureRuntime = true;\n";
   f.tempDirsToCleanup.add(runtimeDirectory);
-  await fs.writeFile(serviceEntrypoint, previousRuntimeSource);
-  const previousRuntime = await fs.stat(runtimeDirectory);
+  await fs.writeFile(serviceEntrypoint, source);
+  const { dev, ino } = await fs.stat(runtimeDirectory);
   const activateGateway = f.mockPackageGatewayLifecycle();
   const restartedRuntimes: { dev: number; ino: number; source: string }[] = [];
   const runFixtureCommand = checks.requireValue(
@@ -563,6 +576,21 @@ it("never starts the candidate after plugin post-update invalidates config", asy
     return runFixtureCommand(argv, options);
   });
   await f.useFileBackedConfig();
+  f.mockRunningManagedGateway(gatewayArgs(serviceEntrypoint));
+  f.mockGatewayHealth(version, "previous-fixture-gateway");
+  cli.mockGitUpdateAfterMutation(
+    cli.makeOkUpdateResult({
+      root: process.cwd(),
+      before: { version },
+      after: { version },
+    }),
+  );
+  return { version, serviceEntrypoint, previousRuntime: { dev, ino, source }, restartedRuntimes };
+}
+
+it("never starts the candidate after plugin post-update invalidates config", async () => {
+  const { version, serviceEntrypoint, previousRuntime, restartedRuntimes } =
+    await prepareManagedGitUpdate();
   const invalidPostUpdateSnapshot = {
     ...(await cli.readConfigFileSnapshot()),
     valid: false,
@@ -572,15 +600,6 @@ it("never starts the candidate after plugin post-update invalidates config", asy
     vi.mocked(cli.readConfigFileSnapshot).mockResolvedValue(invalidPostUpdateSnapshot);
     return pluginSyncResult(f.baseConfig);
   });
-  f.mockRunningManagedGateway(gatewayArgs(serviceEntrypoint));
-  f.mockGatewayHealth(previousVersion, "previous-fixture-gateway");
-  cli.mockGitUpdateAfterMutation(
-    cli.makeOkUpdateResult({
-      root: process.cwd(),
-      before: { version: previousVersion },
-      after: { version: previousVersion },
-    }),
-  );
   vi.mocked(cli.runExec).mockImplementation(async (_file, args) => {
     if (args[1] === "config" && args[2] === "validate") {
       throw createConfigValidationFailure(
@@ -597,9 +616,7 @@ it("never starts the candidate after plugin post-update invalidates config", asy
   checks.expectNoSideEffects(mocks.serviceRestart, cli.runDaemonRestart);
   // A recovery restart must use the original directory restored by the retained
   // transaction; matching script bytes alone cannot identify its generation.
-  expect(restartedRuntimes, checks.getLogOutput()).toEqual([
-    { dev: previousRuntime.dev, ino: previousRuntime.ino, source: previousRuntimeSource },
-  ]);
+  expect(restartedRuntimes, checks.getLogOutput()).toEqual([previousRuntime]);
   expect(checks.freshRestartCalls()).toHaveLength(1);
   expect(cli.defaultRuntime.exit).not.toHaveBeenCalled();
   expect(cli.runExec).toHaveBeenCalledExactlyOnceWith(
@@ -608,11 +625,76 @@ it("never starts the candidate after plugin post-update invalidates config", asy
     expect.objectContaining({ env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" } }),
   );
   expect(checks.getLogOutput()).toContain(
-    `OpenClaw update rolled back to ${previousVersion}: post-update-plugins.`,
+    `OpenClaw update rolled back to ${version}: post-update-plugins.`,
   );
   expect(checks.getLogOutput()).toContain("invalid plugin config");
   expect(checks.getErrorOutput()).not.toContain("Update failed during plugin post-update sync.");
+  // Invalid config still blocks: the rolled-back update owes nothing.
+  expect(readOwedUpdateSteps()).toEqual([]);
 });
+
+it.each([
+  {
+    id: "plugin-convergence",
+    reason: "plugin registry exploded",
+    warning:
+      "Warning: Plugin convergence is owed: plugin registry exploded. Retried by the next `openclaw update`; run `openclaw update repair` to retry it now.",
+  },
+  {
+    id: "post-plugin-doctor",
+    reason: "state database is locked",
+    warning:
+      "Warning: Post-plugin Doctor is owed: state database is locked. Settled when `openclaw update` next completes Doctor after changing plugins; run `openclaw update repair` to retry it now.",
+  },
+] as const)(
+  "keeps a managed update whose $id fails and owes the step",
+  async ({ id, reason, warning }) => {
+    const { version, restartedRuntimes } = await prepareManagedGitUpdate();
+    // An earlier update already owes the step: this update is also its retry, and fails again.
+    const earlier = cli.createUpdateRun({ trigger: "cli" }).runId;
+    recordUpdateRunOwedStep(earlier, id, "earlier failure");
+    finishUpdateRun(earlier, { status: "succeeded" });
+    if (id === "plugin-convergence") {
+      mocks.syncPluginsForUpdateChannel.mockRejectedValueOnce(new Error(reason));
+    } else {
+      // Changed plugins require Doctor. Arming the fault from the Doctor child makes the next
+      // state read, the one for what Doctor left pending, fail after Doctor ran.
+      mocks.syncPluginsForUpdateChannel.mockImplementationOnce(async () =>
+        pluginSyncResult(f.baseConfig, true),
+      );
+      const pending = vi.spyOn(deferredPluginMigrations, "readDeferredPluginMigrationsAsync");
+      vi.mocked(cli.runExec).mockImplementation(async (_file, args) => {
+        if (args.includes("doctor")) {
+          pending.mockRejectedValueOnce(new Error(reason));
+        }
+        return { stdout: new Date(Date.now() - 1000).toString(), stderr: "" };
+      });
+    }
+
+    await cli.updateCommand({ yes: true });
+
+    const run = cli.listUpdateRuns({ limit: 1 })[0];
+    expect(run, checks.getErrorOutput()).toMatchObject({ status: "succeeded" });
+    // This run now holds the step with its own reason; the earlier row is left as it was.
+    const owed = [{ id, runId: run?.runId, reason }];
+    expect(readOwedUpdateSteps()).toEqual(owed);
+    expect(cli.getUpdateRun(earlier)?.steps).toContainEqual(
+      expect.objectContaining({ step: `finalize:owed:${id}`, status: "skipped" }),
+    );
+    // One stop and one start on the updated installation: nothing was rolled back.
+    expect(mocks.serviceStop).toHaveBeenCalledTimes(1);
+    expect(restartedRuntimes).toHaveLength(1);
+    const report = checks.getLogOutput();
+    expect(report).toContain(`OpenClaw updated to ${version}`);
+    expect(report).not.toContain("rolled back");
+    expect(report).toContain(warning);
+    vi.mocked(cli.defaultRuntime.log).mockClear();
+    await cli.updateStatusCommand({});
+    expect(checks.getLogOutput()).toContain(warning);
+    await cli.updateStatusCommand({ json: true });
+    expect((checks.lastWriteJsonCall() as { owedSteps?: unknown }).owedSteps).toEqual(owed);
+  },
+);
 
 it("disarms legacy updater jobs before stopping the gateway without polluting JSON stdout", async () => {
   const tempDir = f.tempDirs.make("openclaw-update-json-stop-service-");

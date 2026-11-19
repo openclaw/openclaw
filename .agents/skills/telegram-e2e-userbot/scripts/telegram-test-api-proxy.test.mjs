@@ -423,6 +423,36 @@ for (const reset of ["before-forward", "after-forward"]) {
   });
 }
 
+test("hangs matching requests until the client gives up", async (t) => {
+  const forwarded = [];
+  const proxy = await startTelegramTestApiProxy({
+    fetchImpl: async (url) => {
+      forwarded.push(String(url));
+      return new Response('{"ok":true}', { headers: { "content-type": "application/json" } });
+    },
+  });
+  t.after(() => proxy.close());
+  proxy.rejectNextRequest({ method: "getFile", reset: "hang", times: 2 });
+  const getFile = (signal) =>
+    fetch(`${proxy.apiRoot}/bot123:ABC/getFile`, { method: "POST", body: "{}", signal });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const failure = await getFile(AbortSignal.timeout(100)).catch((error) => error);
+    assert.equal(failure?.name, "TimeoutError");
+  }
+  assert.equal((await getFile()).status, 200);
+  assert.equal(forwarded.length, 1);
+  assert.deepEqual(
+    proxy.getRequestRejectionEvents().map(({ upstreamForwarded, hang }) => ({
+      upstreamForwarded,
+      hang,
+    })),
+    [
+      { upstreamForwarded: false, hang: true },
+      { upstreamForwarded: false, hang: true },
+    ],
+  );
+});
+
 test("injects repeated flood waits with retry_after before forwarding", async (t) => {
   // Chat ID digits may also appear in legitimate timing fields.
   t.mock.method(Date, "now", () => 1790301001001);

@@ -343,7 +343,11 @@ prepare_limit_summary() {
 DOCKER_RUN_USER_ARGS=()
 UPGRADE_ENTRYPOINT=()
 if [ "$UPDATE_RESTART_MODE" = auto-auth ] ||
-  { [ "$SCENARIO" = package-installed-recovery ] && [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = older-runtime ]; }; then
+  { [ "$SCENARIO" = package-installed-recovery ] && {
+    [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = older-runtime ] ||
+      [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = live-gateway ] ||
+      [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = owed-plugin-retry ]
+  }; }; then
   # MAC_OVERRIDE permits replacing unconfined; the entrypoint drops every capability.
   DOCKER_RUN_USER_ARGS+=(--user root --cgroupns private --cap-add SYS_ADMIN --cap-add MAC_OVERRIDE --security-opt apparmor=unconfined)
   UPGRADE_ENTRYPOINT=(bash /tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/cgroup-entrypoint.sh)

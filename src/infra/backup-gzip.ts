@@ -1,15 +1,50 @@
 import { availableParallelism } from "node:os";
 import { promisify } from "node:util";
 import { gzip } from "node:zlib";
+import { exclusiveBytes } from "./backup-gzip-bytes.js";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { WorkerTaskPool } from "./worker-task-pool.js";
 
-const compress = promisify(gzip);
+const compressOnLibuv = promisify(gzip);
 
 // Members share no dictionary, so a block must dwarf deflate's 32 KiB window
 // to keep the archive size within a fraction of a percent of one stream.
 const BLOCK_BYTES = 4 * 1024 * 1024;
 // zlib runs on the libuv pool, four threads unless the operator resized it.
 // The traversal's file reads share that pool; a larger window would only queue.
-const MAX_CONCURRENCY = 4;
+const LIBUV_CONCURRENCY = 4;
+// Past that, blocks compress on worker threads, off the libuv pool. Two cores
+// stay free for the tar walk and the writer, which keep up with about eight
+// workers; more only add memory and CPU.
+const MAX_WORKERS = 8;
+const RESERVED_CORES = 2;
+
+function resolveGzipConcurrency(): number {
+  const cores = availableParallelism();
+  return Math.max(
+    Math.min(LIBUV_CONCURRENCY, cores),
+    Math.min(MAX_WORKERS, cores - RESERVED_CORES),
+  );
+}
+
+function createWorkerCompressor(workers: number) {
+  const pool = new WorkerTaskPool<Uint8Array<ArrayBuffer>, Uint8Array>({
+    workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.backupGzip),
+    maxWorkers: workers,
+  });
+  return {
+    compress: async (block: Buffer) => {
+      // Cloning a view copies its whole backing store; move an owned copy instead.
+      const member = await pool.run(exclusiveBytes(block), {
+        inputBytes: block.length,
+        transferList: (input) => [input.buffer],
+      });
+      return Buffer.from(member.buffer, member.byteOffset, member.byteLength);
+    },
+    close: () => pool.close(),
+  };
+}
 
 /**
  * Compress a byte stream as consecutive gzip members, several blocks at a time.
@@ -19,8 +54,10 @@ const MAX_CONCURRENCY = 4;
  */
 export async function* gzipInParallel(
   source: AsyncIterable<Buffer>,
-  concurrency = Math.min(MAX_CONCURRENCY, availableParallelism()),
+  concurrency = resolveGzipConcurrency(),
 ): AsyncGenerator<Buffer> {
+  const workers = concurrency > LIBUV_CONCURRENCY ? createWorkerCompressor(concurrency) : undefined;
+  const compress = workers?.compress ?? compressOnLibuv;
   const pending: Array<Promise<Buffer>> = [];
   let parts: Buffer[] = [];
   let size = 0;
@@ -60,5 +97,6 @@ export async function* gzipInParallel(
   } finally {
     // A cancelled or failed archive settles only after its in-flight blocks do.
     await Promise.allSettled(pending);
+    await workers?.close();
   }
 }

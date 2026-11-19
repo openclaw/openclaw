@@ -162,7 +162,12 @@ export async function resolveSkillDispatchTools(params: {
         },
       }
     : undefined;
+  let messageToolAvailable = true;
   const tools = await createOpenClawToolsAsync({
+    retainUnavailableMessageTool: true,
+    onMessageToolAvailability: (available) => {
+      messageToolAvailable = available;
+    },
     gatewayConfigReadAllowed,
     agentSessionKey: params.sessionKey,
     agentChannel: channel,
@@ -238,5 +243,9 @@ export async function resolveSkillDispatchTools(params: {
     policyFiltered,
     getPluginToolMeta,
   );
-  return applyToolAvailabilityDescriptions(policyFiltered);
+  return applyToolAvailabilityDescriptions(
+    messageToolAvailable
+      ? policyFiltered
+      : policyFiltered.filter((tool) => tool.name !== "message"),
+  );
 }

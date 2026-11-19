@@ -18,7 +18,6 @@ import {
 } from "../state/openclaw-state-db-async-lifecycle.js";
 import { ensureOpenClawStatePermissions } from "../state/openclaw-state-db-permissions.js";
 import { acquireWithWait } from "./acquire-with-wait.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256HexPrefixCore } from "./crypto-digest.js";
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
 import {
@@ -61,6 +60,7 @@ import {
   resolveGatewayStateOwnerPath,
   tryBorrowGatewayStateOwner,
 } from "./gateway-state-owner.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
 
 export type GatewayLockHandle = {
   previousOwner?: GatewayOwnerLease["previousOwner"];
