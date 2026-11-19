@@ -7,9 +7,16 @@ import { ignoreMissingPath } from "./errno.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
 import { writeGitReleaseLauncher, type GitReleaseTrial } from "./git-release-launcher.js";
 import { GIT_RELEASE_TRIAL, gitReleaseSlot } from "./git-release-paths.js";
+import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { readPackageVersion } from "./package-json.js";
+import { readPackageReleaseLeases } from "./package-release-lease.js";
 import { collectPackageReleases } from "./package-release-retention.js";
-import { PACKAGE_RELEASES_DIR, readPackageReleaseSlotSync } from "./package-release-slot-path.js";
+import {
+  PACKAGE_RELEASES_DIR,
+  packageReleasePrefixOfRoot,
+  readPackageReleaseSlotSync,
+  type PackageReleaseSlot,
+} from "./package-release-slot-path.js";
 import {
   capturePackageReleaseSlot,
   createPackageReleasePrefix,
@@ -17,7 +24,11 @@ import {
   sweepPackageReleaseTemporaryLinks,
   switchPackageReleaseLink,
 } from "./package-release-slot.js";
-import { readBuiltGatewayBuildId } from "./update-git-runtime.js";
+import {
+  readBuiltGatewayBuildId,
+  readBuiltRuntimeCommit,
+  verifyGitUpdateRecovery,
+} from "./update-git-runtime.js";
 
 /** A new release directory; its worktree is built at `releaseRoot`, where it serves. */
 export async function createGitReleaseDirs(prefix: string) {
@@ -25,9 +36,23 @@ export async function createGitReleaseDirs(prefix: string) {
   return { releasePrefix, releaseRoot: path.join(releasePrefix, "openclaw") };
 }
 
+const gitReleaseTrialFile = (prefix: string) =>
+  path.join(prefix, PACKAGE_RELEASES_DIR, GIT_RELEASE_TRIAL);
+
+/** The ID of the release holding `releaseRoot` (`releases/<id>/openclaw`, or the earlier
+ * `releases/<id>/lib/node_modules/openclaw`). */
+export const gitReleaseId = (releaseRoot: string) =>
+  path.basename(packageReleasePrefixOfRoot(releaseRoot) ?? releaseRoot);
+
 /**
  * Select `releaseRoot` with one rename. With `trial`, the launcher switches back
  * after two failed starts and the Gateway clears the record once it is ready.
+ *
+ * The link text is computed between real paths, because the filesystem resolves it from
+ * the link's real directory (a state directory under macOS `/tmp` is really under
+ * `/private/tmp`), and it must resolve to `releaseRoot` before the old link is replaced.
+ * Arming a trial for the release the link already names changes nothing: its trial, if
+ * any, keeps its own fallback, and a trial never falls back to its own target.
  */
 export async function publishGitRelease(params: {
   prefix: string;
@@ -38,8 +63,18 @@ export async function publishGitRelease(params: {
   assertCurrent?: () => void;
 }): Promise<{ previous: string | null; target: string }> {
   const slot = gitReleaseSlot(params.prefix);
-  const target = packageReleaseLinkTarget(slot, params.releaseRoot);
-  const trialFile = path.join(params.prefix, PACKAGE_RELEASES_DIR, GIT_RELEASE_TRIAL);
+  const globalRoot = path.dirname(slot);
+  await fs.mkdir(globalRoot, { recursive: true });
+  const realGlobalRoot = await fs.realpath(globalRoot);
+  const releaseRoot = await fs.realpath(params.releaseRoot);
+  const target = packageReleaseLinkTarget(path.join(realGlobalRoot, "openclaw"), releaseRoot);
+  const resolved = await fs.realpath(path.resolve(realGlobalRoot, target)).catch(() => null);
+  if (resolved !== releaseRoot) {
+    throw new Error(
+      `The release link text ${target} does not resolve to ${releaseRoot}; the installation was left unchanged.`,
+    );
+  }
+  const trialFile = gitReleaseTrialFile(params.prefix);
   await writeGitReleaseLauncher(params.prefix);
   const existing = await fs.lstat(slot).catch(ignoreMissingPath);
   let previous: string | null = null;
@@ -47,6 +82,12 @@ export async function publishGitRelease(params: {
     const capture = await capturePackageReleaseSlot(slot);
     if (capture.kind !== "link") {
       throw new Error(`${slot} is not a release link; the installation was left unchanged.`);
+    }
+    const selected = await fs
+      .realpath(path.resolve(realGlobalRoot, capture.target))
+      .catch(() => null);
+    if (params.trial && selected === releaseRoot) {
+      return { previous: null, target };
     }
     previous = capture.target;
     // A stale trial must not switch the next release back.
@@ -60,8 +101,6 @@ export async function publishGitRelease(params: {
       });
     }
   } else {
-    const globalRoot = path.dirname(slot);
-    await fs.mkdir(globalRoot, { recursive: true });
     await sweepPackageReleaseTemporaryLinks(globalRoot);
     const temporary = path.join(globalRoot, `.openclaw.release-link-${process.pid}-${Date.now()}`);
     await fs.symlink(target, temporary);
@@ -70,11 +109,11 @@ export async function publishGitRelease(params: {
     await syncDirectoryIfSupported(globalRoot);
   }
   if (params.trial && previous) {
-    const buildId = await readBuiltGatewayBuildId(params.releaseRoot);
+    const buildId = await readBuiltGatewayBuildId(releaseRoot);
     const record: GitReleaseTrial = {
       target,
       previous,
-      version: (await readPackageVersion(params.releaseRoot)) ?? "unknown",
+      version: (await readPackageVersion(releaseRoot)) ?? "unknown",
       ...(buildId ? { buildId } : {}),
       // The update admits only a service whose config selection matches this process.
       config: resolveConfigPath(process.env),
@@ -89,34 +128,241 @@ export async function publishGitRelease(params: {
   return { previous, target };
 }
 
+async function readGitReleaseTrial(prefix: string): Promise<GitReleaseTrial | null> {
+  const raw = await fs.readFile(gitReleaseTrialFile(prefix), "utf8").catch(ignoreMissingPath);
+  // SAFETY: publishGitRelease and the launcher are the only writers of the trial record.
+  return raw ? (JSON.parse(raw) as GitReleaseTrial) : null;
+}
+
 /** A ready Gateway ends the trial of the release it runs. */
 export async function settleGitReleaseTrial(runningRoot: string | null): Promise<void> {
   const slot = runningRoot ? readPackageReleaseSlotSync(runningRoot) : null;
   if (!slot) {
     return;
   }
-  const trialFile = path.join(slot.prefix, PACKAGE_RELEASES_DIR, GIT_RELEASE_TRIAL);
-  const raw = await fs.readFile(trialFile, "utf8").catch(ignoreMissingPath);
-  // SAFETY: publishGitRelease and the launcher are the only writers of the trial record.
-  const trial = raw ? (JSON.parse(raw) as GitReleaseTrial) : null;
+  const trial = await readGitReleaseTrial(slot.prefix);
   if (trial?.target === slot.target) {
-    await fs.rm(trialFile, { force: true });
+    await fs.rm(gitReleaseTrialFile(slot.prefix), { force: true });
   }
+}
+
+export type GitReleasePlacement = {
+  /** What serves: the link's release, unless it is a never-started placed release. */
+  serving: string;
+  /** The release that last served and passed its trial: the next trial's fallback. */
+  fallback: string;
+  /**
+   * A release an earlier update placed that never started: the launcher counted no start
+   * and no process holds it. A started trial stays under the launcher's control, which
+   * owns its state rollback, so it is never reported here.
+   */
+  unserved?: {
+    root: string;
+    /** The link names it (the update failed after the switch), rather than a deferred trial. */
+    selected: boolean;
+  };
+  /**
+   * The trial's fallback (link text) is missing, has no evidence that its commit serves, or
+   * its build does not verify. `commit` is set only when the commit serves: a release
+   * rebuilt from it is a safe fallback. Without it there is none, and nothing is repaired.
+   */
+  unsafeFallback?: {
+    previous: string;
+    reason: "missing" | "unverified" | "unproven";
+    commit?: string;
+  };
+};
+
+/** A release worktree's checked-out commit, read from its Git metadata without running Git. */
+async function readReleaseHead(root: string): Promise<string | null> {
+  const dotGit = await fs.readFile(path.join(root, ".git"), "utf8").catch(() => "");
+  const gitDir = /^gitdir: (.+)$/mu.exec(dotGit)?.[1]?.trim();
+  const head = gitDir
+    ? (await fs.readFile(path.resolve(root, gitDir, "HEAD"), "utf8").catch(() => "")).trim()
+    : "";
+  return /^[0-9a-f]{40,64}$/u.test(head) ? head : null;
+}
+
+/**
+ * The only evidence on disk that a fallback's commit is what the Gateway serves: no
+ * Gateway has ever run from a release, so the service still runs the checkout, and the
+ * checkout's own build reports that commit. That is the state a conversion leaves before
+ * its first restart. Every Gateway that runs from a release takes a lease there first, and
+ * its lease directory stays, so any lease directory means the checkout may not serve.
+ * Nothing on disk records that a release's trial passed (settling deletes the record),
+ * and a lease is taken before the Gateway is ready, so neither shows what serves. A
+ * publisher before this change recorded whatever the link named, which can be a release
+ * that never started.
+ */
+async function isCheckoutServingCommit(
+  prefix: string,
+  checkout: string | undefined,
+  commit: string,
+): Promise<boolean> {
+  const leases = path.join(prefix, PACKAGE_RELEASES_DIR, ".leases");
+  if (!checkout || (await fs.readdir(leases).catch((): string[] => [])).length > 0) {
+    return false;
+  }
+  // The install's own checkout, named by the caller: when it is a linked worktree, the
+  // releases' common Git directory belongs to another repository with its own build.
+  return (await readBuiltRuntimeCommit(checkout)) === commit;
+}
+
+/**
+ * Present and intact: its runtime artifacts verify against the commit it was built from,
+ * and the entry the launcher imports (`dist/index.js`) is there.
+ */
+export async function verifiesAsGitRelease(root: string): Promise<boolean> {
+  const verified = await verifyGitUpdateRecovery({ root, sha: await readReleaseHead(root) });
+  const entry = await fs.stat(path.join(root, "dist", "index.js")).catch(() => null);
+  return verified.serviceRestartSafe && entry?.isFile() === true;
+}
+
+/** A verified release built from `commit`, other than `exclude`, if one is on disk. */
+export async function findVerifiedGitRelease(params: {
+  prefix: string;
+  commit: string;
+  exclude: readonly string[];
+}): Promise<string | null> {
+  const releasesDir = path.join(params.prefix, PACKAGE_RELEASES_DIR);
+  const excluded = new Set(
+    await Promise.all(params.exclude.map((root) => fs.realpath(root).catch(() => root))),
+  );
+  for (const id of await fs.readdir(releasesDir).catch((): string[] => [])) {
+    if (id.startsWith(".")) {
+      continue;
+    }
+    const root = await fs
+      .realpath(path.join(releasesDir, id, path.basename(gitReleaseSlot(params.prefix))))
+      .catch(() => null);
+    if (
+      root &&
+      !excluded.has(root) &&
+      (await readReleaseHead(root)) === params.commit &&
+      (await verifiesAsGitRelease(root))
+    ) {
+      return root;
+    }
+  }
+  return null;
+}
+
+/**
+ * What the trial record says about the link. The link alone is not evidence of what
+ * serves: an update that fails after the switch but before any Gateway starts the new
+ * release leaves the link on a release that never served, with its trial still armed.
+ * That trial's `previous` is used only when its commit is shown to serve (see
+ * `isCheckoutServingCommit`) and its build verifies; otherwise `unsafeFallback` says why.
+ */
+export async function readGitReleasePlacement(
+  slot: PackageReleaseSlot,
+  /** The install's own checkout, whose build is the only evidence of what serves. */
+  checkout?: string,
+): Promise<GitReleasePlacement> {
+  const current = { serving: slot.releaseRoot, fallback: slot.releaseRoot };
+  const trial = await readGitReleaseTrial(slot.prefix).catch(() => null);
+  const resolve = (target: string) =>
+    fs.realpath(path.resolve(path.dirname(slot.slot), target)).catch(() => null);
+  const leased = (root: string) =>
+    readPackageReleaseLeases(slot.prefix, gitReleaseId(root)).live > 0;
+  if (trial?.pending && trial.previous === slot.target) {
+    const root = await resolve(trial.target);
+    return root && root !== slot.releaseRoot && !leased(root)
+      ? { ...current, unserved: { root, selected: false } }
+      : current;
+  }
+  // The launcher counts every start of the release the link names on trial.
+  if (
+    !trial ||
+    trial.pending ||
+    trial.target !== slot.target ||
+    trial.attempts !== 0 ||
+    leased(slot.releaseRoot)
+  ) {
+    return current;
+  }
+  const previous = await resolve(trial.previous);
+  if (previous === slot.releaseRoot) {
+    return current;
+  }
+  const unserved = { root: slot.releaseRoot, selected: true };
+  const commit = previous ? await readReleaseHead(previous) : null;
+  // A fallback is used, or its commit rebuilt, only on evidence that the commit serves.
+  const served = Boolean(
+    previous && commit && (await isCheckoutServingCommit(slot.prefix, checkout, commit)),
+  );
+  if (served && (await verifiesAsGitRelease(previous!))) {
+    return { serving: previous!, fallback: previous!, unserved };
+  }
+  const known = served ? previous! : slot.releaseRoot;
+  return {
+    serving: known,
+    fallback: known,
+    unserved,
+    unsafeFallback: {
+      previous: trial.previous,
+      reason: !previous ? "missing" : served ? "unverified" : "unproven",
+      ...(served ? { commit: commit! } : {}),
+    },
+  };
+}
+
+/**
+ * Put the link back on the fallback, deselecting the placed release, which never started.
+ * A reread right before the switch must still find it never started and on its trial;
+ * otherwise the launcher or a ready Gateway has taken over and nothing is touched. A
+ * failed switch throws. The placed release is not removed here: an updater started
+ * through the link runs from it, so only `collectGitReleases` retires it, with the
+ * collector's checks and its 24 hour grace from this deselection.
+ */
+export async function supersedeUnservedGitRelease(params: {
+  prefix: string;
+  placement: GitReleasePlacement;
+}): Promise<boolean> {
+  const placed = params.placement.unserved?.root;
+  const before = readPackageReleaseSlotSync(gitReleaseSlot(params.prefix));
+  const fresh = before ? (await readGitReleasePlacement(before)).unserved : undefined;
+  if (!placed || fresh?.root !== placed) {
+    return false;
+  }
+  // Also clears a deferred trial, so no start selects the deselected release.
+  await publishGitRelease({
+    prefix: params.prefix,
+    releaseRoot: params.placement.fallback,
+    trial: false,
+  });
+  return true;
 }
 
 /**
  * Remove releases the link does not name that are past the 24 hour minimum age
- * and unleased (#198835's rule), then let Git forget their worktrees.
+ * and unleased (#198835's rule), never the one this updater runs from, then let Git
+ * forget their worktrees.
  */
 export async function collectGitReleases(params: {
   prefix: string;
   keep: readonly string[];
   prune: () => Promise<unknown>;
+  /** The package root this updater runs from; tests name a release instead. */
+  runningRoot?: string | null;
 }): Promise<{ removed: string[]; warnings: string[] }> {
+  const slot = gitReleaseSlot(params.prefix);
+  // An updater started through the link runs from the release the link named then.
+  const running =
+    params.runningRoot === undefined
+      ? resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url })
+      : params.runningRoot;
+  // The shared collector compares real paths in the link's resolved prefix (a state dir
+  // can be a symlink).
+  const keep = await Promise.all(
+    [...params.keep, ...(running ? [running] : [])].map((root) =>
+      fs.realpath(root).catch(() => root),
+    ),
+  );
   const collected = await collectPackageReleases({
-    slot: gitReleaseSlot(params.prefix),
-    prefix: params.prefix,
-    keep: params.keep,
+    slot,
+    prefix: readPackageReleaseSlotSync(slot)?.prefix ?? params.prefix,
+    keep,
   });
   if (collected.removed.length > 0) {
     await params.prune();
