@@ -45,18 +45,16 @@ registerEnglishCatalog(registerTemplatesEnglish);
 // ClawHub's current Template taxonomy. The "other" bucket is assigned by ClawHub.
 const templateCategories = [
   ["", "templatesCatalog.categoryAll", "layoutGrid"],
-  ["personal", "templatesCatalog.categoryPersonal", "users"],
-  ["health", "templatesCatalog.categoryHealth", "activity"],
+  ["engineering", "templatesCatalog.categoryEngineering", "braces"],
+  ["operations", "templatesCatalog.categoryOperations", "settings"],
+  ["household", "templatesCatalog.categoryHousehold", "home"],
+  ["entertainment", "templatesCatalog.categoryEntertainment", "popcorn"],
   ["travel", "templatesCatalog.categoryTravel", "globe"],
   ["productivity", "templatesCatalog.categoryProductivity", "listChecks"],
   ["research", "templatesCatalog.categoryResearch", "search"],
-  ["engineering", "templatesCatalog.categoryEngineering", "braces"],
-  ["governance", "templatesCatalog.categoryGovernance", "shield"],
-  ["operations", "templatesCatalog.categoryOperations", "settings"],
-  ["finance", "templatesCatalog.categoryFinance", "coins"],
+  ["health", "templatesCatalog.categoryHealth", "activity"],
   ["sales", "templatesCatalog.categorySales", "barChart"],
   ["product", "templatesCatalog.categoryProduct", "box"],
-  ["people", "templatesCatalog.categoryPeople", "users"],
   ["other", "templatesCatalog.categoryOther", "layers"],
 ] as const satisfies readonly (readonly [string, string, IconName])[];
 const SECTION_SIZE = 8;
