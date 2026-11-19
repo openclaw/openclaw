@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ConfigSnapshot } from "../../api/types.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { configRawForDisplay } from "./config-draft-model.ts";
 import {
   expectFeedback,
@@ -120,7 +122,14 @@ describe("config patch recovery", () => {
         message: `${method} persisted; wait for the Gateway to restart, then run config.get`,
         failureDetails: (ack) => ({ persistedConfig: ack, application: { status } }),
       });
-      const { runtimeConfig, state } = await createRecoveryCapability(request);
+      const { runtimeConfig, state, publish, client } = await createRecoveryCapability(request);
+      const hello = gatewayHelloForMethods([
+        "config.schema",
+        "config.set",
+        "config.apply",
+        "config.patch",
+      ]);
+      publish(true, client, { ...hello, server: { bootId: "before-restart" } });
       if (method === "config.set") {
         runtimeConfig.patchForm(["enabled"], false);
       }
@@ -128,6 +137,26 @@ describe("config patch recovery", () => {
         method === "config.set" ? runtimeConfig.save() : runtimeConfig.patch(disableFeature),
       ).resolves.toBe(true);
       expectFeedback(state, "restart-required");
+      // Recovery restarts can be pending after the hot-applied revision catches up.
+      const read = store.request.getMockImplementation()!;
+      store.request.mockImplementation(async (readMethod, params) => {
+        const result = await read(readMethod, params);
+        if (readMethod === "config.get") {
+          const snapshot = result as ConfigSnapshot;
+          return { ...snapshot, appliedConfigHash: snapshot.configRevisionHash };
+        }
+        return result;
+      });
+      await runtimeConfig.refresh();
+      expectFeedback(state, "restart-required");
+      publish(false);
+      publish(true, client, { ...hello, server: { bootId: "before-restart" } });
+      await runtimeConfig.refresh();
+      expectFeedback(state, "restart-required");
+      publish(false);
+      publish(true, client, { ...hello, server: { bootId: "after-restart" } });
+      await runtimeConfig.refresh();
+      expectFeedback(state, "idle");
       expect(state).toMatchObject({
         configSnapshot: { hash: "hash-2", config: { enabled: false } },
         configFormDirty: false,
