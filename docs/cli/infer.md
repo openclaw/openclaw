@@ -101,6 +101,8 @@ shell-completion metadata.
 - For `image describe`, `--file` accepts local paths and HTTP(S) URLs; remote URLs go through the normal media-fetch SSRF policy.
 - Stateless execution commands (`model run`, `image *`, `audio *`, `video *`, `web *`, `embedding *`) default to local. Gateway-managed state commands (`tts status`) default to gateway.
 - The local path never requires the gateway to be running.
+- While a Gateway owns the state directory, local commands never refresh or store a shared sign-in. A still-valid sign-in is used as is; an expired sign-in is refused before any credential change. Run the work through the Gateway, retry after its next turn refreshes the sign-in, or stop the Gateway through its service owner. With no Gateway running, local refresh behavior is unchanged.
+- `model auth login` uses the `openclaw models auth login` owner and routes sign-in through a running Gateway. `model auth logout` uses the shared credential-removal owner and refuses while a Gateway owns the state directory.
 - Provider inventory commands whose `configured` state can come from saved agent auth accept
   `--agent <id>`. Without it, they use `agents.defaults.systemAgent.agentId` or the sole configured
   agent; explicit multi-agent fleets with no system owner must pass `--agent`. The provider catalog
