@@ -268,6 +268,13 @@ more than the build diagnostic. The label does not promise 32 usable CPUs; see
 
 ### Blacksmith runner capacity
 
+Current PRs use the 2-vCPU runner for central type checks that run only the
+extension-test and scripts graphs. This includes full-check plans when all five
+core stripes are present and own the root-test partitions. Frozen, release,
+compatibility and other graph layouts retain their existing allocation. The
+[original sizing proof](https://github.com/openclaw/openclaw/pull/197786) covers
+these two serial compiler graphs; this changes allocation, not test coverage.
+
 Main CI previously used `blacksmith-32vcpu-ubuntu-2404` for test types,
 core type stripes, and runtime-topology checks
 to compensate for smaller delivered machines.
