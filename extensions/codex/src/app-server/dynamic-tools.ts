@@ -68,7 +68,11 @@ import {
   type CodexDynamicToolSchemaQuarantine,
   type CodexToolDescriptor,
 } from "./dynamic-tool-catalog.js";
-import { convertToolContents, enforceWholeSkillResult } from "./dynamic-tool-content.js";
+import {
+  convertToolContents,
+  enforceWholeSkillResult,
+  withoutGatewayOnlySkillLocation,
+} from "./dynamic-tool-content.js";
 import {
   type CodexDynamicToolHookContextBase,
   projectCodexExecutableDynamicToolSurface,
@@ -97,6 +101,8 @@ import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reaso
 type CodexDynamicToolHookContext = CodexDynamicToolHookContextBase & {
   remoteWorkspaceRoot?: string;
   remoteWorkspaceRequestTimeoutMs?: number;
+  /** Gateway-only skill name to Gateway directory, when the app-server is remote. */
+  gatewayOnlySkillDirs?: ReadonlyMap<string, string>;
   currentChannelProvider?: string;
   contextWindowTokens?: number;
   currentChannelId?: string;
@@ -507,7 +513,15 @@ export function createCodexDynamicToolBridge(params: {
             isError: rawIsErrorForPresentation,
             result: event.result,
           });
-          const result = enforceWholeSkillResult(toolName, middlewareResult, toolResultMaxChars);
+          const result = enforceWholeSkillResult(
+            toolName,
+            await withoutGatewayOnlySkillLocation(
+              toolName,
+              middlewareResult,
+              params.hookContext?.gatewayOnlySkillDirs,
+            ),
+            toolResultMaxChars,
+          );
           presentationIsError = rawIsErrorForPresentation || isToolResultError(result);
           // A successful spawn is durable before presentation middleware can rewrite details.
           const acceptedSessionSpawn =
