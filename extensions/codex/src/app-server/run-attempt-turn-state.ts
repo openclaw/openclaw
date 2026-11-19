@@ -2,7 +2,10 @@ import {
   createAgentHarnessAttemptDeadlineController,
   type AgentHarnessAttemptTimeout,
 } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  isAgentRunResumableRestartAbortReason,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createAgentHarnessToolExecutionRegistry } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -95,6 +98,20 @@ export function createCodexAttemptTurnState(resources: StartedCodexAttemptResour
     steeringQueueRef.current?.cancel();
     deadlines.beginSettlement(Date.now());
     resolveCompletion();
+  };
+  // A Gateway stop leaves a resumable turn in an app-server it did not start running, as a
+  // crash does; the next Gateway's restart input waits for it. Open requests to it end.
+  const keepResumableRemoteTurn = (interrupt: () => void) => () => {
+    if (
+      isAgentRunResumableRestartAbortReason(runAbortController.signal.reason) &&
+      connection.appServer.start.transport !== "stdio" &&
+      !connection.workerHostedCloud &&
+      state.activeAppServerTurnRequests === 0
+    ) {
+      completeTurn();
+    } else {
+      interrupt();
+    }
   };
   const interruptTurn = async (
     turnId: string,
@@ -242,6 +259,7 @@ export function createCodexAttemptTurnState(resources: StartedCodexAttemptResour
     steeringQueueRef,
     completeTurn,
     interruptTurn,
+    keepResumableRemoteTurn,
     noteProgress,
     deadlines,
   };

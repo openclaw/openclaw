@@ -3,7 +3,6 @@ import {
   detectAndLoadAgentHarnessPromptImages,
   embeddedAgentLog,
   formatErrorMessage,
-  isAgentRunResumableRestartAbortReason,
   resolveAttemptFsWorkspaceOnly,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -243,18 +242,7 @@ export function activateCodexAttemptTurn(
   );
   const activeProjector = projectorRef.current;
   let activationFailed = false;
-  const abortListener = () => {
-    // A Gateway stop leaves a resumable turn in an app-server it did not start running, as a
-    // crash does; the next Gateway's restart input waits for it. Open requests to it end.
-    if (
-      isAgentRunResumableRestartAbortReason(runAbortController.signal.reason) &&
-      connection.appServer.start.transport !== "stdio" &&
-      !connection.workerHostedCloud &&
-      state.activeAppServerTurnRequests === 0
-    ) {
-      completeTurn();
-      return;
-    }
+  const abortListener = turnRuntime.keepResumableRemoteTurn(() => {
     state.abortCleanup = interruptTurn(activeTurnId).then(async (confirmed) => {
       if (
         !activationFailed &&
@@ -291,7 +279,7 @@ export function activateCodexAttemptTurn(
       embeddedAgentLog.warn("codex app-server cancellation cleanup failed", { error });
       completeTurn();
     });
-  };
+  });
   const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
   const bindProjection = async (promptMirrorPromise: Promise<void>) => {
     state.activeLocalProjections += 1;

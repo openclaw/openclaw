@@ -138,7 +138,9 @@ describe("runCodexAppServerAttempt Gateway shutdown", () => {
     const tool = createRuntimeDynamicTool("wait_here");
     tool.execute = vi.fn(async (_id, _args, signal) => {
       started.resolve();
-      await new Promise((resolve) => signal?.addEventListener("abort", resolve, { once: true }));
+      await new Promise((resolve) => {
+        signal?.addEventListener("abort", resolve, { once: true });
+      });
       return textToolResult("stopped");
     });
     const params = Object.assign(createTestParams(), {
