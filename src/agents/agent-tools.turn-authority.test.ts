@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { getInternalToolExecutionPreparer } from "../../packages/agent-core/src/internal-hooks.js";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "../../packages/agent-core/src/internal-hooks.js";
 import {
   bindAgentToolAvailability,
   finalizeAgentToolAvailability,
@@ -186,4 +189,17 @@ it.each([
   expect(getInternalToolExecutionPreparer(refused)).toBeUndefined();
   expect((await refused.execute("call", {})).details).toMatchObject({ gated: true });
   expect(ran).toBe(false);
+});
+
+it("keeps the scoped-reads split off the source preparer", () => {
+  const source = fakeTool("automations");
+  attachInternalToolExecutionPreparer(source, async () => {
+    throw new Error("source preparer ran");
+  });
+  const [split] = resolveTurnToolSurface({
+    turnTools: [source],
+    ownerOnlyDenied: new Set(["automations"]),
+    hostSystemTurn: true,
+  }).tools;
+  expect(getInternalToolExecutionPreparer(split!)).toBeUndefined();
 });
