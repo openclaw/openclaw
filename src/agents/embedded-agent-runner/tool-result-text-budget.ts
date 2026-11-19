@@ -98,7 +98,8 @@ export function keepToolResultTextPrefix(
   const noticeBudget = estimateToolResultTextChars(suffix(rawChars), options);
   let remaining = Math.max(0, maxChars - noticeBudget);
   let omittedChars = 0;
-  const retained = blocks.flatMap(({ block, textChars }) => {
+  let noticeIndex = -1;
+  const retained = blocks.flatMap(({ block, textChars }, index) => {
     if (!isToolResultTextBlock(block)) {
       return [block];
     }
@@ -107,6 +108,12 @@ export function keepToolResultTextPrefix(
       return [block];
     }
     omittedChars += block.text.length;
+    if (noticeIndex === -1) {
+      // Keep the notice at the first omitted text position so text-only checkpoints
+      // can restore the prefix among the canonical non-text blocks.
+      noticeIndex = index;
+      return [block];
+    }
     return [];
   });
   const notice = sliceToolResultTextToBudget(
@@ -114,7 +121,15 @@ export function keepToolResultTextPrefix(
     Math.min(maxChars, noticeBudget + remaining),
     options,
   );
-  return [...retained, { type: "text", text: notice }];
+  const firstOmitted = retained[noticeIndex];
+  if (isToolResultTextBlock(firstOmitted)) {
+    retained[noticeIndex] = {
+      ...firstOmitted,
+      text: notice,
+      ...(typeof firstOmitted.content === "string" ? { content: notice } : {}),
+    };
+  }
+  return retained;
 }
 
 function sliceToolResultTextBudget(
