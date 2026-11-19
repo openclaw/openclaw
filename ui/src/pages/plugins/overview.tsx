@@ -59,7 +59,7 @@ function renderPluginSecurityAudit(status: string, auditUrl: string | null | und
         <Tooltip content={t("pluginsPage.detailSecurityInfo")} describe={false} openOnClick>
           <button
             type="button"
-            class="plugin-catalog-detail__security-info"
+            class="oc-icon-button oc-icon-button--28"
             aria-label={t("pluginsPage.detailSecurityInfo")}
           >
             <Icon name="info" />

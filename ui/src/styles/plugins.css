@@ -1139,8 +1139,7 @@
 }
 .plugin-metadata__facts,
 .plugin-metadata__section,
-.plugin-metadata__links,
-.plugin-catalog-detail__security {
+.plugin-metadata__links {
   margin: 0;
   padding: 0;
 }
@@ -1214,26 +1213,13 @@
 .plugin-catalog-detail__security-heading {
   display: flex;
   align-items: center;
-  gap: 6px;
   margin-bottom: var(--space-1);
 }
-/* The padding widens the target; the matching margin keeps the heading row's height. */
-.plugin-catalog-detail__security-info {
-  display: inline-flex;
-  margin: -4px;
-  padding: 4px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted-strong);
-}
-.plugin-catalog-detail__security-info:hover,
-.plugin-catalog-detail__security-info:focus-visible {
-  color: var(--text);
-}
-.plugin-catalog-detail__security-info svg {
-  width: var(--control-ui-text-xs);
-  height: var(--control-ui-text-xs);
+/* The shared icon button keeps its 28px target; the margin keeps the heading row's height. */
+.plugin-catalog-detail__security .oc-icon-button {
+  --icon-button-glyph: var(--control-ui-text-xs);
+  --icon-button-color: var(--muted-strong);
+  margin-block: -7px;
 }
 .plugin-catalog-detail__security-score {
   /* The hover fill bleeds past the label and bars so neither sits flush with its edge. */
