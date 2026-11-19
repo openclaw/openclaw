@@ -3,8 +3,8 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { PluginMetricFamily } from "../api.js";
 import {
   MAX_PROMETHEUS_FAMILY_SERIES,
-  PROMETHEUS_FAMILY_RESERVES,
-  SHARED_PROMETHEUS_SERIES,
+  MAX_PROMETHEUS_SERIES,
+  PROMETHEUS_FAMILY_LIMITS,
   type PrometheusMetricName,
 } from "./prometheus-family-budget.js";
 import {
@@ -73,18 +73,17 @@ const DROPPED_FAMILY_COUNTER_NAME = "openclaw_prometheus_family_series_dropped_t
 // Exporter stop/start resets counters, but warnings are once per family per process.
 const warnedFamilies = new Set<string>();
 
-// Plugin families have no reserve: they share the pool and the per-family cap.
-const hasCoreReserve = (name: string): name is PrometheusMetricName =>
-  Object.hasOwn(PROMETHEUS_FAMILY_RESERVES, name);
-const reserveFor = (name: string): number =>
-  hasCoreReserve(name) ? PROMETHEUS_FAMILY_RESERVES[name] : 0;
+const isCoreFamily = (name: string): name is PrometheusMetricName =>
+  Object.hasOwn(PROMETHEUS_FAMILY_LIMITS, name);
+const limitFor = (name: string): number =>
+  isCoreFamily(name) ? PROMETHEUS_FAMILY_LIMITS[name] : MAX_PROMETHEUS_FAMILY_SERIES;
 
 export function createPrometheusMetricStore(onSeriesDropped?: (name: string) => void) {
   const counters = createSeries<ScalarSample>();
   const gauges = createSeries<ScalarSample>();
   const histograms = createSeries<HistogramSample>();
   let droppedSeries = 0;
-  let sharedSeries = 0;
+  let retainedSeries = 0;
   const familyCounts = new Map<string, number>();
   const familyDrops = new Map<string, number>();
   const headers = new Map<string, { type: string; help: string; bytes: Buffer }>();
@@ -136,11 +135,7 @@ export function createPrometheusMetricStore(onSeriesDropped?: (name: string) => 
       break;
     }
     const count = familyCounts.get(name) ?? 0;
-    const reserve = reserveFor(name);
-    if (
-      count >= Math.max(MAX_PROMETHEUS_FAMILY_SERIES, reserve) ||
-      (count >= reserve && sharedSeries >= SHARED_PROMETHEUS_SERIES)
-    ) {
+    if (count >= limitFor(name) || retainedSeries >= MAX_PROMETHEUS_SERIES) {
       droppedSeries++;
       familyDrops.set(name, (familyDrops.get(name) ?? 0) + 1);
       if (onSeriesDropped && !warnedFamilies.has(name)) {
@@ -150,9 +145,7 @@ export function createPrometheusMetricStore(onSeriesDropped?: (name: string) => 
       return undefined;
     }
     familyCounts.set(name, count + 1);
-    if (count >= reserve) {
-      sharedSeries++;
-    }
+    retainedSeries++;
     if (!shape) {
       // Each metric can have multiple label shapes (for example GC's optional worker slot).
       shape = {
@@ -247,8 +240,7 @@ export function createPrometheusMetricStore(onSeriesDropped?: (name: string) => 
     gauges.samples = gauges.samples.filter((sample) => sample.name !== name);
     const count = familyCounts.get(name) ?? 0;
     const remaining = count - (previousLength - gauges.samples.length);
-    const reserve = PROMETHEUS_FAMILY_RESERVES[name];
-    sharedSeries -= Math.max(0, count - reserve) - Math.max(0, remaining - reserve);
+    retainedSeries -= count - remaining;
     familyCounts.set(name, remaining);
   };
 
@@ -358,7 +350,7 @@ export function createPrometheusMetricStore(onSeriesDropped?: (name: string) => 
     drop(histograms);
     for (const name of retired) {
       headers.delete(name);
-      sharedSeries -= Math.max(0, (familyCounts.get(name) ?? 0) - reserveFor(name));
+      retainedSeries -= familyCounts.get(name) ?? 0;
       familyCounts.delete(name);
     }
   };
@@ -479,7 +471,7 @@ export function createPrometheusMetricStore(onSeriesDropped?: (name: string) => 
       map.shapes.clear();
     }
     droppedSeries = 0;
-    sharedSeries = 0;
+    retainedSeries = 0;
     familyCounts.clear();
     familyDrops.clear();
     headers.clear();

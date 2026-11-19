@@ -37,7 +37,6 @@ import {
 } from "../cron-creator-authority-grant.js";
 import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
 import { bindGatewayDeviceRevocation } from "../device-revocation.js";
-import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import { assertHumanCronJobAccess, assertHumanCronExecutionAccess } from "./cron-human-owner.js";
 import type {
   GatewayClient,
@@ -99,7 +98,6 @@ export function resolveCronCreatorAuthorityCapture(
 export function resolveCronStreamExecPolicy(
   client: GatewayClient | null,
   required: boolean,
-  context: GatewayRequestContext,
 ): CronStreamExecPolicy | undefined {
   const identity = client?.internal?.agentRuntimeIdentity;
   if (!identity || !required) {
@@ -111,7 +109,6 @@ export function resolveCronStreamExecPolicy(
       ? resolveCronCreatorStreamExecPolicy(identity.cronCreatorAuthorityGrant)
       : undefined;
   if (!execPolicy) {
-    assertActiveAgentRuntimeAuthority(client, context);
     throw new TypeError(CRON_STREAM_EXEC_AUTHORITY_ERROR);
   }
   return execPolicy;
@@ -131,8 +128,6 @@ export function resolveCronMutationCommitGuard(
     "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
   > & { modelJobPolicy?: { config: OpenClawConfig; jobId: string; patch?: CronJobPatch } },
 ): (() => void) | undefined {
-  const validatesAuthority =
-    client?.internal?.agentRuntimeIdentity && context.validateAgentRuntimeApprovalAuthority;
   const identity = client?.internal?.agentRuntimeIdentity;
   const manageAll = identity ? getCronManagementAuthority(identity) : undefined;
   const creatorGrant = identity?.cronCreatorAuthorityGrant;
@@ -144,7 +139,6 @@ export function resolveCronMutationCommitGuard(
       ? creatorGrant
       : undefined;
   if (
-    !validatesAuthority &&
     !jobScope &&
     !manageAll &&
     !requesterGrant &&
@@ -177,9 +171,6 @@ export function resolveCronMutationCommitGuard(
         throw new TypeError(`unknown cron job id: ${jobId}`);
       }
       assertCronModelJobAllowed(client, config, job, patch);
-    }
-    if (validatesAuthority) {
-      assertActiveAgentRuntimeAuthority(client, context);
     }
     // The capability can expire, or the same id can acquire another owner while
     // this request waits for the cron lock. Re-read both at the commit owner.

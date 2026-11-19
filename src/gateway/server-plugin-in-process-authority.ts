@@ -363,7 +363,6 @@ export function resolveInProcessGatewayDispatch(
     : resolveSessionRuntimeAuthority({
         method,
         runtimeIdentity: agentRuntimeIdentity ?? scope?.client?.internal?.agentRuntimeIdentity,
-        context,
       });
   const assertCallerCurrent = captureGatewayToolCallerAssertion(method);
   const transfersCreatedInput =

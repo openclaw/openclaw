@@ -34,6 +34,9 @@
  * Native worker code is unchanged between arms; Linux procfs costs need Linux proof.
  * Acceptance: only changed-file bytes lose shared extents, clean old/new templates,
  * A/A controls and five serial A/B pairs; diagnostics must not add material cost.
+ * --alternate-commit alternates source generations without requiring a refresh.
+ * Acceptance: after seeding both commits, no new generation on a flip back;
+ * report owner latency, CPU/allocation, and retained IDs with matched A/A controls.
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -63,6 +66,7 @@ const { values } = parseArgs({
     "eviction-delay-ms": { type: "string" },
     "agent-db-fixture": { type: "string" },
     "refresh-commit": { type: "string" },
+    "alternate-commit": { type: "string" },
     "filesystem-owner": { type: "string" },
   },
 });
@@ -282,11 +286,15 @@ const { listTemplatesAsync } =
   await import("../../src/agents/worktrees/template-registry-async.js");
 const { nativeWorktreeFilesystem } =
   await import("../../src/agents/worktrees/filesystem-native.js");
-const refreshCommit = values["refresh-commit"]
-  ? await requireGit(repo, ["rev-parse", "--verify", `${values["refresh-commit"]}^{commit}`])
+const alternate = values["alternate-commit"] ?? values["refresh-commit"];
+const refreshCommit = alternate
+  ? await requireGit(repo, ["rev-parse", "--verify", `${alternate}^{commit}`])
   : undefined;
 if (refreshCommit) {
-  assert(process.platform === "darwin", "Clone identity proof requires APFS");
+  assert(
+    values["alternate-commit"] || process.platform === "darwin",
+    "Clone identity proof requires APFS",
+  );
   assert(!values.prewarm && !values["alternate-policy"] && !values["default-base"]);
   await new ManagedWorktreeService({ getConfig: () => config }).create({
     repoRoot: repo,
@@ -434,6 +442,12 @@ try {
     const processUsed = process.cpuUsage(processCpu);
     const row = {
       index,
+      requestedCommit,
+      generations: values["alternate-commit"]
+        ? (await listTemplatesAsync(process.env))
+            .filter((entry) => entry.status === "ready")
+            .map(({ id, sourceCommit, path: directory }) => ({ id, sourceCommit, directory }))
+        : undefined,
       sourceOnly,
       ownerSha256,
       projectOwnerSha256,
@@ -477,7 +491,7 @@ try {
     }
     assert.equal(await requireGit(created.path, ["rev-parse", "HEAD"]), requestedCommit);
     assert.equal(await requireGit(created.path, ["status", "--porcelain"]), "");
-    if (refreshCommit) {
+    if (refreshCommit && !values["alternate-commit"]) {
       assert(previous?.backend === "apfs");
       const current = (await listTemplatesAsync(process.env)).find(
         (entry) => entry.cacheKey === previous.cacheKey,

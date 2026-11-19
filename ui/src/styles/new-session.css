@@ -101,7 +101,6 @@ openclaw-new-session-page,
   color: var(--session-header-control-active-color);
 }
 
-.new-session-page__draft-toggle-label,
 .new-session-page__incognito-toggle-label {
   font-size: 12px;
 }
@@ -2154,6 +2153,7 @@ span.new-session-page__select {
   }
 
   .new-session-page__context-tray .new-session-page__trigger-label {
+    min-inline-size: 0;
     max-width: none;
   }
 
@@ -2162,7 +2162,6 @@ span.new-session-page__select {
     flex: 0 0 14px;
     width: 14px;
     height: 14px;
-    margin-inline-start: auto;
     color: var(--muted);
     stroke-width: 1.5px;
   }

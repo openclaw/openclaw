@@ -19,7 +19,6 @@ import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
-import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import {
   applyCronCreateCallerScopeDefault,
   assertCronModelJobAllowed,
@@ -56,7 +55,6 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   sessionMutationCommitGuard,
   hasCurrentClientAuthority,
 }) => {
-  assertActiveAgentRuntimeAuthority(client, context);
   sessionMutationCommitGuard?.();
   if (hasCurrentClientAuthority?.() === false) {
     throw new Error("Automation caller authority is no longer active");
@@ -114,7 +112,6 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     execPolicy = resolveCronStreamExecPolicy(
       client,
       cronCreateRequiresStreamExecAuthority(candidate),
-      context,
     );
     if (execPolicy && !jobCreate.id) {
       jobCreate.id = randomUUID();

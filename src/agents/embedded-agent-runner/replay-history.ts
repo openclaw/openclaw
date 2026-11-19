@@ -10,9 +10,7 @@ import { sanitizeSessionMessagesImages } from "../embedded-agent-helpers/images.
 import {
   providerRequiresSignedThinking,
   shouldAllowProviderOwnedThinkingReplay,
-  shouldMergeConsecutiveTurns,
-  validateAnthropicTurns,
-  validateGeminiTurns,
+  validateReplayTurnsForPolicy,
 } from "../embedded-agent-helpers/turns.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { annotateInterSessionUserMessages } from "../replay-provenance.js";
@@ -223,11 +221,5 @@ export async function validateReplayTurns(
     messages = context.messages;
   }
 
-  const validatedGemini = policy.validateGeminiTurns ? validateGeminiTurns(messages) : messages;
-  return policy.validateAnthropicTurns
-    ? validateAnthropicTurns(validatedGemini, {
-        mergeConsecutiveTurns: shouldMergeConsecutiveTurns(policy, params.modelApi),
-        mergeConsecutiveUserTurns: !params.preserveUserTurns,
-      })
-    : validatedGemini;
+  return validateReplayTurnsForPolicy(messages, policy, params.modelApi, params.preserveUserTurns);
 }

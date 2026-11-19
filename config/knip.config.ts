@@ -52,6 +52,7 @@ const repositoryScriptEntries = [
   // Performance drivers and their preloads are invoked directly from documented commands.
   "scripts/perf/**/*.{js,mjs,cjs,ts,mts,cts}!",
   "scripts/perf/decision-tool-catalog-measure.ts!",
+  "scripts/perf/persisted-turn-admission-measure.ts!",
   "scripts/perf/exec-safe-bin-io-measure.mjs!",
   "scripts/perf/usage-cost-source-measure.mjs!",
   "scripts/perf/clickclack-account-snapshot.ts!",
@@ -64,6 +65,8 @@ const repositoryScriptEntries = [
   "test/scripts/fixtures/mantis-telegram-failure.mts",
   // Spawned directly by beam-handoff.joined.e2e.test.ts.
   "test/fixtures/beam-live-handoff-client/beam.mjs",
+  // Forked by update-command-doctor-child.test.ts to model the successor's state swap.
+  "src/cli/update-cli/update-command-state-handoff.process.test-support.ts!",
   // Their source headers document standalone benchmark and measurement commands.
   "scripts/bench-ci-lint-plan.mts!",
   "scripts/bench-ci-planner.mts!",
@@ -168,6 +171,8 @@ const repositoryScriptEntries = [
   ".github/workflows/openclaw-stable-main-closeout.yml!",
   // Prepared publication imports its verifier from the frozen release harness.
   ".github/workflows/openclaw-release-publish.yml!",
+  // Release validation imports shared policy from its trusted workflow checkout.
+  ".github/workflows/full-release-validation.yml!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/actions/setup-node-env/seed-bun-from-image.mjs!",
@@ -439,6 +444,7 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs!",
   // published-driver-update-docker.sh launches this managed-update proof inside Docker.
   "scripts/e2e/lib/upgrade-survivor/published-driver.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/published-driver-plugin-publication.mjs!",
   "scripts/e2e/lib/upgrade-survivor/published-plugin-registry.mjs!",
   "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs!",
   // The compiler below exposes the runner's inline Node imports.
@@ -610,11 +616,13 @@ function compileWorkflowConsumers(source: string, filePath: string): string {
       : path.resolve(filePath) ===
           path.resolve(".github/workflows/openclaw-stable-main-closeout.yml")
         ? ".closeout-tooling"
-        : undefined;
+        : path.resolve(filePath) === path.resolve(".github/workflows/full-release-validation.yml")
+          ? "workflow"
+          : undefined;
   if (stagedToolingRoot) {
     return [
       ...source.matchAll(
-        /\b(?:import|const)\s*\{([^}]+)\}\s*(?:from\s*|=\s*await\s+import\(\s*)["']\.\/(\.(?:release-harness|closeout-tooling))\/(scripts\/[^"'\r\n]+)["']/gu,
+        /\b(?:import|const)\s*\{([^}]+)\}\s*(?:from\s*|=\s*await\s+import\(\s*)["']\.\/(\.(?:release-harness|closeout-tooling)|workflow)\/(scripts\/[^"'\r\n]+)["']/gu,
       ),
     ]
       .filter((match) => match[2] === stagedToolingRoot)

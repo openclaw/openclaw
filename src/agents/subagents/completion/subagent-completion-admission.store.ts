@@ -61,7 +61,11 @@ export async function recordRequiredCompletionFailure(
   reason: string,
   batch: readonly SubagentRunRecord[] = [entry],
 ): Promise<void> {
-  if (subagentRuns.get(entry.runId)?.delivery?.status === "delivered") {
+  const wake = entry.requesterSettleWake;
+  if (
+    subagentRuns.get(entry.runId)?.delivery?.status === "delivered" &&
+    !wake?.requesterYieldBatch
+  ) {
     return;
   }
   subagentRegistryLog.warn("Subagent completion delivery failed", {
@@ -71,13 +75,12 @@ export async function recordRequiredCompletionFailure(
   });
   if (
     entry.expectsCompletionMessage !== true ||
-    entry.completionTarget !== "parent" ||
+    (entry.completionTarget !== "parent" && !wake?.requesterYieldBatch) ||
     entry.execution.status !== "terminal" ||
     entry.pauseReason === "sessions_yield"
   ) {
     return;
   }
-  const wake = entry.requesterSettleWake;
   // Share the yielded requester's failure identity with its lifecycle settlement.
   const runId =
     wake?.requesterYieldBatch || batch.length > 1
@@ -94,17 +97,17 @@ export async function recordRequiredCompletionFailure(
         ))
       : `subagent-delivery-failure:${entry.taskRunId ?? entry.runId}:${entry.delivery?.generation ?? 1}`;
   // This records a failed obligation, without borrowing its retired execution authority.
-  // The notice goes to the requester chat as it is now; a deleted requester gets none.
+  // Address the current chat, including a compaction successor; deletion and Stop get no notice.
   const requester = {
     agentId: entry.requesterAgentId,
     sessionKey: entry.requesterSessionKey,
     storePath: entry.requesterStorePath,
   };
   const current = await readSessionEntryReadOnlyInWorker(requester);
-  if (!current?.sessionId) {
+  if (!current?.sessionId || current.status === "killed") {
     return;
   }
-  await runWithoutOwnedSessionTranscriptWrites(() =>
+  const result = await runWithoutOwnedSessionTranscriptWrites(() =>
     appendSessionTranscriptReport(
       {
         ...requester,
@@ -125,11 +128,14 @@ export async function recordRequiredCompletionFailure(
                   renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed"),
                   "child completion failure notice",
                 ),
-                details: { runId, childRunId: entry.runId },
+                details: { runId, childRunId: entry.runId, error: reason },
               },
       },
     ),
   );
+  if (!result.ok) {
+    throw new Error(`Child result failure notice could not be appended: ${result.error.code}`);
+  }
 }
 
 function parseAcknowledgedRecord(value: unknown): SubagentCompletionRecord {

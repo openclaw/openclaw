@@ -7,6 +7,8 @@ import type {
 } from "../../../../src/templates/clawhub-source.ts";
 import { pathForPluginCatalogEntry } from "../../app-route-paths.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
+import { iconData } from "../../components/icon-data.ts";
+import { LINK_READER_HOVERCARD_OPEN_DELAY_MS } from "../../components/link-reader-target.ts";
 import { inspection } from "../../e2e/plugins-settings-admin.test-support.ts";
 import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
@@ -25,9 +27,18 @@ const proofDir = createControlUiE2eArtifactDir("templates-catalog");
 const capture = async (page: Page, name: string, content: Locator, scrollTo?: Locator) => {
   const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [content], {
     animations: "disabled",
+    elements: name === "after-catalog" ? [content] : [],
     scrollTo,
   });
   await writeFile(`${proofDir}/${name}.png`, frame.png);
+  await writeFile(
+    `${proofDir}/${name}.json`,
+    JSON.stringify({
+      viewport: page.viewportSize(),
+      scale: await page.evaluate(() => devicePixelRatio),
+      elements: frame.elements.map(({ bounds }) => ({ bounds })),
+    }),
+  );
 };
 
 const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
@@ -85,6 +96,8 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     detailPublisher: Partial<Pick<ClawHubTemplateCatalogEntry, "ownerHandle" | "official">> = {},
     loading = false,
     colorScheme: "light" | "dark" = "light",
+    linkPreviews = false,
+    catalogEntries: ClawHubTemplateCatalogEntry[] = [entry],
   ) {
     const context = await browser.newContext({
       colorScheme,
@@ -95,6 +108,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     onTestFinished(() => context.close());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      automaticallyFetchFavicons: linkPreviews,
       historyMessages: [
         {
           role: "assistant",
@@ -134,7 +148,10 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         "agents.list": agentsList,
         "templates.catalog.search": {
           entries: [entry],
-          overview: { featured: [entry], sections: [{ category: "research", entries: [entry] }] },
+          overview: {
+            featured: catalogEntries,
+            sections: [{ category: "research", entries: catalogEntries }],
+          },
         },
         "templates.catalog.detail": {
           detail: {
@@ -353,6 +370,14 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     });
     const detail = await openDetail(page);
     await capture(page, "dependency-provenance", detail.getByRole("heading", { name: "Skills" }));
+    // Skill rows carry the Skills navigation glyph, not the docs book.
+    expect(
+      await detail
+        .locator(".plugin-capabilities")
+        .filter({ has: page.getByRole("heading", { name: "Skills" }) })
+        .locator(".plugin-capability__icon path")
+        .evaluateAll((paths) => paths.map((path) => path.getAttribute("d"))),
+    ).toEqual(iconData.sparkles.children.map(([, attributes]) => attributes.d));
     await detail.getByText("ClawHub · Version 2.0.0", { exact: true }).waitFor();
     await detail.getByText("ClawHub · Version 1.2.0", { exact: true }).waitFor();
     expect(await detail.getByText("Installed", { exact: true }).count()).toBe(0);
@@ -366,7 +391,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       const rail = detail.locator(".plugin-catalog-detail__sidebar");
       await capture(page, `detail-rail-${viewport.name}`, rail, rail);
       const audit = rail.locator(".plugin-catalog-detail__security");
-      expect(await audit.getAttribute("href")).toBe(auditUrl);
+      expect(await audit.getByRole("link").getAttribute("href")).toBe(auditUrl);
       expect(await audit.locator("strong").textContent()).toBe("Clean");
       expect(await audit.locator(".is-filled").count()).toBe(3);
       const date = (value: number) =>
@@ -399,6 +424,33 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
         viewport.width,
       );
+    },
+  );
+
+  it.each(["light", "dark"] as const)(
+    "explains the release audit from its info control while link previews are on in %s",
+    async (theme) => {
+      const { page } = await fixture(viewports[3], undefined, undefined, false, theme, true);
+      const detail = await openDetail(page);
+      const audit = detail.locator(".plugin-catalog-detail__security");
+      const hint = page.getByRole("tooltip").filter({ hasText: /\S/u });
+      const info = audit.getByRole("button");
+      await info.hover();
+      await hint.waitFor();
+      // The audit link's page preview must not replace the hint once its delay passes.
+      await page.waitForTimeout(LINK_READER_HOVERCARD_OPEN_DELAY_MS * 2);
+      expect(await page.locator(".link-hovercard").count()).toBe(0);
+      expect(await hint.textContent()).toBe(
+        "ClawHub checks each release for vulnerabilities and agentic risk.",
+      );
+      await capture(page, `audit-info-${theme}`, audit, audit);
+      // Clicking explains instead of following the audit link, and keeps the hint open.
+      await info.click();
+      await page.mouse.move(0, 0);
+      await page.waitForTimeout(LINK_READER_HOVERCARD_OPEN_DELAY_MS * 2);
+      expect(await hint.count()).toBe(1);
+      expect(page.url()).toContain("/templates/");
+      expect(page.context().pages()).toHaveLength(1);
     },
   );
 
@@ -495,7 +547,30 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
   });
 
   it("lays out featured cards and switches category shelves to filtered results", async () => {
-    const { page, gateway } = await fixture();
+    const { page, gateway } = await fixture(
+      undefined,
+      undefined,
+      undefined,
+      false,
+      "light",
+      false,
+      [
+        workflowOperator,
+        { ...researchTemplate, iconUrl: "/apple-touch-icon.png" },
+        {
+          ...workflowOperator,
+          packageName: "@maker/inbox",
+          displayName: "Inbox Organizer",
+          ownerHandle: "maker",
+        },
+        {
+          ...workflowOperator,
+          packageName: "@maker/planner",
+          displayName: "A long weekly planning Template name",
+          ownerHandle: "a-long-publisher-handle",
+        },
+      ],
+    );
     await page.locator("[data-templates-featured] [data-templates-entry]").first().waitFor();
     await page
       .locator('[data-templates-category="research"] [data-templates-entry]')
@@ -516,19 +591,57 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     await capture(
       page,
       "after-catalog",
-      page.getByRole("heading", { name: "Templates", exact: true }),
+      page.locator("[data-templates-featured] [data-templates-entry]").first(),
     );
-    // Four-column cards are too narrow to fit the name between the artwork and Add.
-    const titleRow = await page
-      .locator("[data-templates-featured] [data-templates-entry] .agents-home__template-head")
-      .first()
-      .evaluate((head) => ({
-        head: head.getBoundingClientRect().width,
-        name: head.querySelector("h3")?.getBoundingClientRect().width ?? 0,
-      }));
-    expect(Math.abs(titleRow.head - titleRow.name)).toBeLessThan(1);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await capture(page, "catalog-mobile", page.locator("[data-templates-featured]"));
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      390,
+    );
+    await page.setViewportSize({ width: 1440, height: 900 });
+    for (const selector of ["[data-templates-featured]", '[data-templates-category="research"]']) {
+      const cards = page.locator(`${selector} [data-templates-entry]`);
+      expect(await cards.count()).toBe(4);
+      const boxes = await cards.evaluateAll((elements) =>
+        elements.map((card) => {
+          const { x, y } = card.getBoundingClientRect();
+          return { x, y };
+        }),
+      );
+      expect(boxes[0]!.y).toBe(boxes[1]!.y);
+      expect(boxes[2]!.y).toBe(boxes[3]!.y);
+      expect(boxes[0]!.x).toBe(boxes[2]!.x);
+      expect(boxes[1]!.x).toBeGreaterThan(boxes[0]!.x);
+      expect(boxes[2]!.y).toBeGreaterThan(boxes[0]!.y);
+      const rows = await cards.evaluateAll((elements) =>
+        elements.map((card) => {
+          const art = card.querySelector(".agents-home__template-art")!;
+          const body = card.querySelector(".agents-home__template-head")!.getBoundingClientRect();
+          const image = art.getBoundingClientRect();
+          const add = card.querySelector(".agents-home__template-add")!.getBoundingClientRect();
+          const name = card.querySelector("h3")!.getBoundingClientRect();
+          const owner = card
+            .querySelector(".agents-home__template-identity span")!
+            .getBoundingClientRect();
+          return {
+            background: getComputedStyle(art).backgroundColor,
+            artworkHeight: image.height,
+            bodyHeight: body.height,
+            centerDelta: Math.abs(add.y + add.height / 2 - (body.y + body.height / 2)),
+            identityDelta: Math.abs(name.y - owner.y),
+          };
+        }),
+      );
+      for (const row of rows) {
+        expect(row.background).toBe("rgba(0, 0, 0, 0)");
+        expect(row.artworkHeight).toBe(row.bodyHeight);
+        expect(row.centerDelta).toBeLessThan(1);
+        // Different font sizes share a baseline, with a one-pixel top offset.
+        expect(row.identityDelta).toBeLessThanOrEqual(1);
+      }
+    }
     await gateway.waitForRequest("templates.catalog.search", {
-      match: { overview: true, limit: 8 },
+      match: { overview: true, limit: 4 },
     });
     expect(await gateway.getRequests("templates.catalog.search")).toHaveLength(1);
 
@@ -765,6 +878,14 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         ownerHandle: "maker",
         official: false,
       });
+      await gateway.setHistoryMessages([]);
+      await gateway.setSessionRow({
+        key: "agent:workflow-operator:main",
+        kind: "direct",
+        sessionId: "template-empty-session",
+        hasMessages: false,
+      });
+      await gateway.deferNext("chat.startup");
       const card = page.locator("[data-templates-explore] [data-templates-entry]").first();
       await card.waitFor();
       expect(await card.textContent()).toContain("@openclaw");
@@ -864,12 +985,25 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       expect(Math.abs(admittedFooter!.y - pendingFooter!.y)).toBeLessThanOrEqual(1);
       expect(Math.abs(admittedFooter!.height - pendingFooter!.height)).toBeLessThanOrEqual(1);
       await capture(page, `template-add-${width}-admitted`, admittedPane);
+      // The session description proves there are no saved messages, even
+      // while setup and the first history response remain pending.
+      await gateway.waitForRequest("sessions.messages.subscribe", {
+        match: { key: "agent:workflow-operator:main" },
+      });
+      expect(await admittedPane.locator(".creation-composer").count()).toBe(1);
+      const transcriptSkeleton = admittedPane.locator(
+        ".chat-thread .chat-conversation-loading, .chat-thread .loading-skeleton, .chat-thread openclaw-panel-loading-skeleton",
+      );
+      expect(await transcriptSkeleton.count()).toBe(0);
       await gateway.resolveDeferred("templates.add.apply", {
         agentId: "workflow-operator",
         sessionKey: "agent:workflow-operator:main",
         status: "complete",
         readiness: { ready: false },
       });
+      await admittedPane.locator(".creation-composer").waitFor({ state: "hidden" });
+      expect(await transcriptSkeleton.count()).toBe(0);
+      await gateway.resolveDeferred("chat.startup");
       expect(await composer.inputValue()).toBe("Keep my draft while setup finishes");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       // One Add request, with no plan digest or acknowledgements, and no review first.

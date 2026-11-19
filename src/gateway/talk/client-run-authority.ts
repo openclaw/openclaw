@@ -55,8 +55,8 @@ export async function retainTalkClientRunAuthority(
       acceptGatewayDeviceSourceAuthority(params.hasCurrentClientAuthority);
     },
     async retainRun(runId: string) {
-      if (released) {
-        throw new Error("Talk caller source has closed");
+      if (released || sourceCurrent?.() === false) {
+        throw new Error("Talk caller source authority is no longer active");
       }
       const retained = await retainGatewayOperatorRun({
         client: client ?? null,
@@ -67,9 +67,6 @@ export async function retainTalkClientRunAuthority(
       });
       const assertSourceCurrent = () => {
         retained.authority?.assertCurrent();
-        if (sourceCurrent?.() === false) {
-          throw new Error("Talk caller source authority is no longer active");
-        }
       };
       try {
         assertSourceCurrent();

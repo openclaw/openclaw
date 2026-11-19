@@ -327,7 +327,8 @@ jobs:
             include: include.map((row) => {
               const physicalLabel = row.runner_label ?? blacksmithRunnerLabel(row.runner);
               const boatLabel = boatRunners[physicalLabel];
-              const useBoat = active && boatJobsRemaining > 0 && boatLabel;
+              // Mixed extension batches can exhaust Boat RAM and swap; retain their Blacksmith route.
+              const useBoat = active && row.task === "extension-file-shard" && boatJobsRemaining > 0 && boatLabel;
               if (useBoat) boatJobsRemaining -= 1;
               const label = useBoat ? boatLabel : physicalLabel;
               return label ? { ...row, runner_label: label } : row;
