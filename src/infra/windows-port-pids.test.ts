@@ -8,7 +8,10 @@ vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawnSync: spawn,
 }));
-vi.mock("./windows-appcontainer-spawn.js", () => ({ assertAppContainerSpawnSupported: () => {} }));
+vi.mock("./windows-appcontainer-spawn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./windows-appcontainer-spawn.js")>()),
+  assertAppContainerSpawnSupported: () => {},
+}));
 vi.mock("./windows-install-roots.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./windows-install-roots.js")>()),
   getWindowsPowerShellExePath: () => "powershell.exe",
