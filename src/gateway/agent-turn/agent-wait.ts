@@ -16,6 +16,7 @@ import {
   projectAgentJobObservation,
   waitForAgentJob,
 } from "./agent-job.js";
+import type { AgentJobSession } from "./types.js";
 
 /** Capture an agent wait's initial session and defer its terminal or queued result. */
 export function prepareAgentWaitForTurn(
@@ -53,7 +54,7 @@ export function prepareAgentWaitForTurn(
     queuedBeforeWait?.session ??
     getAgentJobSession(runId, source === "chat" ? "chat" : undefined) ??
     captureAgentJobSession(runContext);
-  const wait = async (recovery?: { recoverWithSessionAuthorization: true }) => {
+  const wait = async (canReadRestoredSession?: (session: AgentJobSession) => Promise<boolean>) => {
     if (queuedBeforeWait) {
       return queuedBeforeWait;
     }
@@ -63,7 +64,7 @@ export function prepareAgentWaitForTurn(
       timeoutMs,
       source,
       canRestoreCompletion: () =>
-        recovery?.recoverWithSessionAuthorization === true &&
+        canReadRestoredSession !== undefined &&
         !source &&
         !runContext &&
         !getAgentRunContext(runId) &&
@@ -74,15 +75,18 @@ export function prepareAgentWaitForTurn(
       readRestoredCompletion: () =>
         getSessionRowProjection(context)
           ?.readRestoredCompletion(runId)
-          ?.then(
-            (entry) =>
-              entry && {
-                status: "ok" as const,
-                startedAt: entry.startedAt,
-                endedAt: entry.endedAt,
-                session: captureAgentJobSession({ ...entry, lifecycleGeneration }),
-              },
-          ),
+          ?.then(async (entry) => {
+            const session = entry && captureAgentJobSession({ ...entry, lifecycleGeneration });
+            if (!session || !(await canReadRestoredSession?.(session))) {
+              return undefined;
+            }
+            return {
+              status: "ok" as const,
+              startedAt: entry.startedAt,
+              endedAt: entry.endedAt,
+              session,
+            };
+          }),
       stopWaiting: () => {
         queuedDuringWait = queuedResult();
         return queuedDuringWait !== undefined;

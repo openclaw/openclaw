@@ -1,9 +1,9 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
-import { createRequestGatewayMethodRegistry } from "./server-methods.js";
+import { createRequestGatewayMethodRegistry, handleGatewayRequest } from "./server-methods.js";
 import { createGatewaySubagentRuntime } from "./server-plugin-subagent-runtime.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
@@ -15,7 +15,7 @@ import {
 } from "./session-row-projection.test-support.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
-it("keeps a restored private run outside a nonmember plugin caller's view", async () => {
+it("protects a restored draft run across public and plugin waits", async () => {
   await withSessionRowProjectionState(async (create, state) => {
     const cfg = rolePolicyConfig();
     await state.writeConfig(cfg);
@@ -45,12 +45,36 @@ it("keeps a restored private run outside a nonmember plugin caller's view", asyn
     });
     const context = createGatewayRequestContext(makeContextParams());
     context.getRuntimeConfig = () => cfg;
-    context.getGatewayMethodRegistry = () => createRequestGatewayMethodRegistry();
+    const methodRegistry = createRequestGatewayMethodRegistry();
+    context.getGatewayMethodRegistry = () => methodRegistry;
     context.trackExecution = trackAsyncWork;
     context.createAgentTurnFacade = (principal) =>
       createInternalAgentTurnFacade({ ...principal, getContext: () => context });
     const projection = await create({ cfg, modelCatalog: [], context });
     bindSessionRowProjection(context, () => projection);
+    const viewer = roleClient("view", "nonmember-viewer");
+    const request = async (client: typeof viewer, id: string) => {
+      const respond = vi.fn();
+      await handleGatewayRequest({
+        context,
+        client,
+        respond,
+        isWebchatConnect: () => true,
+        req: { type: "req", id: "wait", method: "agent.wait", params: { runId: id, timeoutMs: 0 } },
+        methodRegistry,
+      });
+      return respond;
+    };
+    expect(await request(owner, runId)).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "ok", endedAt: 2 }),
+    );
+    for (const id of [runId, "absent-run"]) {
+      expect(await request(viewer, id)).toHaveBeenCalledWith(true, {
+        runId: id,
+        status: "timeout",
+      });
+    }
     const runtime = createGatewaySubagentRuntime(() => context);
     const wait = (id: string) =>
       withPluginRuntimeGatewayRequestScope(

@@ -651,31 +651,27 @@ export async function waitForAgentJob(params: {
   if (cached) {
     return projectAgentJobObservation(cached);
   }
-  if (
+  const signal = getAsyncWorkSignal();
+  if (signal?.aborted) {
+    return null;
+  }
+  const mayRestore = () =>
     params.canRestoreCompletion?.() &&
     !pendingAgentRunTerminals.has(params.runId) &&
-    !agentRunStarts.has(params.runId)
-  ) {
-    const recovery = params.readRestoredCompletion?.();
-    if (recovery) {
-      const restored = await recovery;
-      const published = getAgentRunSnapshot(params);
-      if (published) {
-        return projectAgentJobObservation(published);
-      }
-      if (
-        restored &&
-        params.canRestoreCompletion?.() &&
-        !pendingAgentRunTerminals.has(params.runId) &&
-        !agentRunStarts.has(params.runId)
-      ) {
-        return restored;
-      }
-    }
-  }
-  const signal = getAsyncWorkSignal();
-  if (params.timeoutMs <= 0 || signal?.aborted) {
-    return null;
+    !agentRunStarts.has(params.runId);
+  const readRecovery = () => (mayRestore() ? params.readRestoredCompletion?.() : undefined);
+  const currentRecovery = (restored: AgentJobObservation | undefined) => {
+    const published = getAgentRunSnapshot(params);
+    return published
+      ? projectAgentJobObservation(published)
+      : restored && mayRestore()
+        ? restored
+        : null;
+  };
+  if (params.timeoutMs <= 0) {
+    // A poll may inspect the existing startup record but never waits for a future event.
+    const recovery = readRecovery();
+    return recovery ? currentRecovery(await recovery) : null;
   }
 
   return await new Promise((resolve) => {
@@ -734,6 +730,22 @@ export async function waitForAgentJob(params: {
       onClose();
     } else {
       onWake();
+      // The same deadline and close listener cover both recovery and live observations.
+      if (!settled) {
+        void readRecovery()?.then(
+          (restored) => {
+            if (!settled) {
+              const snapshot = currentRecovery(restored);
+              if (snapshot) {
+                finish(snapshot);
+              }
+            }
+          },
+          () => {
+            // An unavailable historical read leaves the live waiter in charge.
+          },
+        );
+      }
     }
   });
 }
