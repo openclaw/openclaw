@@ -633,9 +633,8 @@ export async function handleApprovalResolve<
         !isApprovalRecordVisibleToClient({
           record: resolved.snapshot,
           client: params.client,
-          ...(params.authority.guard.family === "native-compatibility"
-            ? { cfg: params.context.getRuntimeConfig(), sessionAccess: retainedSessionAccess }
-            : {}),
+          cfg: params.context.getRuntimeConfig(),
+          sessionAccess: retainedSessionAccess,
         }) ||
         (params.reviewer && !custody?.isCurrent(resolved.snapshot))
       ) {

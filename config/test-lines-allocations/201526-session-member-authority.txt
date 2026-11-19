@@ -1,4 +1,4 @@
-772
+882
 # Issue #201526 part D: real-Gateway proof of creator/admin vs invited/team-writer
 # permission changes and per-turn approval audiences; shared lookup/resolve/history
 # and event/push boundaries for exec, plugin and system-agent approvals; authenticated
@@ -11,3 +11,6 @@
 # Legacy-reader regression exercises actual exec/plugin list, lookup and wait RPCs
 # for device-matching/unbound records and preserves admin/internal-runtime readers;
 # the existing plugin wait fixture now uses an authenticated requesting profile.
+# Worker-commit regression covers cross-device creator/admin decisions through real
+# WebSocket request ownership. Existing plugin routing E2E uses authenticated profiles
+# and source sessions while retaining write-only callers and unauthorized-reviewer checks.

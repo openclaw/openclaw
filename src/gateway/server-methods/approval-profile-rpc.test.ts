@@ -18,7 +18,11 @@ import {
   registerPlugin,
   registerSystemAgent,
 } from "./approval.handlers.test-support.js";
-import { createContext } from "./approval.test-support.js";
+import {
+  createApprovalInvocation,
+  createClient as createSocketClient,
+  createContext,
+} from "./approval.test-support.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import { createPluginApprovalHandlers } from "./plugin-approval.js";
 import type { GatewayClient } from "./types.js";
@@ -106,6 +110,44 @@ it("enforces durable creator/raiser ownership across generic lookup, resolution,
           expect(await invoke("approval.get", { id }, creator, context)).toMatchObject({
             ok: true,
           });
+        }
+        for (const admin of [false, true]) {
+          const reviewer = createSocketClient({
+            deviceId: admin ? "cross-device-admin" : "cross-device-creator",
+            profileId: admin ? profiles.other : profiles.creator,
+            scopes: admin ? ["operator.admin"] : ["operator.approvals"],
+          });
+          prepareGatewayRecipientProfile(reviewer);
+          const execReview = await registerExec(managers.exec, {
+            id: `cross-device-exec-${admin}`,
+            requester: { profileId: profiles.raiser! },
+          });
+          const pluginReview = await registerPlugin(managers.plugin, {
+            id: `plugin:cross-device-${admin}`,
+            profileId: profiles.raiser!,
+          });
+          const legacyHandlers = {
+            ...createExecApprovalHandlers(managers.exec),
+            ...createPluginApprovalHandlers(managers.plugin),
+          };
+          for (const [kind, approval] of [
+            ["exec", execReview],
+            ["plugin", pluginReview],
+          ] as const) {
+            const outcome = await createApprovalInvocation({
+              handlers: legacyHandlers,
+              method: `${kind}.approval.resolve`,
+              body: { id: approval.record.id, decision: "deny" },
+              client: reviewer,
+              context,
+              transport: "websocket",
+            }).invoke();
+            expect(outcome).toMatchObject({ ok: true });
+            expect(await approval.decision).toBe("deny");
+            expect(
+              (await getOperatorApproval({ id: approval.record.id, databaseOptions }))?.status,
+            ).toBe("denied");
+          }
         }
         const visibility = { getCfg: () => cfg, client: own };
         expect(
