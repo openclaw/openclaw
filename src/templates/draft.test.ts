@@ -279,6 +279,13 @@ describe("agent-created Template draft avatars", () => {
       width: 1,
     },
     { path: "harbor.svg", format: "SVG", bytes: async () => Buffer.from(SVG), width: 512 },
+    {
+      // The create-template inventory writes an avatar that the agent stores inline beside the draft.
+      path: ".openclaw/template-drafts/inline-avatar.png",
+      format: "draft-folder PNG",
+      bytes: async () => PNG,
+      width: 1,
+    },
   ])("packages a $format avatar as the icon and the new agent's avatar", async (source) => {
     const { prepare } = await avatarFixture(source.path, await source.bytes());
     await using prepared = await prepare();

@@ -16,6 +16,16 @@ const COMMAND_TIMEOUT_MS = 15_000;
 const DRAFT_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const AGENT_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const AVATAR_IMAGE = /\.(?:png|jpe?g|webp|gif|svg)$/i;
+const INLINE_AVATAR = /^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,([A-Za-z0-9+/=]+)$/i;
+const INLINE_AVATAR_EXTENSIONS = {
+  png: "png",
+  jpeg: "jpg",
+  webp: "webp",
+  gif: "gif",
+  "svg+xml": "svg",
+};
+// The same ceiling review applies to a draft avatar.
+const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 // Startup files a Template may carry. USER.md and MEMORY.md describe the current
 // owner, so they are reported as private and never offered as source material.
 const PORTABLE_FILES = [
@@ -166,8 +176,12 @@ async function listInstructionFiles(workspace) {
   return { present, privateFiles };
 }
 
-/** A workspace-relative image the agent already uses as its avatar, if there is one. */
-async function resolveAvatar(workspace, identity) {
+/**
+ * A workspace-relative image for the agent's avatar, if it has one. An avatar chosen in
+ * the Control UI is stored inline as a data URL, so it is written beside the draft for
+ * review to read as a file; the agent never has to copy image data into the proposal.
+ */
+async function resolveAvatar(workspace, identity, draftId) {
   let candidate = typeof identity?.avatar === "string" ? identity.avatar.trim() : "";
   if (!candidate) {
     try {
@@ -176,6 +190,24 @@ async function resolveAvatar(workspace, identity) {
     } catch {
       candidate = "";
     }
+  }
+  const inline = candidate.match(INLINE_AVATAR);
+  if (inline) {
+    const bytes = Buffer.from(inline[2], "base64");
+    if (bytes.length === 0 || bytes.length > AVATAR_MAX_BYTES) {
+      return undefined;
+    }
+    const extension = INLINE_AVATAR_EXTENSIONS[inline[1].toLowerCase()];
+    const relative = `.openclaw/template-drafts/${draftId}-avatar.${extension}`;
+    try {
+      await writeFile(join(workspace, relative), bytes, { flag: "wx", mode: 0o600 });
+    } catch (error) {
+      // A repeated inventory for the same draft finds the file it already wrote.
+      if (error?.code !== "EEXIST") {
+        return undefined;
+      }
+    }
+    return relative;
   }
   if (!candidate || /^[a-z][a-z0-9+.-]*:/i.test(candidate) || isAbsolute(candidate)) {
     return undefined;
@@ -332,7 +364,11 @@ const warnings = [];
 if (!plugins.ok) warnings.push(`plugins unavailable: ${plugins.error}`);
 if (!automations.ok) warnings.push(`automations unavailable: ${automations.error}`);
 
-const avatar = await resolveAvatar(options.workspace, identity.ok ? identity.value : undefined);
+const avatar = await resolveAvatar(
+  options.workspace,
+  identity.ok ? identity.value : undefined,
+  draftId,
+);
 const output = {
   draftId,
   draftPath: join(options.workspace, ".openclaw", "template-drafts", `${draftId}.json`),
