@@ -5,6 +5,7 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 import { isStateDatabaseMaintenanceContention } from "../../infra/gateway-state-owner-record.js";
+import { AUTOMATIC_RECOVERY_CLEANUP_STEP } from "../../infra/update-automatic-cleanup-result.js";
 import { formatUpdateDoctorLintFinding } from "../../infra/update-doctor-lint.js";
 import { formatUpdateFailureFact } from "../../infra/update-failure-facts-format.js";
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
@@ -277,6 +278,10 @@ function printStep(step: Omit<UpdateStepResult, "cwd">): void {
   defaultRuntime.log(`  ${statusIcon} ${step.name}${termination} ${duration}`);
   for (const finding of step.doctorLintFindings ?? []) {
     defaultRuntime.log(`    ${formatUpdateDoctorLintFinding(finding)}`);
+  }
+  // Cleanup states what it removed, freed and kept even when nothing needs attention.
+  if (step.name === AUTOMATIC_RECOVERY_CLEANUP_STEP && step.diagnostics?.[0]) {
+    defaultRuntime.log(`    ${theme.muted(step.diagnostics[0])}`);
   }
   if (step.advisory === undefined && !isFailedUpdateStep(step)) {
     return;

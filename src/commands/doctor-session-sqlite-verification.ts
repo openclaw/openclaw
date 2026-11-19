@@ -93,6 +93,11 @@ export function createRecoveryDestinationVerifier(
         // A consented disposal whose bytes are already gone protects nothing here.
         continue;
       }
+      if (target.databaseIdentity && run.manifest.updateRunId) {
+        // Its update run's outcome released this backup. The live file may legitimately be
+        // a new inode: the updater's own rollback and the startup swap replace it.
+        continue;
+      }
       const paths = resolveSqliteDatabaseFilePaths(target.sqlitePath);
       assertDoctorSqliteMaintenancePathsNotAliased("update recovery cleanup", paths, [stateDir]);
       const expected = destinations.get(target.sqlitePath);

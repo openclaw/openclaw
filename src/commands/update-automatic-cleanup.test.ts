@@ -752,7 +752,9 @@ it("retires a failed update's own capture only when it never activated", async (
   await complete(succeeded, now - 60_000);
   const activated = failedRun(now, ["staging", "validating", "activating"]);
   const activatedResult = await fail(activated.runId, now + 1_000);
+  // An activated failure keeps its own capture; with nothing older to release it adds no step.
   expect(activatedResult.steps.map((step) => step.name)).not.toContain("recovery-artifact-cleanup");
+  expect(fs.existsSync(activated.directory)).toBe(true);
   const unactivated = failedRun(now + 2_000, ["staging", "validating"]);
   const result = await fail(unactivated.runId, now + 3_000);
   expect(fs.existsSync(unactivated.directory)).toBe(false);
@@ -911,3 +913,51 @@ it.each(["intent", "unlink-pending", "retained"] as const)(
     }
   },
 );
+
+it("retires an already-current run's own capture when that run ends", async () => {
+  const { runId, directory } = capturedRun(now);
+  using clock = vi.spyOn(Date, "now");
+  clock.mockReturnValue(now + 1_000);
+  const emit = await prepareUpdateCommandTerminalResult(
+    { opts: { json: true, run: { runId, env } } },
+    { status: "skipped", mode: "git", reason: "already-current", steps: [], durationMs: 1 },
+    { rolledBack: false },
+  );
+  const result = await emit();
+  expect(getUpdateRun(runId, { env })?.status).toBe("skipped");
+  expect(fs.existsSync(directory)).toBe(false);
+  expect(result.steps.at(-1)?.diagnostics?.[0]).toContain("removed 1 item");
+});
+
+it("retires a failed run's capture after a later verified update, and reruns cleanup once verification lands", async () => {
+  const { runId: failed, directory: failedCapture } = capturedRun(now - 240_000);
+  {
+    using clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(now - 200_000);
+    finishUpdateRun(failed, { status: "rolled-back" }, { env });
+  }
+  const { runId, directory } = capturedRun(now);
+  // Cleanup runs before the Gateway's health verification is recorded.
+  await complete(runId, now + 1_000);
+  expect([failedCapture, directory].map(fs.existsSync)).toEqual([true, true]);
+  {
+    using clock = vi.spyOn(Date, "now");
+    clock.mockReturnValue(now + 30_000);
+    recordUpdateRunVerification(
+      runId,
+      {
+        serviceRunning: true,
+        versionMatch: true,
+        settled: true,
+        readyz: true,
+        channelsReady: true,
+        coreReady: true,
+        pluginErrors: [],
+      },
+      { env },
+    );
+  }
+  const cleanup = await automaticallyCleanUpdateRecovery(runId, env);
+  expect(cleanup?.advisory).toBeUndefined();
+  expect([failedCapture, directory].map(fs.existsSync)).toEqual([false, false]);
+});

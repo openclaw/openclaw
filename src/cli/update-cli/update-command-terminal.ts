@@ -12,7 +12,7 @@ import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
-import { automaticallyCleanUpdateRecovery, failedBeforeActivation } from "./automatic-cleanup.js";
+import { automaticallyCleanUpdateRecovery, failedUpdateCanCleanUp } from "./automatic-cleanup.js";
 import { prepareResult, printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
@@ -637,11 +637,9 @@ export async function recordUpdatePackageCompletion(
   if (!params.opts.json) {
     defaultRuntime.log("Finishing update: checking package backup retention and cleanup.");
   }
-  // Doctor can revoke restoration after capture. Both local and migrated
-  // finalization retire the retained parent's transaction through this boundary.
-  if (params.databaseBackup?.restoreRefusal) {
-    transaction.databaseBackupRoot = undefined;
-  }
+  // Both local and migrated finalization retire the retained parent's transaction here.
+  // A verified success removes its pre-migration images even after Doctor revoked
+  // automatic restoration (owner policy); an unverified outcome keeps them.
   // Retirement deletes the previous package before exit; time it even on success.
   const retirementStartedAt = performance.now();
   const retained: UpdateStepResult | void = await transaction
@@ -742,7 +740,7 @@ export async function prepareUpdateCommandTerminalResult(
       (result.status === "ok" ||
         (result.status === "skipped" && result.reason === "already-current") ||
         (result.status === "error" &&
-          failedBeforeActivation(params.opts.run.runId, params.opts.run.env)))
+          failedUpdateCanCleanUp(params.opts.run.runId, params.opts.run.env)))
         ? await automaticallyCleanUpdateRecovery(params.opts.run.runId, params.opts.run.env)
         : undefined;
     emit(cleanup ? [cleanup] : []);

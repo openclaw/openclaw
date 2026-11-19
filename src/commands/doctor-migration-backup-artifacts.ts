@@ -13,6 +13,7 @@ import {
   writeSessionSqliteMigrationManifest,
   type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
+import { UPDATE_RUN_ID_PATTERN } from "../infra/update-displaced-database-receipt.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { VERSION } from "../version.js";
@@ -62,6 +63,9 @@ export function recordDoctorMigrationBackups(
       };
     },
   );
+  // Inside an update this links the backups to the run whose outcome releases them.
+  // UPDATE_RUN_ID_ENV; spelled out so Doctor does not load the update control plane.
+  const updateRunId = env.OPENCLAW_UPDATE_RUN_ID?.trim();
   getOpenClawDatabaseMaintenanceScope()?.assertAdmission();
   writeSessionSqliteMigrationManifest({
     manifestPath,
@@ -71,6 +75,7 @@ export function recordDoctorMigrationBackups(
       openClawVersion: VERSION,
       startedAt: new Date().toISOString(),
       targets,
+      ...(updateRunId && UPDATE_RUN_ID_PATTERN.test(updateRunId) ? { updateRunId } : {}),
     },
   });
 }

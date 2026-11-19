@@ -209,7 +209,7 @@ it.each(
     ].map((scenario) => Object.assign(scenario, { kind })),
   ),
 )(
-  "retains $kind snapshots: restorable=$restorable, lateRefusal=$lateRefusal, outcome=$outcome, discardFails=$discardFails",
+  "retires $kind snapshots only on verified success: restorable=$restorable, lateRefusal=$lateRefusal, outcome=$outcome, discardFails=$discardFails",
   async ({ kind, restorable, lateRefusal, outcome, discardFails }) => {
     const base = await fs.realpath(dirs.make("update-database-retention-"));
     const fixture = await createPackageSwapFixture(base);
@@ -316,7 +316,8 @@ it.each(
       finalResult,
       () => {},
     );
-    const retired = restorable && !lateRefusal && outcome === "success";
+    // Owner policy: verified success retires the images even when restoration was unavailable.
+    const retired = outcome === "success";
     // Server-side captures are dropped only where their snapshots retire, and first.
     expect(discard).toHaveBeenCalledTimes(retired ? 1 : 0);
     if (retired && discardFails) {
@@ -334,11 +335,9 @@ it.each(
     }
     if (!restorable) {
       expect(capture?.step.warnings).toEqual([
-        expect.stringContaining("even after successful activation"),
+        expect.stringContaining("until this update is verified successful"),
       ]);
-      expect(capture?.step.diagnostics?.[0]).toContain(
-        "remain available after successful activation",
-      );
+      expect(capture?.step.diagnostics?.[0]).toContain("Restoring them is manual.");
     }
   },
 );

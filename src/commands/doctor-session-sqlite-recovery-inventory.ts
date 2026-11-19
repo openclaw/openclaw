@@ -39,6 +39,14 @@ import {
   readCompletedUpdateHistory,
 } from "./update-capture-cleanup.js";
 import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
+import {
+  classifyDisplacedDatabases,
+  scanDisplacedDatabases,
+} from "./update-displaced-database-cleanup.js";
+import {
+  createUpdateRunArtifactOwnership,
+  type UpdateRunArtifactOwnership,
+} from "./update-run-artifact-ownership.js";
 
 type Outcome = RecoveryCleanupArtifact["outcome"];
 export type RecoveryCleanupReport = ReturnType<typeof summarizeRecoveryCleanup>;
@@ -64,6 +72,8 @@ export function collectRecoveryInventory(params: {
   env: NodeJS.ProcessEnv;
   scan?: RecoveryInventoryScan;
   readHistory?: boolean;
+  /** Runs that own other update backups, so the newest unverified set is chosen across kinds. */
+  ownerRunIds?: readonly string[];
 }) {
   const entries = (directory: string) =>
     params.scan?.directory(directory) ?? fs.readdirSync(directory, { withFileTypes: true });
@@ -170,14 +180,26 @@ export function collectRecoveryInventory(params: {
       }
     }
   }
+  const updateRunIdOf = (ref: RecoveryArtifactReference) =>
+    ref.target.databaseIdentity ? ref.run.manifest.updateRunId : undefined;
+  let ownership: UpdateRunArtifactOwnership | undefined;
   if (
     params.readHistory !== false &&
-    [...references.values()].some((refs) => refs.some((ref) => ref.target.databaseIdentity))
+    ([...references.values()].some((refs) => refs.some((ref) => ref.target.databaseIdentity)) ||
+      params.ownerRunIds?.length)
   ) {
     const history = readCompletedUpdateHistory(params.env);
     supersededBefore = Math.max(
       history?.latestCompletedStartedAt ?? 0,
       history?.latestVerifiedFinishedAt ?? 0,
+    );
+    ownership = createUpdateRunArtifactOwnership(
+      history,
+      [
+        ...[...references.values()].flatMap((refs) => refs.map(updateRunIdOf)),
+        ...(params.ownerRunIds ?? []),
+      ].filter((runId): runId is string => runId !== undefined),
+      params.env,
     );
   }
   for (const [archivePath, refs] of references) {
@@ -210,6 +232,23 @@ export function collectRecoveryInventory(params: {
       item.outcome = outcome;
       item.reason = reason;
     };
+    // Backups an update's Doctor took are released by that run's outcome, not by the live
+    // file's identity: the updater's own rollback and the startup swap replace that file.
+    const ownerRunIds = [...new Set(refs.map(updateRunIdOf))];
+    // Once any manifest names an update run, only one owner's outcome may decide; the
+    // inode-based rules never apply to it, because retirement skips that live-file check.
+    const runOutcome = ownerRunIds.some((runId) => runId !== undefined)
+      ? ownerRunIds.length === 1
+        ? (ownership?.classify(ownerRunIds[0]!) ?? {
+            outcome: "protected" as const,
+            reason: "unreadable-update-history",
+          })
+        : { outcome: "protected" as const, reason: "conflicting-update-run-owners" }
+      : undefined;
+    item.runs.push(...ownerRunIds.filter((runId): runId is string => runId !== undefined));
+    if (runOutcome?.outcome === "candidate") {
+      item.reason = runOutcome.reason;
+    }
     if (refs.some((ref) => !ref.trusted)) {
       classify("protected", "unsupported-target-ownership");
     } else if (refs.every((ref) => ref.move.artifact?.disposal.state === "disposed")) {
@@ -226,11 +265,13 @@ export function collectRecoveryInventory(params: {
           (stat.nlink !== 1n && !isPendingMigrationArtifactClaim(archivePath, evidence))))
     ) {
       classify("blocked", "artifact-alias-or-nonregular");
+    } else if (runOutcome && runOutcome.outcome !== "candidate") {
+      classify(runOutcome.outcome, runOutcome.reason);
     } else if (
       refs.some(
         ({ run, target }) =>
-          !run.manifest.completedAt ||
-          target.validationBeforeArchive !== "passed" ||
+          (!runOutcome &&
+            (!run.manifest.completedAt || target.validationBeforeArchive !== "passed")) ||
           target.issues.some((issue) => !isSessionSqliteMigrationWarning(issue)),
       )
     ) {
@@ -242,6 +283,7 @@ export function collectRecoveryInventory(params: {
           .reason,
       );
     } else if (
+      !runOutcome &&
       refs.some(
         ({ target, run }) =>
           target.databaseIdentity && !(supersededBefore > Date.parse(run.manifest.completedAt!)),
@@ -387,6 +429,7 @@ export function collectRecoveryInventory(params: {
     artifacts,
     references,
     manifestPaths,
+    ownership,
     report: summarizeRecoveryCleanup(
       root,
       artifacts.filter((item) => !missingOriginals.has(item.path)),
@@ -512,19 +555,37 @@ function readUpdateCleanupInventory(params: {
   scan?: RecoveryInventoryScan;
   readHistory?: boolean;
 }) {
-  const inventory = collectRecoveryInventory(params);
+  const stateDir = path.dirname(
+    canonicalMigrationFilePath(path.join(resolveStateDir(params.env), "anchor")),
+  );
+  const families = scanDisplacedDatabases(stateDir, params.scan);
+  const inventory = collectRecoveryInventory({
+    ...params,
+    ownerRunIds: families.flatMap((family) => (family.receipt ? [family.runId] : [])),
+  });
   const captures = collectUpdateCaptureInventory({
     stateDir: inventory.report.stateDir,
     env: params.env,
     scan: params.scan,
     readHistory: params.readHistory,
   });
+  const displaced = classifyDisplacedDatabases(families, inventory.ownership);
+  if (params.scan?.incomplete) {
+    for (const item of displaced.artifacts) {
+      if (item.outcome === "candidate") {
+        item.outcome = "protected";
+        item.reason = "incomplete-recovery-inventory";
+        displaced.retirement.delete(item.path);
+      }
+    }
+  }
   return {
     ...inventory,
     captureIdentities: captures.identities,
+    displacedRetirement: displaced.retirement,
     report: summarizeRecoveryCleanup(
       inventory.report.stateDir,
-      [...inventory.report.artifacts, ...captures.artifacts],
+      [...inventory.report.artifacts, ...captures.artifacts, ...displaced.artifacts],
       "preview",
       inventory.report.missingOriginals,
     ),

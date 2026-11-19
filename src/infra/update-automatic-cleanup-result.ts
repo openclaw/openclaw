@@ -7,12 +7,33 @@ import type { UpdateStepResult } from "./update-step-result.js";
 
 export const AUTOMATIC_RECOVERY_CLEANUP_STEP = "recovery-artifact-cleanup";
 
+/** Every finished run may release older backups; each artifact's own rule decides. */
 export function canAutomaticallyCleanUpdateRecovery(run: UpdateRunRecord): boolean {
   return (
     run.finishedAtMs !== null &&
     (run.status === "succeeded" ||
+      run.status === "failed" ||
+      run.status === "rolled-back" ||
       (run.status === "skipped" && run.reason === "already-current") ||
       isNeverActivatedFailedUpdate(run))
+  );
+}
+
+/**
+ * A recorded cleanup is final unless the run's health verification landed after it: a
+ * cleanup that ran before verification could not release the run's own backups yet.
+ */
+export function hasSettledAutomaticRecoveryCleanup(run: UpdateRunRecord): boolean {
+  const step = run.steps.find(
+    (entry) => entry.step === AUTOMATIC_RECOVERY_CLEANUP_STEP && entry.status === "completed",
+  );
+  return (
+    step !== undefined &&
+    !(
+      step.endedAtMs !== undefined &&
+      run.confirmedAtMs !== null &&
+      run.confirmedAtMs > step.endedAtMs
+    )
   );
 }
 
@@ -40,7 +61,7 @@ export async function recordAutomaticRecoveryCleanup(
   try {
     // Record completion last: a crash before diagnostics settle leaves a safe retry.
     const [completed, ...details] = updateRunStepsFromResultStep(result);
-    for (const step of [...details, completed!]) {
+    for (const step of [...details, { ...completed!, endedAtMs: Date.now() }]) {
       const saved = await recordUpdateRunStepAsync(runId, step, { env, assertCurrent });
       if (!saved) {
         throw new Error("Cleanup bookkeeping was not recorded");

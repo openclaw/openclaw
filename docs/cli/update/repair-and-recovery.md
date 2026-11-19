@@ -1134,9 +1134,9 @@ exclusive offline ownership, or asks the running Gateway to perform retirement
 under its own live ownership. It does not stop or restart the Gateway for cleanup.
 This also applies to the macOS app's CLI updates and `--no-restart`; that flag does
 not bypass state ownership. Gateway-owned restart completion performs the same
-retirement after it records success. A failed update that never reached repair or
-activation attempts the same retirement after its failure is recorded, including
-its own capture.
+retirement after it records success. A failed update attempts the same retirement
+after its failure is recorded when no update recovery is pending. One that never
+reached repair or activation also retires its own capture.
 
 External supervisors using `update migrate` and `update finish` attempt the same
 cleanup when they finish an accepted update, after retiring their rollback journal.
@@ -1164,6 +1164,59 @@ a historical index may reference an original in another manifest. Independently
 eligible update and Doctor captures can still be retired.
 There is no age-only expiration of update captures or migration originals, no
 total-size cap, and no byte-budget-driven deletion.
+
+<a id="what-automatic-cleanup-deletes" />
+
+### What automatic cleanup deletes
+
+Automatic cleanup deletes a file only when it can prove the updater made it: the
+name and location match what the updater writes, a record links it to an update
+run, and the file still matches that record. Run order, not file times, decides
+what is old.
+
+After an update is verified successful (the new version is serving and its health
+check passed), cleanup deletes at once:
+
+- the Doctor pre-migration backups that update's Doctor took
+  (`<database>.pre-startup-migration-<id>.bak`). Their manifest in
+  `session-sqlite-migration-runs/` records the update's run id (`updateRunId`), and
+  that run's outcome releases them. The live database keeping its inode is not
+  required: the updater's own rollback and the startup swap replace that file.
+- the pre-migration database snapshots that update took
+  (`<package-backup>.databases`, or `.artifacts/<name>.databases` for Git
+  checkouts), also when automatic restoration was unavailable.
+- the same Doctor backups and `<database>.migrated-<runId>` files of every earlier
+  finished update. A database rollback writes
+  `<database>.migrated-<runId>.receipt.json` before it moves the migrated files
+  aside; cleanup deletes only the files that receipt lists, with the recorded
+  device, inode, size, and modification time, then the receipt.
+- superseded original-state captures, by the rules above.
+
+When the newest update failed or was not verified, cleanup keeps that update's
+backups, because repair may need them, and deletes older sets only while no update
+recovery is pending and no update run is unfinished.
+
+Cleanup never deletes:
+
+- Doctor cron repair backups (`openclaw.sqlite.doctor-cron-*.bak`).
+- backups without a manifest or receipt, including Doctor backups written before
+  manifests existed and manifests written before `updateRunId` existed. Those older
+  manifests keep their previous completion rules.
+- a backup whose manifest names an update run with no record.
+- anything a pending recovery or an unfinished update run references.
+- `.databases` snapshot directories left by earlier updates; no receipt links them
+  to their run. Doctor reports older npm snapshot directories with their size.
+- files outside the state directory, the install root, and the release prefix, or
+  any name the updater does not write, such as your own `openclaw.sqlite.bak`.
+
+The update result's `recovery-artifact-cleanup` step lists what was removed with
+its size and the total freed, what was kept and why, and each file kept as
+`Kept: not provably ours` with its size. To decide about those, ask your agent with
+`openclaw triage`; an unmanifested backup can also be removed with
+`openclaw update cleanup --include-unmanifested <path>`. A deletion that fails is a
+warning on the update and never changes its outcome; the next update retries it.
+These rules apply when the installed updater or Gateway that finishes the update
+includes them; manifests and receipts written by older builds stay protected.
 
 `openclaw status` (including `--json`) and read-only Doctor report local recovery
 copy logical bytes and counts by kind: update captures, standalone Doctor
