@@ -24,7 +24,6 @@ const CRON_FIELD_LABEL_KEYS: Record<CronFieldKey, string> = {
   staggerAmount: "cron.form.staggerWindow",
   activeHoursStart: "cron.form.activeHoursStart",
   activeHoursEnd: "cron.form.activeHoursEnd",
-  activeHoursTimezone: "cron.form.timezoneOptional",
   triggerScript: "cron.form.triggerScript",
   payloadText: "cron.form.assistantTaskPrompt",
   payloadModel: "cron.form.model",

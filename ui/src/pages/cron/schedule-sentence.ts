@@ -15,7 +15,7 @@ export type SentenceFrequency =
   | "custom";
 
 export type CronSentence =
-  | { frequency: "hourly"; days: number[]; hours: { from: number; until: number } | null }
+  | { frequency: "hourly"; days: number[] }
   | { frequency: "daily"; days: number[]; hour: number; minute: number }
   | { frequency: "weekly"; day: number; hour: number; minute: number }
   | { frequency: "monthly"; dayOfMonth: number; hour: number; minute: number };
@@ -102,20 +102,8 @@ export function parseCronSentence(expression: string): CronSentence | null {
   if (minute === null || days === null) {
     return null;
   }
-  const window = /^(\d{1,2})-(\d{1,2})$/u.exec(hourField ?? "");
-  if (hourField === "*" || window) {
-    if (minute !== 0 || domField !== "*") {
-      return null;
-    }
-    if (!window) {
-      return { frequency: "hourly", days, hours: null };
-    }
-    const from = integer(window[1], 0, 23);
-    const until = integer(window[2], 0, 23);
-    if (from === null || until === null || from >= until) {
-      return null;
-    }
-    return { frequency: "hourly", days, hours: { from, until } };
+  if (hourField === "*") {
+    return minute === 0 && domField === "*" ? { frequency: "hourly", days } : null;
   }
   const hour = integer(hourField, 0, 23);
   if (hour === null) {
@@ -137,10 +125,8 @@ export function parseCronSentence(expression: string): CronSentence | null {
 /** The cron expression a sentence stands for. */
 export function formatCronSentence(sentence: CronSentence): string {
   switch (sentence.frequency) {
-    case "hourly": {
-      const hours = sentence.hours ? `${sentence.hours.from}-${sentence.hours.until}` : "*";
-      return `0 ${hours} * * ${formatDays(sentence.days)}`;
-    }
+    case "hourly":
+      return `0 * * * ${formatDays(sentence.days)}`;
     case "daily":
       return `${sentence.minute} ${sentence.hour} * * ${formatDays(sentence.days)}`;
     case "weekly":
@@ -188,7 +174,7 @@ export function sentenceForFrequency(
   const days = sentenceDays(current);
   switch (frequency) {
     case "hourly":
-      return { frequency, days, hours: current?.frequency === "hourly" ? current.hours : null };
+      return { frequency, days };
     case "daily":
       return { frequency, days, ...time };
     case "weekly":

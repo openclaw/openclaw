@@ -45,7 +45,6 @@ export type CronFormState = {
   activeHoursEnabled: boolean;
   activeHoursStart: string;
   activeHoursEnd: string;
-  activeHoursTimezone: string;
   idleOnly: boolean;
   payloadSkipIfScratchEmpty: boolean;
   deliveryTarget: "" | "owner";
@@ -95,7 +94,6 @@ export type CronFieldKey =
   | "staggerAmount"
   | "activeHoursStart"
   | "activeHoursEnd"
-  | "activeHoursTimezone"
   | "triggerScript"
   | "payloadText"
   | "payloadModel"

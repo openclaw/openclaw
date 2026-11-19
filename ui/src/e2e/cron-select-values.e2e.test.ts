@@ -61,7 +61,6 @@ suite.define(() => {
       const timeZone = page.locator("#cron-cron-tz");
       await part("frequency").click();
       await part("frequency-custom").click();
-      await page.locator('[data-test-id="cron-advanced"]').click();
       await timeZone.fill("Mars/Phobos");
       await expect.poll(() => submit.isDisabled()).toBe(true);
       await part("frequency").click();
@@ -83,17 +82,14 @@ suite.define(() => {
       await part("frequency-hourly").click();
       await part("hours").click();
       await part("between").click();
-      const from = part("from");
-      expect(await from.locator('option[value="17"]').count()).toBe(0);
-      await from.selectOption("10");
-      await part("until").selectOption("18");
-      await page.keyboard.press("Escape");
+      await page.locator("#cron-active-hours-start").fill("10:00");
+      await page.locator("#cron-active-hours-end").fill("18:00");
 
       await page.locator('[data-test-id="cron-submit"]').click();
       expect((await gateway.waitForRequest("cron.update")).params).toMatchObject({
         id: job.id,
         patch: {
-          schedule: { kind: "cron", expr: "0 10-18 * * 5", tz: "America/Toronto", staggerMs: 0 },
+          schedule: { kind: "cron", expr: "0 10-17 * * 5", tz: "America/Toronto", staggerMs: 0 },
         },
       });
     });

@@ -58,6 +58,8 @@ as schedules or read `HEARTBEAT.md`.
 
 ### Monitoring policies
 
+In the Control UI, choose **Between hours** in the schedule builder for an interval or cron schedule. The start is inclusive and the end is exclusive; for example, `08:00` to `22:00` excludes `22:00` itself. Leave **Time zone** blank to use the Gateway host time zone for new schedules. Whole-hour cron windows can be written in the expression; elapsed intervals keep their cadence and use a separate window. Existing windows and their time zones are preserved when you reopen and save a job. If a saved cron job uses different time zones for the expression and the window, the editor notes the difference; changing the time zone applies it to both.
+
 Use job-level policies for periodic checks that should respect quiet hours and
 agent-wide activity. They apply through ordinary scheduler and session admission;
 no separate heartbeat runner is involved.

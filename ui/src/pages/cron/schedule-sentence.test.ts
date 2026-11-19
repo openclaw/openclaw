@@ -9,8 +9,7 @@ import {
 
 describe("schedule sentence", () => {
   it.each<[string, CronSentence]>([
-    ["0 * * * *", { frequency: "hourly", days: [0, 1, 2, 3, 4, 5, 6], hours: null }],
-    ["0 9-18 * * 4-6", { frequency: "hourly", days: [4, 5, 6], hours: { from: 9, until: 18 } }],
+    ["0 * * * *", { frequency: "hourly", days: [0, 1, 2, 3, 4, 5, 6] }],
     ["30 9 * * *", { frequency: "daily", days: [0, 1, 2, 3, 4, 5, 6], hour: 9, minute: 30 }],
     ["38 12 * * 1-5", { frequency: "daily", days: [1, 2, 3, 4, 5], hour: 12, minute: 38 }],
     ["0 8 * * 0,6", { frequency: "daily", days: [0, 6], hour: 8, minute: 0 }],
@@ -35,6 +34,7 @@ describe("schedule sentence", () => {
     "0 9 1 * 1",
     "0 9,17 * * *",
     "0 18-9 * * *",
+    "0 9-18 * * 4-6",
     "0 9 * * MON",
     "0 9 L * *",
     "0 0 9 * * *",
