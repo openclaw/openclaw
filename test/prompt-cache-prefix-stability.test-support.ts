@@ -13,6 +13,12 @@ import { listenProofProvider, useRuntimeProofFixture } from "./runtime-proof.tes
 const TOKEN = "prefix-stability-token";
 const TARGET = "agent:main:prefix-stability-target";
 const SENDER = "agent:main:prefix-stability-sender";
+const WINDOW = "agent:main:prefix-stability-window";
+const WINDOW_TURN = "WINDOW-TURN";
+// The bounded reader keeps 8 bytes per budget token (1.6 MB for this 200k model) while
+// compaction estimates 4 characters per token. CJK text is 3 bytes per character, so the
+// history outgrows the byte window before it reaches the compaction threshold.
+const WINDOW_PAYLOAD = "\u6f22".repeat(20_000);
 
 export type Api = "anthropic-messages" | "openai-completions" | "openai-responses";
 type Reply = { text: string; compaction?: true } | { tool: string; args: Record<string, unknown> };
@@ -259,6 +265,9 @@ export function usePrefixStabilityJourney() {
     const targetRequests: WireRequest[] = [];
     // The hidden subagent: its spawn task turn has no inter-session provenance, later turns do.
     const childRequests: WireRequest[] = [];
+    // A session whose history outgrows the bounded byte window after one large compaction.
+    const windowRequests: WireRequest[] = [];
+    const windowCompactions: number[] = [];
     let childKey: string | undefined;
     const seen: string[] = [];
     let ordinal = 0;
@@ -266,7 +275,16 @@ export function usePrefixStabilityJourney() {
       const latest = lastMessage(request);
       const hasToolResult = /tool_result|"role":"tool"|function_call_output/.test(latest);
       if (request.tools === "[]") {
+        if (request.text.includes(WINDOW_TURN)) {
+          windowCompactions.push(windowRequests.length);
+          // A large summary competes with recent rows for the byte window.
+          return { text: `Summary: ${"the window session ran the probe journey. ".repeat(150)}` };
+        }
         return { text: "Summary: the session ran the probe journey." };
+      }
+      if (request.text.includes(`session=${WINDOW}`)) {
+        windowRequests.push(request);
+        return { text: `ok ${windowRequests.length}` };
       }
       if (request.text.includes(`session=${SENDER}`)) {
         return hasToolResult || !latest.includes("forward a ping")
@@ -481,6 +499,29 @@ export function usePrefixStabilityJourney() {
         expect(childRequests.length).toBeGreaterThan(1);
         const childBreaks = prefixBreaks(childRequests);
         expect(childBreaks, JSON.stringify(childBreaks, null, 2)).toEqual([]);
+
+        // Multi-run byte window: each run hydrates a bounded view. Once the history outgrows it,
+        // the old compaction summary no longer fits, and the history identity must not change.
+        await send(WINDOW, `${WINDOW_TURN} first`);
+        await client.request("sessions.compact", { key: WINDOW }, { timeoutMs: 65_000 });
+        await settle();
+        const windowCompactionAt = windowRequests.length;
+        for (let turn = 0; turn < 30; turn++) {
+          if (turn === 26) {
+            // An unrelated chat compacts while this run is in flight.
+            await Promise.all([
+              send(WINDOW, `${WINDOW_TURN} ${turn} ${WINDOW_PAYLOAD}`),
+              client.request("sessions.compact", { key: SENDER }, { timeoutMs: 65_000 }),
+            ]);
+          } else {
+            await send(WINDOW, `${WINDOW_TURN} ${turn} ${WINDOW_PAYLOAD}`);
+          }
+        }
+        expect(windowRequests.length).toBeGreaterThan(windowCompactionAt + 29);
+        // Compactions, explicit or automatic, are the only rebuild points.
+        const allowed = new Set([windowCompactionAt, ...windowCompactions]);
+        const windowBreaks = prefixBreaks(windowRequests).filter(({ at }) => !allowed.has(at));
+        expect(windowBreaks, JSON.stringify(windowBreaks, null, 2)).toEqual([]);
       } catch (error) {
         throw new Error(`${String(error)}\n${seen.join("\n")}`, { cause: error });
       }
