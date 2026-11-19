@@ -172,9 +172,13 @@ Gateway, retry the update, or bypass safety checks. See
 
 ### Original state captures
 
-Before a fresh direct CLI update writes runtime state, the installed updater attempts to
+At a fresh direct CLI update's first state change, the installed updater attempts to
 retain the original config, its includes, local databases, and declared plugin
-migration resources. The capture stays beside the selected state directory in
+migration resources. That point is activation, a handoff of the update to the running
+Gateway, or, on an already-current core, the fresh Doctor that follows a changed plugin.
+An already-current update without that Doctor, and an update refused before it changes
+anything, copy nothing. A profile without a state database yet records that absence
+before its first update writes history. The capture stays beside the selected state directory in
 `<state-directory>.update-captures/<run-id>`. Doctor continuations keep the same
 capture; they do not replace it with already migrated state. State-directory
 relocation leaves its original location and recorded paths intact.
