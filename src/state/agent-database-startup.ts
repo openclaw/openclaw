@@ -39,6 +39,7 @@ import {
   type AgentDatabaseAdmissionRefusal,
 } from "./agent-database-admission.js";
 import { withAgentDatabasePreparationContext } from "./agent-database-preparation-context.js";
+import { matchesInspectionPath, recoveryTiming } from "./agent-database-startup.helpers.js";
 import type {
   PendingAgentDatabaseInspection as PendingInspection,
   AgentDatabaseStartupActivation as Activation,
@@ -51,10 +52,7 @@ import {
   AGENT_DATABASE_PREPARATION_CONCURRENCY,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
-import {
-  createOpenClawAgentDatabasePathMatcher,
-  isSameOpenClawAgentDatabasePath,
-} from "./openclaw-agent-db.paths.js";
+import { createOpenClawAgentDatabasePathMatcher } from "./openclaw-agent-db.paths.js";
 import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
@@ -62,17 +60,6 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 const PREPARATION_PROGRESS_INTERVAL_MS = 60_000;
 const STARTUP_PUBLICATION_ATTEMPTS = 4;
 
-function recoveryTiming(recovery: PendingRecovery, now = performance.now()) {
-  return {
-    elapsedMs: Math.round(now - recovery.startedAt),
-    phaseDurationsMs: {
-      ...recovery.phaseDurationsMs,
-      [recovery.phase]: Math.round(
-        (recovery.phaseDurationsMs[recovery.phase] ?? 0) + now - recovery.phaseStartedAt,
-      ),
-    },
-  };
-}
 type PreparedSchemaHeader = Pick<
   AgentSchemaInspection,
   "version" | "writerAppVersion" | "agentSchemaMeta"
@@ -82,21 +69,6 @@ type PreparedSchemaHeaders = {
   headers: Map<string, PreparedSchemaHeader>;
   state?: { identity: string; schemaAdmissionId: string };
 };
-
-function matchesInspectionPath(
-  paths: readonly string[],
-  target: string,
-  samePath = isSameOpenClawAgentDatabasePath,
-): boolean {
-  return paths.some((pathname) => {
-    try {
-      return samePath(pathname, target);
-    } catch {
-      // An uncertain sibling cannot classify this target; its own inspection reports the failure.
-      return false;
-    }
-  });
-}
 
 const log = createSubsystemLogger("state/agent-admission");
 const startupAdmission = new AsyncLocalStorage<AgentDatabaseStartupAdmission>();
@@ -414,8 +386,15 @@ class AgentDatabaseStartupAdmission {
       const checked = Promise.allSettled(inspections.map(({ result }) => result));
       // Gateway-owned recovery outlives the caller's temporary discovery snapshot.
       const work = runInDetachedAsyncContext(async () => {
-        const preparation: { maintenance?: () => Promise<void> } = {};
+        const preparation: { maintenance?: () => Promise<void>; withdraw?: () => void } = {};
         let revokeReadAdmission: (() => void) | undefined;
+        const publicationComplete = createDeferredCore();
+        const releasePublication = () => {
+          if (this.publishingAgentId === agentId) {
+            this.publishingAgentId = undefined;
+          }
+          publicationComplete.resolve();
+        };
         try {
           const results = await checked;
           phase("activation");
@@ -498,31 +477,24 @@ class AgentDatabaseStartupAdmission {
           phase("readiness");
           await racePromiseWithAbortSignal(activation.preparationReady, this.signal);
           assertCurrent();
+          const preparationOptions = { env, assertCurrent, signal: this.signal };
           await withSqliteReadOnlyWorkerScope(
             async () => {
               await assertNotDeleted();
-              await preparePendingAgentDatabase(refusal, { env, assertCurrent }, async () => {
+              await preparePendingAgentDatabase(refusal, preparationOptions, async () => {
                 await using prepared = new AsyncDisposableStack();
-                const input = {
-                  agentId,
-                  paths,
-                  env,
-                  signal: this.signal,
-                  assertCurrent,
-                  phase,
-                };
+                const input = { agentId, paths, env, signal: this.signal, assertCurrent, phase };
                 const publish = async () => {
-                  const publicationComplete = createDeferredCore();
                   phase("publication-wait");
                   const previous = this.publication;
                   this.publication = publicationComplete.promise;
                   try {
-                    await previous;
+                    await racePromiseWithAbortSignal(previous, this.signal);
                     assertCurrent();
                     this.publishingAgentId = agentId;
                     for (let attempt = 1; ; attempt++) {
                       try {
-                        await activation.publishAgent(input);
+                        preparation.withdraw = (await activation.publishAgent(input)) || undefined;
                         break;
                       } catch (error) {
                         const retryable =
@@ -543,33 +515,40 @@ class AgentDatabaseStartupAdmission {
                     }
                     phase("publication");
                     await assertNotDeleted();
-                  } finally {
-                    if (this.publishingAgentId === agentId) {
-                      this.publishingAgentId = undefined;
+                    if (activation.captureReadAdmission) {
+                      // Publish only prepared inputs. Sibling auth/model refreshes must see
+                      // this agent before physical cleanup, which can stall independently.
+                      revokeReadAdmission = publishPendingAgentDatabaseReadAdmission(refusal, {
+                        env,
+                        paths: canReadBeforeOpen
+                          ? results.flatMap((result) =>
+                              result.status === "fulfilled"
+                                ? (result.value.readReadyAgentPaths ?? [])
+                                : [],
+                            )
+                          : paths,
+                        assertCurrent: activation.captureReadAdmission({
+                          ...input,
+                          assertCurrent: assertLifetimeCurrent,
+                        }),
+                      });
+                      releasePublication();
+                      recovery.readReady = undefined;
+                      readReady.resolve();
                     }
-                    publicationComplete.resolve();
+                  } catch (error) {
+                    // Refuse failed publication before cleanup can block its handoff.
+                    if (!this.stopped) {
+                      failPendingAgentDatabase(refusal, error, { env });
+                    }
+                    releasePublication();
+                    throw error;
                   }
                 };
                 if (canReadBeforeOpen && activation.captureReadAdmission) {
                   // Exact existing schemas can serve committed snapshots while full integrity
                   // gates writes. Native readers retain schema, file, and quarantine checks.
-                  const assertReadCurrent = activation.captureReadAdmission({
-                    ...input,
-                    assertCurrent: assertLifetimeCurrent,
-                  });
-                  assertReadCurrent();
                   await preparePendingAgentDatabaseRead(refusal, { env, assertCurrent }, publish);
-                  assertReadCurrent();
-                  assertCurrent();
-                  revokeReadAdmission = publishPendingAgentDatabaseReadAdmission(refusal, {
-                    env,
-                    paths: results.flatMap((result) =>
-                      result.status === "fulfilled" ? (result.value.readReadyAgentPaths ?? []) : [],
-                    ),
-                    assertCurrent: assertReadCurrent,
-                  });
-                  recovery.readReady = undefined;
-                  readReady.resolve();
                   log.info("agent database reads ready while writable inspection continues", {
                     agentId,
                     ...recoveryTiming(recovery),
@@ -613,7 +592,13 @@ class AgentDatabaseStartupAdmission {
                     phase("open");
                     const opened = await activation.openAgent(input);
                     if (opened) {
-                      prepared.use(opened);
+                      // The native owner retains cleanup after admission shutdown.
+                      prepared.defer(() =>
+                        racePromiseWithAbortSignal(
+                          Promise.resolve(opened[Symbol.asyncDispose]()),
+                          this.signal,
+                        ),
+                      );
                     }
                   } finally {
                     release?.();
@@ -649,6 +634,9 @@ class AgentDatabaseStartupAdmission {
           if (!this.stopped) {
             const reason = formatErrorMessage(error);
             failPendingAgentDatabase(refusal, error, { env });
+            if (this.pending.get(agentId) === recovery) {
+              preparation.withdraw?.();
+            }
             log.warn("agent database remains degraded", {
               agentId,
               paths,
@@ -659,14 +647,12 @@ class AgentDatabaseStartupAdmission {
           }
         } finally {
           revokeReadAdmission?.();
+          releasePublication();
           if (this.pending.get(agentId) === recovery) {
             this.pending.delete(agentId);
           }
           if (this.pending.size === 0) {
             this.clearProgress();
-          }
-          if (this.publishingAgentId === agentId) {
-            this.publishingAgentId = undefined;
           }
           readReady.resolve();
           completion.resolve();

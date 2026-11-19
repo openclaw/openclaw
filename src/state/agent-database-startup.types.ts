@@ -20,7 +20,8 @@ export type AgentDatabaseStartupActivation = {
   migrateAgent: (
     input: AgentDatabaseStartupPreparationInput,
   ) => Promise<void | { maintain: () => Promise<void> }>;
-  publishAgent: (input: AgentDatabaseStartupPreparationInput) => Promise<void>;
+  /** The publisher owns withdrawal if admission later fails. */
+  publishAgent: (input: AgentDatabaseStartupPreparationInput) => Promise<void | (() => void)>;
   captureReadAdmission?: (input: AgentDatabaseStartupPreparationInput) => () => void;
 };
 export type AgentDatabaseStartupPreparationPhase =

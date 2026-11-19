@@ -31,7 +31,10 @@ vi.mock("./agent-database-admission.js", async (importOriginal) => {
       },
     ),
     failPendingAgentDatabase: vi.fn<typeof actual.failPendingAgentDatabase>((refusal) => {
-      admissionState.failed.push(refusal.agentId);
+      // The real refusal owner records one state per agent across nested failure cleanup.
+      if (!admissionState.failed.includes(refusal.agentId)) {
+        admissionState.failed.push(refusal.agentId);
+      }
     }),
     readAgentDatabaseAdmissionRefusal: () => undefined,
   };
