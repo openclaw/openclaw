@@ -417,12 +417,12 @@ it("preflights the pre-migration image without refusing or changing anything", a
     await fs.truncate(file, 8 * 1024 ** 2);
   }
   const backupDirectory = path.join(f.root, "backup");
-  let freeMiB: number | null = 90;
+  let freeMiB: number | null = 80;
   capacity((target) =>
     target === backupDirectory ? (freeMiB === null ? null : freeMiB * 1024 ** 2) : 140 * 1024 ** 2,
   );
   const before = await readFiles(f.files);
-  for (freeMiB of [90, 140, null]) {
+  for (freeMiB of [80, 140, null]) {
     const { step, shortfall } = await assessInitialUpdateSnapshotCapacity({
       config: {},
       stateDir: f.stateDir,
@@ -431,10 +431,10 @@ it("preflights the pre-migration image without refusing or changing anything", a
     });
     // The image is skipped below its need; the migration's own room fits on the state volume.
     expect(step.exitCode, step.stderrTail ?? undefined).toBe(0);
-    expect(shortfall).toBe(freeMiB === 90);
+    expect(shortfall).toBe(freeMiB === 80);
     expect(step.warnings).toEqual(
-      freeMiB === 90
-        ? [expect.stringMatching(/^No pre-migration database image: it needs 96 MiB near /u)]
+      freeMiB === 80
+        ? [expect.stringMatching(/^No pre-migration database image: it needs 88 MiB near /u)]
         : freeMiB === null
           ? [expect.stringContaining("could not be measured")]
           : undefined,

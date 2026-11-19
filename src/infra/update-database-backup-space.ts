@@ -58,12 +58,14 @@ async function planUpdateDatabaseSpace(directory: string, { families }: Measured
     sameVolumeAsImage: device === backupDevice,
     requiredBytes: volume.bytes + RESERVE_BYTES,
   }));
-  // On a shared volume the image must leave the migration its own room.
+  // The retained image lives through both phases: capture adds one family of
+  // staging, then the migration on a shared volume needs its own room. They do
+  // not overlap, so the image needs room for the larger of the two.
   const headroom = volumes
     .filter((volume) => volume.sameVolumeAsImage)
     .reduce((most, volume) => Math.max(most, volume.requiredBytes), RESERVE_BYTES);
   return {
-    imageRequiredBytes: imageBytes === 0 ? 0 : imageBytes + largest + headroom,
+    imageRequiredBytes: imageBytes === 0 ? 0 : imageBytes + Math.max(largest, headroom),
     migrationVolumes: volumes,
   };
 }
@@ -120,7 +122,7 @@ export async function assessUpdateDatabaseSpace(directory: string, measured: Mea
     );
     diagnostics.push(diagnostic);
     if (space && space.availableBytes < volume.requiredBytes) {
-      refusal ??= `A database migration may need up to ${formatDiskSpaceBytes(volume.requiredBytes)} (${volume.requiredBytes} bytes) of free space near ${volume.directory} for its write-ahead log, but only ${formatDiskSpaceBytes(space.availableBytes)} (${space.availableBytes} bytes) is available. Free at least ${formatDiskSpaceBytes(volume.requiredBytes - space.availableBytes)} on that volume, then run openclaw update again; nothing has changed.`;
+      refusal ??= `A database migration may need up to ${formatDiskSpaceBytes(volume.requiredBytes)} (${volume.requiredBytes} bytes) of free space near ${volume.directory} for its write-ahead log, but only ${formatDiskSpaceBytes(space.availableBytes)} (${space.availableBytes} bytes) is available. Free at least ${formatDiskSpaceBytes(volume.requiredBytes - space.availableBytes)} (${volume.requiredBytes - space.availableBytes} bytes) on that volume, then run openclaw update again; nothing has changed.`;
     }
   }
   let imageSkipped = false;

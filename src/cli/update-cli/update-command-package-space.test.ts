@@ -25,11 +25,11 @@ function seedPackageShortfall({ stateVolumeMiB = 160 } = {}) {
     db.exec("CREATE TABLE evidence(value BLOB); INSERT INTO evidence VALUES(zeroblob(16777216))");
   }
   const backupDirectory = path.dirname(fixture.root);
-  // The image needs the agent, one family of staging and the migration's room: 112 MiB.
+  // The image needs the agent plus the larger of its staging and the migration room: 96 MiB.
   vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
     targetPath,
     checkedPath: targetPath,
-    availableBytes: (targetPath === backupDirectory ? 100 : stateVolumeMiB) * 1024 ** 2,
+    availableBytes: (targetPath === backupDirectory ? 90 : stateVolumeMiB) * 1024 ** 2,
     totalBytes: 1024 ** 3,
   }));
   vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
@@ -58,7 +58,7 @@ it("continues a package update past a pre-migration image that does not fit", as
 
   expect(packageUpdate.stagePackageInstallUpdate).toHaveBeenCalledTimes(1);
   expect(printedWarnings()).toContain(
-    `Warning: No pre-migration database image: it needs 112 MiB near ${backupDirectory} and 100 MiB is free. Without it, the previous version cannot be restored once the new version's database migration commits; a failed update then stays on the new version and is fixed forward. The update continues and measures the image again before the migration.`,
+    `Warning: No pre-migration database image: it needs 96 MiB near ${backupDirectory} and 90 MiB is free. Without it, the previous version cannot be restored once the new version's database migration commits; a failed update then stays on the new version and is fixed forward. The update continues and measures the image again before the migration.`,
   );
   const result = vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0];
   expect(result).not.toMatchObject({ reason: "snapshot-capacity-insufficient" });
@@ -97,7 +97,7 @@ it("refuses before staging only when the migration itself has no room", async ()
   expect(result).toMatchObject({ reason: "snapshot-capacity-insufficient" });
   // The agent file is 16 MiB plus a few SQLite pages, so the exact byte count varies.
   expect(JSON.stringify(result)).toContain(
-    `A database migration may need up to 80 MiB (${80 * 1024 ** 2 + fs.statSync(file).size - 16 * 1024 ** 2} bytes) of free space near ${path.dirname(file)} for its write-ahead log, but only 50 MiB (${50 * 1024 ** 2} bytes) is available. Free at least 30 MiB on that volume, then run openclaw update again; nothing has changed.`,
+    `A database migration may need up to 80 MiB (${80 * 1024 ** 2 + fs.statSync(file).size - 16 * 1024 ** 2} bytes) of free space near ${path.dirname(file)} for its write-ahead log, but only 50 MiB (${50 * 1024 ** 2} bytes) is available. Free at least 30 MiB (${30 * 1024 ** 2 + fs.statSync(file).size - 16 * 1024 ** 2} bytes) on that volume, then run openclaw update again; nothing has changed.`,
   );
   expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
   expect(fs.readFileSync(file).equals(before)).toBe(true);

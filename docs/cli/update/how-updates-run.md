@@ -1005,20 +1005,21 @@ archive's source-path layout so their original destinations remain identifiable
 after detailed run history is compacted. The report retains the directory location;
 per-file paths, schema versions, and digests appear in bounded diagnostics. Committed WAL data is included in each
 standalone snapshot. The snapshot needs what it writes: the total SQLite family
-bytes, one more family for private staging, and, on the database volume, room
-for the migration itself (the largest database plus 64 MiB). Restoration checks
-its own space when it runs, before it moves any live database, so the snapshot
-reserves nothing for it.
+bytes, plus the larger of one family of private staging during capture and, on
+the database volume, room for the migration that follows (the largest database
+plus 64 MiB). Restoration checks its own space when it runs, before it moves any
+live database, so the snapshot reserves nothing for it.
 
-A snapshot that does not fit never stops the update. The updater skips it,
-records a `database snapshot` warning that names the space needed and free, and
-continues. Each schema migration commits in one SQLite transaction with its
-version bump, so an interrupted or failed migration loses nothing. What a skipped
-snapshot gives up is going back: once the new version's migration commits, the
-previous version refuses the newer schema, so a failed update stays on the new
-version and is fixed forward. The same rule applies when the disk fills while
-the snapshot is written. Unknown free space produces a warning and the snapshot
-is attempted.
+A snapshot that the backup measures as not fitting never stops the update. The
+updater skips it before copying anything, records a `database snapshot` warning
+that names the space needed and free, and continues. Each schema migration
+commits in one SQLite transaction with its version bump, so an interrupted or
+failed migration loses nothing. What a skipped snapshot gives up is going back:
+once the new version's migration commits, the previous version refuses the newer
+schema, so a failed update stays on the new version and is fixed forward. Any
+other snapshot failure, including a disk that fills while a copy is running,
+still fails the update before migration. Unknown free space produces a warning
+and the snapshot is attempted.
 
 The update refuses before it changes anything only when the database volume
 cannot hold the migration itself: the largest database plus 64 MiB, because a

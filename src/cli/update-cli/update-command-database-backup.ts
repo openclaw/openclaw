@@ -3,11 +3,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { resolveStateDir } from "../../config/paths.js";
 import { resolveDatabaseFamilyEngines } from "../../infra/database-engine/registry.js";
-import {
-  collectErrorGraphCandidates,
-  extractErrorCode,
-  formatErrorMessage,
-} from "../../infra/errors.js";
+import { collectErrorGraphCandidates, formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { hasActiveGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
@@ -111,39 +107,38 @@ export async function assertUpdatePostgresOwnerReleasable(params: {
   await assertUpdatePostgresCaptureOwnership({ config: params.config, env: params.env });
 }
 
-function isDiskFull(error: unknown): boolean {
-  return collectErrorGraphCandidates(error, (current) => [current.cause]).some(
-    (candidate) =>
-      extractErrorCode(candidate) === "ENOSPC" ||
-      /\bENOSPC\b|No space left on device|database or disk is full/u.test(
-        formatErrorMessage(candidate),
-      ),
-  );
-}
-
 /**
  * Owner decision: an image that does not fit is skipped and the update continues.
  * Migrations commit in one SQLite transaction each, so nothing is lost; what is
  * given up is restoring the previous version once a migration commits.
+ *
+ * Only the backup owner's own measured shortfall qualifies: it is raised before any
+ * family is checkpointed or copied, so nothing was captured and nothing needs
+ * settling. Any other failure, including one a cleanup failure joins, still fails.
  */
 async function skipUpdateDatabaseImageForSpace(
   error: unknown,
-  directory: { path: string; ownedByRun: boolean } | undefined,
+  directory: string | undefined,
   env: NodeJS.ProcessEnv,
   assertCurrent: () => void,
 ): Promise<{ step: UpdateStepResult; retained: boolean } | undefined> {
   const space = findUpdateCaptureSpaceError(error)?.capacity;
-  if (!space && !isDiskFull(error)) {
+  if (
+    !space ||
+    collectErrorGraphCandidates(error, (current) => [current.cause]).some(
+      (candidate) => candidate instanceof AggregateError,
+    )
+  ) {
     return undefined;
   }
   let retained = "";
-  if (directory?.ownedByRun) {
+  if (directory) {
     try {
       assertCurrent();
-      // This run created the directory and nothing refers to a partial image.
-      await fs.rm(directory.path, { recursive: true, force: true });
+      // The capture created this directory exclusively; it holds no image.
+      await fs.rm(directory, { recursive: true, force: true });
     } catch (cleanupError) {
-      retained = ` Its partial files remain at ${directory.path} (${formatErrorMessage(cleanupError)}).`;
+      retained = ` Its scratch files remain at ${directory} (${formatErrorMessage(cleanupError)}).`;
     }
   }
   return {
@@ -155,15 +150,11 @@ async function skipUpdateDatabaseImageForSpace(
       durationMs: 0,
       exitCode: 0,
       warnings: [
-        `${
-          space
-            ? formatUpdateDatabaseImageSkip(
-                space.requiredBytes,
-                space.availableBytes,
-                directory?.path ?? resolveStateDir(env),
-              )
-            : "No pre-migration database image: the disk filled while it was written. Without it, the previous version cannot be restored once the new version's database migration commits; a failed update then stays on the new version and is fixed forward."
-        }${retained} The update continues.`,
+        `${formatUpdateDatabaseImageSkip(
+          space.requiredBytes,
+          space.availableBytes,
+          directory ?? resolveStateDir(env),
+        )}${retained} The update continues.`,
       ],
     },
   };
@@ -195,7 +186,7 @@ export async function captureUpdateDatabases(params: {
   const maintenance = ownership.maintenance;
   let unavailable = ownership.unavailable;
   let outcome: { value: UpdateDatabaseBackup } | { error: unknown };
-  let backupDirectory: { path: string; ownedByRun: boolean } | undefined;
+  let backupDirectory: string | undefined;
   try {
     const capture = async () => {
       params.assertCurrent();
@@ -236,15 +227,7 @@ export async function captureUpdateDatabases(params: {
         params.assertCurrent();
         backupRoot = path.join(physicalArtifactRoot, path.basename(backupRoot));
       }
-      const directory = `${backupRoot}.databases`;
-      // A fixed-name root can hold an earlier run's retained images; only this run's own is removable.
-      backupDirectory = {
-        path: directory,
-        ownedByRun: !(await fs.lstat(directory).then(
-          () => true,
-          () => false,
-        )),
-      };
+      backupDirectory = `${backupRoot}.databases`;
       const captured = await createUpdateDatabaseBackup({
         backupRoot,
         stateDir: resolveStateDir(env),

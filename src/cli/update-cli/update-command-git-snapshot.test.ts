@@ -214,7 +214,10 @@ it.each([false, true])(
       const staging = runner.mock.calls[0]?.[0].opts.beforeGitStaging;
       // A release takes no database image, so nothing measures space for one.
       expect(staging === undefined).toBe(gitReleases);
-      expect(getSnapshotSource).not.toHaveBeenCalled();
+      // Running what the runner would run at staging measures the in-place image.
+      const admission = await staging?.();
+      expect(admission?.step.name).toBe(gitReleases ? undefined : "snapshot-space-preflight");
+      expect(getSnapshotSource).toHaveBeenCalledTimes(gitReleases ? 0 : 1);
     });
   },
 );

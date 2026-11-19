@@ -83,9 +83,9 @@ function freeSpace(bytes: () => number) {
 sparse(
   "continues past a pre-migration image that does not fit and names what it gives up",
   async () => {
-    // A 20 GiB shared database with 50 GiB free: the former 5x preflight wanted 100 GiB.
+    // A 20 GiB shared database with 35 GiB free: the former 5x preflight wanted 100 GiB.
     const f = await fixture({ sharedBytes: 20 * GiB });
-    freeSpace(() => 50 * GiB);
+    freeSpace(() => 35 * GiB);
 
     const { step, shortfall } = await assessInitialUpdateSnapshotCapacity({
       ...f,
@@ -95,7 +95,7 @@ sparse(
     expect(step.exitCode, step.stderrTail ?? undefined).toBe(0);
     expect(shortfall).toBe(true);
     expect(step.warnings).toEqual([
-      `No pre-migration database image: it needs 60 GiB near ${f.directory} and 50 GiB is free. Without it, the previous version cannot be restored once the new version's database migration commits; a failed update then stays on the new version and is fixed forward. The update continues and measures the image again before the migration.`,
+      `No pre-migration database image: it needs 40 GiB near ${f.directory} and 35 GiB is free. Without it, the previous version cannot be restored once the new version's database migration commits; a failed update then stays on the new version and is fixed forward. The update continues and measures the image again before the migration.`,
     ]);
   },
 );
@@ -112,13 +112,13 @@ sparse("refuses only when the migration itself has no room, saying how much to f
   expect(step.exitCode).toBe(1);
   expect(shortfall).toBe(true);
   expect(step.stderrTail?.split("\n")[0]).toBe(
-    `Update refused: A database migration may need up to 20 GiB (${20 * GiB + 64 * MiB} bytes) of free space near ${path.dirname(f.shared)} for its write-ahead log, but only 10 GiB (${10 * GiB} bytes) is available. Free at least 10 GiB on that volume, then run openclaw update again; nothing has changed.`,
+    `Update refused: A database migration may need up to 20 GiB (${20 * GiB + 64 * MiB} bytes) of free space near ${path.dirname(f.shared)} for its write-ahead log, but only 10 GiB (${10 * GiB} bytes) is available. Free at least 10 GiB (${10 * GiB + 64 * MiB} bytes) on that volume, then run openclaw update again; nothing has changed.`,
   );
 });
 
 sparse("keeps the image when it fits beside the migration", async () => {
   const f = await fixture({ sharedBytes: 20 * GiB });
-  freeSpace(() => 61 * GiB);
+  freeSpace(() => 41 * GiB);
 
   const { step, shortfall } = await assessInitialUpdateSnapshotCapacity({
     ...f,
@@ -133,9 +133,9 @@ sparse("keeps the image when it fits beside the migration", async () => {
 });
 
 it("admits a capture by what it writes and refuses it before any checkpoint or copy", async () => {
-  // About 4 MiB of agent: one image, one family of staging, and the migration's room.
+  // About 4 MiB of agent: the image plus the larger of one family of staging and the migration's room.
   const f = await fixture({ agentBlob: 4 * MiB });
-  let available = 74 * MiB;
+  let available = 70 * MiB;
   freeSpace(() => available);
 
   await expect(createUpdateDatabaseBackupInProcess({ ...f, stopped: true })).rejects.toMatchObject({
