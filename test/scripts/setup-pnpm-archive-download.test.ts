@@ -271,18 +271,62 @@ describe("pnpm version output owns its failure", () => {
     const output = join(root, "outputs");
     fs.writeFileSync(output, "");
     const step = action.runs.steps.find((entry: { id?: string }) => entry.id === "pnpm-version");
-    const run = `pnpm() { if [ ${status} -eq 0 ]; then printf '12.9.0\\n'; else return ${status}; fi; }\n${step.run}`;
+    const calls = join(root, "pnpm-calls");
+    const pnpm = `pnpm() { echo called >> "$PNPM_CALLS"; if [ ${status} -eq 0 ]; then printf '12.9.0\\n'; else return ${status}; fi; }`;
+    const run = `${pnpm}\n${step.run}`;
     const result = await command.run(
       "bash",
       ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", run],
       {
         encoding: "utf8",
         cwd: root,
-        env: { PATH: process.env.PATH, PROJECT_DIR: root, GITHUB_OUTPUT: output },
+        env: {
+          PATH: process.env.PATH,
+          PROJECT_DIR: root,
+          GITHUB_OUTPUT: output,
+          PNPM_CALLS: calls,
+        },
       },
     );
     expect(result.error, "pnpm version action subprocess").toBeUndefined();
     expect(result.status, result.stderr).toBe(status);
     expect(read(output)).toBe(status === 0 ? "pnpm-version=12.9.0\n" : "");
+    if (status === 0) {
+      const nodeAction = parse(read(".github/actions/setup-node-env/action.yml"));
+      const diagnostic = nodeAction.runs.steps.find(
+        (entry: { name?: string }) => entry.name === "Runtime versions",
+      );
+      const outputs = Object.fromEntries(
+        read(output)
+          .trim()
+          .split("\n")
+          .map((line) => line.split("=")),
+      );
+      const env = Object.fromEntries(
+        Object.entries(diagnostic.env ?? {}).map(([key, expression]) => [
+          key,
+          String(expression).replace(
+            /\$\{\{ steps\.setup-pnpm\.outputs\.([^ ]+) \}\}/g,
+            (_, name) => expectDefined(outputs[name], `recorded pnpm output ${name}`),
+          ),
+        ]),
+      );
+      const versions = await command.run(
+        "bash",
+        [
+          "--noprofile",
+          "--norc",
+          "-e",
+          "-o",
+          "pipefail",
+          "-c",
+          `${pnpm}\nnode() { echo fixture-node; }\nnpm() { echo fixture-npm; }\nbun() { echo fixture-bun; }\n${diagnostic.run}`,
+        ],
+        { encoding: "utf8", cwd: root, env: { PATH: process.env.PATH, PNPM_CALLS: calls, ...env } },
+      );
+      expect(versions.status, versions.stderr).toBe(0);
+      expect(versions.stdout).toBe("fixture-node\nfixture-npm\n12.9.0\nfixture-bun\n");
+    }
+    expect(read(calls)).toBe("called\n");
   });
 });
