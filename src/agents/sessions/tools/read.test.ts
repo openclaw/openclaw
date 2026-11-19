@@ -220,7 +220,7 @@ console.log("headless-read-ok");`,
         id: "read-1",
         name: "read",
         arguments: tool.prepareArguments ? tool.prepareArguments(raw) : raw,
-      });
+      }) as Parameters<typeof tool.execute>[1];
     await expectReadText(tool, call({ path: "notes.txt", optional: false }), "present");
     await expect(executeRead(tool, call({ path: "missing.txt", optional: false }))).rejects.toThrow(
       "File not found",

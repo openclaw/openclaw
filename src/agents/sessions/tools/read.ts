@@ -439,12 +439,14 @@ export function createReadToolDefinition(
     parameters: readToolInputSchema,
     // Models send optional: false for a required read; the schema accepts only true.
     prepareArguments: (args) => {
-      if (!isRecord(args) || args.optional !== false) {
-        return args as ReadToolInput;
+      let prepared = args;
+      if (isRecord(args) && args.optional === false) {
+        const required = { ...args };
+        delete required.optional;
+        prepared = required;
       }
-      const required = { ...args };
-      delete required.optional;
-      return required as ReadToolInput;
+      // SAFETY: agent-core validates prepared arguments against the schema before execution.
+      return prepared as ReadToolInput;
     },
     outputSchema: readToolOutputSchema,
     async execute(
