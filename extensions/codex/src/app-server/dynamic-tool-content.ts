@@ -36,6 +36,7 @@ export async function withoutGatewayOnlySkillLocation(
   result: AgentToolResult<unknown>,
   gatewayOnly: ReadonlyMap<string, string> | undefined,
 ): Promise<AgentToolResult<unknown>> {
+  // SAFETY: untyped skill tool payload; every field read below is checked or stringified.
   const details = result.details as Record<string, unknown> | undefined;
   if (!gatewayOnly?.size || !details || isToolResultError(result)) {
     return result;
