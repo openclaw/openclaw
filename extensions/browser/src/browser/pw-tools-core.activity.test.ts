@@ -11,16 +11,12 @@ const {
 } = await import("./pw-tools-core.activity.js");
 const target = { cdpUrl: "http://127.0.0.1:18792" };
 const session = harness.getPwToolsCoreSessionMocks();
-const expectedUrl = "https://example.com/current";
-const changed = "Page text target changed or closed; refresh tabs and retry.";
 
 function installTextPage(
   contents: Record<string, string>,
   overrides: { count?: () => Promise<number>; innerText?: () => Promise<string> } = {},
-  page: Record<string, unknown> = {},
 ) {
   harness.setPwToolsCoreCurrentPage({
-    ...page,
     locator: (selector: string) => ({
       first: () => ({
         count: async () => (selector in contents ? 1 : 0),
@@ -77,46 +73,24 @@ it.each([
   expect(await readText({ ...target, selector, maxChars })).toEqual({ text, truncated });
 });
 
-type PageChange = { url?: string; closed?: boolean };
-
-/** Page whose CDP frame tree reports these main-frame loader ids, one per read. */
-function installDocumentPage(
-  loaderIds: Array<string | undefined>,
-  before: PageChange = {},
-  during: PageChange = {},
-) {
-  const state = { url: expectedUrl, closed: false, ...before };
-  const pending = [...loaderIds];
-  const send = async () => ({ frameTree: { frame: { id: "main", loaderId: pending.shift() } } });
-  const context = { newCDPSession: async () => ({ send, detach: async () => {} }) };
-  const innerText = vi.fn(async () => {
-    Object.assign(state, during);
-    return "Body";
+it("rejects text the locator read from a document that replaced the page", async () => {
+  const mainFrame = {};
+  const listeners: Array<(frame: object) => void> = [];
+  harness.setPwToolsCoreCurrentPage({
+    mainFrame: () => mainFrame,
+    on: (_event: string, listener: (frame: object) => void) => listeners.push(listener),
+    locator: () => ({
+      first: () => ({
+        innerText: async () => {
+          for (const listener of listeners) {
+            listener(mainFrame);
+          }
+          return "Next page";
+        },
+      }),
+    }),
   });
-  const page = { url: () => state.url, isClosed: () => state.closed, context: () => context };
-  installTextPage({ body: "Body" }, { innerText }, page);
-  return innerText;
-}
-
-it.each([
-  ["one document", ["first", "first"]],
-  ["an endpoint without document identities", [undefined, undefined]],
-])("returns text read within %s", async (_name, loaderIds) => {
-  installDocumentPage(loaderIds);
-  expect(await readText({ ...target, expectedUrl })).toEqual({ text: "Body", truncated: false });
-});
-
-it.each<[string, Array<string | undefined>, PageChange, PageChange, number]>([
-  ["loads another document", ["first", "second"], {}, {}, 1],
-  ["gains a document identity", [undefined, "second"], {}, {}, 1],
-  ["left the expected URL", [], { url: "https://example.com/old" }, {}, 0],
-  ["was closed", [], { closed: true }, {}, 0],
-  ["navigates during the read", ["first", "first"], {}, { url: "https://example.com/b" }, 1],
-  ["closes during the read", ["first", "first"], {}, { closed: true }, 1],
-])("rejects text when the page %s", async (_name, loaderIds, before, during, reads) => {
-  const innerText = installDocumentPage(loaderIds, before, during);
-  await expect(readText({ ...target, expectedUrl })).rejects.toThrow(changed);
-  expect(innerText).toHaveBeenCalledTimes(reads);
+  await expect(readText({ ...target, selector: "#total" })).rejects.toThrow(/Frame changed/);
 });
 
 it("filters by URL or resource type and clears the full network buffer", async () => {

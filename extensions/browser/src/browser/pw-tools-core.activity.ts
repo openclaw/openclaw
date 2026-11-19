@@ -6,19 +6,13 @@ import type {
   BrowserPageError,
 } from "./pw-session.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
-import { readDocumentIdentitiesForPage } from "./pw-session.page-cdp.js";
+import { withSnapshotFrameGuard } from "./pw-snapshot-page.js";
 import { awaitActionWithAbort } from "./pw-tools-core.interactions.navigation.js";
 
-/**
- * Returns visible page text without evaluating caller-provided JavaScript.
- * Text is discarded when the page closes, leaves `expectedUrl`, or reports a different
- * main-frame document after the read than before it. Navigations that return to the
- * original document in between are not detected.
- */
+/** Returns visible page text without evaluating caller-provided JavaScript. */
 export async function getPageTextViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
-  expectedUrl?: string;
   selector?: string;
   maxChars?: number;
   signal?: AbortSignal;
@@ -33,48 +27,36 @@ export async function getPageTextViaPlaywright(opts: {
   const signal = opts.signal
     ? AbortSignal.any([opts.signal, controller.signal])
     : controller.signal;
-  const changedError = () =>
-    new Error("Page text target changed or closed; refresh tabs and retry.");
   const read = async () => {
     signal.throwIfAborted();
     const page = await getPageForTargetId(opts);
-    signal.throwIfAborted();
-    const assertPageCurrent = () => {
-      signal.throwIfAborted();
-      if (page.isClosed() || (opts.expectedUrl !== undefined && page.url() !== opts.expectedUrl)) {
-        throw changedError();
-      }
-    };
-    // Engines that never report a committed loader id read no identity before or after
-    // the text, so the comparison below does not reject them.
-    const readMainFrameIdentity = async () => {
-      const identities = await readDocumentIdentitiesForPage(page).catch(() => undefined);
-      assertPageCurrent();
-      return identities?.mainFrame;
-    };
-    const documentIdentity = await readMainFrameIdentity();
-    let locator = page.locator(opts.selector ?? "body").first();
-    if (!opts.selector) {
-      for (const selector of ["article", "main"]) {
-        const candidate = page.locator(selector).first();
-        const count = await candidate.count();
-        signal.throwIfAborted();
-        if (count) {
-          locator = candidate;
-          break;
-        }
-      }
-    }
-    // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- This action reads rendered text, not hidden DOM text.
-    const text = await locator.innerText({
-      timeout: Math.max(1, deadline - performance.now()),
+    // Locators re-resolve after a navigation, so text read across one belongs to another document.
+    return await withSnapshotFrameGuard({
+      page,
+      frame: page.mainFrame(),
       signal,
+      run: async (assertCurrent) => {
+        let locator = page.locator(opts.selector ?? "body").first();
+        if (!opts.selector) {
+          for (const selector of ["article", "main"]) {
+            const candidate = page.locator(selector).first();
+            const count = await candidate.count();
+            signal.throwIfAborted();
+            if (count) {
+              locator = candidate;
+              break;
+            }
+          }
+        }
+        // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- This action reads rendered text, not hidden DOM text.
+        const text = await locator.innerText({
+          timeout: Math.max(1, deadline - performance.now()),
+          signal,
+        });
+        assertCurrent();
+        return text;
+      },
     });
-    // Locators re-resolve after navigation, so the text may belong to a successor document.
-    if ((await readMainFrameIdentity()) !== documentIdentity) {
-      throw changedError();
-    }
-    return text;
   };
   const text = await withTimeout(awaitActionWithAbort(read(), signal), timeout, {
     createError: () => {
