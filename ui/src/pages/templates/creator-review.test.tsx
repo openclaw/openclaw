@@ -86,6 +86,17 @@ const target = {
   draftId: "ec8f46b0-4ca3-4991-8a73-dfdcc8764087",
   sessionKey: "agent:research:main",
 };
+function mountInline(context: ReturnType<typeof createContext>) {
+  const { agentId, sessionKey } = target;
+  return mountSolid(() => (
+    <TemplateCreatorInlineReview
+      context={context}
+      payload={target}
+      agentId={agentId}
+      sessionKey={sessionKey}
+    />
+  ));
+}
 async function fixture(review = reviewed) {
   const request = vi.fn(
     async (method: string, _params?: Record<string, unknown>): Promise<unknown> => {
@@ -188,14 +199,7 @@ it("offers one sign-in action before drafting is complete and opens review witho
     }),
   });
   const open = vi.spyOn(window, "open").mockReturnValue(null);
-  const page = mountSolid(() => (
-    <TemplateCreatorInlineReview
-      context={context}
-      payload={target}
-      sessionKey={target.sessionKey}
-      agentId={target.agentId}
-    />
-  ));
+  const page = mountInline(context);
   try {
     await vi.advanceTimersByTimeAsync(1);
     await waitForSolid(() => expect(page.getByRole("button", { name: "Sign in" })).toBeTruthy());
@@ -206,14 +210,10 @@ it("offers one sign-in action before drafting is complete and opens review witho
     expect(page.getByText("ZYXW-2345", { exact: true })).toBeTruthy();
     await vi.advanceTimersByTimeAsync(30);
     await waitForSolid(() => expect(page.getByRole("button", { name: "Publish" })).toBeTruthy());
-    expect(call.mock.calls.filter(([method]) => method === "templates.drafts.review")).toHaveLength(
-      1,
-    );
-    expect(
-      call.mock.calls.some(
-        ([method]) => method === "chat.send" || method === "templates.drafts.publish",
-      ),
-    ).toBe(false);
+    const methods = call.mock.calls.map(([method]) => method);
+    expect(methods.filter((m) => m === "templates.drafts.review")).toHaveLength(1);
+    expect(methods).not.toContain("chat.send");
+    expect(methods).not.toContain("templates.drafts.publish");
   } finally {
     page.unmount();
     open.mockRestore();
@@ -339,14 +339,7 @@ it("retains pending receipt across remount and promotes only a matching registry
   await flow.publish();
   page.unmount();
   flow.retirePresentation();
-  const remounted = mountSolid(() => (
-    <TemplateCreatorInlineReview
-      context={context}
-      payload={target}
-      sessionKey={target.sessionKey}
-      agentId={target.agentId}
-    />
-  ));
+  const remounted = mountInline(context);
   await waitForSolid(() => expect(remounted.getByText("Published", { exact: true })).toBeTruthy());
   expect(remounted.getByRole("button", { name: "Copy link" }).textContent).toBe("Copy link");
   expect(remounted.queryByRole("link", { name: "View on ClawHub" })).toBeNull();
@@ -368,15 +361,7 @@ it("will not publish when review is stale or operator authority is revoked", asy
 it("shares the draft through sidebar handoff and remounts revised metadata before publication", async () => {
   const { page, flow, context, request } = await fixture();
   expect(templateCreatorFlow(context, target)).toBe(flow);
-  const renderInline = () => (
-    <TemplateCreatorInlineReview
-      context={context}
-      payload={target}
-      sessionKey={target.sessionKey}
-      agentId={target.agentId}
-    />
-  );
-  const inline = mountSolid(renderInline);
+  const inline = mountInline(context);
   await vi.advanceTimersByTimeAsync(0);
   await waitForSolid(() => expect(inline.getByRole("button", { name: "Publish" })).toBeTruthy());
   expect(page.queryByRole("region")).toBeNull();
@@ -399,7 +384,7 @@ it("shares the draft through sidebar handoff and remounts revised metadata befor
         ? updated
         : pendingPublication,
   );
-  const remounted = mountSolid(renderInline);
+  const remounted = mountInline(context);
   await vi.advanceTimersByTimeAsync(0);
   expect(
     request.mock.calls.findLast(([method]) => method === "templates.drafts.review")?.[1],
