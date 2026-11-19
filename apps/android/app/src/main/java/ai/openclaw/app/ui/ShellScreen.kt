@@ -863,7 +863,7 @@ internal fun overviewHeaderRoute(attentionRows: List<HomeAttentionRow>): Setting
 
 /** Top-level sessions only; child sessions are reached through their parent. */
 internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<ChatSessionEntry> {
-  val nested = sessionParentLinks(sessions).keys
+  val nested = navigationParentLinks(sessions).keys
   return sessions
     .filter { it.key !in nested }
     .sortedWith(compareByDescending<ChatSessionEntry> { it.lastActivityAt ?: it.updatedAtMs ?: Long.MIN_VALUE }.thenBy { it.key })

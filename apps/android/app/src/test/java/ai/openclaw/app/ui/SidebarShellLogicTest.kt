@@ -412,6 +412,47 @@ class SidebarShellLogicTest {
   }
 
   @Test
+  fun homeChildrenStayTopLevelConversations() {
+    val home = session("agent:main:main", 10)
+    val conversation = session("agent:main:dashboard:work", 20).copy(parentSessionKey = home.key)
+    val legacyHome = session("main", 5)
+    val legacyChild = session("agent:main:subagent:legacy", 15).copy(spawnedBy = legacyHome.key)
+    val customHome = session("agent:main:custom-home", 1).copy(isMain = true)
+    val customChild = session("agent:main:subagent:custom", 25).copy(parentSessionKey = customHome.key)
+
+    val presentation = sidebarSessionPresentation(listOf(home, conversation, legacyHome, legacyChild, customHome, customChild), emptyList())
+
+    assertTrue(presentation.parentByKey.isEmpty())
+    assertEquals(
+      listOf(customChild.key, conversation.key, legacyChild.key, home.key, legacyHome.key, customHome.key),
+      presentation.recent.map { it.key },
+    )
+  }
+
+  @Test
+  fun aParentRanksByItsNewestChildActivity() {
+    val oldParent = session("agent:main:dashboard:old", 10)
+    val freshChild = session("agent:main:subagent:fresh", 100).copy(parentSessionKey = oldParent.key)
+    val newer = (1..3).map { session("agent:main:dashboard:newer-$it", 50 + it.toLong()) }
+
+    val presentation = sidebarSessionPresentation(listOf(oldParent, freshChild) + newer, emptyList())
+
+    assertEquals(oldParent.key, presentation.recent.first().key)
+    assertEquals(oldParent.key, sidebarSectionWindow(presentation.recent, visibleLimit = 1, activeSessionKey = "").rows.single().key)
+  }
+
+  @Test
+  fun aCollapsedParentReportsItsHiddenChildrensRequests() {
+    val parent = session("agent:main:dashboard:parent", 30)
+    val child = session("agent:main:subagent:child", 20).copy(parentSessionKey = parent.key)
+    val grandchild = session("agent:main:subagent:grandchild", 10).copy(parentSessionKey = child.key)
+    val presentation = sidebarSessionPresentation(listOf(parent, child, grandchild), emptyList())
+
+    assertEquals(listOf(parent.key, child.key, grandchild.key), presentation.attentionRows(parent, childrenExpanded = false).map { it.key })
+    assertEquals(listOf(parent.key), presentation.attentionRows(parent, childrenExpanded = true).map { it.key })
+  }
+
+  @Test
   fun parentsStartCollapsedUnlessTheyHoldTheOpenSessionAndHonorTheUsersChoice() {
     val parent = session("agent:main:dashboard:parent", 50)
     val child = session("agent:main:subagent:child", 40).copy(parentSessionKey = parent.key)

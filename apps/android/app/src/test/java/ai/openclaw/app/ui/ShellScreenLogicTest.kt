@@ -435,10 +435,12 @@ class ShellScreenLogicTest {
         ChatSessionEntry(key = "agent:main:dashboard:parent", updatedAtMs = 1),
         ChatSessionEntry(key = "agent:main:subagent:child", updatedAtMs = 3, parentSessionKey = "agent:main:dashboard:parent"),
         ChatSessionEntry(key = "agent:main:subagent:orphan", updatedAtMs = 2, parentSessionKey = "agent:main:dashboard:unloaded"),
+        ChatSessionEntry(key = "agent:main:main", updatedAtMs = 0),
+        ChatSessionEntry(key = "agent:main:dashboard:home-child", updatedAtMs = 4, parentSessionKey = "agent:main:main"),
       )
 
     assertEquals(
-      listOf("agent:main:subagent:orphan", "agent:main:dashboard:parent"),
+      listOf("agent:main:dashboard:home-child", "agent:main:subagent:orphan", "agent:main:dashboard:parent", "agent:main:main"),
       overviewRecentSessions(sessions).map { session -> session.key },
     )
   }

@@ -201,6 +201,22 @@ internal data class SidebarSessionPresentation(
   val childrenByParent: Map<String, List<ChatSessionEntry>> = emptyMap(),
 )
 
+private val agentMainSessionKey = Regex("^agent:[^:]+:main$")
+
+private fun isHomeSession(
+  key: String,
+  entry: ChatSessionEntry?,
+): Boolean = entry?.isMain == true || key == "main" || agentMainSessionKey.matches(key)
+
+/**
+ * Parent links for the sidebar and Overview. Home is a page rather than a listed row, so its
+ * children are top-level conversations, as on the web.
+ */
+internal fun navigationParentLinks(entries: List<ChatSessionEntry>): Map<String, String> {
+  val entriesByKey = entries.associateBy { it.key }
+  return sessionParentLinks(entries).filterValues { parent -> !isHomeSession(parent, entriesByKey[parent]) }
+}
+
 /** The top-level row that contains [key], so a nested active session keeps its parent on screen. */
 internal fun SidebarSessionPresentation.rootKeyOf(key: String): String {
   var current = key
@@ -214,6 +230,12 @@ internal fun SidebarSessionPresentation.rootKeyOf(key: String): String {
 
 /** [entries] plus their nested descendants, so a collapsed section still reports hidden attention. */
 internal fun SidebarSessionPresentation.withDescendants(entries: List<ChatSessionEntry>): List<ChatSessionEntry> = entries.flatMap { entry -> listOf(entry) + descendantsOf(entry.key) }
+
+/** Rows whose questions and approvals a session row reports; a collapsed parent carries its hidden children. */
+internal fun SidebarSessionPresentation.attentionRows(
+  session: ChatSessionEntry,
+  childrenExpanded: Boolean,
+): List<ChatSessionEntry> = if (childrenExpanded) listOf(session) else withDescendants(listOf(session))
 
 /** Every nested descendant of [key], depth first. */
 internal fun SidebarSessionPresentation.descendantsOf(key: String): List<ChatSessionEntry> = childrenByParent[key].orEmpty().flatMap { child -> listOf(child) + descendantsOf(child.key) }
@@ -297,9 +319,25 @@ internal fun sidebarSessionPresentation(
   val activeSessions = sidebarRecentSessions(sessions, currentSessionKey, nowMs)
   // Catalog sections own their rows, so those rows neither nest here nor hold children here.
   val listed = activeSessions.filter { it.pinned == true || it.key !in excludedSessionKeys }
-  val parentByKey = sessionParentLinks(listed)
+  val parentByKey = navigationParentLinks(listed)
   val childrenByParent = listed.filter { it.key in parentByKey }.groupBy { parentByKey.getValue(it.key) }
-  val roots = listed.filter { it.key !in parentByKey }
+  val latestActivity = mutableMapOf<String, Long>()
+
+  fun threadActivity(session: ChatSessionEntry): Long =
+    latestActivity.getOrPut(session.key) {
+      childrenByParent[session.key].orEmpty().fold(session.lastActivityAt ?: session.updatedAtMs ?: 0L) { latest, child ->
+        maxOf(latest, threadActivity(child))
+      }
+    }
+  // A parent ranks by its newest child, so a child's new work keeps the thread on the first page.
+  val roots =
+    listed
+      .filter { it.key !in parentByKey }
+      .sortedWith(
+        compareByDescending<ChatSessionEntry> { it.pinned == true }
+          .thenByDescending(::threadActivity)
+          .thenBy { it.key },
+      )
   val pinned = roots.filter { it.pinned == true }
   val navigable = roots.filter { it.pinned != true }
   val grouped = navigable.filter { !it.category.isNullOrBlank() }
@@ -647,9 +685,10 @@ internal fun OpenClawSidebar(
     val expanded =
       children.isNotEmpty() &&
         recentPresentation.childrenExpanded(session.key, activeSessionKey, expandedParentKeys, collapsedParentKeys)
+    val attentionRows = recentPresentation.attentionRows(session, expanded)
     SidebarSessionRow(
       session = session,
-      attention = attentionFor(listOf(sidebarAttentionSessionKey(session.key, session.ownerAgentId ?: selectedAgentId ?: defaultAgentId))),
+      attention = attentionFor(attentionRows.map { sidebarAttentionSessionKey(it.key, it.ownerAgentId ?: selectedAgentId ?: defaultAgentId) }),
       selected = session.key == activeSessionKey,
       palette = palette,
       onClick = { onSelectSession(session) },
