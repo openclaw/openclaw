@@ -502,11 +502,10 @@ class BrokerHost implements SpawnBrokerHost {
           this.resourceClaims?.fail(error);
           return;
         }
-        const delay = RESTART_DELAYS[this.consecutiveFailures++];
-        if (delay === undefined) {
-          this.readiness.reject(error);
-          return;
-        }
+        // A ready broker belongs to the Gateway's lifetime: keep replacing it at the
+        // capped backoff, so a transient launch failure cannot disable it until restart.
+        const delay =
+          RESTART_DELAYS[Math.min(this.consecutiveFailures++, RESTART_DELAYS.length - 1)];
         this.restartTimer = setTimeout(() => this.start(), delay);
       });
     };

@@ -60,9 +60,9 @@ it("recovers after more than five independently healthy generations", async () =
   expect(native.spawn).toHaveBeenCalledTimes(8);
 });
 
-it("stops after bounded consecutive recovery failures following a healthy startup", async () => {
+it("keeps replacing a lost broker at the capped backoff after consecutive failures", async () => {
   retire(child, 1);
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; attempt < 6; attempt++) {
     const failed = expect(host.ready()).rejects.toMatchObject({
       code: "ERR_SPAWN_BROKER_UNAVAILABLE",
     });
@@ -70,9 +70,13 @@ it("stops after bounded consecutive recovery failures following a healthy startu
     retire(child, 1);
     await failed;
   }
-  // Exhaustion must leave no later generation queued, even beyond its backoff.
-  await vi.advanceTimersToNextTimerAsync();
-  expect(native.spawn).toHaveBeenCalledTimes(6);
-  await host.waitForCleanup();
-  await expect(host.ready()).rejects.toMatchObject({ code: "ERR_SPAWN_BROKER_UNAVAILABLE" });
+  expect(native.spawn).toHaveBeenCalledTimes(7);
+  // Retries stay at the last backoff step instead of looping hot.
+  await vi.advanceTimersByTimeAsync(1999);
+  expect(native.spawn).toHaveBeenCalledTimes(7);
+  const ready = host.ready();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(native.spawn).toHaveBeenCalledTimes(8);
+  markReady();
+  await expect(ready).resolves.toBeUndefined();
 });
