@@ -71,6 +71,8 @@ import {
 } from "./history-merge.ts";
 import {
   captureChatSessionScrollPosition,
+  CHAT_TRANSCRIPT_END_THRESHOLD_PX,
+  getChatSessionScrollPosition,
   saveChatSessionScrollPosition,
   scheduleChatScroll,
 } from "./scroll.ts";
@@ -290,6 +292,12 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
   }
 
   protected handleTranscriptScroll(event: Event): void {
+    // WebKit moves a retained pane's native offset after content-visibility hides it.
+    // A hidden pane has no reader: its scroll must neither replace the saved
+    // position nor lock end-follow. Presentation restores the reader's position.
+    if (!this.visuallyPresented) {
+      return;
+    }
     const root =
       event.currentTarget instanceof HTMLElement
         ? event.currentTarget
@@ -342,6 +350,52 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
     // Preserve the normal at-bottom/new-message bookkeeping while layering
     // history-sentinel arming onto the same scroll event.
     this.state?.handleChatScroll(event);
+  }
+
+  private retainedPositionFrame: number | undefined;
+
+  protected override visuallyPresentedChanged(visible: boolean): void {
+    super.visuallyPresentedChanged(visible);
+    if (this.retainedPositionFrame !== undefined) {
+      cancelAnimationFrame(this.retainedPositionFrame);
+      this.retainedPositionFrame = undefined;
+    }
+    // Only a settled retained transcript can have drifted; initial placement owns new ones.
+    if (visible && this.transcript.isPositionSettled) {
+      this.retainedPositionFrame = requestAnimationFrame(() => {
+        this.retainedPositionFrame = undefined;
+        this.restoreRetainedReaderPosition();
+      });
+    }
+  }
+
+  /** Returns a re-shown retained pane to the reader's last visible position. */
+  private restoreRetainedReaderPosition(): void {
+    const state = this.state;
+    const root = this.transcript.scrollElement;
+    const sessionKey = this.transcript.renderedSessionKey;
+    if (
+      !this.visuallyPresented ||
+      !state ||
+      !root ||
+      !sessionKey ||
+      !areUiSessionKeysEquivalent(sessionKey, state.sessionKey) ||
+      !this.transcript.isPositionSettled
+    ) {
+      return;
+    }
+    const saved = getChatSessionScrollPosition(this.paneId, sessionKey);
+    if (!saved) {
+      return;
+    }
+    if (saved.anchorToEnd) {
+      const distance = root.scrollHeight - root.clientHeight - root.scrollTop;
+      if (distance > CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
+        this.transcript.scrollToEnd({ source: "auto", behavior: "instant" });
+      }
+    } else if (Math.abs(root.scrollTop - saved.scrollTop) > 1) {
+      this.transcript.scrollToOffset(saved.scrollTop);
+    }
   }
 
   protected consumeHistoryIntent(): boolean {
