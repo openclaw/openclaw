@@ -85,10 +85,12 @@ export type FinisherDeps = {
 };
 
 /**
- * The pnpm 11+ home a package directory belongs to. Registry installs land in the global
- * virtual store (`<home>/store/v<N>/links/@/openclaw/<version>/<hash>/node_modules/openclaw`);
- * tarball and other non-registry installs stay in the project's own virtual store
- * (`<home>/global/v<N>/<project>/node_modules/.pnpm/openclaw@<spec>/node_modules/openclaw`).
+ * The pnpm 11+ home a package directory belongs to, whichever store holds it: the global
+ * virtual store (`<home>/store/v<N>/links/@/openclaw/<version>/<hash>/node_modules/openclaw`),
+ * a project's own store for tarball installs
+ * (`<home>/global/v<N>/<project>/node_modules/.pnpm/openclaw@<spec>/node_modules/openclaw`), or
+ * pnpm 11.28's group store (`<home>/global/v<N>/<group>/.pnpm/openclaw@<version>_…/…/openclaw`).
+ * The active-entry check below, not this shape, decides which package is current.
  */
 function parsePnpmPackageHome(root: string) {
   const match = /^(.+)[/\\](?:store|global)[/\\](v\d+)[/\\].+[/\\]node_modules[/\\]openclaw$/u.exec(

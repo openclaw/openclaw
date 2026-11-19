@@ -28,7 +28,7 @@ function writePackage(root: string, version: string) {
 }
 
 /** A pnpm 11 global install whose entry pnpm repointed from 2026.11.5 to 2026.11.6. */
-function pnpmSwitch(candidate: "registry" | "tarball" = "registry") {
+function pnpmSwitch(candidate: "registry" | "tarball" | "pnpm11-group" = "registry") {
   const base = tempDirs.make("openclaw-shipped-restart-");
   const storeEntry = (home: string, version: string, hash: string) =>
     path.join(
@@ -45,18 +45,24 @@ function pnpmSwitch(candidate: "registry" | "tarball" = "registry") {
     );
   const home = path.join(fs.realpathSync(base), "pnpm-home");
   const previous = writePackage(storeEntry(home, "2026.11.5", "a1"), "2026.11.5");
-  const project = path.join(home, "global", "v11", "project");
-  // A tarball install stays in the project's own virtual store, as in the test cells.
+  const project = path.join(home, "global", "v11", "708-1a1f51a997e-d997f18d74ab61bc");
+  // A tarball install stays in the project's own virtual store, as in the test cells;
+  // pnpm 11.28 keeps a registry install's `.pnpm` directly under the group directory.
   const current = writePackage(
     candidate === "registry"
       ? storeEntry(home, "2026.11.6", "b2")
-      : path.join(project, "node_modules/.pnpm/openclaw@file+openclaw.tgz/node_modules/openclaw"),
+      : candidate === "tarball"
+        ? path.join(project, "node_modules/.pnpm/openclaw@file+openclaw.tgz/node_modules/openclaw")
+        : path.join(
+            project,
+            ".pnpm/openclaw@2026.11.6_@opentelemetry+api@1.10.0/node_modules/openclaw",
+          ),
     "2026.11.6",
   );
   fs.mkdirSync(path.join(project, "node_modules"), { recursive: true });
   fs.writeFileSync(path.join(project, "package.json"), '{"dependencies":{"openclaw":"2026.11.6"}}');
   fs.symlinkSync(current, path.join(project, "node_modules", "openclaw"), "dir");
-  fs.symlinkSync(project, path.join(home, "global", "v11", "hash-openclaw"), "dir");
+  fs.symlinkSync(project, path.join(home, "global", "v11", "9440847f"), "dir");
   const foreign = writePackage(
     storeEntry(path.join(base, "other-home"), "2026.11.5", "c3"),
     "2026.11.5",
@@ -65,7 +71,9 @@ function pnpmSwitch(candidate: "registry" | "tarball" = "registry") {
   // pnpm can prune the previous generation; the unit still names its path.
   const pruned = storeEntry(home, "2026.11.4", "d4");
   const env = { OPENCLAW_STATE_DIR: path.join(base, "state") };
-  return { base, previous, current, foreign, npm, pruned, env, options: { env } };
+  // The lexical global entry the shipped driver runs the Doctor from.
+  const entry = path.join(project, "node_modules", "openclaw");
+  return { base, previous, current, entry, foreign, npm, pruned, env, options: { env } };
 }
 
 type Fixture = ReturnType<typeof pnpmSwitch>;
@@ -169,6 +177,13 @@ describe("Doctor gate for a shipped updater's refused pnpm restart", () => {
       driver: "grandparent",
       notice: FINISHER_NOTICE,
     },
+    {
+      name: "a pnpm 11.28 registry candidate under its group's own .pnpm, without a run id",
+      candidate: "pnpm11-group",
+      runIdEnv: false,
+      driver: "grandparent",
+      notice: FINISHER_NOTICE,
+    },
     { name: "a waiter that could not start", spawn: "failed", notice: MANUAL_RECOVERY_NOTICE },
     { name: "a waiter already running", spawn: "duplicate" },
     {
@@ -196,10 +211,7 @@ describe("Doctor gate for a shipped updater's refused pnpm restart", () => {
     const diagnosed: string[] = [];
     const { OPENCLAW_UPDATE_RUN_ID: _runId, ...withoutRunId } = doctorEnv(fixture, runId);
     await maybeLeaveShippedRestartFinisher({
-      root:
-        variant.root === "npm"
-          ? fixture.npm
-          : path.join(fixture.base, "pnpm-home/global/v11/project/node_modules/openclaw"),
+      root: variant.root === "npm" ? fixture.npm : fixture.entry,
       env: {
         ...("runIdEnv" in variant ? withoutRunId : doctorEnv(fixture, runId)),
         ...(variant.repair
