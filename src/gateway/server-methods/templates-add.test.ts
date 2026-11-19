@@ -23,7 +23,6 @@ const validateDelivery = vi.hoisted(() => vi.fn());
 const captureCreator = vi.hoisted(() => vi.fn());
 const reloadPlugin = vi.hoisted(() => vi.fn());
 const deleteAgent = vi.hoisted(() => vi.fn());
-const captureCreator = vi.hoisted(() => vi.fn());
 // Native account selection is covered by cron inference-binding tests.
 vi.mock("./cron-input-validation.js", async (original) => ({
   ...(await original<typeof import("./cron-input-validation.js")>()),
@@ -57,11 +56,6 @@ vi.mock("../../plugins/management-mutations.js", async (importOriginal) => ({
 vi.mock("./agents-config-mutations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agents-config-mutations.js")>()),
   deleteAgentConfigEntry: deleteAgent,
-}));
-
-vi.mock("./cron-input-validation.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./cron-input-validation.js")>()),
-  captureCronCreatorSession: captureCreator,
 }));
 
 const agentId = "workflow-operator";
@@ -455,7 +449,9 @@ it.each([false, true])(
   async (revoked) => {
     const dispose = vi.fn();
     const check = vi.fn(() => {
-      if (revoked) throw new Error("Account replaced");
+      if (revoked) {
+        throw new Error("Account replaced");
+      }
     });
     const createdActor = { type: "human", source: "profile", id: "template-owner" };
     const inferenceBinding = {
