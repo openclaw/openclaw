@@ -595,7 +595,7 @@ describe("clearSessionResetRuntimeState", () => {
       });
       const release = vi.fn();
       retainWorkOperatorContinuation(work.flowId!, sessionKey, {
-        operatorAuthority: { scope: "operator" },
+        operatorAuthority: {},
         assertCurrent: () => {},
         run: (run) => run(),
         release,

@@ -88,6 +88,20 @@ async function runWithWorkOperatorContinuation<T>(
   }
   try {
     custody?.assertCurrent();
+    // A wake starts a new turn. Operator authority stays fixed for the arming request (#201334),
+    // so the wake re-checks the operator's current admission once, as queued and returned starts do.
+    custody?.operatorAuthority?.reauthorize?.();
+  } catch (error) {
+    if (!work.operatorAuthorityRequired) {
+      throw error;
+    }
+    await markPendingWorkFailed(
+      work,
+      `Retained operator authority revoked: ${formatErrorMessage(error)}`,
+    );
+    return undefined;
+  }
+  try {
     // Continuation (karmaterminal): the retained scope still carries the arming turn's registry.
     return await (custody ? custody.run(() => runOnCurrentPluginGeneration(run)) : run());
   } catch (error) {
