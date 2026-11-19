@@ -23,7 +23,7 @@ import {
 } from "../../audit/execution-decision-receipts.js";
 import { inspectExecutionIdentityRun } from "../../audit/execution-identity-context.js";
 import type { InternalAuditRunInspectResult } from "../../audit/execution-identity-inspection.types.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const DEFAULT_AUDIT_LIST_LIMIT = 100;
@@ -101,6 +101,28 @@ function invalidRangeOrCursor(params: { cursor?: string; after?: number; before?
   };
 }
 
+/** Reject blank ids, which the trim below would drop, widening the page to every record. */
+function rejectBlankAuditFilter(
+  method: "audit.list" | "audit.activity.list",
+  params: AuditActivityListParams,
+  respond: RespondFn,
+): boolean {
+  const field = (["agentId", "sessionKey", "runId"] as const).find(
+    (key) => params[key] !== undefined && !normalizeOptionalString(params[key]),
+  );
+  if (field) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `invalid ${method} filters: ${field} must not be blank`,
+      ),
+    );
+  }
+  return field !== undefined;
+}
+
 function readAuditListPage(
   params: AuditActivityListParams,
   cursor: number | undefined,
@@ -129,7 +151,10 @@ function readAuditListPage(
 
 export const auditHandlers: GatewayRequestHandlers = {
   "audit.list": async ({ params, respond }) => {
-    if (!assertValidParams(params, validateAuditListParams, "audit.list", respond)) {
+    if (
+      !assertValidParams(params, validateAuditListParams, "audit.list", respond) ||
+      rejectBlankAuditFilter("audit.list", params, respond)
+    ) {
       return;
     }
     const parsed = invalidRangeOrCursor(params);
@@ -149,7 +174,8 @@ export const auditHandlers: GatewayRequestHandlers = {
   },
   "audit.activity.list": async ({ params, respond }) => {
     if (
-      !assertValidParams(params, validateAuditActivityListParams, "audit.activity.list", respond)
+      !assertValidParams(params, validateAuditActivityListParams, "audit.activity.list", respond) ||
+      rejectBlankAuditFilter("audit.activity.list", params, respond)
     ) {
       return;
     }
