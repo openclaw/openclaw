@@ -1,14 +1,11 @@
 import os from "node:os";
 import path from "node:path";
-import { GatewayLockError } from "./gateway-lock-payload.js";
 import {
+  GatewayLockError,
   readLockPayload,
   resolveGatewayLockPaths,
   resolveGatewayOwnerStatus,
 } from "./gateway-lock.js";
-
-/** A legacy owner does not take the state lock, so nothing else would exclude it. */
-export class LegacyGatewayLockError extends GatewayLockError {}
 
 /** Published 2026.6.33 Gateways predate state-local locks and SQLite coordinators. */
 export async function readLegacyGatewayLockIdentity(env: NodeJS.ProcessEnv) {
@@ -16,7 +13,7 @@ export async function readLegacyGatewayLockIdentity(env: NodeJS.ProcessEnv) {
   const lockDir = path.join(os.tmpdir(), uid === undefined ? "openclaw" : `openclaw-${uid}`);
   const { configLockPath } = resolveGatewayLockPaths(env, lockDir);
   const payload = await readLockPayload(configLockPath, true).catch((cause: unknown) => {
-    throw new LegacyGatewayLockError(
+    throw new GatewayLockError(
       `Legacy Gateway lock could not be read at ${configLockPath}; inspect that file as the Gateway service account before retrying maintenance.`,
       cause,
     );
@@ -35,7 +32,7 @@ export async function assertLegacyGatewayStoppedForMaintenance(
 ): Promise<void> {
   const owner = await readLegacyGatewayLockIdentity(env);
   if (owner) {
-    throw new LegacyGatewayLockError(
+    throw new GatewayLockError(
       `Legacy Gateway lock ${owner.path} still has a live or unverified owner (PID ${owner.pid}).`,
     );
   }

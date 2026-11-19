@@ -613,9 +613,11 @@ export async function updateGitCheckout(params: {
     // Source conversion migrates only after its prepared global exposure is swapped.
     if (!opts.prepareGitExposure) {
       stateMigrationStarted = true;
-      // Doctor may migrate, so code rollback stops here. Starting Doctor is not evidence of
-      // risk: its own refusal names one, and the CLI measures the schema it left behind.
-      recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
+      recovery = {
+        serviceRestartSafe: false,
+        reason: "state-migration-started",
+        dataAtRisk: "state-migrated-no-rollback",
+      };
       const doctorSteps: UpdateStepResult[] = [];
       let doctorStep: UpdateStepResult | null;
       try {
@@ -647,6 +649,9 @@ export async function updateGitCheckout(params: {
           getUpdateDoctorConfigFailureReason(doctorStep.configWriteRefusal) ?? "doctor-failed",
         );
       }
+      // Doctor finished its migrations: the candidate checkout owns the state it left, so a
+      // later asset or HEAD check failure refuses code rollback without naming a data risk.
+      recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
     }
 
     if ((await resolveControlUiAssetHealth({ root: gitRoot })).kind !== "ready") {

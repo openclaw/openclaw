@@ -994,12 +994,10 @@ describe("Git checkout execution", () => {
       }[failure],
       recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
     });
-    // Starting Doctor is not evidence of risk: only its own refusal names one. The CLI
-    // then measures the schema to decide whether the previous code can still run.
-    const recovery = result.recovery;
-    expect(recovery?.serviceRestartSafe === false ? recovery.dataAtRisk : undefined).toBe(
-      failure === "doctor-data-at-risk" ? "unreadable-state" : undefined,
-    );
+    // A failed Doctor may have stopped part way; checks after a finished Doctor name no risk.
+    const { dataAtRisk } = { dataAtRisk: undefined, ...result.recovery };
+    const expected = failure.startsWith("doctor-") ? "state-migrated-no-rollback" : undefined;
+    expect(dataAtRisk).toBe(failure === "doctor-data-at-risk" ? "unreadable-state" : expected);
     expect(result.steps.some((step) => step.name.startsWith("git-rollback-"))).toBe(false);
     expect(await fs.readFile(stateFile, "utf8")).toBe("migrated state");
     expect(await head()).toBe(targetSha);

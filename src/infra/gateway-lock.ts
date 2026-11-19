@@ -32,8 +32,6 @@ import {
   classifyGatewayLockProcessNamespace,
   describeGatewayLockHolder,
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
-  GatewayLockError,
-  GatewayLockInspectionError,
   GatewayLockNamespaceError,
   type GatewayLockRole,
   type LockPayload,
@@ -63,8 +61,6 @@ import {
   tryBorrowGatewayStateOwner,
 } from "./gateway-state-owner.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
-
-export { GatewayLockError, GatewayLockInspectionError } from "./gateway-lock-payload.js";
 
 export type GatewayLockHandle = {
   previousOwner?: GatewayOwnerLease["previousOwner"];
@@ -131,6 +127,17 @@ export function isSameGatewayLockIdentity(
   );
 }
 
+export class GatewayLockError extends Error {
+  constructor(
+    message: string,
+    public override readonly cause?: unknown,
+    public readonly databasePath?: string,
+  ) {
+    super(message);
+    this.name = "GatewayLockError";
+  }
+}
+
 export function isGatewayLifecycleContentionError(error: unknown): boolean {
   return (
     error instanceof GatewayLockError && error.cause instanceof GatewayStateOwnerContentionError
@@ -157,7 +164,7 @@ function resolveGatewayOwnerStatusSync(
     const remaining =
       opts.deadlineMs === undefined ? CMDLINE_EXEC_TIMEOUT_MS : opts.deadlineMs - performance.now();
     if (remaining <= 0) {
-      throw new GatewayLockInspectionError("Gateway lock inspection deadline expired");
+      throw new GatewayLockError("Gateway lock inspection deadline expired");
     }
     return Math.max(1, Math.min(CMDLINE_EXEC_TIMEOUT_MS, Math.ceil(remaining)));
   };
@@ -221,13 +228,13 @@ export async function readLockPayload(
       await fs.readFile(lockPath, { encoding: "utf8", signal }),
     );
     if (requireInspection && !payload) {
-      throw new GatewayLockInspectionError("Gateway lock payload could not be verified");
+      throw new GatewayLockError("Gateway lock payload could not be verified");
     }
     return payload;
   } catch (error) {
     signal?.throwIfAborted();
     if (requireInspection && !hasErrnoCode(error, "ENOENT")) {
-      throw new GatewayLockInspectionError("Gateway lock inspection is unavailable", error);
+      throw new GatewayLockError("Gateway lock inspection is unavailable", error);
     }
     return null;
   }
@@ -241,12 +248,12 @@ export function readLockPayloadSync(
   try {
     const payload = parseGatewayLockPayload(fsSync.readFileSync(lockPath, "utf8"));
     if (requireInspection && !payload) {
-      throw new GatewayLockInspectionError("Gateway lock payload could not be verified");
+      throw new GatewayLockError("Gateway lock payload could not be verified");
     }
     return payload;
   } catch (error) {
     if (requireInspection && !hasErrnoCode(error, "ENOENT")) {
-      throw new GatewayLockInspectionError("Gateway lock inspection is unavailable", error);
+      throw new GatewayLockError("Gateway lock inspection is unavailable", error);
     }
     return null;
   }
@@ -336,7 +343,7 @@ async function readVerifiedGatewayLockIdentity(
   const assertActive = () => {
     opts.signal?.throwIfAborted();
     if (deadlineMs !== undefined && performance.now() >= deadlineMs) {
-      throw new GatewayLockInspectionError("Gateway lock inspection deadline expired");
+      throw new GatewayLockError("Gateway lock inspection deadline expired");
     }
   };
   assertActive();
