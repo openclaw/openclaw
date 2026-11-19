@@ -11,7 +11,6 @@ import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcem
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
-import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import { readCronCallerScope } from "./cron-caller-scope.js";
 import { respondRefusedCronAgent } from "./cron-job-access.js";
 import { respondError } from "./response.js";
@@ -127,7 +126,6 @@ export const cronWakeHandler: GatewayRequestHandler = async ({
     text: p.text,
     commitGuard: () => {
       sessionMutationCommitGuard?.();
-      assertActiveAgentRuntimeAuthority(client, context);
     },
     ...(sessionKey ? { sessionKey } : {}),
     ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
