@@ -221,6 +221,28 @@ describe("scribes catalog", () => {
     expect(checkRunMessage("claim-consolidation", `${current}\nTidy titles.`)).toEqual({
       state: "custom",
     });
+    // An edited message from the version just before amounts is offered them; its schedule picks
+    // which, a custom schedule gets none, and a message naming its own amount keeps it.
+    expect(checkRunMessage("claim-consolidation", `${beforeAmounts}\nTidy titles.`)).toEqual({
+      state: "differs",
+      current,
+    });
+    expect(
+      checkRunMessage(
+        "claim-consolidation",
+        `${beforeAmounts}\nTidy titles.`,
+        cron(REVIEW_NIGHTLY_SCHEDULE),
+      ),
+    ).toEqual({ state: "differs", current: nightly });
+    expect(
+      checkRunMessage("claim-consolidation", `${beforeAmounts}\nTidy titles.`, { kind: "every" }),
+    ).toEqual({ state: "custom" });
+    expect(
+      checkRunMessage(
+        "claim-consolidation",
+        current.replace("retire 15 written Timelines", "retire 3 written Timelines"),
+      ),
+    ).toEqual({ state: "custom" });
     const granola = runMessage("granola", { meetings: "all", since: "today" });
     expect(granola).toContain("- Each run: ingest 4 meetings.");
     // A Granola message from before run amounts upgrades unedited, and an edited one keeps its
@@ -252,6 +274,17 @@ describe("scribes catalog", () => {
     expect(checkRunMessage("granola", `${granola}\nAlso tag speakers.`)).toEqual({
       state: "custom",
     });
+    // The same for a Granola message that keeps the current access and attention rules.
+    expect(checkRunMessage("granola", `${granolaBeforeAmounts}\nAlso tag speakers.`)).toEqual({
+      state: "differs",
+      current: granola,
+    });
+    expect(
+      checkRunMessage(
+        "granola",
+        granola.replace("ingest 4 meetings", "ingest 2 meetings") + "\nAlso tag speakers.",
+      ),
+    ).toEqual({ state: "custom" });
     expect(
       repairPrompt("claim-consolidation", { schedule: { kind: "cron" }, runMessage: earlier }),
     ).toContain(`\`\`\`text\n${current}\n\`\`\``);

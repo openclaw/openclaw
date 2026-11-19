@@ -90,7 +90,10 @@ and the automation. Do not ask questions. Each step names its task:
    withdrawn and left; Timelines retired and left; pages reviewed, changed and
    left unchanged.
 
-The run message sets how many Timelines and pages a run takes on; without one,
+These targets address a November 13, 2026 scheduled run that retired one
+Timeline and reviewed one page with hundreds waiting
+([#199744](https://github.com/openclaw/openclaw/pull/199744)). The run message
+sets how many Timelines and pages a run takes on; without one,
 retire 10 and review 5. These are targets, not limits: finish one before the
 next, and stop short only when none are left. Compaction keeps what you
 published, so a long run is no reason to stop. An item that still fails after

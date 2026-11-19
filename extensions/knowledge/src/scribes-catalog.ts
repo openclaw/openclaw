@@ -215,6 +215,8 @@ const CONSOLIDATION_AMOUNTS: Record<ReviewSchedule, { timelines: number; pages: 
 };
 /** Meetings one scheduled Learn from Granola run ingests, within the same 60-minute ceiling. */
 const GRANOLA_MEETINGS_PER_RUN = 4;
+/** How a settings line naming a scheduled run's amount begins. */
+const EACH_RUN = "Each run:";
 
 // The settings a scribe's work reads: conversations, Granola meetings, Memory files and how much
 // a scheduled run takes on. Schedules are separate.
@@ -230,7 +232,7 @@ function workSettings(setup: ScribeSetup, wording = CURRENT_WORDING, amounts = t
     const since = GRANOLA_SINCE_WORDS[options.since] ?? options.since;
     return [
       `Granola meetings: ${GRANOLA_MEETING_WORDS[options.meetings]}, ${since}.`,
-      ...(scheduled ? [`Each run: ingest ${GRANOLA_MEETINGS_PER_RUN} meetings.`] : []),
+      ...(scheduled ? [`${EACH_RUN} ingest ${GRANOLA_MEETINGS_PER_RUN} meetings.`] : []),
     ];
   }
   if ("sources" in options) {
@@ -239,7 +241,7 @@ function workSettings(setup: ScribeSetup, wording = CURRENT_WORDING, amounts = t
   // A once run carries no schedule, and a custom schedule has no amounts.
   const amount = scheduled ? CONSOLIDATION_AMOUNTS[options.schedule] : undefined;
   return amount
-    ? [`Each run: retire ${amount.timelines} written Timelines and review ${amount.pages} pages.`]
+    ? [`${EACH_RUN} retire ${amount.timelines} written Timelines and review ${amount.pages} pages.`]
     : [];
 }
 
@@ -506,7 +508,7 @@ function settingsChoices(id: ScribeId): ScribeOptions[ScribeId][] {
  *   since replaced.
  * - outdated: an earlier version generated it unchanged; `current` replaces it.
  * - differs: it differs from every generated message and still carries wording Knowledge has since
- *   replaced, so new run instructions are available (the plugin can't tell who changed it). An update
+ *   replaced, or keeps the current work step without a run amount the current wording adds, so new run instructions are available (the plugin can't tell who changed it). An update
  *   is available); `current` is what resetting it applies, for the settings the message names
  *   (the defaults when it names none Knowledge generates).
  */
@@ -514,10 +516,10 @@ export type RunMessageCheck =
   | { state: "current" | "custom" }
   | { state: "outdated" | "differs"; current: string };
 
-/** Compare a scribe automation's run message with every message each version generated. */
 /** The part of an automation's schedule a run message check reads. */
 export type RunSchedule = { kind: string; expr?: string };
 
+/** Compare a scribe automation's run message with every message each version generated. */
 export function checkRunMessage(
   id: ScribeId,
   message: string,
@@ -560,9 +562,6 @@ export function checkRunMessage(
         !message.includes(current[part]!),
     ),
   );
-  if (!replaced) {
-    return { state: "custom" };
-  }
   // A differing message keeps its settings when it still names a generated settings line.
   // Matched by its source settings alone, so a message from before run amounts keeps them.
   const named = choices.find((options) =>
@@ -570,7 +569,19 @@ export function checkRunMessage(
       (line) => message.includes(`- ${line}`),
     ),
   );
-  return { state: "differs", current: generate(named ?? scheduled ?? defaultOptions(id)) };
+  const target = named ?? scheduled ?? defaultOptions(id);
+  // An edited message that keeps the current work step but names no run amount, where the current
+  // wording adds one, is offered the amount; one that names its own amount keeps it.
+  const missingAmount =
+    message.includes(current[1]!) &&
+    !message.includes(`- ${EACH_RUN}`) &&
+    workSettings(scribeSetup(id, "ongoing", target), CURRENT_WORDING, amounts).some((line) =>
+      line.startsWith(EACH_RUN),
+    );
+  if (!replaced && !missingAmount) {
+    return { state: "custom" };
+  }
+  return { state: "differs", current: generate(target) };
 }
 
 /** First words of every repair prompt; the page never forces a first run after one. */
