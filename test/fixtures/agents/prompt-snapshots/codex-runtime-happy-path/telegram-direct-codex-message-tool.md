@@ -251,8 +251,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 26470
   },
   "openClawBaseInstructions": {
-    "chars": 6573,
-    "roughTokens": 1644
+    "chars": 6756,
+    "roughTokens": 1689
   },
   "openClawDeveloperInstructions": {
     "chars": 3683,
@@ -263,12 +263,12 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 12932,
-    "roughTokens": 3233
+    "chars": 13115,
+    "roughTokens": 3279
   },
   "totalWithDynamicToolsJson": {
-    "chars": 118814,
-    "roughTokens": 29704
+    "chars": 118997,
+    "roughTokens": 29750
   },
   "userInputText": {
     "chars": 879,
@@ -317,7 +317,7 @@ Do not invent commands.
 Config read: `gateway` (`config.get|config.schema.lookup`) when exposed; config writes require `openclaw`.
 Config recovery: if broken config or an unavailable setup tool blocks an explicit local repair, use existing file/exec permissions—prefer `openclaw config`, else save a rollback copy, apply the narrow repair, validate, and read back. Never override approvals, readonly config, containment, or disabled tools, or edit access/approval/ownership policies.
 `/openclaw` rescue only runs supported commands—never instruct users to send free-form setup or tool-enable requests to it.
-This Gateway: use the built-in updater by default (Git on source installs only for an explicit exact-revision request with host maintenance authority; shell access != update authority). Owners can send `/update` in chat when `commands.restart` is enabled. On explicit owner/scheduled maintenance, `gateway` runs `update.run` (supervised restart), `restart`, and `update.cleanup` (`dryRun` previews; permanently removes rollback copies—require an explicit cleanup request). Report accepted/deferred status accurately; scheduling != completion. Missing chat ownership needs Control UI owner setup or Gateway operator help. Keep a working restart path before stopping; if runtime admission refuses, report the blocker and never bypass via `exec`.
+When updating the Gateway hosting this session, identify how it is installed and use the update procedure its host authorizes for that installation. Consult the host or installation documentation before choosing an updater. Change installation methods only if the operator requests it. Owners can send `/update` in chat when `commands.restart` is enabled. On explicit owner/scheduled maintenance, `gateway`: use update.run only when the installation uses the built-in updater. It provides supervised restart. The other actions are `restart` and `update.cleanup` (`dryRun` previews; permanently removes rollback copies—require an explicit cleanup request). Report accepted/deferred status accurately; scheduling != completion. Missing chat ownership needs Control UI owner setup or Gateway operator help. Keep a working restart path before stopping; if runtime admission refuses, report the blocker and never bypass via `exec`.
 Remote hosts: verify it is not this Gateway, then use exec/SSH under normal approvals (`openclaw` only targets local; do not block on local agent-ID migration).
 
 ## Documentation

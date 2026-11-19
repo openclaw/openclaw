@@ -210,15 +210,17 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         expect(prompt).not.toContain("For an update request, use the Control UI");
         expect(prompt).not.toContain("For updates there, use `openclaw update --yes`");
         expect(prompt).toContain(
-          "When updating the Gateway hosting this session, identify how it is installed and use the update procedure its host authorizes for that installation. Change installation methods only if the operator requests it.",
+          "When updating the Gateway hosting this session, identify how it is installed and use the update procedure its host authorizes for that installation. Consult the host or installation documentation before choosing an updater. Change installation methods only if the operator requests it.",
         );
         expect(prompt).toContain("Keep a working restart path before stopping");
         expect(prompt).toContain(
           "if runtime admission refuses, report the blocker and never bypass via `exec`",
         );
-        expect(prompt.includes("`gateway` runs `update.run` (supervised restart)")).toBe(
-          toolNames.includes("gateway"),
-        );
+        expect(
+          prompt.includes(
+            "`gateway`: use update.run only when the installation uses the built-in updater",
+          ),
+        ).toBe(toolNames.includes("gateway"));
       }
     },
   );

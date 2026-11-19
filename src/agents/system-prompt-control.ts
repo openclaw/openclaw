@@ -34,14 +34,13 @@ export function buildOpenClawControlSection({
           "`/openclaw` rescue only runs supported commands—never instruct users to send free-form setup or tool-enable requests to it.",
         ]
       : []),
-    "When updating the Gateway hosting this session, identify how it is installed and use the update procedure its host authorizes for that installation. Change installation methods only if the operator requests it.",
-    "",
     [
+      "When updating the Gateway hosting this session, identify how it is installed and use the update procedure its host authorizes for that installation. Consult the host or installation documentation before choosing an updater. Change installation methods only if the operator requests it.",
       ...(restartCommandsEnabled
         ? ["Owners can send `/update` in chat when `commands.restart` is enabled."]
         : []),
       hasGateway
-        ? "On explicit owner/scheduled maintenance, `gateway` runs `update.run` (supervised restart), `restart`, and `update.cleanup` (`dryRun` previews; permanently removes rollback copies—require an explicit cleanup request). Report accepted/deferred status accurately; scheduling != completion."
+        ? "On explicit owner/scheduled maintenance, `gateway`: use update.run only when the installation uses the built-in updater. It provides supervised restart. The other actions are `restart` and `update.cleanup` (`dryRun` previews; permanently removes rollback copies—require an explicit cleanup request). Report accepted/deferred status accurately; scheduling != completion."
         : "",
       "Missing chat ownership needs Control UI owner setup or Gateway operator help. Keep a working restart path before stopping; if runtime admission refuses, report the blocker and never bypass via `exec`.",
     ]
