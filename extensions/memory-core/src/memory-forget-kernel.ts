@@ -15,10 +15,7 @@ import {
   type MemoryForgetLineage,
   type MemoryForgetLineageResult,
 } from "./memory-entry-origins-task.js";
-import {
-  forEachMemoryForgetChunkIdBatch,
-  type ForgetDatabase,
-} from "./memory-forget-index-task.js";
+import type { ForgetDatabase } from "./memory-forget-index-task.js";
 import { advanceMemoryIndexRevision } from "./memory-index-revision.worker.js";
 import { recordMemorySessionTombstonesInDatabase } from "./memory-session-tombstones.js";
 
@@ -65,21 +62,17 @@ export function purgeForgottenMemory(
     // PostgreSQL owns generated text and vector FK projections; deleting the
     // source below removes both within this same owner transaction.
     if (input.hasVectorTable && !isPostgresSqlConnection(db)) {
-      forEachMemoryForgetChunkIdBatch(input.chunkIds, (batch) => {
-        executeSqliteQuerySync(
-          db,
-          kysely.deleteFrom("memory_index_chunks_vec").where("id", "in", batch),
-        );
-      });
-    }
-    forEachMemoryForgetChunkIdBatch(input.chunkIds, (batch) => {
       executeSqliteQuerySync(
         db,
         kysely
-          .deleteFrom("memory_index_chunks")
-          .where("id", "in", isPostgresSqlConnection(db) ? sqliteStringSet(batch) : batch),
+          .deleteFrom("memory_index_chunks_vec")
+          .where("id", "in", sqliteStringSet(input.chunkIds)),
       );
-    });
+    }
+    executeSqliteQuerySync(
+      db,
+      kysely.deleteFrom("memory_index_chunks").where("id", "in", sqliteStringSet(input.chunkIds)),
+    );
   }
   deleteMemoryIndexSources(db, input.sources);
   if (tableExists(db, "memory_embedding_cache")) {
