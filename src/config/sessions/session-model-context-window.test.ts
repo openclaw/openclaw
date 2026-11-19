@@ -121,7 +121,7 @@ it("preserves a newest tool turn using headroom when its final reply arrives", (
   }
 });
 
-it("keeps the current turn's request when its tool frames exceed the byte cap", () => {
+it("keeps the current turn's request when its tool frames exceed the byte cap, never orphaning a result", () => {
   const requests = [
     user(0, "task"),
     ...[1, 3].flatMap((seq) => [
@@ -146,6 +146,20 @@ it("keeps the current turn's request when its tool frames exceed the byte cap", 
       maxEvents: 100,
     }).map(({ entry }) => entry.seq),
   ).toEqual([0, 3, 4, 5]);
+  // A displaced result whose call precedes the request cannot ride along without that call.
+  const displaced = [
+    requests[0]!,
+    requests[1]!,
+    user(2),
+    { ...requests[2]!, entry: { ...requests[2]!.entry, ...entryBase(3) } },
+    assistant(4, "failed"),
+  ];
+  expect(
+    selectBoundedModelRequests(displaced, sizing([100, 100, 100, 850, 50]), {
+      maxBytes: 1000,
+      maxEvents: 100,
+    }).map(({ entry }) => entry.seq),
+  ).toEqual([4]);
 });
 
 it("reserves the compaction event slot before deciding that history exceeds the byte cap", () => {
