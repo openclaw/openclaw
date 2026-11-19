@@ -600,6 +600,22 @@ it("does not promote a login profile when protected storage rejects", async () =
   expectNoCalls(mocks.promoteAuthProfileInOrder, mocks.updateConfig, mocks.callGateway);
 });
 
+it("forwards --yes as overwriteExisting to the provider login method", async () => {
+  useProvider("github-copilot", "GitHub Copilot");
+
+  await loginCommand({ provider: "github-copilot", yes: true });
+
+  expect(runProviderAuth.mock.calls[0]?.[0].opts).toEqual({ overwriteExisting: true });
+});
+
+it("leaves provider login opts unset without --yes", async () => {
+  useProvider("github-copilot", "GitHub Copilot");
+
+  await loginCommand({ provider: "github-copilot" });
+
+  expect(runProviderAuth.mock.calls[0]?.[0].opts).toBeUndefined();
+});
+
 it.each([
   { connected: true, outcome: "gateway-rejected", target: "running" },
   { connected: false, outcome: "gateway-unreachable", target: "local" },
@@ -1115,3 +1131,5 @@ it("keeps the requested agent store when interactive auth add falls back to past
     agentDir: "/tmp/openclaw/agents/coder",
   });
 });
+
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
