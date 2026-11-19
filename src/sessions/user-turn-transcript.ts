@@ -30,7 +30,7 @@ import {
   inheritUserTurnPromptReactionSource,
   projectUserTurnRequesterOrigin,
 } from "./user-turn-transcript-admission.js";
-import { persistUserTurnInput, stageUserTurnPendingInput } from "./user-turn-transcript-media.js";
+import * as transcriptMedia from "./user-turn-transcript-media.js";
 import { createUserTurnProcessingCompletion } from "./user-turn-transcript-processing.js";
 import {
   capturePersistedModelPromptProjection,
@@ -113,7 +113,7 @@ export function createUserTurnTranscriptRecorder(
   let admissionWrite: Promise<void> | undefined;
   let replacementText: string | undefined;
   let confirmedSteerTargetRunId: string | undefined;
-  let pendingInput: Awaited<ReturnType<typeof stageUserTurnPendingInput>>;
+  let pendingInput: Awaited<ReturnType<typeof transcriptMedia.stageUserTurnPendingInput>>;
   // The committed input keeps its run identity across later preparation attempts.
   let acceptedPendingInputRunId: string | undefined;
   let acceptedPendingInputId: string | undefined;
@@ -422,7 +422,7 @@ export function createUserTurnTranscriptRecorder(
             ? recorder.assertOriginalInputCommit
             : undefined;
         const persist = () =>
-          persistUserTurnInput(recorder, {
+          transcriptMedia.persistUserTurnInput(recorder, {
             ...resolvedTarget,
             logicalTurnId,
             message: projectUserTurnRequesterOrigin(candidate, requesterOrigin),
@@ -571,7 +571,7 @@ export function createUserTurnTranscriptRecorder(
             acceptedPendingInputId ??= receipt.inputId;
             adoptPendingInput(receipt);
           };
-          pendingInput = await stageUserTurnPendingInput(recorder, target, {
+          pendingInput = await transcriptMedia.stageUserTurnPendingInput(recorder, target, {
             ...options,
             runId,
             // A retained ID without a receipt means this recorder confirmed relinquishment.
@@ -677,6 +677,7 @@ export function createUserTurnTranscriptRecorder(
           message: persistedMessage,
         };
       }
+      transcriptMedia.retireStagedInput(pendingInput, acceptedPendingInputRunId, params.target);
       notifyMessagePersisted(persistedMessage);
     },
     markBlocked: () => {

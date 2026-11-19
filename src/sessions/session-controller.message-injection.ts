@@ -17,6 +17,7 @@ import {
 } from "../auto-reply/reply/message-injection-authority.js";
 import { hasPromptImageInput } from "../media/prompt-image-input.js";
 import { recordRunInjectedInputDevice } from "../plugins/hook-requester-device.js";
+import { isGatewayRestartDraining } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   replyMessageInjectionTargetOwner,
@@ -602,6 +603,19 @@ async function beginPreparedReplyMessageInjectionTarget(
             : {}),
         }
       : {}),
+    onQueueSettled: () => {
+      // A staged steer lives only while its receiving run owns it, or across a restart
+      // that cut that run off; commit consumes it in the transcript recorder.
+      const recorder = userTurnTranscriptRecorder;
+      if (recorder && !recorder.hasPersisted() && !recorder.isPendingInputConsumed?.()) {
+        if (isGatewayRestartDraining()) {
+          recorder.relinquishPendingInput?.();
+        } else {
+          recorder.finishPendingInput?.("cancelled", "failed");
+        }
+      }
+      queueOptions?.onQueueSettled?.();
+    },
     onQueueAccepted: (accepted) => {
       // Refuse only after ruling out uncertain question dispatch, which retains replay custody.
       if (accepted) {
@@ -624,6 +638,11 @@ async function beginPreparedReplyMessageInjectionTarget(
     if (resolved.prepareQueueMessage) {
       await resolved.prepareQueueMessage();
     }
+    // An accepted steer survives a restart: stage durable input before acknowledging it.
+    await userTurnTranscriptRecorder?.stageApproved?.({
+      runId: crypto.randomUUID(),
+      assertCurrent: () => assertFailureSourceCurrent?.(),
+    });
     outcome = resolved.injection
       .queueMessage(preparedText, runtimeQueueOptions)
       .then(async (result): Promise<ReplyMessageInjectionOutcome> => {

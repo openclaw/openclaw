@@ -1,14 +1,22 @@
 import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import { resolveSessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.transcript-target.js";
+import type { SessionPendingInputReceipt } from "../config/sessions/session-pending-input-receipt.types.js";
+import { discardSessionPendingInput } from "../config/sessions/session-pending-input-withdrawal.js";
 import { readQueuedChatInputAdmission } from "../gateway/queued-chat-input-admission.js";
 import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
-import { persistUserTurnTranscript } from "./user-turn-transcript.persistence.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  persistUserTurnTranscript,
+  resolveUserTurnTranscriptTarget,
+} from "./user-turn-transcript.persistence.js";
 import type {
   UserTurnTranscriptRecorder,
   UserTurnTranscriptTarget,
+  UserTurnTranscriptTargetResolver,
 } from "./user-turn-transcript.types.js";
 
+const log = createSubsystemLogger("sessions/user-turn");
 const uncertainInputOwners = new WeakSet<UserTurnTranscriptRecorder>();
 
 function retainUncertainInputMedia(recorder: UserTurnTranscriptRecorder, error: unknown): never {
@@ -68,4 +76,22 @@ export async function persistUserTurnInput(
   } catch (error) {
     return retainUncertainInputMedia(recorder, error);
   }
+}
+
+/**
+ * The runtime commits a staged steer outside pending-input custody; retire its queued row.
+ * A crash before this lands replays the row, and replay dedups by idempotency key.
+ */
+export function retireStagedInput(
+  receipt: SessionPendingInputReceipt | undefined,
+  runId: string | undefined,
+  targetResolver: UserTurnTranscriptTargetResolver,
+): void {
+  if (receipt?.state !== "queued" || !runId) {
+    return;
+  }
+  receipt.relinquish();
+  void resolveUserTurnTranscriptTarget(targetResolver)
+    .then((target) => target && discardSessionPendingInput(target, runId, () => {}))
+    .catch((error: unknown) => log.warn(`Staged input retirement failed: ${String(error)}`));
 }
