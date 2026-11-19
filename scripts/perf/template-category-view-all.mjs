@@ -14,16 +14,22 @@ try {
   let requestId;
   let expectedCount;
   cdp.on("Network.webSocketFrameSent", ({ response }) => {
-    if (response.opcode !== 1 || !response.payloadData.startsWith("{")) return;
+    if (response.opcode !== 1 || !response.payloadData.startsWith("{")) {
+      return;
+    }
     const message = JSON.parse(response.payloadData);
     if (message.method === "templates.catalog.search" && message.params?.category) {
       requestId = message.id;
     }
   });
   cdp.on("Network.webSocketFrameReceived", ({ response }) => {
-    if (!requestId || response.opcode !== 1 || !response.payloadData.startsWith("{")) return;
+    if (!requestId || response.opcode !== 1 || !response.payloadData.startsWith("{")) {
+      return;
+    }
     const message = JSON.parse(response.payloadData);
-    if (message.id === requestId) expectedCount = message.payload?.entries?.length;
+    if (message.id === requestId) {
+      expectedCount = message.payload?.entries?.length;
+    }
   });
   for (let load = 1; load <= 3; load++) {
     for (const category of BENCH_CATEGORIES.split(",")) {
@@ -48,7 +54,9 @@ try {
               const count = document.querySelectorAll(
                 selector + " [data-templates-results] [data-templates-entry]",
               ).length;
-              if (!count) return;
+              if (!count) {
+                return;
+              }
               observer.disconnect();
               requestAnimationFrame(() =>
                 requestAnimationFrame(() => {
