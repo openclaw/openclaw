@@ -1,12 +1,15 @@
 /**
- * Offline collector recovery on a synthetic Team fixture (never use live state).
+ * Offline completion recovery on a synthetic Team fixture (never use live state).
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/subagent-collector-restart-measure.ts \
  *   --fixture /absolute/synthetic-fixture --output /absolute/result.json \
  *   [--source /absolute/restore-metadata.base.ts] [--control] [--allocation]
+ *   [--shutdown-completions]
  * Interleave A/A/B processes, at least five each. Imports, fixture reset and compact
  * hydration are outside timing; restore metadata includes its real worker commit.
  * Acceptance: all 16 interrupted collectors become waitable; completed-cohort controls
  * retain their results without a consistent timing/CPU/allocation regression.
+ * Shutdown mode instead requires all 16 legacy quiet kills to retain deliverable errors;
+ * compare its already-repaired controls separately from the required one-time writes.
  */
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
@@ -26,6 +29,7 @@ const { values } = parseArgs({
     control: { type: "boolean", default: false },
     allocation: { type: "boolean", default: false },
     profile: { type: "boolean", default: false },
+    "shutdown-completions": { type: "boolean", default: false },
   },
 });
 assert(values.fixture && values.output && global.gc, "Pass --fixture, --output and --expose-gc");
@@ -102,6 +106,27 @@ for (let i = 0; i < 4300; i++) {
       interrupted && !values.control ? undefined : { status: interrupted ? "killed" : "done" },
     archiveAtMs: now - 500 + 86_400_000,
   });
+  if (values["shutdown-completions"] && interrupted) {
+    Object.assign(rows.get(runId)!, {
+      collect: undefined,
+      collectorCompletion: undefined,
+      spawnMode: "run",
+      expectsCompletionMessage: true,
+      endedReason: values.control ? "subagent-error" : "subagent-killed",
+      completion: {
+        required: true,
+        ...(values.control ? { resultText: null, capturedAt: now - 500 } : {}),
+      },
+      delivery: { status: "pending" },
+      cleanupHandled: !values.control,
+      cleanupCompletedAt: values.control ? undefined : now - 500,
+      suppressAnnounceReason: values.control ? undefined : "killed",
+      killReconciliation: values.control
+        ? undefined
+        : { killedAt: now - 500, suppressTaskDelivery: true },
+      archiveAtMs: undefined,
+    });
+  }
 }
 const inspector = new Session();
 inspector.connect();
@@ -148,6 +173,19 @@ try {
       cpuMs: (used.user + used.system) / 1000,
       sampledBytes,
       waitable,
+      ...(values["shutdown-completions"]
+        ? {
+            recoveredCompletions: [...subagentRuns.values()].filter(
+              (row) =>
+                row.expectsCompletionMessage &&
+                row.endedReason === "subagent-error" &&
+                row.completion?.capturedAt !== undefined &&
+                row.delivery?.status === "pending" &&
+                !row.killReconciliation &&
+                !row.suppressCompletionDelivery,
+            ).length,
+          }
+        : {}),
     });
   }
   writeFileSync(
@@ -157,6 +195,7 @@ try {
         sourceHash: hash("sha256", source),
         fixture,
         control: values.control,
+        shutdownCompletions: values["shutdown-completions"],
         allocation: values.allocation,
         load: loadavg(),
         runs: rows.size,
