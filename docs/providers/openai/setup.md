@@ -509,6 +509,10 @@ Approve token sharing during sign-in to enable model calls. If you grant identit
 permissions only, OpenClaw saves the account but asks you to enable sharing or
 choose another credential before inference.
 
+When this is the agent's first OpenAI sign-in, its suggested model runs on
+OpenClaw's own harness, as it does after guided setup. An agent that already has an
+OpenAI sign-in or Codex plugin settings keeps the harness it uses.
+
 The browser returns to `http://localhost:PORT/auth/callback`, where OpenClaw picks
 a free `PORT` for each sign-in, so an app already using a port cannot block it.
 If your browser runs on another computer, OpenClaw shows the port with the sign-in

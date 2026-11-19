@@ -482,6 +482,11 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
       // Identity-only login must not change the model or silently choose another funding source.
       return { profiles: result.profiles, notes: result.notes };
     }
+    // A first OpenAI login runs on OpenClaw's harness. An agent that already has an
+    // OpenAI login, or any Codex plugin settings, keeps the runtime it has.
+    if (!ctx.existingProfiles?.length && !ctx.config.plugins?.entries?.codex) {
+      result.agentRuntimeId = "openclaw";
+    }
     return result;
   } catch (error) {
     await callback.complete({

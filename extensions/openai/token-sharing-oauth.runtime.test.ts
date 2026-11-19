@@ -116,6 +116,7 @@ function context(overrides: Partial<ProviderAuthContext> = {}): ProviderAuthCont
     },
     isRemote: false,
     assertCurrent: vi.fn(),
+    config: {},
     ...overrides,
   } as unknown as ProviderAuthContext;
 }
@@ -353,6 +354,8 @@ describe("ChatGPT token-sharing authorization", () => {
         agent_name_hint: "OpenClaw",
         scope: "openid email profile resource.invoke chatgpt.tokens.use.direct offline_access",
       });
+      // A first OpenAI login runs on OpenClaw's harness; reconnecting keeps the runtime.
+      expect(registered.agentRuntimeId).toBe("openclaw");
       const credential = oauthCredential(registered);
       expect(credential).toMatchObject({
         clientId: registeredId,
@@ -389,8 +392,18 @@ describe("ChatGPT token-sharing authorization", () => {
         profileId: "openai:my-account",
         credential: { clientId: registeredId },
       });
+      expect(reconnected).not.toHaveProperty("agentRuntimeId");
     },
   );
+
+  it("keeps the runtime of an agent with Codex plugin settings", async () => {
+    callbackClientIds = ["oaiapp_testregistered"];
+    identity.aud = "oaiapp_testregistered";
+    const config = { plugins: { entries: { codex: { enabled: true } } } };
+    const result = await loginTokenSharing(context({ existingProfiles: [], config }));
+    expect(result.defaultModel).toBeDefined();
+    expect(result).not.toHaveProperty("agentRuntimeId");
+  });
 
   it.each([
     ["missing registration ID", true, []],

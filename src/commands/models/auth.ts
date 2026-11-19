@@ -57,6 +57,7 @@ import {
 import { repairModelSelectionRuntimePlugins } from "../runtime-plugin-install.js";
 import { saveModelProviderApiKey } from "./auth-api-key.js";
 import { tryImportProviderCredential } from "./auth-credential-import.js";
+import { applyLoginAgentRuntime } from "./auth-login-runtime.js";
 import {
   looksLikeOpenAIApiKey,
   normalizeManualAuthProvider,
@@ -350,7 +351,7 @@ async function runProviderAuthMethod(
     : undefined;
   const shouldUpdateConfig =
     (isRecord(configPatch) && Object.keys(configPatch).length > 0) ||
-    Boolean(login.setDefault && defaultModel);
+    Boolean((login.setDefault || login.result.agentRuntimeId) && defaultModel);
   if (profiles.length > 0 || shouldUpdateConfig) {
     await login.beforePersistentEffect?.();
   }
@@ -388,10 +389,9 @@ async function runProviderAuthMethod(
         beforeCommit: login.assertCurrent,
         writeOptions: { assertCurrent: login.assertCurrent },
         finalizeConfig: (replayed, cfg) => {
-          const priorAgentsDefaultsModel = cfg.agents?.defaults?.model;
           const next = restorePriorAgentsDefaultsModelUnlessOptIn({
-            cfg: replayed,
-            priorAgentsDefaultsModel,
+            cfg: applyLoginAgentRuntime(replayed, login, defaultModel),
+            priorAgentsDefaultsModel: cfg.agents?.defaults?.model,
             setDefault: login.setDefault,
           });
           if (login.setDefault && defaultModel) {
