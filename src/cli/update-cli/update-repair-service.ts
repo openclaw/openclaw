@@ -51,8 +51,8 @@ function stoppedGatewayGuidance(reason: string, env: NodeJS.ProcessEnv): string 
  * nothing is changed.
  */
 export async function verifyRecordedDataAtRisk(params: {
-  markedRunId: string;
-  mark: string;
+  /** Newest first; one verification settles them all. */
+  marks: readonly { runId: string; mark: string }[];
   repairRunId: string;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -60,17 +60,17 @@ export async function verifyRecordedDataAtRisk(params: {
   phase: UpdateFinalizationPhase;
   timeoutMs: number;
 }): Promise<string | undefined> {
-  const { env, phase, markedRunId, mark } = params;
+  const { env, phase, marks } = params;
   const verification = await verifyUpdateStateConsistency({
     env,
     formatCommand: (command) => formatCliCommand(command, env),
+    marks,
     signal: phase.signal,
   });
   phase.assertCurrent();
   if (verification.status !== "consistent") {
     return formatDataAtRiskRefusal({
-      runId: markedRunId,
-      mark,
+      marks,
       verification,
       gateway: await observeGatewayForGuidance({
         service: resolveGatewayService(),
@@ -81,17 +81,19 @@ export async function verifyRecordedDataAtRisk(params: {
       outcome: `Repair changed nothing. ${formatDataAtRiskNextSteps(verification, env)}`,
     });
   }
-  const resolved = formatDataAtRiskResolved({ runId: markedRunId, mark, verification });
-  recordUpdateRunStep(
-    params.repairRunId,
-    {
-      step: dataAtRiskVerifiedStep(markedRunId),
-      status: "completed",
-      endedAtMs: Date.now(),
-      detail: resolved,
-    },
-    { env },
-  );
+  const resolved = formatDataAtRiskResolved({ marks, verification });
+  for (const { runId } of marks) {
+    recordUpdateRunStep(
+      params.repairRunId,
+      {
+        step: dataAtRiskVerifiedStep(runId),
+        status: "completed",
+        endedAtMs: Date.now(),
+        detail: resolved,
+      },
+      { env },
+    );
+  }
   defaultRuntime[params.json ? "error" : "log"](resolved);
   return undefined;
 }
@@ -120,7 +122,10 @@ export async function restoreRepairGateway(params: {
   const service = resolveGatewayService();
   const mark = risk();
   if (mark) {
-    const refusal = await verifyRecordedDataAtRisk({ ...params, markedRunId: originalRunId, mark });
+    const refusal = await verifyRecordedDataAtRisk({
+      ...params,
+      marks: [{ runId: originalRunId, mark }],
+    });
     if (refusal) {
       return { restart: false, warning: refusal };
     }

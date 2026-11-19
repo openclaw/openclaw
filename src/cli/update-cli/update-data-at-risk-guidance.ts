@@ -6,7 +6,7 @@ import {
 } from "../../infra/update-data-at-risk.js";
 import {
   dataAtRiskVerifiedStep,
-  findLatestUnverifiedDataAtRisk,
+  listUnverifiedDataAtRisk,
 } from "../../infra/update-run-data-at-risk.js";
 import { listUpdateRuns, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -63,12 +63,20 @@ function describeGateway(gateway: ObservedGateway): string {
     : "The Gateway state could not be read.";
 }
 
+type Marks = readonly { runId: string; mark: string }[];
+
+/** The newest mark by name; earlier ones by count, so one line covers them all. */
+function describeMarks(marks: Marks): string {
+  const [newest] = marks;
+  const earlier = marks.length - 1;
+  return `Update ${newest?.runId} recorded data at risk (${newest?.mark})${earlier ? ` and ${earlier} earlier update${earlier === 1 ? "" : "s"} did too` : ""}`;
+}
+
 export function formatDataAtRiskResolved(params: {
-  runId: string;
-  mark: string;
+  marks: Marks;
   verification: Extract<UpdateStateVerification, { status: "consistent" }>;
 }): string {
-  return `Update ${params.runId} recorded data at risk (${params.mark}); verification found the ${params.verification.detail}, so that mark is resolved.`;
+  return `${describeMarks(params.marks)}; verification found the ${params.verification.detail}, so ${params.marks.length === 1 ? "that mark is" : "those marks are"} resolved.`;
 }
 
 /** Agent first, then the manual command, for a finding a person must act on. */
@@ -76,12 +84,11 @@ export function formatDataAtRiskNextSteps(
   verification: Exclude<UpdateStateVerification, { status: "consistent" }>,
   env: NodeJS.ProcessEnv,
 ): string {
-  return `Run \`${formatCliCommand("openclaw triage", env)}\` for an agent that reads the facts recorded on this run, or by hand: ${verification.nextAction}`;
+  return `Run \`${formatCliCommand("openclaw triage", env)}\` for an agent with the recorded facts, or by hand: ${verification.nextAction}`;
 }
 
 export function formatDataAtRiskRefusal(params: {
-  runId: string;
-  mark: string;
+  marks: Marks;
   verification: Exclude<UpdateStateVerification, { status: "consistent" }>;
   gateway: ObservedGateway;
   /** What this command left as it was, then what to do next. */
@@ -90,14 +97,15 @@ export function formatDataAtRiskRefusal(params: {
   const { verification } = params;
   const finding =
     verification.status === "unverifiable"
-      ? `Verification could not complete: ${verification.detail}.`
-      : `Verification found that ${verification.detail}.`;
-  return `Update ${params.runId} recorded data at risk (${params.mark}). ${finding} ${describeGateway(params.gateway)} ${params.outcome}`;
+      ? `Could not verify: ${verification.detail}.`
+      : `Found: ${verification.detail}.`;
+  // Next steps come before the finding: a recorded warning keeps only its first 500 characters.
+  return `${describeMarks(params.marks)}. ${describeGateway(params.gateway)} ${params.outcome} ${finding}`;
 }
 
 /**
- * Before a plain update creates its run: verify the newest unverified data-at-risk mark.
- * Consistent: report one line and return the recorder for the receipt on the new run.
+ * Before a plain update creates its run: verify every unverified data-at-risk mark.
+ * Consistent: report one line and return the recorder for the receipts on the new run.
  * Newer state or an unreadable database: warn and continue, since the update's own
  * schema checks still guard activation and updating is the named fix. Any other
  * finding refuses once its run exists, so the finding is recorded; nothing changes.
@@ -106,38 +114,36 @@ export async function verifyRecordedDataAtRiskBeforeUpdate(
   env: NodeJS.ProcessEnv,
   timeoutMs: number | undefined,
 ): Promise<((runId: string) => void) | undefined> {
-  const latest = findLatestUnverifiedDataAtRisk(listUpdateRuns({ limit: 100 }, { env }));
-  if (!latest) {
+  const marks = listUnverifiedDataAtRisk(listUpdateRuns({ limit: 100 }, { env }));
+  if (marks.length === 0) {
     return undefined;
   }
   const verification = await verifyUpdateStateConsistency({
     env,
     formatCommand: (command) => formatCliCommand(command, env),
+    marks,
   });
-  const markedRunId = latest.run.runId;
   if (verification.status === "consistent") {
-    const detail = formatDataAtRiskResolved({
-      runId: markedRunId,
-      mark: latest.mark,
-      verification,
-    });
+    const detail = formatDataAtRiskResolved({ marks, verification });
     defaultRuntime.error(detail);
-    return (runId) =>
-      recordUpdateRunStep(
-        runId,
-        {
-          step: dataAtRiskVerifiedStep(markedRunId),
-          status: "completed",
-          endedAtMs: Date.now(),
-          detail,
-        },
-        { env },
-      );
+    return (runId) => {
+      for (const marked of marks) {
+        recordUpdateRunStep(
+          runId,
+          {
+            step: dataAtRiskVerifiedStep(marked.runId),
+            status: "completed",
+            endedAtMs: Date.now(),
+            detail,
+          },
+          { env },
+        );
+      }
+    };
   }
   const continues = verification.status === "unverifiable" || verification.newerState === true;
   const refusal = formatDataAtRiskRefusal({
-    runId: markedRunId,
-    mark: latest.mark,
+    marks,
     verification,
     gateway: await observeGatewayForGuidance({ service: resolveGatewayService(), env, timeoutMs }),
     outcome: continues

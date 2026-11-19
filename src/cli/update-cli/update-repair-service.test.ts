@@ -387,17 +387,18 @@ it("verifies a mark on an update that never stopped the Gateway without starting
 it.each([
   {
     status: "inconsistent",
+    // A realistic path and writer: the whole refusal must survive the 500-character warning cap.
     detail:
-      "the state database /state/openclaw.sqlite is at schema 99, newer than 40 supported by installed OpenClaw",
+      "the state database /Users/alice/.openclaw/state/openclaw.sqlite is at schema 41 (written by OpenClaw 2026.11.9), newer than 40 supported by installed OpenClaw 2026.11.6",
     nextAction:
       "run `openclaw update` to a version that supports it, or restore the pre-update backup.",
-    finding: "found that the state database",
+    finding: "Found:",
   },
   {
     status: "unverifiable",
     detail: "the state databases could not be inspected: database is locked",
     nextAction: "retry `openclaw update repair` once that reason is cleared.",
-    finding: "could not complete: the state databases could not be inspected",
+    finding: "Could not verify:",
   },
 ] as const)(
   "keeps the Gateway as it was when a recorded mark is $status",
@@ -413,7 +414,6 @@ it.each([
     expect(
       repairRun.steps.some((step) => step.step.startsWith("finalize:data-at-risk-verified:")),
     ).toBe(false);
-    const warning = `Update ${original} recorded data at risk (rollback-state-unverified). Verification ${finding}`;
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         restart: false,
@@ -421,11 +421,7 @@ it.each([
         postUpdate: expect.objectContaining({
           doctor: expect.objectContaining({
             warnings: [
-              expect.stringMatching(
-                new RegExp(
-                  `^${escapeRegExp(warning)}.* The Gateway is stopped\\. Repair changed nothing\\. ${escapeRegExp(`${triageLead}${verification.nextAction}`)}$`,
-                ),
-              ),
+              `Update ${original} recorded data at risk (rollback-state-unverified). The Gateway is stopped. Repair changed nothing. ${triageLead}${verification.nextAction} ${finding} ${verification.detail}.`,
             ],
           }),
         }),
@@ -433,6 +429,31 @@ it.each([
     );
   },
 );
+
+it("keeps a Gateway another update stopped down when a later mark is inconsistent", async () => {
+  // The stopping run carries no mark; a later Git release or pre-mutation run does.
+  seed(true);
+  const marked = seed(false, markedRisk, false, false, "rollback-state-unverified");
+  vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency").mockResolvedValue({
+    status: "inconsistent",
+    detail: "the state database is at schema 39",
+    nextAction: "run `openclaw doctor --fix` to finish the migration.",
+  });
+
+  await repair();
+
+  expect(service.start).not.toHaveBeenCalled();
+  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+    expect.objectContaining({
+      restart: false,
+      postUpdate: expect.objectContaining({
+        doctor: expect.objectContaining({
+          warnings: [expect.stringContaining(`Update ${marked} recorded data at risk`)],
+        }),
+      }),
+    }),
+  );
+});
 
 it("reports a serving Gateway as running when a recorded mark is inconsistent", async () => {
   const original = seed(false, markedRisk);
@@ -448,6 +469,7 @@ it("reports a serving Gateway as running when a recorded mark is inconsistent", 
   });
   vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency").mockResolvedValue({
     status: "inconsistent",
+    newerState: true,
     detail: "the state database is at schema 99",
     nextAction:
       "run `openclaw update` to a version that supports it, or restore the pre-update backup.",
@@ -463,7 +485,7 @@ it("reports a serving Gateway as running when a recorded mark is inconsistent", 
       postUpdate: expect.objectContaining({
         doctor: expect.objectContaining({
           warnings: [
-            `Update ${original} recorded data at risk (rollback-state-unverified). Verification found that the state database is at schema 99. The Gateway is running and serving OpenClaw 1.0.0. Repair changed nothing. Run \`openclaw triage\` for an agent that reads the facts recorded on this run, or by hand: run \`openclaw update\` to a version that supports it, or restore the pre-update backup.`,
+            `Update ${original} recorded data at risk (rollback-state-unverified). The Gateway is running and serving OpenClaw 1.0.0. Repair changed nothing. Run \`openclaw triage\` for an agent with the recorded facts, or by hand: run \`openclaw update\` to a version that supports it, or restore the pre-update backup. Found: the state database is at schema 99.`,
           ],
         }),
       }),
@@ -471,12 +493,7 @@ it("reports a serving Gateway as running when a recorded mark is inconsistent", 
   );
 });
 
-const triageLead =
-  "Run `openclaw triage` for an agent that reads the facts recorded on this run, or by hand: ";
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+const triageLead = "Run `openclaw triage` for an agent with the recorded facts, or by hand: ";
 
 // #188303: a refused recovery after migrated state leaves the managed service stopped
 // (launchd boots it out); without named data risk, repair restarts it on the installed package.

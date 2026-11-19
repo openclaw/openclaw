@@ -363,9 +363,12 @@ export async function inspectInterruptedUpdateRecovery(
       next = `Run ${repair}, then retry ${update}.`,
       cause: unknown = pending,
     ) =>
-      new Error([pending.message, why, `${agentRoute} By hand:`, next].filter(Boolean).join(" "), {
-        cause,
-      });
+      new Error(
+        [pending.message, why, agentRoute, next && `By hand: ${next}`].filter(Boolean).join(" "),
+        {
+          cause,
+        },
+      );
     /**
      * The stage finishes only the killed run. Repair would also finish any other run
      * the history still owes recovery, including another update's pending Gateway stop.

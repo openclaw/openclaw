@@ -204,12 +204,6 @@ export async function admitUpdateCommandRun(params: {
     env,
     recoverOrphanedSidecars: false,
   });
-  // A recorded data-at-risk mark is checked, never ignored, even when already current.
-  const settleMark =
-    params.opts.dryRun === true || env[POST_CORE_UPDATE_ENV] === "1"
-      ? undefined
-      : await verifyRecordedDataAtRiskBeforeUpdate(env, parseUpdateTimeoutMs(params.opts.timeout));
-  params.assertCurrent?.();
   const meta = await readControlPlaneUpdateSentinelMeta(env);
   await resolveForegroundUpdateAdmission({
     root: params.root,
@@ -220,6 +214,12 @@ export async function admitUpdateCommandRun(params: {
       params.opts.run?.completionOwner === "gateway-restart" ||
       undefined,
   });
+  // A recorded data-at-risk mark is checked, never ignored, even when already current.
+  const settleMark =
+    params.opts.dryRun === true || env[POST_CORE_UPDATE_ENV] === "1"
+      ? undefined
+      : await verifyRecordedDataAtRiskBeforeUpdate(env, parseUpdateTimeoutMs(params.opts.timeout));
+  params.assertCurrent?.();
   // Read reporting policy first: nothing may yield between activation admission and creation.
   const reportResult = params.opts.dryRun !== true && (await readUpdateResultPolicy(env));
   assertUpdatePackageActivationAdmission(params.root, {

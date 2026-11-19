@@ -124,15 +124,33 @@ it.each(["stable", "foreign", "pinned", "paired", "different-mount"] as const)(
   },
 );
 
-it.each(["own checkout", "other checkout", "copied release"] as const)(
+it.each([
+  "own checkout",
+  "other checkout",
+  "copied release",
+  "release outside its prefix",
+] as const)(
   "owns a Git release-mode service only for a release worktree of its checkout (%s)",
   async (release) => {
     const root = await fs.realpath(dirs.make("openclaw-git-release-owner-"));
     const git = (cwd: string, ...args: string[]) =>
       execFileSync(
         "git",
-        ["-c", "user.name=fixture", "-c", "user.email=fixture@invalid", ...args],
-        { cwd, stdio: "ignore" },
+        [
+          "-c",
+          "user.name=fixture",
+          "-c",
+          "user.email=fixture@invalid",
+          "-c",
+          "core.hooksPath=/dev/null",
+          ...args,
+        ],
+        // Host Git configuration and hooks must not shape the fixture.
+        {
+          cwd,
+          stdio: "ignore",
+          env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+        },
       );
     const createCheckout = async (dir: string) => {
       await fs.mkdir(path.join(dir, "dist"), { recursive: true });
@@ -147,15 +165,18 @@ it.each(["own checkout", "other checkout", "copied release"] as const)(
     await createCheckout(checkout);
     await createCheckout(other);
     const prefix = path.join(root, "state", "git-install");
-    const releaseRoot = path.join(prefix, "releases", "r1", "lib", "node_modules", "openclaw");
+    const releaseRoot =
+      release === "release outside its prefix"
+        ? path.join(root, "elsewhere", "releases", "r1", "openclaw")
+        : path.join(prefix, "releases", "r1", "lib", "node_modules", "openclaw");
     await fs.mkdir(path.dirname(releaseRoot), { recursive: true });
     if (release === "copied release") {
-      await fs.cp(checkout, releaseRoot, {
-        recursive: true,
-        filter: (source) => path.basename(source) !== ".git",
-      });
+      // A copy keeps the `.git` file, but Git's registration still names the original.
+      const registered = path.join(root, "registered");
+      git(checkout, "worktree", "add", "-q", "--detach", registered);
+      await fs.cp(registered, releaseRoot, { recursive: true });
     } else {
-      const owner = release === "own checkout" ? checkout : other;
+      const owner = release === "other checkout" ? other : checkout;
       git(owner, "worktree", "add", "-q", "--detach", releaseRoot);
     }
     const slot = path.join(prefix, "lib", "node_modules", "openclaw");

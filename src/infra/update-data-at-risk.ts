@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { preflightOpenClawDatabaseSchemas } from "../state/openclaw-database-preflight.js";
 import type {
@@ -36,6 +37,25 @@ function retryRepair(formatCommand: (command: string) => string): string {
   return `retry \`${formatCommand("openclaw update repair")}\` once that reason is cleared.`;
 }
 
+/** Name the first database and count the rest, so a finding stays readable in one warning. */
+function listFindings(findings: readonly string[]): string {
+  return findings.length > 1
+    ? `${findings[0]} (and ${findings.length - 1} more)`
+    : (findings[0] ?? "");
+}
+
+/** A rollback moves migrated databases aside as `<db>.migrated-<run>` before restoring. */
+function findRollbackLeftover(databasePath: string, runId: string): string | undefined {
+  const directory = path.dirname(databasePath);
+  try {
+    const name = fs.readdirSync(directory).find((entry) => entry.includes(`.migrated-${runId}`));
+    return name ? path.join(directory, name) : undefined;
+  } catch {
+    // The restore-directory check below reports an unreadable directory.
+    return undefined;
+  }
+}
+
 function describeAhead(database: IncompatibleOpenClawDatabase): string {
   const agent = database.agentId ? ` for agent ${database.agentId}` : "";
   const writer = database.writerAppVersion
@@ -52,7 +72,7 @@ function classify(
     return {
       status: "inconsistent",
       newerState: true,
-      detail: schemas.incompatible.map(describeAhead).join("; "),
+      detail: listFindings(schemas.incompatible.map(describeAhead)),
       // The installed build cannot open newer state; a build that supports it can.
       nextAction: `run \`${formatCommand("openclaw update")}\` to a version that supports it, or restore the pre-update backup.`,
     };
@@ -61,24 +81,24 @@ function classify(
   if (pending.length > 0) {
     return {
       status: "inconsistent",
-      detail: pending
-        .map(
+      detail: listFindings(
+        pending.map(
           (database) =>
             `the ${database.kind} database${database.agentId ? ` for agent ${database.agentId}` : ""} ${database.path} is at schema ${database.foundVersion}; installed OpenClaw ${VERSION} needs ${database.supportedVersion}, so its migration did not finish`,
-        )
-        .join("; "),
+        ),
+      ),
       nextAction: `run \`${formatCommand("openclaw doctor --fix")}\` to finish the migration.`,
     };
   }
   if (schemas.indeterminate.length > 0) {
     return {
       status: "unverifiable",
-      detail: schemas.indeterminate
-        .map(
+      detail: listFindings(
+        schemas.indeterminate.map(
           (database) =>
             `${database.kind} database ${database.path} could not be read: ${database.reason}`,
-        )
-        .join("; "),
+        ),
+      ),
       nextAction: retryRepair(formatCommand),
     };
   }
@@ -96,9 +116,31 @@ function classify(
 export async function verifyUpdateStateConsistency(params: {
   env: NodeJS.ProcessEnv;
   formatCommand: (command: string) => string;
+  /** The recorded marks being checked; some name evidence a schema check cannot see. */
+  marks?: readonly { runId: string; mark: string }[];
   signal?: AbortSignal;
 }): Promise<UpdateStateVerification> {
+  if (params.marks?.some(({ mark }) => mark === "active-mutation")) {
+    // Doctor process custody owns this mark: schemas cannot show whether writers exited.
+    return {
+      status: "unverifiable",
+      detail:
+        "the mark records Doctor processes that may still be writing, which a state check cannot rule out",
+      nextAction: `once those processes have stopped, run \`${params.formatCommand("openclaw update repair")}\` to settle their custody.`,
+    };
+  }
   const databasePath = path.resolve(resolveOpenClawStateSqlitePath(params.env));
+  const leftover = params.marks
+    ?.map(({ runId }) => ({ runId, file: findRollbackLeftover(databasePath, runId) }))
+    .find(({ file }) => file);
+  if (leftover) {
+    return {
+      status: "inconsistent",
+      detail: `the database rollback of update ${leftover.runId} left ${leftover.file}, so the state may be only partly restored`,
+      nextAction:
+        "keep that file and the update's backup; an agent or a person must compare them before the Gateway starts.",
+    };
+  }
   try {
     await assertUpdateRecoveryDirectoryAdmission(databasePath);
   } catch (error) {

@@ -188,29 +188,59 @@ export function resolveServiceEntrypoint(
   return undefined;
 }
 
-/** The repository's common Git directory, read from `.git` without running Git. */
-async function readGitCommonDir(worktree: string): Promise<string | undefined> {
+/** A linked worktree's private Git directory, read from its `.git` file without running Git. */
+async function readLinkedGitDir(worktree: string): Promise<string | undefined> {
   const dotGit = path.join(worktree, ".git");
-  const stat = await fs.lstat(dotGit).catch(() => null);
-  if (stat?.isDirectory()) {
-    return await realpathOrResolve(dotGit);
-  }
-  if (!stat?.isFile()) {
+  if (!(await fs.lstat(dotGit).catch(() => null))?.isFile()) {
     return undefined;
   }
   const pointer = /^gitdir:\s*(.+)$/mu.exec(await fs.readFile(dotGit, "utf8"))?.[1]?.trim();
-  if (!pointer) {
+  return pointer ? path.resolve(worktree, pointer) : undefined;
+}
+
+/** The repository's common Git directory for a checkout or a linked worktree. */
+async function readGitCommonDir(worktree: string): Promise<string | undefined> {
+  const dotGit = path.join(worktree, ".git");
+  if ((await fs.lstat(dotGit).catch(() => null))?.isDirectory()) {
+    return await realpathOrResolve(dotGit);
+  }
+  const gitDir = await readLinkedGitDir(worktree);
+  if (!gitDir) {
     return undefined;
   }
-  const gitDir = path.resolve(worktree, pointer);
   const common = (await fs.readFile(path.join(gitDir, "commondir"), "utf8").catch(() => "")).trim();
   return await realpathOrResolve(common ? path.resolve(gitDir, common) : gitDir);
 }
 
-/** Whether `release` is a linked worktree of the repository that `checkout` belongs to. */
-async function isLinkedWorktreeOf(release: string, checkout: string): Promise<boolean> {
-  const releaseGit = await fs.lstat(path.join(release, ".git")).catch(() => null);
-  if (!releaseGit?.isFile()) {
+/**
+ * Whether a service that starts the Git release launcher runs a release of `checkout`:
+ * the launcher is the entrypoint, the release sits in that launcher's `releases/`, and it
+ * is a linked worktree Git itself registered for the checkout's repository (its private
+ * Git directory points back at it, so a copied release does not qualify).
+ */
+async function isGitReleaseOf(
+  command: Pick<GatewayServiceCommandConfig, "programArguments">,
+  release: string,
+  checkout: string,
+): Promise<boolean> {
+  const index = resolveServiceEntrypointIndex(command.programArguments);
+  const launcher = index === undefined ? undefined : command.programArguments[index];
+  if (!launcher || !path.isAbsolute(launcher) || path.basename(launcher) !== GIT_RELEASE_LAUNCHER) {
+    return false;
+  }
+  const releases = await realpathOrResolve(path.join(path.dirname(launcher), "releases"));
+  const gitDir = await readLinkedGitDir(release);
+  if (!release.startsWith(`${releases}${path.sep}`) || !gitDir) {
+    return false;
+  }
+  const backPointer = (
+    await fs.readFile(path.join(gitDir, "gitdir"), "utf8").catch(() => "")
+  ).trim();
+  if (
+    !backPointer ||
+    (await realpathOrResolve(path.resolve(gitDir, backPointer))) !==
+      (await realpathOrResolve(path.join(release, ".git")))
+  ) {
     return false;
   }
   const [releaseCommon, checkoutCommon] = await Promise.all([
@@ -351,10 +381,7 @@ export async function gatewayServiceCommandMatchesRoot(
   }
   // A Git release-mode service starts the release launcher; each release is a
   // linked worktree of the checkout, which stays the installation's own root.
-  if (
-    command?.programArguments.some((arg) => path.basename(arg) === GIT_RELEASE_LAUNCHER) &&
-    (await isLinkedWorktreeOf(serviceRootReal, expectedRootReal))
-  ) {
+  if (command && (await isGitReleaseOf(command, serviceRootReal, expectedRootReal))) {
     return true;
   }
   const managed = command?.managedDefinition;

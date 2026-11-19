@@ -18,7 +18,7 @@ import {
 import type { ManagedHandoffRepair } from "../../infra/update-managed-service-handoff-lease-types.js";
 import { readUpdateResultPolicy } from "../../infra/update-result-telemetry.js";
 import { formatUpdateRunOwnership } from "../../infra/update-run-activity.js";
-import { findLatestUnverifiedDataAtRisk } from "../../infra/update-run-data-at-risk.js";
+import { listUnverifiedDataAtRisk } from "../../infra/update-run-data-at-risk.js";
 import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import {
   acknowledgeAbandonedUpdateRun,
@@ -550,19 +550,18 @@ async function updateFinalizeCommandInternal(
     const restoresGateway = interruptedGateway && pluginUpdate.status !== "error" && !retained;
     // The newest unverified mark is checked first, whether or not its run stopped the
     // Gateway (Git release, refusals before mutation), so guidance naming repair stays
-    // true. Restoration then sees this run's receipt; a refusal both report is one warning.
-    const latestMark =
+    // true. Restoration then sees this run's receipt; a refusal skips restoration.
+    const marks =
       ownsMaintenance && pluginUpdate.status !== "error" && !retained
-        ? findLatestUnverifiedDataAtRisk(listUpdateRuns({ limit: 100 }))
-        : undefined;
+        ? listUnverifiedDataAtRisk(listUpdateRuns({ limit: 100 }))
+        : [];
     const gateway =
-      restoresGateway || latestMark
+      restoresGateway || marks.length > 0
         ? await lifecycle.run("gatewayRestoration", async (phase) => {
             const markRefusal =
-              latestMark &&
+              marks.length > 0 &&
               (await verifyRecordedDataAtRisk({
-                markedRunId: latestMark.run.runId,
-                mark: latestMark.mark,
+                marks,
                 repairRunId: invokingRunId,
                 config: configSnapshot.config,
                 env: resolveServiceRefreshEnv(process.env, tryProcessCwd()),
@@ -570,8 +569,9 @@ async function updateFinalizeCommandInternal(
                 phase,
                 timeoutMs: lifecycle.budget("gatewayRestoration"),
               }));
+            // Inconsistent state keeps every Gateway as it is, whichever run stopped it.
             if (markRefusal) {
-              onDoctorWarnings([markRefusal]);
+              return { restart: false, warning: markRefusal };
             }
             if (!restoresGateway) {
               return undefined;

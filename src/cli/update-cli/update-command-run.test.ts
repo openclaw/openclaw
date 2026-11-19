@@ -226,20 +226,28 @@ it.each([
   { finding: "newer state", refuses: false },
 ] as const)("handles a recorded mark whose verification finds $finding", async ({ refuses }) => {
   const { root, marked, error } = markedFailedUpdate("update-admission-marked-refused-");
-  vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency").mockResolvedValue({
-    status: "inconsistent",
-    detail: "the state database is at schema 7",
-    nextAction: "run `openclaw doctor --fix` to finish the migration.",
-    ...(refuses ? {} : { newerState: true as const }),
-  });
+  vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency").mockResolvedValue(
+    refuses
+      ? {
+          status: "inconsistent",
+          detail: "the state database is at schema 7",
+          nextAction: "run `openclaw doctor --fix` to finish the migration.",
+        }
+      : {
+          status: "inconsistent",
+          newerState: true,
+          detail: "the state database is at schema 99",
+          nextAction: "run `openclaw update` to a version that supports it.",
+        },
+  );
   const admission = admitUpdateCommandRun({ env: process.env, opts: {}, root });
 
   if (refuses) {
     await expect(admission).rejects.toThrow(
-      `Update ${marked.runId} recorded data at risk (rollback-state-unverified). Verification found that`,
+      `Update ${marked.runId} recorded data at risk (rollback-state-unverified). The Gateway`,
     );
     await expect(admission).rejects.toThrow(
-      "The update changed nothing. Run `openclaw triage` for an agent that reads the facts recorded on this run, or by hand: run `openclaw doctor --fix` to finish the migration.",
+      "The update changed nothing. Run `openclaw triage` for an agent with the recorded facts, or by hand: run `openclaw doctor --fix` to finish the migration. Found: the state database is at schema 7.",
     );
     // The refusing run keeps the finding for the agent that triage opens.
     const [refusing] = updateRunLedger.listUpdateRuns({ limit: 1 });

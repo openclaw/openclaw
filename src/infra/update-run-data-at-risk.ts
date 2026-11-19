@@ -39,15 +39,12 @@ export function findUnverifiedDataAtRisk(
   return mark && marked && !hasVerifiedDataAtRisk(history, marked.runId) ? mark : undefined;
 }
 
-/** Newest-first history: the newest recorded mark that no run has verified yet. */
-export function findLatestUnverifiedDataAtRisk(
+/** Newest-first history: every recorded mark that no run has verified yet, newest first. */
+export function listUnverifiedDataAtRisk(
   history: readonly UpdateRunRecord[],
-): { run: UpdateRunRecord; mark: string } | undefined {
-  for (const run of history) {
+): { runId: string; mark: string }[] {
+  return history.flatMap((run) => {
     const mark = findUnverifiedDataAtRisk(run, history);
-    if (mark) {
-      return { run, mark };
-    }
-  }
-  return undefined;
+    return mark ? [{ runId: run.runId, mark }] : [];
+  });
 }

@@ -53,7 +53,7 @@ it("reads current state in place beside an open write transaction", async () => 
     writer.exec("ROLLBACK");
     writer.close();
   }
-  // A live Gateway can hold a multi-gigabyte database; verification must not copy it.
+  // The in-process copy path stays unused; the child reads the source in one transaction.
   expect(copies).not.toHaveBeenCalled();
 });
 
@@ -96,21 +96,58 @@ it("refuses while an interrupted state restore is still on disk", async () => {
   );
 });
 
-it("reports an unlistable state directory as unverifiable, not as an interrupted restore", async () => {
+it("never resolves a mark that records live Doctor writers from schemas alone", async () => {
   openOpenClawStateDatabase();
-  closeOpenClawStateDatabaseForTest();
-  const directory = path.dirname(resolveOpenClawStateSqlitePath(process.env));
-  // Files stay reachable by name; only listing for restore directories fails.
-  await fs.chmod(directory, 0o300);
-  try {
-    const verdict = await verify();
 
-    expect(verdict).toMatchObject({ status: "unverifiable" });
-    expect(verdict.detail).not.toContain("restore did not finish");
-  } finally {
-    await fs.chmod(directory, 0o700);
-  }
+  const verdict = await verifyUpdateStateConsistency({
+    env: process.env,
+    formatCommand: (command) => command,
+    marks: [{ runId: "run-1", mark: "active-mutation" }],
+  });
+
+  expect(verdict).toMatchObject({ status: "unverifiable" });
+  expect(verdict.status !== "consistent" && verdict.nextAction).toContain("processes have stopped");
 });
+
+it("refuses when the marked update's database rollback left migrated files behind", async () => {
+  openOpenClawStateDatabase();
+  const databasePath = resolveOpenClawStateSqlitePath(process.env);
+  // A rollback moves migrated databases aside before it restores the backup.
+  await fs.writeFile(`${databasePath}.migrated-run-1`, "migrated state");
+
+  const marked = (runId: string) =>
+    verifyUpdateStateConsistency({
+      env: process.env,
+      formatCommand: (command) => command,
+      marks: [{ runId, mark: "rollback-state-unverified" }],
+    });
+
+  await expect(marked("run-1")).resolves.toMatchObject({
+    status: "inconsistent",
+    detail: expect.stringContaining(`${databasePath}.migrated-run-1`),
+  });
+  // Another update's leftover says nothing about this mark.
+  await expect(marked("run-2")).resolves.toMatchObject({ status: "consistent" });
+});
+
+it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "reports an unlistable state directory as unverifiable, not as an interrupted restore",
+  async () => {
+    openOpenClawStateDatabase();
+    closeOpenClawStateDatabaseForTest();
+    const directory = path.dirname(resolveOpenClawStateSqlitePath(process.env));
+    // Files stay reachable by name; only listing for restore directories fails.
+    await fs.chmod(directory, 0o300);
+    try {
+      const verdict = await verify();
+
+      expect(verdict).toMatchObject({ status: "unverifiable" });
+      expect(verdict.detail).not.toContain("restore did not finish");
+    } finally {
+      await fs.chmod(directory, 0o700);
+    }
+  },
+);
 
 it("refuses while an earlier update's state recovery is unfinished", async () => {
   const fixture = createRetainedCheckpointFixture(state.path("retained"));
