@@ -33,6 +33,7 @@ import {
   recordDoctorHealthWarnings,
 } from "./doctor-health-contribution.js";
 import { appContainerSpawnCheck, nativeStatusCheck } from "./doctor-native-status-check.js";
+import { openClawIdAccessCheck, runOpenClawIdAccessHealth } from "./doctor-openclaw-id-access.js";
 
 function coreHealthRunner(checkId: string): DoctorHealthContribution["run"] {
   return async (ctx) => {
@@ -610,6 +611,10 @@ export function resolveInitialDoctorHealthContributions(params: {
         "core/doctor/cron-inference-accounts",
       ],
       run: runLegacyCronHealth,
+    }),
+    createDoctorHealthContribution("doctor:openclaw-id-access", "OpenClaw ID Access", {
+      healthChecks: openClawIdAccessCheck,
+      run: runOpenClawIdAccessHealth,
     }),
     createDoctorHealthContribution("doctor:sandbox", "Sandbox", {
       healthChecks: {

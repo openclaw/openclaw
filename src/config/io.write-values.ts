@@ -1,4 +1,6 @@
 import { readAgentRosterProperty } from "../agents/agent-scope-config.js";
+import { withOpenClawIdAccessAllowed } from "../gateway/openclaw-id/access-plugin.js";
+import { isOpenClawIdEnabled } from "../shared/openclaw-id-policy.js";
 import { createConfigRuntimeEnvBase } from "./config-env-vars.js";
 import { resolveWriteEnvSnapshotForPath, restoreEnvVarRefsFromResolved } from "./env-preserve.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
@@ -68,7 +70,14 @@ export function prepareProjectedConfigWriteValues(
       ),
     );
   };
-  const authoredConfig = restore(params.nextConfig, params.explicitSetPaths, inputSource);
+  // Only an authored off→on write consents to feature dependencies. Reads and
+  // watcher reloads never run this transform; existing installations use Doctor.
+  const nextConfig =
+    !isOpenClawIdEnabled(snapshot.sourceConfig.gateway?.openclawId) &&
+    isOpenClawIdEnabled(params.nextConfig.gateway?.openclawId)
+      ? withOpenClawIdAccessAllowed(params.nextConfig)
+      : params.nextConfig;
+  const authoredConfig = restore(nextConfig, params.explicitSetPaths, inputSource);
   const resolution = resolveConfigForRead(
     authoredConfig,
     createConfigRuntimeEnvBase(source, params.env),
