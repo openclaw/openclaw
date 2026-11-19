@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import {
   isGatewayRestartDraining,
@@ -77,11 +78,22 @@ export async function prepareSubagentTerminalObservation(params: {
     return undefined;
   }
   assertCurrent();
+  // A collector has no continuation to resume it; its yielded turn is its result.
+  const classification = params.yielded ? "success" : classifySubagentTerminalOutcome(terminal);
+  if (
+    classification === "cancellation" &&
+    terminal.stopReason === AGENT_RUN_RESTART_ABORT_STOP_REASON &&
+    isGatewayRestartDraining()
+  ) {
+    // Shutdown aborts runs only after the one-way restart drain. The row stays unended and
+    // the child session resumes it after restart. Session resets also abort with "restart",
+    // but outside the drain they are cancellations.
+    params.clearPending();
+    return undefined;
+  }
   if (params.yielded) {
     params.clearPending();
   }
-  // A collector has no continuation to resume it; its yielded turn is its result.
-  const classification = params.yielded ? "success" : classifySubagentTerminalOutcome(terminal);
   const cancelled = classification === "cancellation";
   return {
     runId: entry.runId,

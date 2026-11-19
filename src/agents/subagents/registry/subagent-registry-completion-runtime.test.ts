@@ -11,6 +11,7 @@ import {
   getAsyncWorkSignal,
   trackAsyncWork,
 } from "../../../shared/async-work-scope.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../../agent-run-terminal-outcome.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import {
@@ -18,7 +19,10 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
+import {
+  createSubagentRegistryCompletionRuntime,
+  prepareSubagentTerminalObservation,
+} from "./subagent-registry-completion-runtime.js";
 import {
   createSubagentTestGate,
   installLifecycleWorkerAckFixture,
@@ -335,6 +339,54 @@ describe("subagent completion rejection ownership", () => {
       await h.complete("subagent-wait");
       h.expectState({ completed: 2, resumes: 0, handled: true, retained: true });
       h.expectState({ timers: state === "running" ? 1 : 0 });
+    },
+  );
+});
+
+describe("subagent restart-abort observation", () => {
+  afterEach(() => resetGatewayWorkAdmission());
+
+  it.each([true, false])(
+    "leaves a restart-aborted child unended only during restart drain (draining: %s)",
+    async (draining) => {
+      const entry = createSubagentRunRecord({
+        runId: "restart-abort",
+        childSessionKey: "agent:main:subagent:restart-abort",
+        execution: { status: "running", startedAt: 0 },
+      });
+      const clearPending = vi.fn();
+      if (draining) {
+        // Gateway shutdown aborts runs only after this one-way drain starts.
+        markGatewayRestartDraining();
+      }
+      const completion = await prepareSubagentTerminalObservation({
+        entry,
+        terminal: {
+          status: "error",
+          reason: "aborted",
+          stopReason: "restart",
+          error: "agent run aborted for restart",
+          startedAt: 0,
+          endedAt: 1,
+        },
+        yielded: false,
+        runs: new Map([[entry.runId, entry]]),
+        context: captureOpenClawStateWorkerContext(),
+        assertCurrent: () => {},
+        clearPending,
+        adoptPaused: async () => false,
+        resumePaused: () => {},
+      });
+      if (draining) {
+        expect(completion).toBeUndefined();
+        expect(clearPending).toHaveBeenCalledOnce();
+        return;
+      }
+      // A session reset aborts with the same stop reason while the Gateway keeps serving.
+      expect(completion).toMatchObject({
+        reason: SUBAGENT_ENDED_REASON_KILLED,
+        outcome: { status: "error", error: "subagent run terminated" },
+      });
     },
   );
 });
