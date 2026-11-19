@@ -136,11 +136,27 @@ function SetupActionRow(props: {
 }
 
 function SignIn(props: ModelSetupViewProps & { result: SystemAgentSetupDetectResult }) {
-  const options = createMemo(() =>
-    (props.result.authOptions ?? [])
-      .filter((option) => !props.embedded || !props.credentialChoices?.includes(option.id))
-      .toSorted((a, b) => a.label.localeCompare(b.label)),
-  );
+  // Alphabetical by provider; a provider's options stay together in the Gateway's
+  // order, which puts the provider's preferred sign-in first.
+  const options = createMemo(() => {
+    const offered = (props.result.authOptions ?? []).filter(
+      (option) => !props.embedded || !props.credentialChoices?.includes(option.id),
+    );
+    const provider = (option: (typeof offered)[number]) => option.brandId ?? option.id;
+    const firstLabels = new Map<string, string>();
+    for (const option of offered) {
+      const label = firstLabels.get(provider(option));
+      if (label === undefined || option.label.localeCompare(label) < 0) {
+        firstLabels.set(provider(option), option.label);
+      }
+    }
+    const providerLabel = (option: (typeof offered)[number]) =>
+      firstLabels.get(provider(option)) ?? option.label;
+    return offered.toSorted(
+      (a, b) =>
+        providerLabel(a).localeCompare(providerLabel(b)) || provider(a).localeCompare(provider(b)),
+    );
+  });
   const featured = createMemo(() =>
     options().filter(
       (option) => option.featured || option.kind === "install" || option.kind === "custom",

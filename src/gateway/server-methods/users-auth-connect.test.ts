@@ -6,6 +6,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import {
   setupModelAccountConnectTest,
+  listPersonalAccountAuthChoices,
   resolveProfileId,
   prepareUserProfileSelectionAuthority,
   connectUserModelAccount,
@@ -41,6 +42,37 @@ import {
 setupModelAccountConnectTest();
 
 describe("users model-account connection lifecycle", () => {
+  it("lists each provider's sign-in methods in picker priority, keeping provider order", async () => {
+    const choice = (providerId: string, methodId: string, assistantPriority: number) => ({
+      pluginId: providerId,
+      providerId,
+      methodId,
+      choiceLabel: methodId,
+      groupLabel: providerId,
+      assistantPriority,
+    });
+    // Manifest order: Codex browser login is declared before Sign in with ChatGPT.
+    listPersonalAccountAuthChoices.mockReturnValue([
+      choice("zeta", "token", 5),
+      choice("openai", "oauth", -10),
+      choice("openai", "device-code", -40),
+      choice("openai", "siwc", -50),
+    ]);
+    expect(await rpc("users.authConnect.catalog", { profileId: "profile-1" })).toHaveBeenCalledWith(
+      true,
+      {
+        providers: [
+          { id: "zeta", label: "zeta", methods: [{ id: "token", label: "token" }] },
+          {
+            id: "openai",
+            label: "openai",
+            methods: ["siwc", "device-code", "oauth"].map((id) => ({ id, label: id })),
+          },
+        ],
+      },
+    );
+  });
+
   it.each(["direct", "shared-secret", "ingress"] as const)(
     "uses the catalog and exact sensitive step for a %s caller without consuming a rejected answer",
     async (caller) => {

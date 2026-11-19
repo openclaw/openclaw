@@ -434,17 +434,23 @@ export function createModelAccountConnectService(options: {
     catalog(action: ModelAccountConnectAction): UsersAuthConnectCatalogResult {
       assertRunning(action);
       const providers = new Map<string, UsersAuthConnectCatalogResult["providers"][number]>();
-      for (const choice of listPersonalAccountAuthChoices(options.getConfig())) {
-        let provider = providers.get(choice.providerId);
-        if (!provider) {
-          provider = {
+      const choices = listPersonalAccountAuthChoices(options.getConfig());
+      for (const choice of choices) {
+        if (!providers.has(choice.providerId)) {
+          providers.set(choice.providerId, {
             id: choice.providerId,
             label: choice.groupLabel ?? choice.providerId,
             methods: [],
-          };
-          providers.set(choice.providerId, provider);
+          });
         }
-        if (!provider.methods.some((method) => method.id === choice.methodId)) {
+      }
+      // Providers keep their order; each one's methods follow its picker priority,
+      // so its preferred sign-in comes first.
+      for (const choice of choices.toSorted(
+        (a, b) => (a.assistantPriority ?? 0) - (b.assistantPriority ?? 0),
+      )) {
+        const provider = providers.get(choice.providerId);
+        if (provider && !provider.methods.some((method) => method.id === choice.methodId)) {
           provider.methods.push({
             id: choice.methodId,
             label: choice.choiceLabel,

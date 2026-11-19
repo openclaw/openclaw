@@ -36,6 +36,7 @@ const exchange = vi.hoisted(() => vi.fn());
 const modelAccountLinksCurrent = vi.hoisted(() => vi.fn());
 
 export {
+  listPersonalAccountAuthChoices,
   resolveProfileId,
   prepareUserProfileSelectionAuthority,
   connectUserModelAccount,

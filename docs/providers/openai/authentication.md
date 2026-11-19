@@ -10,11 +10,11 @@ sidebarTitle: "Authentication"
 
 Choose your OpenAI authentication method based on the access you need:
 
+- **Sign in with ChatGPT** (SIWC): use your ChatGPT plan for eligible Responses API
+  requests in OpenClaw. OpenAI-hosted plugins are not supported yet.
 - **Codex login:** use your ChatGPT account for Codex models. Choose browser
   OAuth locally or device code on a remote machine. OpenAI-hosted plugins require
   a grant with connector scopes.
-- **Sign in with ChatGPT** (SIWC): use your ChatGPT plan for eligible Responses API
-  requests in OpenClaw. OpenAI-hosted plugins are not supported yet.
 - **API key:** use OpenAI Platform models with your project's permissions and
   API billing.
 
@@ -169,14 +169,14 @@ Run the command on the machine running the OpenClaw installation you want to
 configure:
 
 ```bash
-# Codex login through a browser
-openclaw models auth login --provider openai --method oauth
+# Sign in with ChatGPT
+openclaw models auth login --provider openai --method siwc
 
 # Codex login on a remote or headless machine
 openclaw models auth login --provider openai --method device-code
 
-# Sign in with ChatGPT
-openclaw models auth login --provider openai --method siwc
+# Codex login through a browser
+openclaw models auth login --provider openai --method oauth
 
 # OpenAI Platform API key
 openclaw models auth login --provider openai --method api-key

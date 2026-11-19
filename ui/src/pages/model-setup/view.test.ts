@@ -103,6 +103,37 @@ describe("renderModelSetup", () => {
     expect(view.onDetect).toHaveBeenCalledOnce();
   });
 
+  it("keeps a provider's sign-ins together in Gateway order within the alphabetical list", () => {
+    const option = (id: string, brandId: string, label: string) => ({
+      id,
+      brandId,
+      label,
+      kind: "oauth" as const,
+      featured: true,
+    });
+    const container = mount(
+      props({
+        page: {
+          phase: "ready",
+          result: {
+            ...detected,
+            authOptions: [
+              option("openai-token-sharing", "openai", "Sign in with ChatGPT"),
+              option("openai-device-code", "openai", "Codex login (device code)"),
+              option("anthropic", "anthropic", "Anthropic Claude CLI"),
+              option("copilot", "copilot", "Copilot Proxy"),
+            ],
+          },
+        },
+      }),
+    );
+    expect(
+      [...container.querySelectorAll("[data-auth-choice]")].map((row) =>
+        row.getAttribute("data-auth-choice"),
+      ),
+    ).toEqual(["anthropic", "openai-token-sharing", "openai-device-code", "copilot"]);
+  });
+
   it("shows detected authentication without credential values", () => {
     const detail = "logged in · ChatGPT account · alex@example.com";
     const secret = "synthetic-private-token";

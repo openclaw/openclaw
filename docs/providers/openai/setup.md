@@ -14,6 +14,30 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
 ## Getting started
 
 <Tabs>
+  <Tab title="Sign in with ChatGPT">
+    **Best for:** using your ChatGPT plan through the public OpenAI API, without
+    a separate API key.
+
+    <Steps>
+      <Step title="Sign in">
+        ```bash
+        openclaw models auth login --provider openai --method siwc
+        ```
+
+        Approve token sharing in your browser to enable model calls.
+      </Step>
+      <Step title="Verify the model is available">
+        ```bash
+        openclaw models list --provider openai
+        ```
+      </Step>
+    </Steps>
+
+    See [Sign in with ChatGPT](#sign-in-with-chatgpt) for remote Gateways,
+    usage limits and current limitations.
+
+  </Tab>
+
   <Tab title="API key (OpenAI Platform)">
     **Best for:** direct API access and usage-based billing.
 
