@@ -362,7 +362,7 @@ it("uses the newest group's live card label without inheriting an earlier failur
 
   await renderActivityFixture(groups, { ...opts, runActive: false });
   expect(activitySummary.textContent?.replace(/\s+/gu, " ").trim()).toBe(
-    "File reads, editing files",
+    "File reads, changing files",
   );
 });
 

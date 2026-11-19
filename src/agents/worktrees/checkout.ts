@@ -132,7 +132,7 @@ async function prepareTemplate(options: CheckoutOptions) {
           options.env,
           cacheKey,
           options.commitGuard,
-          undefined,
+          contentKey,
           options.workerAuthority,
         );
         if (
@@ -149,7 +149,10 @@ async function prepareTemplate(options: CheckoutOptions) {
           );
           if (warm) {
             // The slot owns independent, validated bytes. Its unused source needs no reader.
-            setWorktreePreparationTemplate("warm", { reason: "ready" });
+            setWorktreePreparationTemplate("warm", {
+              reason: "ready",
+              identity: `${backend.id}:${cacheKey}:${contentKey}`,
+            });
             return { ...warm, backend, poolTemplate: existing, warm: true };
           }
         }

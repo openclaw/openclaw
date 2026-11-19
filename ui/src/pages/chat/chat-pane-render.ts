@@ -40,7 +40,6 @@ import {
 import {
   chatSubmitState,
   createChatPaneSendActions,
-  createChatPaneRunRecoveryActions,
   dismissChatError,
   resolveChatPaneFollowUpMode,
 } from "./chat-pane-state.ts";
@@ -52,6 +51,7 @@ import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
 import { clearChatQueue, resumeChatQueue } from "./chat-send-actions.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
 import { refreshChatCommands } from "./chat-session-commands.ts";
+import { readChatModelCatalogState } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import {
@@ -142,10 +142,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       agentsLoaded: this.context.agents.state.agentsList !== null,
       selectedAgentFound: selectedAgent !== undefined,
       agentModel: agentDefaultModel,
-      modelSelectionPolicy: state.chatModelSelectionPolicy,
-      catalogRetired: state.chatModelCatalogRetired,
-      catalogInitialized: state.chatModelCatalogInitialized,
-      catalogError: state.chatModelCatalogError,
+      modelCatalogState: readChatModelCatalogState(state),
+      modelAuthStatusResult: state.modelAuthStatusResult,
       onSetup: () => this.context.navigate("model-setup"),
     });
     const placementStartup = this.context.placementStartup.get(state.sessionKey);
@@ -601,7 +599,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       ...this.chatState.attachmentInputProps(state),
       cameraActive: this.conversationPresented,
       onRemoveAttachment: this.removeBrowserAnnotation,
-      ...createChatPaneRunRecoveryActions(state, {
+      ...this.runRecoveryActions(state, {
         canSend: composerAvailability.canSend && !catalogKey && !suggestionViewer,
         onRewindMessage: selectedSessionArchived
           ? undefined

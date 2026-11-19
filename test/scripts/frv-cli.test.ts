@@ -135,42 +135,6 @@ process.stdout.write(Array.isArray(value) ? value.map(job => JSON.stringify(job)
   });
 
   it.each([
-    ["--run", "77", "--workflow-sha", "a".repeat(40), "--request-file", "unused-request.json"],
-    ["--reconcile-request", "unused-request.json"],
-  ])("rejects retired receipt recovery before transport for %j", (...arguments_) => {
-    const preload = `
-      import childProcess from "node:child_process";
-      import { syncBuiltinESMExports } from "node:module";
-      const rejectTransport = () => {
-        process.stdout.write("unexpected transport");
-        throw new Error("unexpected transport");
-      };
-      childProcess.spawn = rejectTransport;
-      childProcess.execFileSync = rejectTransport;
-      childProcess.execFile = rejectTransport;
-      globalThis.fetch = rejectTransport;
-      syncBuiltinESMExports();
-    `;
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        `data:text/javascript,${encodeURIComponent(preload)}`,
-        resolve("scripts/frv.mjs"),
-        "recover",
-        ...arguments_,
-      ],
-      { encoding: "utf8", env: { ...process.env, GH_TOKEN: "", GITHUB_TOKEN: "" } },
-    );
-
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("[frv] recover is retired");
-    expect(result.stderr).toContain("fresh qualification with pnpm ci:full-release");
-    expect(result.stdout).toBe("");
-  });
-
-  it.each([
     ["status", "--no-follow is valid only with rerun --job"],
     ["rerun", "--no-follow is valid only with rerun --job", "--child", "normalCi"],
   ])("rejects --no-follow for unsupported %s commands", (command, message, ...arguments_) => {

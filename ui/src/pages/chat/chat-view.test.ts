@@ -1166,7 +1166,6 @@ describe("chat voice controls", () => {
     expect(visualizer?.getAttribute("data-level")).toBe(status === "connecting" ? "0" : "0.64");
     expect(visualizer?.getAttribute("data-source")).toBe("microphone");
     expect(visualizer?.getAttribute("aria-hidden")).toBe("true");
-    expect(visualizer?.querySelectorAll(".agent-chat__voice-activity-bar")).toHaveLength(7);
     const statusRegion = container.querySelector(
       status === "connecting"
         ? '[role="status"].agent-chat__talk-status'
@@ -1216,16 +1215,13 @@ describe("chat voice controls", () => {
     });
     try {
       const host = requireElement(container, "openclaw-microphone-activity", "voice meter");
-      const bars = Array.from(host.querySelectorAll(".agent-chat__voice-activity-bar"));
       const canvas = await waitForSolid(() => requireElement(host, "canvas", "decorative canvas"));
-      expect(bars).toHaveLength(7);
       expect(canvas.hasAttribute("data-ready")).toBe(false);
 
       inputLevel.set(0.8);
       flush();
       await waitForSolid(() => expect(getContext.mock.contexts).toContain(canvas));
       expect(container.querySelector("openclaw-microphone-activity")).toBe(host);
-      expect(Array.from(host.querySelectorAll(".agent-chat__voice-activity-bar"))).toEqual(bars);
       expect(host.getAttribute("data-level")).toBe("0.8");
       expect(canvas.hasAttribute("data-ready")).toBe(false);
       expectDefined(
@@ -1251,17 +1247,13 @@ describe("chat voice controls", () => {
     document.body.append(container);
     try {
       const visualizer = container.querySelector<HTMLElement>(".agent-chat__voice-activity");
-      const centerBar = visualizer?.querySelector<HTMLElement>(
-        ".agent-chat__voice-activity-bar:nth-child(4)",
-      );
+      const canvas = visualizer?.querySelector("canvas");
 
       inputLevel.set(0.8);
       flush();
 
       expect(visualizer?.getAttribute("data-level")).toBe("0.8");
-      expect(visualizer?.querySelector(".agent-chat__voice-activity-bar:nth-child(4)")).toBe(
-        centerBar,
-      );
+      expect(visualizer?.querySelector("canvas")).toBe(canvas);
 
       const replacement = new RealtimeTalkLevelSignal();
       replacement.set(0.35);
@@ -2458,11 +2450,11 @@ describe("chat model controls", () => {
             renderChatModelAccountControl({
               owner: state,
               client,
+              ownsScope: () => true,
               selection,
               model,
               modelAuthStatusResult: status,
               disabled: false,
-              ownsSelection: () => true,
               onSelect: vi.fn(),
             }),
         },

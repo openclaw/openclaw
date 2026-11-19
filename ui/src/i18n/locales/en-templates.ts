@@ -18,7 +18,7 @@ const enTemplates = {
     installedAgent: "Installed agent: {agentId}",
     incompleteImport: "Installation did not complete. Inspect the agent before retrying.",
     explore: "Templates",
-    exploreDescription: "Find an agent for your next task.",
+    exploreDescription: "Ready-made Claws that get the job done.",
     title: "Templates",
     featured: "Featured",
     results: "Results",

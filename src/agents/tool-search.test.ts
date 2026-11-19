@@ -504,8 +504,7 @@ describe("Tool Search", () => {
     "keeps gateway guidance consistent across surfaces with delegation denied=%s",
     (denyOpenClaw) => {
       const expected =
-        "Read gateway config/schema. Owner request/operator schedule: update.run, restart, update.cleanup. Use runtime-owned actions." +
-        (denyOpenClaw ? "" : " Other system changes: use openclaw tool.");
+        "Read gateway config/schema. Owner request/operator schedule: update.run, restart, update.cleanup.";
       const authorizedTools = filterToolsByPolicy(
         [createGatewayTool(), ...createOpenClawDelegateToolsForRun({ sessionAgentId: "main" })],
         denyOpenClaw ? { deny: ["openclaw"] } : undefined,
@@ -520,9 +519,7 @@ describe("Tool Search", () => {
         "finalized gateway tool",
       );
 
-      expect(finalizedTools.some((tool) => tool.name === "openclaw")).toBe(
-        expected.includes("openclaw"),
-      );
+      expect(finalizedTools.some((tool) => tool.name === "openclaw")).toBe(!denyOpenClaw);
       expect(gateway.description).toBe(expected);
 
       for (const mode of ["tools", "directory"] as const) {

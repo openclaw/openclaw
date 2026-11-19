@@ -7,6 +7,7 @@ import { owesRequesterCompletion } from "../agents/subagents/registry/subagent-r
 import { isYieldedSubagentRun } from "../agents/subagents/registry/subagent-run-liveness.js";
 import { readSessionSubmittedInput } from "../config/sessions/session-pending-input-source.js";
 import type { PendingInputScope } from "../config/sessions/session-pending-input-store.js";
+import { isRestartResumeEntryOutOfScope } from "../config/sessions/session-restart-resume-scope.js";
 import {
   acquireTranscriptLease,
   type TranscriptLease,
@@ -67,6 +68,10 @@ export async function prepareRestartCompletionCustody(
   assertCurrent();
   const recovered: string[] = [];
   for (const { sessionKey, entry } of entries) {
+    // A completion wakes parent work; work from another restart resume scope never regains it.
+    if (isRestartResumeEntryOutOfScope(entry)) {
+      continue;
+    }
     try {
       recovered.push(
         ...(await recoverRequesterCompletionCustody({

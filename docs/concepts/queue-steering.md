@@ -10,6 +10,8 @@ title: "Steering queue"
 
 When a prompt arrives in the same conversation and the queue mode is `steer` (the default, no config needed), OpenClaw tries to send that prompt into the active runtime, including during tool execution. Collaborative steering is enabled by default; operators can disable it explicitly. OpenClaw and the native Codex app-server harness implement the delivery details differently.
 
+Discord guild channels and threads keep ordinary messages from different authenticated requesters as separate followup turns. Same-requester corrections can still steer, and explicit `/steer` or `/tell` retain their existing authorization and collaboration rules. This scheduling exception does not classify message topics: use `/followup` for an independent request from the same person.
+
 This page covers queue-mode steering for normal inbound messages in `steer` mode. In `followup` or `collect` mode, normal messages skip this path and wait until the active run finishes. For the explicit `/steer <message>` command, see [Steer](/tools/steer).
 
 An older followup does not disable steering for later input. OpenClaw tries each new steer against the active run after earlier steering attempts settle. When the runtime cannot accept steering, messages remain queued in their original order; accepted steering goes to the active turn. When collaborative steering is disabled, another requester’s input queues quietly as their own turn. An explicit `collaborativeSteeringFallback: "reject"` instead refuses it.
@@ -129,14 +131,14 @@ Messages with separate durable ingress admission, including Discord and Telegram
 
 If several messages arrive while the agent is executing a tool call:
 
-- With collaborative steering enabled, messages from another admitted participant can join the active turn under its original requester and prepared permissions. With an explicit `messages.queue.allowCollaborativeSteering: false`, another person’s input queues quietly for their own turn.
+- With collaborative steering enabled, messages from another admitted participant can join the active turn under its original requester and prepared permissions, except ordinary Discord guild messages, which keep separate turns. With an explicit `messages.queue.allowCollaborativeSteering: false`, another person’s input queues quietly for their own turn.
 - For accepted steering, OpenClaw preserves the runtime's configured steering drain mode and FIFO order. One-at-a-time consumers keep later messages for later boundaries; `all` consumers inject the queued FIFO batch together. Codex receives messages collected during its quiet window as one batched `turn/steer`.
 - With `/queue collect`, OpenClaw does not steer. It waits until the active run ends, then creates followup turns after the debounce window, combining only compatible queued messages.
 - With `/queue interrupt`, OpenClaw aborts the active run and starts the newest message instead of steering.
 
 ## Scope
 
-`messages.queue.allowCollaborativeSteering` defaults to `true`. Operators can set it to `false` to keep participants’ executions separate. When Bob's admitted human input joins Alice's active turn in the same conversation, the execution keeps Alice's identity and prepared permissions. Bob can influence actions using permissions Alice has that Bob does not. Bob remains identified as the message author; steering does not switch the execution to Bob, combine their permissions, or attribute subsequent actions to individual messages.
+`messages.queue.allowCollaborativeSteering` defaults to `true`. Operators can set it to `false` to keep participants’ executions separate. Ordinary Discord guild messages from Bob instead wait for their own turn; this exception also applies when collaboration is enabled. When eligible admitted human input from Bob joins Alice's active turn in the same conversation, the execution keeps Alice's identity and prepared permissions. Bob can influence actions using permissions Alice has that Bob does not. Bob remains identified as the message author; steering does not switch the execution to Bob, combine their permissions, or attribute subsequent actions to individual messages.
 
 With the option set to `false` and quiet fallback selected, another person’s input queues for a separate execution under their identity and current policy. The active turn is unchanged. No warning or queue status message is sent for this expected fallback. Ordinary guidance from the same authenticated requester in the same conversation retains the active execution’s prepared permissions, regardless of this option. Reconnecting with different client capabilities or caller tool bindings does not replace that execution or its permissions. Unidentified input cannot borrow the active execution's authority. Current conversation access, the original execution’s live authority, backend compatibility, cancellation, and current-owner checks always apply.
 
@@ -261,6 +263,8 @@ An authorized Gateway client can withdraw a message still waiting in the OpenCla
 runtime's steering queue or the followup queue, before delivery starts, with `chat.abort({ sessionKey,
 runId })`. Use the `runId` returned by that message's `chat.send`. This withdraws
 that message without stopping the active run or retrying it as a followup.
+After withdrawing a steer from the runtime's queue, sending the same message ID
+returns a cancellation error. To send the message again, use a new message ID.
 
 Once delivery starts, cancellation cannot guarantee withdrawal or undo completed
 work. If delivery cannot be confirmed, OpenClaw reports the uncertainty and retains

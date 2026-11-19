@@ -235,6 +235,8 @@ export function formatUpdateFinalizationError(error: unknown): string {
 
 export type MutableUpdateExecutionResult = {
   mutationStarted: boolean;
+  /** A candidate Doctor or boot check may have written live state; only then can its schema have moved. */
+  candidateOpenedState: boolean;
   result: UpdateRunResult;
   failure?: { cause: unknown; detail: string };
   preManagedServiceStop: PreManagedServiceStop | undefined;
