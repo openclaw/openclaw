@@ -1,4 +1,5 @@
 import { strokeIconData, type IconData } from "./icon-data-types.ts";
+import type { IconName } from "./icon-data.ts";
 
 // Navigation section icons: outline at rest, `*Filled` for the current page.
 // Drawn on a 24 grid, stroke 2, round caps and joins. `users` reuses the
@@ -331,3 +332,21 @@ export const navigationIconData = {
     ],
   ]),
 } as const satisfies Record<string, IconData>;
+
+/** Navigation icons swap to these filled forms while their page is current. */
+export const filledIconNames: Partial<Record<IconName, IconName>> = {
+  access: "accessFilled",
+  atSign: "atSignFilled",
+  automations: "automationsFilled",
+  clawrouter: "clawrouterFilled",
+  customize: "customizeFilled",
+  dashboards: "dashboardsFilled",
+  knowledge: "knowledgeFilled",
+  meetings: "meetingsFilled",
+  portals: "portalsFilled",
+  sessions: "sessionsFilled",
+  systems: "systemsFilled",
+  usage: "usageFilled",
+  users: "usersFilled",
+  workboard: "workboardFilled",
+};
