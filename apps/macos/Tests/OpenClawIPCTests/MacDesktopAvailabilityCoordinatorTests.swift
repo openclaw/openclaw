@@ -268,6 +268,9 @@ struct MacDesktopAvailabilityCoordinatorTests {
         ]
         #expect(LiveMacDesktopAvailabilityPlatform.consoleState(users: [unlocked], uid: 501) == .unlocked)
         #expect(LiveMacDesktopAvailabilityPlatform.consoleState(users: [unlocked], uid: 502) == .locked)
+        var rootConsole = unlocked
+        rootConsole["kCGSSessionUserIDKey"] = 0
+        #expect(LiveMacDesktopAvailabilityPlatform.consoleState(users: [rootConsole], uid: 0) == .locked)
         #expect(LiveMacDesktopAvailabilityPlatform.consoleState(users: [], uid: 501) == .unknown)
         #expect(LiveMacDesktopAvailabilityPlatform.consoleState(users: [unlocked, unlocked], uid: 501) == .unknown)
         for (field, value, expected) in [

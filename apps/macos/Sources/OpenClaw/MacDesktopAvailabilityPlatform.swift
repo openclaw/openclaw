@@ -31,15 +31,16 @@ final class LiveMacDesktopAvailabilityPlatform: MacDesktopAvailabilityPlatform {
     }
 
     static func consoleState(users: [[String: Any]], uid: uid_t) -> MacDesktopAvailabilityCoordinator.State {
+        // UID 0 may appear as a console or login manager entry, never as a user session.
+        guard uid != 0 else { return .locked }
+
         // A Screen Sharing session is logged in and unlocked without owning the physical console.
-        if uid != 0 {
-            let own = users.filter {
-                ($0["kCGSSessionUserIDKey"] as? NSNumber)?.uint32Value == uid
-            }
-            if own.count > 1 { return .unknown }
-            if let session = own.first {
-                return Self.sessionState(session)
-            }
+        let own = users.filter {
+            ($0["kCGSSessionUserIDKey"] as? NSNumber)?.uint32Value == uid
+        }
+        if own.count > 1 { return .unknown }
+        if let session = own.first {
+            return Self.sessionState(session)
         }
         let console = users.filter { Self.boolean($0["kCGSSessionOnConsoleKey"]) == true }
         guard console.count == 1, let user = console.first else { return .unknown }
