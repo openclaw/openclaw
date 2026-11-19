@@ -788,7 +788,15 @@ describe("direct compactor through the context-engine delegate", () => {
         compact: vi.fn<ContextEngine["compact"]>(delegate),
       });
       const preparation = await import("../../config/sessions/session-compaction-prepared.js");
-      const reads = vi.spyOn(preparation, "readPreparedSessionCompactionInWorker");
+      const read = preparation.readPreparedSessionCompactionInWorker;
+      const values: Awaited<ReturnType<typeof read>>[] = [];
+      const reads = vi
+        .spyOn(preparation, "readPreparedSessionCompactionInWorker")
+        .mockImplementation(async (...args) => {
+          const value = await read(...args);
+          values.push(value);
+          return value;
+        });
       const observed = await observeTranscriptHydrations();
       try {
         let preparedSession: PreparedCompactionSession | undefined;
@@ -817,7 +825,6 @@ describe("direct compactor through the context-engine delegate", () => {
           preparedSession ? { preparedSession } : undefined,
         );
         expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
-        const values = await Promise.all(reads.mock.results.map(({ value }) => value));
         const planned = values.find((value) => value.status === "prepared");
         if (!planned) {
           throw new Error("expected bounded compaction preparation");
