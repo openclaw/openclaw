@@ -336,6 +336,9 @@ export class TemplateCreatorFlow implements TemplateCreator {
         this.seenRevision = draft.revision;
         if (hasCompleteScope(draft.content)) {
           await this.refreshReview(target, generation);
+        } else if (this.review) {
+          // No refresh will notify the card to retire its stale preview.
+          this.changed();
         }
       }
     } catch (error) {
