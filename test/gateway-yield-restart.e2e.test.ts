@@ -73,6 +73,7 @@ it
     let yieldedAfterOutage = false;
     let requesterFinished = false;
     let toolMarker = "";
+    let rootSawStoppedChild = false;
     const reservation = await reserveTestPortListener({
       offsets: [0],
       signal,
@@ -107,6 +108,15 @@ it
           };
           if (text.includes(childPrompt) && !text.includes(rootPrompt)) {
             childCalls++;
+            if (
+              stoppedRoot &&
+              !legacyShutdown &&
+              text.includes("The Gateway restarted while you were working.")
+            ) {
+              // The interrupted child resumes its own task after the restart.
+              reply("CHILD_RESUMED_RESULT");
+              return;
+            }
             if (mainTool) {
               if (text.includes("RUN_MAIN_LANE_TOOL")) {
                 call("exec", {
@@ -172,6 +182,11 @@ it
             return;
           }
           if (stoppedRoot) {
+            rootSawStoppedChild ||= !legacyShutdown && text.includes("Gateway stopped");
+            if (!legacyShutdown && text.includes("CHILD_RESUMED_RESULT")) {
+              reply("ROOT_RECEIVED_RESUMED_CHILD");
+              return;
+            }
             if (text.includes("Gateway stopped")) {
               reply("ROOT_RECONCILED_STOPPED_CHILD");
               return;
@@ -451,20 +466,40 @@ it
         await client.stopAndWait();
         client = undefined;
         if (mainTool) {
+          // Shutdown leaves the interrupted child unended for its own resume.
           expect(readChildRun()).toMatchObject({
-            execution: {
-              status: "terminal",
-              outcome: { status: "error", error: "Gateway stopped" },
-            },
+            execution: { status: "running" },
             completion: { required: true },
-            delivery: { status: "pending" },
           });
+          expect(readChildRun().execution).not.toHaveProperty("endedAt");
         }
         if (legacyShutdown) {
-          // Previous Gateways recorded this exact quiet-kill state during shutdown.
-          // Reproduce the persisted upgrade input after the real main-lane tool is aborted.
+          // Previous Gateways ended the child with "Gateway stopped" during shutdown, recorded
+          // this exact quiet-kill state, and never marked the child session for resume.
+          // Reproduce that persisted upgrade input after the real main-lane tool is aborted.
           const legacy = readChildRun();
           assert(isRecord(legacy.execution));
+          const endedAt = Date.now();
+          legacy.execution = {
+            ...legacy.execution,
+            status: "terminal",
+            endedAt,
+            outcome: { status: "error", error: "Gateway stopped" },
+            suppressSessionEffects: true,
+          };
+          legacy.delivery = { status: "pending" };
+          const sessions = openNodeSqliteDatabase(
+            path.join(instance.state.agentDir(childAgent), "openclaw-agent.sqlite"),
+          );
+          try {
+            sessions
+              .prepare(
+                "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.resumeAfterRestart') WHERE session_key = ?",
+              )
+              .run(childKey!);
+          } finally {
+            sessions.close();
+          }
           Object.assign(legacy, {
             endedReason: "subagent-killed",
             completion: { required: true },
@@ -534,9 +569,13 @@ it
               const history = await client!.request<{ messages: unknown[] }>("chat.history", {
                 sessionKey: rootKey,
               });
-              expect(
-                JSON.stringify(history.messages).includes("ROOT_RECONCILED_STOPPED_CHILD"),
-              ).toBe(true);
+              const replies = JSON.stringify(history.messages);
+              if (legacyShutdown) {
+                expect(replies.includes("ROOT_RECONCILED_STOPPED_CHILD")).toBe(true);
+              } else {
+                // One completion wake carries the resumed child's real result.
+                expect(replies.split("ROOT_RECEIVED_RESUMED_CHILD")).toHaveLength(2);
+              }
               expect(history.messages).not.toEqual(
                 expect.arrayContaining([
                   expect.objectContaining({ customType: "run-failed-before-reply" }),
@@ -545,8 +584,9 @@ it
             },
             { timeout: 15_000 },
           );
-          expect(childCalls).toBe(callsBeforeRestart);
-          if (mainTool) {
+          expect(childCalls).toBe(callsBeforeRestart + (legacyShutdown ? 0 : 1));
+          expect(rootSawStoppedChild).toBe(false);
+          if (legacyShutdown) {
             await vi.waitFor(
               () => {
                 const db = openNodeSqliteDatabase(
