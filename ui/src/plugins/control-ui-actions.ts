@@ -95,7 +95,11 @@ export async function runControlUiPluginAction(
     agentId: params.agentId ?? params.session?.agentId,
     session: params.session ? structuredClone(params.session) : undefined,
   };
-  const state = entry.value.resolve?.(context);
+  const composer = params.placement === "composer" ? params.composer : undefined;
+  const state = entry.value.resolve?.({
+    ...context,
+    draft: composer && (composer.getDraft?.() ?? composer.draft),
+  });
   // A resolver can synchronously withdraw its registration or remove the view.
   check();
   if (state?.hidden || state?.disabled) {
@@ -107,7 +111,6 @@ export async function runControlUiPluginAction(
       ),
     );
   }
-  const composer = params.placement === "composer" ? params.composer : undefined;
   // Like replacement composer operations, a retired handle throws instead of touching
   // whichever draft its pane presents next.
   const checkComposer = () => {
@@ -142,7 +145,7 @@ export async function runControlUiPluginAction(
           },
           propose: async (text: string, proposal: ControlUiDraftProposal) => {
             checkComposer();
-            return owner.offer(text, proposal.title, signal);
+            return owner.offer(text, proposal, signal);
           },
         },
     });

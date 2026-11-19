@@ -322,7 +322,10 @@ host.ui.registerAction({
 A composer action with a host icon-registry `icon` renders as a compact button in
 the composer toolbar, after the attachment menu, with `label` as its accessible
 name and tooltip. Composer actions without an icon keep the text button above
-the composer, as do icon actions beside a replacement composer.
+the composer, as do icon actions beside a replacement composer. A composer
+action's `resolve` receives the pane's current `draft`, so an action that needs
+text can return `{ disabled: !draft.trim() }`; the host re-resolves as the user
+types.
 
 For work that produces a draft, such as rewriting, translating or shortening it,
 call `composer.startTask({ title })`. The host shows one card above the input
@@ -336,7 +339,9 @@ that changes in place, so the composer never moves:
   and **Dismiss** (Escape). Nothing changes and nothing is sent until the user
   accepts. Accepting replaces the draft as one editor step, so undo, or the
   receipt's **Undo**, restores the previous draft with its mentions. The promise
-  resolves `"accepted"` or `"dismissed"`.
+  resolves `"accepted"` or `"dismissed"`. Pass `insert: true` to replace the draft
+  at once instead, with the same single undo step and **Undo** receipt; while
+  dictation or a pending goal locks the editor, the proposal waits for **Use**.
 - **Failure:** `task.fail(message)` shows the message with **Dismiss** and **Try
   again**, which runs the action again.
 
