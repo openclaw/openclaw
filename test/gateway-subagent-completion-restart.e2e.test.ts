@@ -42,6 +42,7 @@ it.skipIf(process.platform === "win32").for(["nested", "captured"] as const)(
     let restarted = false;
     let leafStarted = false;
     let childStarted = false;
+    let rootReceivedChildError = false;
     let childRunId: string | undefined;
     let capturedRunId: string | undefined;
     let finishCaptured: (() => void) | undefined;
@@ -78,6 +79,7 @@ it.skipIf(process.platform === "win32").for(["nested", "captured"] as const)(
             return;
           }
           if (text.includes("CUSTODY_ROOT_TASK")) {
+            rootReceivedChildError ||= text.includes("Gateway stopped");
             const receipts = input.flatMap((item) =>
               isRecord(item) && item.type === "function_call_output"
                 ? findSubagentRecords(
@@ -349,6 +351,9 @@ it.skipIf(process.platform === "win32").for(["nested", "captured"] as const)(
           },
           { timeout: 30_000 },
         );
+        if (kind === "captured") {
+          expect(rootReceivedChildError).toBe(true);
+        }
         phase = "delivered receipt survives another restart";
         await instance.stopGateway();
         await client.stopAndWait();

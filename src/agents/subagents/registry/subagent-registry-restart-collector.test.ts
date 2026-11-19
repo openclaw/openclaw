@@ -1,5 +1,12 @@
 import { expect, it } from "vitest";
 import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
+import { createContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../../process/gateway-work-admission.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
@@ -7,7 +14,7 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import { createSubagentRegistryRestorer } from "./subagent-registry-restore.js";
 import { saveSubagentRegistryToSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import {
-  markSubagentRunTerminated,
+  terminateLiveSubagentsForShutdown,
   resetSubagentRegistryForTests,
   testing,
 } from "./subagent-registry.test-helpers.js";
@@ -53,17 +60,38 @@ it.each(["crash", "shutdown"] as const)(
           ensureListener() {},
           warn() {},
         }).activate();
+      const claims: Array<{ runId: string; token: ReturnType<typeof claimAgentRunContext> }> = [];
       try {
         saveSubagentRegistryToSqlite(new Map(entries.map((entry) => [entry.runId, entry])));
         await restore();
         if (restart === "shutdown") {
-          for (const entry of entries.slice(1)) {
-            await markSubagentRunTerminated({
-              runId: entry.runId,
-              reason: "Gateway stopped",
-              suppressTaskDelivery: true,
-              suppressSessionEffects: true,
+          const gateway = createContext();
+          const resolveGatewayContext = () => gateway;
+          for (const entry of subagentRuns.values()) {
+            bindGatewayContextResolver(entry, resolveGatewayContext);
+            if (entry.execution.status === "running") {
+              const token = claimAgentRunContext(
+                entry.runId,
+                { agentId: "main", sessionKey: entry.childSessionKey },
+                { trackOwner: true, ownsContext: true },
+              );
+              expect(token).toBeDefined();
+              claims.push({ runId: entry.runId, token });
+            }
+          }
+          markGatewayRestartDraining();
+          await terminateLiveSubagentsForShutdown(resolveGatewayContext);
+          resetGatewayWorkAdmission();
+          for (const { runId, token } of claims) {
+            releaseAgentRunContext(runId, token);
+            expect(subagentRuns.get(runId)).toMatchObject({
+              execution: {
+                status: "terminal",
+                outcome: { status: "error", error: "Gateway stopped" },
+              },
+              collectorCompletion: { status: "failed" },
             });
+            expect(subagentRuns.get(runId)?.killReconciliation).toBeUndefined();
           }
           await resetSubagentRegistryForTests({ persist: false });
           await restore();
@@ -82,7 +110,7 @@ it.each(["crash", "shutdown"] as const)(
             { runId: "captured", status: "done", result: "saved result" },
             ...entries.slice(1).map((entry) => ({
               runId: entry.runId,
-              status: restart === "shutdown" ? "killed" : "failed",
+              status: "failed",
               error: expect.stringMatching(/restart|Gateway stopped/),
             })),
           ],
@@ -97,6 +125,10 @@ it.each(["crash", "shutdown"] as const)(
           );
         }
       } finally {
+        resetGatewayWorkAdmission();
+        for (const { runId, token } of claims) {
+          releaseAgentRunContext(runId, token);
+        }
         await resetSubagentRegistryForTests({ persist: false });
       }
     });
