@@ -11,6 +11,7 @@ import { SqliteSchemaVersionError } from "../../infra/sqlite-user-version.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import {
   createDeferredConfiguredPluginRepairDoctorResult,
+  DoctorMaintenanceRefusalError,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
@@ -443,6 +444,57 @@ it.each([
         advisory: expectedAdvisory,
       }),
     );
+  },
+);
+
+it.each([
+  { verdict: "data-at-risk", consumer: "runner" },
+  { verdict: "data-at-risk", consumer: "package-verification" },
+  { verdict: "none", consumer: "runner" },
+  { verdict: "deferred", consumer: "runner" },
+] as const)(
+  "carries a failed Doctor child's own data-risk verdict ($verdict, $consumer)",
+  async ({ verdict, consumer }) => {
+    const { root, doctor } = await createDoctorFixture();
+    mockDoctor(async (options) => {
+      await writeFixtureJson(doctorResultPath(options), {
+        status: "error",
+        failureFacts: [reportedFailure],
+        ...(verdict === "data-at-risk"
+          ? { maintenanceRefusal: { kind: "data-at-risk", reason: "incomplete-migration" } }
+          : verdict === "deferred"
+            ? { maintenanceRefusal: { kind: "deferred", reason: "coordinator-contention" } }
+            : {}),
+      });
+      return processResult({ code: 1, stderr: "Doctor stopped during a state migration." });
+    });
+    const results: UpdateStepResult[] = [];
+    if (consumer === "package-verification") {
+      // The package swap keeps a failed verification step so it can restore the package.
+      const step = await runPackagePostInstallVerification(root, (candidateRoot, recorded) =>
+        doctor({ root: candidateRoot, results: recorded }),
+      );
+      expect(step).toMatchObject({ name: "openclaw doctor", exitCode: 1 });
+      expect(step.failureFacts).toEqual(expect.arrayContaining([reportedFailure]));
+      return;
+    }
+    const outcome = await doctor({ results }).then(
+      (step) => ({ step }),
+      (error: unknown) => ({ error }),
+    );
+    expect(results).toEqual([expect.objectContaining({ name: "openclaw doctor", exitCode: 1 })]);
+    if (verdict !== "data-at-risk") {
+      // A failed Doctor without its own data-risk verdict is not evidence that state is at risk.
+      expect(outcome).toEqual({ step: results[0] });
+      return;
+    }
+    assert("error" in outcome);
+    expect(outcome.error).toBeInstanceOf(DoctorMaintenanceRefusalError);
+    expect(outcome.error).toMatchObject({
+      refusal: { kind: "data-at-risk", reason: "incomplete-migration" },
+      message: expect.stringContaining("Doctor stopped during a state migration."),
+      failureFacts: expect.arrayContaining([reportedFailure]),
+    });
   },
 );
 

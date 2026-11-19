@@ -4,6 +4,7 @@ import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { readPackageVersion } from "./package-json.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
 import { getUpdateDoctorConfigFailureReason } from "./update-doctor-config.js";
+import { DoctorMaintenanceRefusalError } from "./update-doctor-result.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import {
   readBuiltGatewayBuildId,
@@ -613,11 +614,9 @@ export async function updateGitCheckout(params: {
     // Source conversion migrates only after its prepared global exposure is swapped.
     if (!opts.prepareGitExposure) {
       stateMigrationStarted = true;
-      recovery = {
-        serviceRestartSafe: false,
-        reason: "state-migration-started",
-        dataAtRisk: "state-migrated-no-rollback",
-      };
+      // Starting Doctor is no evidence that state changed. The CLI compares state schemas
+      // after any failure; this runner records only the Doctor child's typed data risk.
+      recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
       const doctorSteps: UpdateStepResult[] = [];
       let doctorStep: UpdateStepResult | null;
       try {
@@ -627,8 +626,14 @@ export async function updateGitCheckout(params: {
         if (refusal.kind === "data-at-risk") {
           recovery.dataAtRisk = refusal.reason;
         }
-        steps.push(...doctorSteps);
-        throw error;
+        // A failed Doctor whose child reported its own data risk is a Doctor failure.
+        const failed = doctorSteps.findLast(isFailedUpdateStep);
+        if (error instanceof DoctorMaintenanceRefusalError && recovery.dataAtRisk && failed) {
+          doctorStep = failed;
+        } else {
+          steps.push(...doctorSteps);
+          throw error;
+        }
       }
       steps.push(
         ...doctorSteps.filter((result) => result !== doctorStep),

@@ -26,7 +26,9 @@ import { createDoctorServiceInspectionBudget } from "../../infra/update-doctor-d
 import {
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,
+  DoctorMaintenanceRefusalError,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+  type DoctorMaintenanceRefusal,
 } from "../../infra/update-doctor-result.js";
 import { createUpdateDoctorSectionTiming } from "../../infra/update-doctor-section-timing.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
@@ -229,6 +231,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
       runCommand: sectionTiming.wrap(runCommand ?? runCommandWithTimeout),
     });
   let outcome: { step: UpdateStepResult } | { error: unknown };
+  let refusal: DoctorMaintenanceRefusal | undefined;
   try {
     if (context?.databaseBackup) {
       await observeUpdateParentDatabaseWrites(context.databaseBackup, {
@@ -278,6 +281,13 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
       throw outcome.error;
     }
     const doctorResult = await consumeUpdatePostInstallDoctorResult(doctorResultPath);
+    // The child's own typed verdict is the evidence that its failure left state at risk.
+    if (
+      doctorResult?.status === "error" &&
+      doctorResult.maintenanceRefusal?.kind === "data-at-risk"
+    ) {
+      refusal = doctorResult.maintenanceRefusal;
+    }
     if ("error" in outcome) {
       const recorded = completedSteps.at(-1);
       if (!recorded) {
@@ -289,6 +299,19 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     }
   } catch (error) {
     outcome = { error };
+  }
+  if (refusal) {
+    const step = "step" in outcome ? outcome.step : completedSteps.at(-1);
+    outcome = {
+      error: new DoctorMaintenanceRefusalError(
+        step?.stderrTail?.trim() || `Activation Doctor reported data at risk (${refusal.reason}).`,
+        refusal,
+        {
+          ...("error" in outcome ? { cause: outcome.error } : {}),
+          failureFacts: step?.failureFacts,
+        },
+      ),
+    };
   }
   try {
     params.results?.push(...(processSettlement ? [processSettlement] : []), ...completedSteps);

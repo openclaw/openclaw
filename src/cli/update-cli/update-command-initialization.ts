@@ -5,6 +5,7 @@ import { compareSemverStrings } from "../../infra/npm-registry-spec.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../../infra/sqlite-files.js";
 import type { UpdateCandidateAdmissionResult } from "../../infra/update-candidate-admission.js";
+import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { isFailedUpdateStep } from "../../infra/update-run-step.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
@@ -182,13 +183,26 @@ export async function initializeUpdateStateFromTarget(
   // Doctor must still validate and migrate authored config before activation.
   await updateStateNeedsInitialization(params.env);
   params.assertCurrent();
-  const result = await runPackageUpdateDoctor({ ...params, managedServiceEnv: params.env });
+  // Initialization precedes activation: a Doctor refusal leaves the installation unchanged.
+  let refusal: DoctorMaintenanceRefusalError | undefined;
+  const result = await runPackageUpdateDoctor({
+    ...params,
+    managedServiceEnv: params.env,
+  }).catch((error: unknown) => {
+    if (!(error instanceof DoctorMaintenanceRefusalError)) {
+      throw error;
+    }
+    refusal = error;
+    return null;
+  });
   params.assertCurrent();
   await params.checkSchemas("after");
-  if (!result || isFailedUpdateStep(result)) {
+  if (refusal || !result || isFailedUpdateStep(result)) {
     throw new UpdatePreMutationError(
       "target-state-initialization",
-      result?.stderrTail ?? "The selected release could not initialize its state database.",
+      refusal?.message ??
+        result?.stderrTail ??
+        "The selected release could not initialize its state database.",
     );
   }
   if (await updateStateNeedsInitialization(params.env)) {

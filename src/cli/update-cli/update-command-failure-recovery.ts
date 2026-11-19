@@ -184,7 +184,12 @@ export async function verifyUpdateFailureRecovery(params: {
         params.preManagedServiceStop.serviceMutationAllowed !== false &&
         params.preManagedServiceStop.serviceUpdateVerdict?.kind === "owned" &&
         result.verification?.serviceRunning === false &&
-        !(previousRecovery?.serviceRestartSafe === false && previousRecovery.dataAtRisk)
+        // A candidate whose Doctor started and failed may hold partly repaired state, with
+        // or without a recorded data risk; this path must not start it.
+        !(
+          previousRecovery?.serviceRestartSafe === false &&
+          (previousRecovery.dataAtRisk || previousRecovery.reason === "state-migration-started")
+        )
       ) {
         restartAttempted =
           (await maybeRestartServiceAfterFailedMutableUpdate({
