@@ -113,28 +113,41 @@ export async function runControlUiPluginAction(
       throw new Error("This plugin UI view has ended.");
     }
   };
-  await entry.value.run({
-    ...context,
-    host: scopeControlUiHost(entry.host, signal, params.isCurrent),
-    signal,
-    composer: composer && {
-      get draft() {
-        checkComposer();
-        return composer.getDraft?.() ?? composer.draft;
+  // Tasks this invocation started: once one is cancelled or retired, its error is expected.
+  const tasks: AbortSignal[] = [];
+  try {
+    await entry.value.run({
+      ...context,
+      host: scopeControlUiHost(entry.host, signal, params.isCurrent),
+      signal,
+      composer: composer && {
+        get draft() {
+          checkComposer();
+          return composer.getDraft?.() ?? composer.draft;
+        },
+        setDraft: (text: string) => {
+          checkComposer();
+          composer.onDraftChange(text);
+        },
+        startTask: ({ title }: { title: string }) => {
+          checkComposer();
+          const task = composer
+            .tasks()
+            .start({ title, signal, actionKey: entry.key, retry: params.retry });
+          tasks.push(task.signal);
+          return task;
+        },
+        propose: async (text: string, proposal: ControlUiDraftProposal) => {
+          checkComposer();
+          return composer.tasks().offer(text, proposal.title, signal);
+        },
       },
-      setDraft: (text: string) => {
-        checkComposer();
-        composer.onDraftChange(text);
-      },
-      startTask: ({ title }: { title: string }) => {
-        checkComposer();
-        return composer.tasks().start({ title, signal, actionKey: entry.key, retry: params.retry });
-      },
-      propose: async (text: string, proposal: ControlUiDraftProposal) => {
-        checkComposer();
-        return composer.tasks().offer(text, proposal.title, signal);
-      },
-    },
-  });
+    });
+  } catch (error) {
+    if (tasks.some((task) => task.aborted)) {
+      return;
+    }
+    throw error;
+  }
   check();
 }

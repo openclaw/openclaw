@@ -261,11 +261,14 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
       if (current.signal.aborted) {
         return;
       }
-      // A toolbar action has no row of its own: its failure shows in the pane's task card.
-      if (props.kind === "composer-toolbar" && host.composer) {
+      // A toolbar action has no row of its own: its failure shows in the pane's task card,
+      // unless another task owns the card; then it falls back to the inline alert.
+      if (
+        props.kind === "composer-toolbar" &&
         host.composer
-          .tasks()
-          .report(current.state?.label ?? current.entry.value.label, formatUiError(error));
+          ?.tasks()
+          .report(current.state?.label ?? current.entry.value.label, formatUiError(error))
+      ) {
         return;
       }
       throw error;

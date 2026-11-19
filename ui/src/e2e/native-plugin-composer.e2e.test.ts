@@ -39,6 +39,13 @@ const fixture = `export default { id: "composer-fixture", activate(host) {
     run({ composer }) { composer.setDraft(${JSON.stringify(PROPOSED)}); },
   });
   host.ui.registerAction({
+    id: "slow-broken", label: "Slow broken", icon: "pencilLine", placement: "composer",
+    async run() {
+      await new Promise((resolve) => { proof.failSlow = resolve; });
+      throw new Error("Slow fixture failed");
+    },
+  });
+  host.ui.registerAction({
     id: "broken", label: "Broken", icon: "alertTriangle", placement: "composer",
     run() { throw new Error("Fixture action failed"); },
   });
@@ -87,6 +94,7 @@ type ComposerProofWindow = Window & {
     runs: number;
     mode: string;
     cancelled?: boolean;
+    failSlow?: () => void;
   };
   openclawControlUiE2eGateway: { findRequests: (method: string) => unknown[] };
 };
@@ -157,13 +165,33 @@ suite.define(() => {
       const before = await input.boundingBox();
       await page
         .locator(".agent-chat__composer-lead")
-        .getByRole("button", { name: "Broken" })
+        .getByRole("button", { name: "Broken", exact: true })
         .click();
       await page
         .locator('.agent-chat__composer-task[data-state="failed"]')
         .getByText("Fixture action failed")
         .waitFor();
       expect(await input.boundingBox()).toEqual(before);
+    });
+  });
+
+  it("does not let a late toolbar failure take over another action's task", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      await open(page);
+      await page.getByRole("button", { name: "Slow broken", exact: true }).click();
+      await page.getByRole("button", { name: "Rewrite", exact: true }).click();
+      const working = page.locator('.agent-chat__composer-task[data-state="working"]');
+      await working.waitFor();
+      await page.evaluate(() =>
+        (window as unknown as ComposerProofWindow).composerProof?.failSlow?.(),
+      );
+      await page.getByRole("alert").filter({ hasText: "Slow fixture failed" }).waitFor();
+      expect(await working.count()).toBe(1);
+      expect(
+        await page.evaluate(
+          () => (window as unknown as ComposerProofWindow).composerProof?.cancelled,
+        ),
+      ).toBe(false);
     });
   });
 

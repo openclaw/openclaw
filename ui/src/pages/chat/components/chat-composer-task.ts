@@ -202,14 +202,16 @@ export function createComposerTasks() {
     },
     cancel: () => settle(),
     /** Show a failure that has no task of its own, such as a toolbar action that threw. */
-    report(title: string, message: string) {
-      if (presenters === 0) {
-        return;
+    report(title: string, message: string): boolean {
+      // Never take over a live card: it belongs to another task.
+      if (presenters === 0 || current) {
+        return false;
       }
-      settle();
+      clearAccepted();
       setState((draft) => {
         draft.card = { kind: "failed", title, message, retry: null };
       });
+      return true;
     },
     retry() {
       const card = state.card;
