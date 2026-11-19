@@ -431,9 +431,12 @@ exhausted but the reply still continues:
 }
 ```
 
-The start message goes out before the [memory flush](#memory-flush), which can take
-minutes on a large local context. If the flush leaves nothing to compact, a
-"Compaction not needed" message follows instead of a completion message.
+"Compacting context..." is sent once maintenance is allowed and before the [memory
+flush](#memory-flush), which can take minutes on a large local context. If the flush
+leaves nothing to compact, "Compaction not needed" follows, unless the chat has reached
+its transcript size limit: then the warning that older history was left out is the last
+message. Queued web-chat turns and channels that deliver only a final reply show
+compaction notices with that reply. Compaction left to ChatGPT's own servers sends none.
 
 ### Memory flush
 

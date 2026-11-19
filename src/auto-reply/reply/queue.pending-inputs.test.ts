@@ -179,7 +179,7 @@ describe("followup queue durable input consumption", () => {
       });
       vi.mocked(runSessionCompactionIfNeeded).mockImplementation(async (params) => {
         maintenanceInputs.push(await listSessionPendingInputs(scope()));
-        await params.beforeCompaction?.(sessionEntry);
+        await params.beforeCompaction?.(sessionEntry, async () => {});
         throw failure;
       });
       expect((await listSessionPendingInputs(scope())).total).toBe(0);

@@ -66,6 +66,7 @@ import {
 import {
   createCompactionNotifier,
   resolveCompactionCompletionNotice,
+  type CompactionCheckpoint,
   type CompactionNoticePhase,
   type CompactionNotifier,
 } from "./compaction-notice.js";
@@ -123,7 +124,7 @@ export async function runSessionCompactionIfNeeded(params: {
   agentHarnessId?: string;
   abortSignal?: AbortSignal;
   authorize?: () => boolean;
-  beforeCompaction?: (entry: SessionEntry) => Promise<SessionEntry | undefined>;
+  beforeCompaction?: CompactionCheckpoint<SessionEntry>;
   onCompactionStart?: () => void;
   onCompactionCommitted?: (accepted: AcceptedCompactionSuccessor) => void;
   onSessionIdChanged?: (sessionId: string) => void;
@@ -270,19 +271,17 @@ export async function runSessionCompactionIfNeeded(params: {
     !shouldCompactByTranscriptBytes &&
     (await defersTokenCompactionToChatGPTBoundary(params.followupRun.run));
   if (params.beforeCompaction) {
-    // The checkpoint is a full model turn that can take minutes; announce compaction first.
-    if (!(await defersToProvider())) {
-      await notifier.notify("start");
-    }
-    const refreshed = await params.beforeCompaction(entry);
-    assertActive();
+    // The checkpoint is a full model turn that can take minutes; announce once maintenance is admitted.
+    const announceStart = () => notifier.announceStart(defersToProvider, params.cfg);
     // Memory checkpointing may refresh source usage; replan once without repeating it.
-    return runSessionCompactionIfNeeded({
-      ...params,
-      sessionEntry: refreshed,
-      beforeCompaction: undefined,
-      compactionNotifier: notifier,
+    const replan = { beforeCompaction: undefined, compactionNotifier: notifier };
+    const checkpoint = params.beforeCompaction(entry, announceStart);
+    const checkpointAndReplan = checkpoint.then((refreshed) => {
+      assertActive();
+      return runSessionCompactionIfNeeded({ ...params, ...replan, sessionEntry: refreshed });
     });
+    // A failure in either settles a sent start notice; the shared notifier never repeats one.
+    return notifier.settleOnFailure(params, checkpointAndReplan);
   }
 
   if (await defersToProvider()) {
@@ -510,7 +509,7 @@ export async function runSessionCompactionIfNeeded(params: {
     }
     return entry;
   } catch (err) {
-    if (!notifier.ended && !params.abortSignal?.aborted) {
+    if (!notifier.ended && !notifier.cancelled(params)) {
       await notifier.notify("incomplete");
     }
     throw err;
