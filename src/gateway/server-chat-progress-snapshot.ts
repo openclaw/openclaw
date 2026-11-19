@@ -132,11 +132,11 @@ function captureProgressEvent(
   deferOutput: boolean,
 ): CapturedProgressEvent | undefined {
   try {
-    // Only the fresh tool-output envelope has fully controlled predicate facts.
-    // Inherited JSON transforms can reshape those facts and keep eager capture.
-    const serializedOutput = deferOutput && !("toJSON" in event) && !("toJSON" in event.data);
+    // The owner built this envelope; scalar fields and canonical frozen output
+    // already have their JSON representation. Other producer values need capture.
+    const plainEnvelope = !("toJSON" in event) && !("toJSON" in event.data);
     if (
-      serializedOutput &&
+      plainEnvelope &&
       typeof event.runId === "string" &&
       Number.isFinite(event.seq) &&
       !Object.is(event.seq, -0) &&
@@ -144,7 +144,15 @@ function captureProgressEvent(
       !Object.is(event.ts, -0) &&
       (event.sessionKey === undefined || typeof event.sessionKey === "string") &&
       (event.agentId === undefined || typeof event.agentId === "string") &&
-      isCanonicalImmutableOutput(event.data.partialResult)
+      Object.getOwnPropertySymbols(event.data).length === 0 &&
+      Object.values(event.data).every(
+        (value) =>
+          value === null ||
+          typeof value === "string" ||
+          typeof value === "boolean" ||
+          (typeof value === "number" && Number.isFinite(value) && !Object.is(value, -0)) ||
+          (deferOutput && isCanonicalImmutableOutput(value)),
+      )
     ) {
       // Canonical immutable facts need no JSON copy. Keep the existing byte
       // budget and generic native capture for mutable/custom producer values.
@@ -160,7 +168,7 @@ function captureProgressEvent(
     if (byteLength > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES) {
       return undefined;
     }
-    if (serializedOutput) {
+    if (deferOutput && plainEnvelope) {
       // Capture producer getters/toJSON now, but decode only the retained receipt
       // when recovery reads it. Output bodies are not used by owner predicates.
       const { partialResult: _partialResult, ...data } = event.data;
