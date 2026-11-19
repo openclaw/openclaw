@@ -313,7 +313,8 @@ export function createTalkClientAgentRuntime(params: {
             ) {
               params.onCommandCompleted?.(operationalRunInstance);
             }
-            return result as unknown as Awaited<ReturnType<typeof agentRuntime.runEmbeddedAgent>>;
+            // SAFETY: the command owner returns the embedded run result shape (payloads + meta) it received from the runner.
+            return result as Awaited<ReturnType<typeof agentRuntime.runEmbeddedAgent>>;
           } finally {
             // The command owner closes its admission; join accepted terminal writes here too.
             try {

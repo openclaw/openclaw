@@ -378,7 +378,10 @@ it("retains exactly one embedded yielded acknowledgement and late result through
     rearmGeneration: 1,
   };
   runEmbeddedAgent.mockImplementation(async (params) => {
-    const instance = expectDefined(params.preparedRunAdmission?.operationalRunInstance, "prepared run instance");
+    const instance = expectDefined(
+      params.preparedRunAdmission?.operationalRunInstance,
+      "prepared run instance",
+    );
     const handle = createEmbeddedRunHandle({ runId: params.runId });
     await withGatewayToolCallerIdentity(
       {
