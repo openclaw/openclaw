@@ -574,31 +574,6 @@ export function initSubagentRegistry() {
   return subagentRestorer.restoreOnce();
 }
 
-/** Shutdown interrupts execution; the completion owner still owes the requester its outcome. */
-export async function terminateLiveSubagentsForShutdown(
-  resolveGatewayContext: GatewayContextResolver,
-): Promise<void> {
-  const gateway = resolveGatewayContext();
-  const entries = [...subagentRuns.values()].filter(
-    (entry) =>
-      (isSubagentRunLive(entry) || isSubagentRunQueued(entry)) &&
-      gateway !== undefined &&
-      getGatewayContextResolver(entry)?.() === gateway,
-  );
-  await Promise.all(
-    entries.map((entry) =>
-      // Shutdown joins this terminal write after new-root admission has closed.
-      completeSubagentRunAttempt(subagentLifecycleController, {
-        runId: entry.runId,
-        reason: SUBAGENT_ENDED_REASON_ERROR,
-        outcome: { status: "error", error: "Gateway stopped" },
-        triggerCleanup: false,
-        suppressSessionEffects: true,
-      }),
-    ),
-  );
-}
-
 export function activateSubagentRegistry(
   resolveGatewayContext: GatewayContextResolver,
 ): Promise<void> {

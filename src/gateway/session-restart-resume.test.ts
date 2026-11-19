@@ -293,7 +293,8 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
       };
       const cases: Array<[string, Partial<InternalSessionEntry>, boolean]> = [
         ["crash", {}, mode !== "clean-or-unknown"],
-        ["yielded", { endedAt: 120 }, false],
+        // A yield with no surviving wake source resumes itself.
+        ["yielded", { endedAt: 120 }, true],
         ["stale", { startedAt: 1, updatedAt: 999 }, false],
         ["missing-start", { startedAt: undefined }, false],
         ["new-incarnation", { startedAt: 200 }, false],
@@ -302,8 +303,9 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
         ["archived", { archivedAt: 2 }, false],
         ["external", { modelSelectionLocked: true }, false],
         ["cron:job", {}, false],
-        ["subagent:child", {}, false],
-        ["dashboard:spawned", { createdVia: "spawn" }, false],
+        // Children own their interrupted runs like any other session.
+        ["subagent:child", {}, mode !== "clean-or-unknown"],
+        ["dashboard:spawned", { createdVia: "spawn" }, mode !== "clean-or-unknown"],
         ["live", {}, false],
         ...(mode === "markers"
           ? [
@@ -400,10 +402,9 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
         expect(
           loadExactSessionEntry({ agentId: "main", sessionKey: "agent:main:live" })?.entry,
         ).toHaveProperty("lifecycleRunId", "live");
-        expect(loadExactSessionEntry(sessionTarget("yielded"))?.entry).toMatchObject({
-          status: "failed",
-          lastRunError: expect.stringContaining("child completion"),
-        });
+        expect(loadExactSessionEntry(sessionTarget("yielded"))?.entry).not.toHaveProperty(
+          "lastRunError",
+        );
         expect(
           loadExactSessionEntry(sessionTarget("yielded"))?.entry.lifecycleRunId,
         ).toBeUndefined();

@@ -1,5 +1,7 @@
 import { expect, it } from "vitest";
 import { createOperationalRunInstanceRef } from "../agents/operational-run-instance.js";
+import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
@@ -77,5 +79,51 @@ it("preserves accepted user work while an automation backend is detached between
       releaseSessionControllerClaim(input.claim!);
       await input.claim!.settlement.promise;
       releaseAgentRunContext(runId, claim);
+    }
+  }));
+
+it("marks a live child under its own key, not its root requester", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const parent = { agentId: "main", sessionKey: "agent:main:dashboard:live-parent" };
+    const child = {
+      agentId: "main",
+      sessionKey: "agent:main:subagent:live-child",
+      sessionId: "live-child",
+    };
+    replaceSessionEntrySync(
+      { ...parent, sessionId: "live-parent" },
+      { sessionId: "live-parent", updatedAt: 1 },
+    );
+    replaceSessionEntrySync(child, {
+      sessionId: child.sessionId,
+      spawnedBy: parent.sessionKey,
+      updatedAt: 1,
+    });
+    subagentRuns.set(
+      "live-child-run",
+      createSubagentRunRecord({
+        runId: "live-child-run",
+        childSessionKey: child.sessionKey,
+        childAgentId: "main",
+        requesterSessionKey: parent.sessionKey,
+        requesterAgentId: "main",
+        expectsCompletionMessage: true,
+      }),
+    );
+    const target = captureSessionTarget({
+      ...child,
+      incarnation: child.sessionId,
+      storeScope: resolveSessionStorePathCore(undefined, { agentId: child.agentId }),
+    });
+    const operation = createReplyOperation({ ...child, target, resetTriggered: false });
+    try {
+      await persistRunningSessionsForRestart({ cfg: {} });
+      expect(loadExactSessionEntry(child)?.entry.resumeAfterRestart).toBeDefined();
+      expect(
+        loadExactSessionEntry({ ...parent, sessionId: "live-parent" })?.entry.resumeAfterRestart,
+      ).toBeUndefined();
+    } finally {
+      operation.complete();
+      subagentRuns.delete("live-child-run");
     }
   }));

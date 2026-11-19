@@ -8,6 +8,14 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 const latestRun = vi.fn();
 const liveRun = vi.fn();
 const replaceSubagentRunAfterSteerMock = vi.fn();
+const liveExecution = vi.fn(() => false);
+
+vi.mock("../agents/subagents/registry/subagent-run-liveness.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/subagents/registry/subagent-run-liveness.js")>(
+    "../agents/subagents/registry/subagent-run-liveness.js",
+  )),
+  isSubagentRunLive: () => liveExecution(),
+}));
 
 vi.mock("../agents/subagents/registry/subagent-registry-read.js", async () => {
   const actual = await vi.importActual<
@@ -76,6 +84,7 @@ beforeEach(() => {
   latestRun.mockReset();
   liveRun.mockReset();
   replaceSubagentRunAfterSteerMock.mockReset();
+  liveExecution.mockReset().mockReturnValue(false);
 });
 
 it("skips ACP reads without an ended run and observes newly written ACP metadata", async () => {
@@ -151,3 +160,45 @@ it.each([false, true])("accepts a replacement only when it owns the child (%s)",
     await expect(pending).rejects.toThrow("subagent follow-up owner replacement was rejected");
   }
 });
+
+it.each([false, true])(
+  "continues a restart-interrupted row in place unless its execution is live (%s)",
+  async (live) => {
+    const run = endedRun({ runId: "run-interrupted" });
+    const interrupted = {
+      ...run,
+      runTimeoutSeconds: 600,
+      execution: { status: "running" as const, startedAt: 41 },
+    };
+    latestRun.mockResolvedValue(interrupted);
+    liveRun.mockReturnValue(interrupted);
+    liveExecution.mockReturnValue(live);
+    replaceSubagentRunAfterSteerMock.mockReturnValue(true);
+
+    await expect(reactivate()).resolves.toBe(!live);
+
+    expect(replaceSubagentRunAfterSteerMock.mock.calls).toEqual(
+      live
+        ? []
+        : [
+            [
+              expect.objectContaining({
+                previousRunId: "run-interrupted",
+                nextRunId: "run-next",
+                refreshCompletionAuthority: true,
+                preserveRequesterSettleWake: true,
+                runTimeoutSeconds: 600,
+              }),
+            ],
+          ],
+    );
+    // The resumed turn continues the recorded task; it neither starts a new task nor
+    // keeps the interrupted row as a completed predecessor.
+    if (!live) {
+      expect(replaceSubagentRunAfterSteerMock.mock.calls[0]?.[0]).not.toHaveProperty("task");
+      expect(replaceSubagentRunAfterSteerMock.mock.calls[0]?.[0]).not.toHaveProperty(
+        "preserveCompletedRun",
+      );
+    }
+  },
+);

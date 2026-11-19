@@ -18,7 +18,6 @@ import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
-import { sleep } from "../utils/sleep.js";
 import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
 import { createGatewayCloseTestDepsFactory } from "./server-close.test-support.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
@@ -65,61 +64,56 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
-it.each(
-  ["session persistence", "subagent settlement"].flatMap((step) =>
-    ["rejected", "slow", "timed out"].map((outcome) => ({ step, outcome })),
-  ),
-)("closes its listener and resources after $step $outcome", async ({ step, outcome }) => {
-  const { listener, releaseListener, claim } = await reserveTestPortListener({
-    offsets: [0],
-    createListener: () => createServer(),
-  });
-  const committed = createDeferredCore();
-  const settle = async (signal?: AbortSignal) => {
-    if (outcome === "rejected") {
-      throw new Error("store refused");
-    }
-    await committed.promise;
-    signal?.throwIfAborted();
-  };
-  const marker = step === "session persistence";
-  const params = createGatewayCloseTestDeps({
-    httpServer: listener,
-    channelIds: ["telegram"],
-    persistRunningSessionsForRestart: marker ? settle : () => sleep(500),
-    terminateRunningSubagentsForShutdown: marker ? undefined : settle,
-  });
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-  const markerOverrun = marker && outcome === "timed out";
-  const closing = runWithProcessCleanupBudget(
-    { deadline: performance.now() + (markerOverrun ? 85_000 : 3_000), warn() {} },
-    () => closeGateway(params).catch((error: unknown) => error),
-  );
-  try {
-    await vi.advanceTimersByTimeAsync(500);
-    await vi.advanceTimersByTimeAsync(
-      markerOverrun ? 9_500 : outcome === "timed out" ? 2_500 : 1_500,
+it.each(["rejected", "slow", "timed out"].map((outcome) => ({ outcome })))(
+  "closes its listener and resources after session persistence $outcome",
+  async ({ outcome }) => {
+    const { listener, releaseListener, claim } = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () => createServer(),
+    });
+    const committed = createDeferredCore();
+    const settle = async (signal?: AbortSignal) => {
+      if (outcome === "rejected") {
+        throw new Error("store refused");
+      }
+      await committed.promise;
+      signal?.throwIfAborted();
+    };
+    const params = createGatewayCloseTestDeps({
+      httpServer: listener,
+      channelIds: ["telegram"],
+      persistRunningSessionsForRestart: settle,
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+    const markerOverrun = outcome === "timed out";
+    const closing = runWithProcessCleanupBudget(
+      { deadline: performance.now() + (markerOverrun ? 85_000 : 3_000), warn() {} },
+      () => closeGateway(params).catch((error: unknown) => error),
     );
-    committed.resolve();
-    const expected =
-      outcome === "rejected"
-        ? "store refused"
-        : `Shutdown ${step} did not settle within ${marker ? 10_000 : 2_500}ms`;
-    expect(await closing).toMatchObject(
-      outcome === "slow" ? { warnings: [] } : new Error(expected),
-    );
-    expect(listener.listening).toBe(false);
-    expect(params.stopChannel).toHaveBeenCalledWith("telegram");
-    expect(sharedStateLifecycle.size).toBe(0);
-  } finally {
-    committed.resolve();
-    vi.useRealTimers();
-    if (listener.listening) {
-      await releaseListener();
+    try {
+      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(markerOverrun ? 9_500 : 1_500);
+      committed.resolve();
+      const expected =
+        outcome === "rejected"
+          ? "store refused"
+          : "Shutdown session persistence did not settle within 10000ms";
+      expect(await closing).toMatchObject(
+        outcome === "slow" ? { warnings: [] } : new Error(expected),
+      );
+      expect(listener.listening).toBe(false);
+      expect(params.stopChannel).toHaveBeenCalledWith("telegram");
+      expect(sharedStateLifecycle.size).toBe(0);
+    } finally {
+      committed.resolve();
+      vi.useRealTimers();
+      if (listener.listening) {
+        await releaseListener();
+      }
+      await claim.release();
     }
-    await claim.release();
-  }
-});
+  },
+);
 
 it("finalizes capture after media drains even when stopping media cleanup fails", async () => {
   const mediaCleanup = await import("./server-media-cleanup-lifecycle.js");

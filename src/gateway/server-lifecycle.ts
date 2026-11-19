@@ -547,14 +547,9 @@ export async function prepareGatewayLifecycle(params: {
             signal,
           });
         },
-        terminateRunningSubagentsForShutdown: async () => {
+        cancelReceivedWork: (reason) => {
           // Persistence has settled or timed out; release marker retention before run claims.
           void Promise.resolve(markClosePreludeStarted(optsValue)).catch(() => {});
-          const { terminateLiveSubagentsForShutdown } =
-            await import("../agents/subagents/registry/subagent-registry.js");
-          await terminateLiveSubagentsForShutdown(runtime.resolvePluginGatewayContext);
-        },
-        cancelReceivedWork: (reason) => {
           // Restart markers and session stop classification precede authority retirement.
           requestEntryLifetime.retire(reason);
           runtime.scheduler.beginClose();
