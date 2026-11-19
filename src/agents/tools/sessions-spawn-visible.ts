@@ -635,6 +635,7 @@ export async function maybeSpawnVisibleSession(
         {
           runId,
           requesterTurnRunId: params.options?.requesterTurnRunId,
+          gatewayContextResolver: resolveGatewayContext,
           childSessionKey,
           childAgentId: targetAgentId,
           sessionEntry: { sessionId, lifecycleRevision },
