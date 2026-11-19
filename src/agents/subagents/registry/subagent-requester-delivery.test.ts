@@ -195,3 +195,42 @@ it.for([
     });
   }
 });
+
+it("marks a permanently suspended completion delivered after its owned yield batch succeeds", async () => {
+  const entry = raw();
+  entry.delivery = {
+    ...entry.delivery!,
+    status: "suspended",
+    disposition: "permanent_failure",
+    suspendedReason: "permanent_failure",
+  };
+  entry.requesterSettleWake = {
+    status: "dispatching",
+    attemptCount: 1,
+    rearmGeneration: 1,
+    requesterYieldBatch: true,
+    batchRunIds: [entry.runId],
+  };
+  saveSubagentRegistryToSqlite(new Map([[entry.runId, entry]]));
+  const database = openOpenClawStateDatabase();
+  runOpenClawStateWriteTransaction(
+    () =>
+      mutateSubagentCompletionInDatabase(database, {
+        kind: "requesterBatch",
+        entries: [{ subagent: readSubagentRun(database, entry.runId)! }],
+        now: 300,
+        outcome: { delivered: true, path: "direct" },
+      }),
+    { database },
+  );
+
+  const stored = readSubagentRun(database, entry.runId)!;
+  expect(stored).toMatchObject({
+    delivery: {
+      status: "delivered",
+      disposition: "delivered",
+      deliveredAt: 300,
+    },
+  });
+  expect(stored.requesterSettleWake).toBeUndefined();
+});
