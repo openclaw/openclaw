@@ -957,8 +957,6 @@ process.exitCode = 23;
 it.each([
   "client-source",
   "client-source-separate-candidate",
-  "client-source-candidate-mismatch",
-  "client-source-candidate-missing",
   "client-source-wrong-head",
   "client-source-dirty",
   "client-source-late-head",
@@ -1026,16 +1024,8 @@ it.each([
   const temp = tempDirs.make("ios-release-e2e-adapter-");
   const developerDir = tempDirs.make("ios-release-e2e-developer-");
   const compatibility = scenario.startsWith("client-source");
-  const separateCandidate =
-    scenario.includes("candidate-") || scenario.endsWith("separate-candidate");
+  const separateCandidate = scenario.endsWith("separate-candidate");
   const candidateRoot = separateCandidate ? path.join(temp, "candidate") : process.cwd();
-  if (separateCandidate && !scenario.endsWith("candidate-missing")) {
-    mkdirSync(path.join(candidateRoot, "dist"), { recursive: true });
-    writeFileSync(
-      path.join(candidateRoot, "dist/build-info.json"),
-      JSON.stringify({ commit: "3".repeat(40) }),
-    );
-  }
   const clientRoot = compatibility ? tempDirs.make("ios-release-e2e-client-") : "";
   vi.spyOn(os, "tmpdir").mockReturnValue(temp);
   vi.stubGlobal(
@@ -1063,6 +1053,13 @@ it.each([
     nodeVersion: process.version,
     npmVersion: "11.6.2",
   };
+  // Candidate preparation belongs to the isolated owner, covered by ios-release-gateway.test.ts.
+  const isolatedGateway = {
+    cwd: process.cwd(),
+    entrypoint: [path.join(process.cwd(), "scripts/lib/native-candidate-entrypoint.mjs")],
+    identity: { kind: "candidate-source", targetSha: "3".repeat(40), sourceSha: "3".repeat(40) },
+    dispose: vi.fn(async () => {}),
+  };
   let installedGatewayPath = "";
   nativeMocks.install.mockImplementation(async (options) => {
     lifecycle.push("gateway-install");
@@ -1075,12 +1072,8 @@ it.each([
       );
     }
     if (separateCandidate) {
-      const actual = await vi.importActual<
-        typeof import("../../scripts/lib/ios-release-gateway.js")
-      >("../../scripts/lib/ios-release-gateway.js");
-      const prepared = await actual.prepareIOSReleaseGateway(options);
-      installedGatewayPath = prepared.cwd;
-      return prepared;
+      installedGatewayPath = isolatedGateway.cwd;
+      return isolatedGateway;
     }
     installedGatewayPath = path.join(options.installDir, "node_modules/openclaw");
     return { cwd: installedGatewayPath, entrypoint: ["openclaw.mjs"], identity: gatewayIdentity };
@@ -1263,7 +1256,7 @@ it.each([
   nativeMocks.gateway.mockImplementation(async (options) => {
     expect(options).toMatchObject({
       cwd: installedGatewayPath,
-      entrypoint: [separateCandidate ? path.join(candidateRoot, "openclaw.mjs") : "openclaw.mjs"],
+      entrypoint: separateCandidate ? isolatedGateway.entrypoint : ["openclaw.mjs"],
     });
     if (options.name === "ios-release-e2e-preflight") {
       lifecycle.push("gateway-preflight-create");
@@ -1336,8 +1329,6 @@ it.each([
         };
         options.signal.addEventListener("abort", onAbort, { once: true });
       });
-    } else if (options.bin === "git" && separateCandidate && options.cwd === candidateRoot) {
-      stdout.write((scenario.endsWith("candidate-mismatch") ? "4" : "3").repeat(40));
     } else if (options.bin === "git" && options.cwd === clientRoot) {
       if (args[1] === "--show-toplevel") {
         stdout.write(clientRoot);
@@ -1668,12 +1659,6 @@ it.each([
       }
     },
   });
-  if (scenario.endsWith("candidate-mismatch") || scenario.endsWith("candidate-missing")) {
-    await expect(admission).rejects.toMatchObject({ diagnostic: { operation: "gateway-install" } });
-    expect(nativeMocks.build).not.toHaveBeenCalled();
-    expect(nativeMocks.gateway).not.toHaveBeenCalled();
-    return;
-  }
   if (scenario === "client-source-wrong-head" || scenario === "client-source-dirty") {
     await expect(admission).rejects.toMatchObject({
       diagnostic:
@@ -2377,7 +2362,8 @@ it.each([
       expect(readdirSync(temp)).toHaveLength(1);
     } else {
       await native.cleanup();
-      expect(readdirSync(temp)).toEqual(separateCandidate ? ["candidate"] : []);
+      expect(readdirSync(temp)).toEqual([]);
+      expect(isolatedGateway.dispose).toHaveBeenCalledTimes(separateCandidate ? 1 : 0);
     }
   }
 });
