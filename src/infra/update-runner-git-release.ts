@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { formatErrorMessage } from "./errors.js";
 import { gitReleaseSlot, resolveGitReleasePrefix } from "./git-release-paths.js";
 import {
   collectGitReleases,
@@ -122,8 +121,12 @@ export async function updateGitRelease(params: {
     version: beforeVersion,
     ...(beforeBuildId ? { buildId: beforeBuildId } : {}),
   };
-  // The running release and the checkout stay untouched until the link moves.
-  const recovery = await verifyGitUpdateRecovery({ root: running, sha: runningSha });
+  // The running release and the checkout stay untouched until the link moves. A restart
+  // starts the placed release on its trial, which without a safe fallback is not safe.
+  const recovery: UpdateRunResult["recovery"] =
+    placement?.unsafeFallback && unserved
+      ? { serviceRestartSafe: false, reason: "runtime-verification-failed" }
+      : await verifyGitUpdateRecovery({ root: running, sha: runningSha });
   const result = (status: UpdateRunResult["status"], reason?: string): UpdateRunResult => ({
     status,
     mode: "git",
@@ -282,17 +285,13 @@ export async function updateGitRelease(params: {
     if (!unserved || !placement) {
       return true;
     }
-    const superseded = await supersedeUnservedGitRelease({ prefix, placement, prune });
+    const superseded = await supersedeUnservedGitRelease({ prefix, placement });
     await reportPlacement(
-      !superseded.superseded
-        ? "It started or ended its trial during this update, so the link and trial stay with the launcher."
-        : superseded.removed
-          ? "This update removed it."
-          : superseded.error
-            ? `Removing it failed; release collection retries later: ${formatErrorMessage(superseded.error)}`
-            : "A process started from it during this update, so release collection keeps it for now.",
+      superseded
+        ? "The link is back on the fallback; release collection removes the placed release once it has been deselected for 24 hours."
+        : "It started or ended its trial during this update, so the link and trial stay with the launcher.",
     );
-    return superseded.superseded;
+    return superseded;
   };
   if (deferredLeftover) {
     await reportPlacement(

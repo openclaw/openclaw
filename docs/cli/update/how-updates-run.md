@@ -1609,8 +1609,9 @@ serve (see below), the next plain `openclaw update` builds on it:
   are replayed. It then restarts the Gateway into the release, verifies it, and ends the
   trial.
 - If the target is newer, the link goes back to the serving release. The new release
-  goes on trial with the serving release as its fallback, and the superseded release is
-  removed.
+  goes on trial with the serving release as its fallback. The superseded release stays
+  on disk, because an `openclaw` started through the link may be running from it; release
+  collection removes it once it has been deselected for 24 hours.
 - If the serving release is the target, the update runs the candidate checks on it and the
   caller's mutation check, puts the link back on the serving release, and reports that the
   installation is current. If the placed release started or ended its trial meanwhile, the

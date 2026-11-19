@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveConfigPath } from "../config/paths.js";
@@ -8,8 +7,9 @@ import { ignoreMissingPath } from "./errno.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
 import { writeGitReleaseLauncher, type GitReleaseTrial } from "./git-release-launcher.js";
 import { GIT_RELEASE_TRIAL, gitReleaseSlot } from "./git-release-paths.js";
+import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { readPackageVersion } from "./package-json.js";
-import { packageReleaseLeaseDir, readPackageReleaseLeases } from "./package-release-lease.js";
+import { readPackageReleaseLeases } from "./package-release-lease.js";
 import { collectPackageReleases } from "./package-release-retention.js";
 import {
   PACKAGE_RELEASES_DIR,
@@ -314,67 +314,61 @@ export async function readGitReleasePlacement(
 }
 
 /**
- * Put the link on the fallback and remove the placed release, which never started. A
- * reread right before the switch must still find it never started and on its trial;
+ * Put the link back on the fallback, deselecting the placed release, which never started.
+ * A reread right before the switch must still find it never started and on its trial;
  * otherwise the launcher or a ready Gateway has taken over and nothing is touched. A
- * failed switch throws; a failed removal keeps the files for `collectGitReleases`.
+ * failed switch throws. The placed release is not removed here: an updater started
+ * through the link runs from it, so only `collectGitReleases` retires it, with the
+ * collector's checks and its 24 hour grace from this deselection.
  */
 export async function supersedeUnservedGitRelease(params: {
   prefix: string;
   placement: GitReleasePlacement;
-  prune: () => Promise<unknown>;
-}): Promise<{ superseded: boolean; removed: boolean; error?: unknown }> {
+}): Promise<boolean> {
   const placed = params.placement.unserved?.root;
   const before = readPackageReleaseSlotSync(gitReleaseSlot(params.prefix));
   const fresh = before ? (await readGitReleasePlacement(before)).unserved : undefined;
   if (!placed || fresh?.root !== placed) {
-    return { superseded: false, removed: false };
+    return false;
   }
-  // Also clears a deferred trial, so no start selects the release being removed.
+  // Also clears a deferred trial, so no start selects the deselected release.
   await publishGitRelease({
     prefix: params.prefix,
     releaseRoot: params.placement.fallback,
     trial: false,
   });
-  const after = readPackageReleaseSlotSync(gitReleaseSlot(params.prefix));
-  const id = gitReleaseId(placed);
-  // Recheck at removal: a process may have started it since the placement was read.
-  if (
-    !after ||
-    after.releaseRoot === placed ||
-    readPackageReleaseLeases(after.prefix, id).live > 0
-  ) {
-    return { superseded: true, removed: false };
-  }
-  const releasesDir = path.join(after.prefix, PACKAGE_RELEASES_DIR);
-  try {
-    // Out of the release namespace first, so a partial removal is never a release.
-    const doomed = path.join(releasesDir, `.collecting-${id}-${randomBytes(4).toString("hex")}`);
-    await fs.rename(path.join(releasesDir, id), doomed);
-    await fs.rm(doomed, { recursive: true, force: true });
-    await fs.rm(packageReleaseLeaseDir(releasesDir, id), { recursive: true, force: true });
-    await params.prune();
-    return { superseded: true, removed: true };
-  } catch (error) {
-    return { superseded: true, removed: false, error };
-  }
+  return true;
 }
 
 /**
  * Remove releases the link does not name that are past the 24 hour minimum age
- * and unleased (#198835's rule), then let Git forget their worktrees.
+ * and unleased (#198835's rule), never the one this updater runs from, then let Git
+ * forget their worktrees.
  */
 export async function collectGitReleases(params: {
   prefix: string;
   keep: readonly string[];
   prune: () => Promise<unknown>;
+  /** The package root this updater runs from; tests name a release instead. */
+  runningRoot?: string | null;
 }): Promise<{ removed: string[]; warnings: string[] }> {
   const slot = gitReleaseSlot(params.prefix);
-  // The shared collector works in the link's resolved prefix (a state dir can be a symlink).
+  // An updater started through the link runs from the release the link named then.
+  const running =
+    params.runningRoot === undefined
+      ? resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url })
+      : params.runningRoot;
+  // The shared collector compares real paths in the link's resolved prefix (a state dir
+  // can be a symlink).
+  const keep = await Promise.all(
+    [...params.keep, ...(running ? [running] : [])].map((root) =>
+      fs.realpath(root).catch(() => root),
+    ),
+  );
   const collected = await collectPackageReleases({
     slot,
     prefix: readPackageReleaseSlotSync(slot)?.prefix ?? params.prefix,
-    keep: params.keep,
+    keep,
   });
   if (collected.removed.length > 0) {
     await params.prune();
