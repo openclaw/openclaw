@@ -255,7 +255,6 @@ describe("sessions_send steering custody", () => {
               expect(receiver.pendingCount()).toBe(0);
             }
             const existingLeases = new Set(turn.authorityLeases);
-            const acknowledged = vi.fn();
             const sent = createSessionsSendTool({
               config: cfg,
               agentSessionKey: REQUESTER,
@@ -269,14 +268,15 @@ describe("sessions_send steering custody", () => {
               mode: "steer",
               timeoutSeconds: 0,
             });
-            void sent.then(acknowledged, acknowledged);
             await receiver.waitForAccepted();
-            await setImmediate();
-            expect(acknowledged).not.toHaveBeenCalled();
+            // The receipt returns at acceptance; the receiver keeps the input until it settles.
+            expect((await sent).details).toMatchObject({
+              status: "accepted",
+              targetDisposition: "steered",
+            });
             expect(receiver.pendingCount()).toBe(1);
             await turn.complete();
             await setImmediate();
-            expect(acknowledged).not.toHaveBeenCalled();
             const custodyLeases = turn.authorityLeases.filter(
               (lease) =>
                 !existingLeases.has(lease) &&
@@ -304,9 +304,7 @@ describe("sessions_send steering custody", () => {
               await receiver.commit();
               expect(receiver.pendingCount()).toBe(0);
             }
-            // Recipient custody can settle after the sender ends, but a closed
-            // personal-tool turn must never receive a fresh result.
-            await expect(sent).rejects.toThrow("This turn has ended");
+            // Recipient custody settles after the sender ends.
             expect(receiver.pendingCount()).toBe(0);
             await custodyReleased.promise;
             for (const lease of custodyLeases) {
