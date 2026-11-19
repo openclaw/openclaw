@@ -11,9 +11,10 @@ const followupTurnTestState = vi.hoisted(() => ({
   execute: vi.fn(),
 }));
 
-vi.mock("./agent-runner-execution.js", async () => {
+vi.mock("./agent-runner-execution.js", async (importOriginal) => {
   const { runAgentTurnWithOutcome } = await import("./agent-runner-execution-outcome.js");
   return {
+    ...(await importOriginal<typeof import("./agent-runner-execution.js")>()),
     executeAgentTurn: (params: AgentTurnParams) =>
       runAgentTurnWithOutcome(params, params.admittedTurn?.runId ?? "run-1", () =>
         followupTurnTestState.execute(params),
