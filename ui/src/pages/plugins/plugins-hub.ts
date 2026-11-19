@@ -23,8 +23,9 @@ export function pluginsHubPanel(tab: PluginsHubTab) {
     : { id: PLUGINS_HUB_PANEL_ID };
 }
 
-export const PLUGINS_HUB_DOCS_URLS: Partial<Record<PluginsHubTab, string>> = {
+export const PLUGINS_HUB_DOCS_URLS: Record<PluginsHubTab, string> = {
   plugins: "https://docs.openclaw.ai/plugins/manage-plugins",
   skills: "https://docs.openclaw.ai/tools/skills",
   "skill-workshop": "https://docs.openclaw.ai/tools/skill-workshop",
+  templates: "https://docs.openclaw.ai/concepts/agents-and-templates",
 };

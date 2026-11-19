@@ -1654,7 +1654,7 @@ var External = [
     /(^name$|^kind$|^source$|^ref$|^version$)/u,
     /(^name$|^kind$)/u,
     /(^name$|^kind$|^source$|^path$)/u,
-    /(^name$|^enabled$|^schedule$|^timezone$)/u,
+    /(^name$|^enabled$|^schedule$|^timezone$|^message$)/u,
     /(^verdict$|^auditUrl$)/u,
     /(^packageName$|^version$|^kind$|^name$)/u,
     /(^preview$)/u,
@@ -20186,13 +20186,15 @@ var External = [
     "enabled" in value &&
     "schedule" in value &&
     "timezone" in value &&
+    "message" in value &&
     Object.getOwnPropertyNames(value).every(
       (unique_2045, unique_2046) => External[1031].test(unique_2045) || check_2(value[unique_2045]),
     ) &&
     check_6(value.name) &&
     check_97(value.enabled) &&
     check_6(value.schedule) &&
-    check_6(value.timezone),
+    check_6(value.timezone) &&
+    check_6(value.message),
   check_3025 = (value) =>
     typeof value == "object" &&
     value !== null &&

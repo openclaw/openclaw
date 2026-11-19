@@ -183,7 +183,7 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   background: transparent;
   text-align: start;
   &:hover {
-    background: var(--bg-hover);
+    background: var(--surface-hover);
   }
   & > span:not([class]) {
     flex: 1;
@@ -318,7 +318,8 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
     }
   }
 }
-.template-creator__message {
+.template-automation-message {
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 .template-creator__detail-group {
