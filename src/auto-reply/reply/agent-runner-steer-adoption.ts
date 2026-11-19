@@ -18,7 +18,10 @@ import {
   type ReplyOperation,
 } from "../../sessions/session-controller.js";
 import { canInjectReplyMessageTarget } from "../../sessions/session-controller.message-injection.js";
-import { prepareReplyMessageJoin } from "../../sessions/session-controller.message-join.js";
+import {
+  hasReplySteeringRequesterMismatch,
+  prepareReplyMessageJoin,
+} from "../../sessions/session-controller.message-join.js";
 import {
   getSessionControllerEntryForOperation,
   isCurrentSessionControllerOperation,
@@ -54,7 +57,8 @@ type ActiveReplySteerFallbackReason =
   | "admission-changed"
   | "reply-owner-ended"
   | "model-fallback-changed"
-  | "execution-settings-changed";
+  | "execution-settings-changed"
+  | "independent-request";
 
 type ActiveReplySteerParams = {
   steeringIntent?: RunReplyAgentParams["steeringIntent"];
@@ -234,6 +238,19 @@ export async function runActiveReplySteer(
       return await fallback("injection_unavailable");
     }
     assertReadCurrent();
+    // A different participant's ordinary guild message owns a separate task.
+    // Native acceptance consumes steering, so it cannot later be replayed if
+    // the model answers only the newest request. Keep custody in the FIFO queue.
+    if (
+      isInboundUserMessage &&
+      (followupRun.originatingChannel ?? followupRun.run.messageProvider) === "discord" &&
+      params.sessionCtx.ChatType === "channel" &&
+      resolveCommandTurnContext(params.sessionCtx).kind === "normal" &&
+      followupRun.run.config.messages?.queue?.allowCollaborativeSteering !== false &&
+      hasReplySteeringRequesterMismatch(followupRun, activeReplyOperation)
+    ) {
+      return await fallback("independent-request", injectionTarget.runId);
+    }
     delivery = prepareSteeringDelivery({
       agentId: followupRun.run.agentId,
       sessionKey,

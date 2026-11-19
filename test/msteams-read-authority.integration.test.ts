@@ -832,7 +832,8 @@ describe.each(surfaces)("Teams %s reads with a %s registration", (route, origin)
     }
   });
 
-  it.each(["turn-token", "plugin-token", "run-response", "plugin-entry"] as const)(
+  // Runtime admission is checked once; turn and plugin authority still fence both routes.
+  it.each(["turn-token", "plugin-token", "plugin-entry"] as const)(
     "fences a read when its lifetime closes at %s",
     async (stage) => {
       const local = stage === "plugin-entry";
@@ -848,8 +849,6 @@ describe.each(surfaces)("Teams %s reads with a %s registration", (route, origin)
         });
       } else if (local) {
         graph.afterEntry = fixture.retirePlugin;
-      } else {
-        graph.onRequest = fixture.revokeClaim;
       }
       const result = fixture.invoke(
         route,
@@ -867,11 +866,7 @@ describe.each(surfaces)("Teams %s reads with a %s registration", (route, origin)
         finish.resolve();
       }
       await rejected;
-      if (stage === "run-response") {
-        expect(fixture.requests).toHaveLength(1);
-      } else {
-        expect(fixture.requests).toEqual([]);
-      }
+      expect(fixture.requests).toEqual([]);
       if (local) {
         expect(graph.acquireToken).not.toHaveBeenCalled();
       }

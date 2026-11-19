@@ -268,6 +268,13 @@ more than the build diagnostic. The label does not promise 32 usable CPUs; see
 
 ### Blacksmith runner capacity
 
+Current PRs use the 2-vCPU runner for central type checks that run only the
+extension-test and scripts graphs. This includes full-check plans when all five
+core stripes are present and own the root-test partitions. Frozen, release,
+compatibility and other graph layouts retain their existing allocation. The
+[original sizing proof](https://github.com/openclaw/openclaw/pull/197786) covers
+these two serial compiler graphs; this changes allocation, not test coverage.
+
 Main CI previously used `blacksmith-32vcpu-ubuntu-2404` for test types,
 core type stripes, and runtime-topology checks
 to compensate for smaller delivered machines.
@@ -516,7 +523,9 @@ canonical-main admission, protected environments, commands, and 120-minute deadl
 ### Hourly plugin routing
 
 Plugin Prerelease prepares hourly extension jobs for the repository-wide Boat
-backend. Its manifest translates the resolved physical two-CPU Blacksmith class
+backend. Only file-bounded extension shards qualify for Boat. Mixed extension
+batches retain Blacksmith after observed Boat RAM and swap exhaustion; their
+parallelism and file inventory are unchanged. The manifest translates the resolved physical two-CPU Blacksmith class
 to `boat` (four CPUs, 8 GiB) and the four-CPU class to `boat-large` (eight CPUs,
 16 GiB). Canonical scheduled first attempts use the same account start budget
 as ordinary CI: at most 20 jobs per run, with daily, hourly, and minute headroom.

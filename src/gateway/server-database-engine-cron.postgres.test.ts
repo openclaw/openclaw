@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
+import { stripVTControlCharacters } from "node:util";
 import { getEnvironmentData } from "node:worker_threads";
 import pg from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -86,7 +87,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       env: {
         [DSN_ENV]: connection,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_GATEWAY_RESTART_TRACE: "0",
+        OPENCLAW_GATEWAY_RESTART_TRACE: "1",
         OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         // Kill the Gateway owner itself, rather than a CLI respawn wrapper.
         OPENCLAW_NO_RESPAWN: "1",
@@ -133,11 +134,15 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
     delete instance.env.VITEST;
     delete instance.env.NODE_ENV;
     await instance.startGateway();
+    const firstBoot = createDeferred<string | undefined>();
+    const closed = createDeferred<{ code: number; reason: string }>();
     const gateway = await connectGatewayClient({
       url: instance.url,
       token: instance.gatewayToken,
       clientDisplayName: "vitest-postgres-cron",
       signal,
+      onHelloOk: (hello) => firstBoot.resolve(hello.server.bootId),
+      onClose: (code, reason) => closed.resolve({ code, reason }),
     });
     resources.defer(() => disconnectGatewayClient(gateway));
     const anchor = await readPostgresAnchor(current);
@@ -149,8 +154,241 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         "SELECT pid FROM pg_stat_activity WHERE application_name = $1 ORDER BY pid",
         [applicationName],
       );
-    return { instance, current, gateway, anchor, applicationName, ownedBackends };
+    return {
+      instance,
+      current,
+      gateway,
+      anchor,
+      applicationName,
+      ownedBackends,
+      bootId: await firstBoot.promise,
+      closed: closed.promise,
+    };
   }
+
+  it(
+    "joins interrupted cron finalization before restarting in process and reuses its PostgreSQL pool",
+    { timeout: 90_000 },
+    async ({ signal }) => {
+      await using resources = new AsyncDisposableStack();
+      const prompt = "Report the interrupted in-process restart result.";
+      const probePrompt = "Report the result after the in-process restart.";
+      const summary = "Post-restart cron completed.";
+      const accepted = createDeferred();
+      const aborted = createDeferred();
+      const requests: string[] = [];
+      const providerServer = createServer((request, response) => {
+        void (async () => {
+          if (request.method !== "POST" || request.url !== "/v1/responses") {
+            response.writeHead(404).end();
+            return;
+          }
+          requests.push(await readRequestText(request));
+          if (requests.length === 1) {
+            response.once("close", () => {
+              if (!response.writableEnded) {
+                aborted.resolve();
+              }
+            });
+            // Only restart cancellation may release this response. Replays finish visibly.
+            accepted.resolve();
+            return;
+          }
+          writeOpenAiResponsesText(response, {
+            text: summary,
+            messageId: "post-restart-cron-message",
+            responseId: "post-restart-cron-response",
+          });
+        })().catch((error: unknown) => {
+          response.writeHead(500).end(String(error));
+        });
+      });
+      const providerUrl = await listenLoopback(providerServer);
+      resources.defer(() => closeHttpServer(providerServer));
+      const { instance, gateway, anchor, applicationName, ownedBackends, bootId, closed } =
+        await startCronGateway(resources, signal, providerUrl);
+      const child = instance.child!;
+      const pid = child.pid!;
+      expect(bootId).toEqual(expect.any(String));
+      const readBridgeStarts = () => {
+        const logs = stripVTControlCharacters(instance.logs());
+        return [...logs.matchAll(/worker startup state: (\{[^\r\n]*\})\r?\n/gu)].map((match) => {
+          const snapshot: {
+            workerLifecycle: Array<{
+              script: string;
+              started: number;
+              retired: Array<{ reason: string; count: number }>;
+            }>;
+          } = JSON.parse(match[1]!);
+          return snapshot.workerLifecycle.filter(({ script }) => script === "bridge.worker.js");
+        });
+      };
+      const pool = { postgresBridgeCount: 4, postgresPoolSelfRootCount: 0 };
+      const bridge = [{ script: "bridge.worker.js", started: 4, retired: [] }];
+      await expect(gateway.request("diagnostics.lanes", {})).resolves.toMatchObject(pool);
+      await expect.poll(readBridgeStarts).toEqual([bridge]);
+      const job = await gateway.request<{ id: string }>("cron.add", {
+        name: "in-process-restart-one-shot",
+        agentId: "main",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: prompt },
+        delivery: { mode: "none" },
+      });
+      const run = await gateway.request<{ runId: string }>("cron.run", {
+        id: job.id,
+        mode: "force",
+      });
+      expect(run).toMatchObject({ enqueued: true, runId: expect.any(String) });
+      await withinTest(accepted.promise, signal);
+      const readReceipt = () =>
+        queryRows<{ receipt_id: string; status: string }>(
+          `SELECT receipt_id, status FROM ${quoteIdentifier(anchor.namespace)}.cron_run_receipts WHERE request_run_id = $1`,
+          [run.runId],
+        );
+      const receipts = await readReceipt();
+      expect(receipts).toEqual([{ receipt_id: expect.any(String), status: "running" }]);
+      const locker = new pg.Client({ connectionString: connection });
+      resources.defer(() => locker.end());
+      await locker.connect();
+      await locker.query("BEGIN");
+      // Register rollback last so failed assertions unlock before Gateway cleanup joins writes.
+      const lock = resources.use(new AsyncDisposableStack());
+      lock.defer(() => locker.query("ROLLBACK").then(() => undefined));
+      await locker.query(
+        `SELECT receipt_id FROM ${quoteIdentifier(anchor.namespace)}.cron_run_receipts WHERE receipt_id = $1 FOR UPDATE`,
+        [receipts[0]!.receipt_id],
+      );
+      const lockerPid = (await locker.query<{ pid: number }>("SELECT pg_backend_pid() AS pid"))
+        .rows[0]!.pid;
+      const blockedBackends = () =>
+        queryRows<{ pid: number }>(
+          "SELECT pid FROM pg_stat_activity WHERE application_name = $1 AND query ILIKE '%UPDATE%cron_run_receipts%' AND $2 = ANY(pg_blocking_pids(pid)) ORDER BY pid",
+          [applicationName, lockerPid],
+        );
+      // The provider is still running: restart-intent consumption must precede finalization.
+      const restart = await gateway.request<{ preflight: { counts: { cronRuns: number } } }>(
+        "gateway.restart.request",
+        { skipDeferral: true, reason: "postgres-cron-in-process-test" },
+      );
+      expect(restart).toMatchObject({ ok: true, status: "scheduled" });
+      expect(restart.preflight.counts.cronRuns).toBeGreaterThan(0);
+      await withinTest(aborted.promise, signal);
+      await expect
+        .poll(blockedBackends, { timeout: 15_000 })
+        .toEqual([{ pid: expect.any(Number) }]);
+      // Ingress retires after cron's grace window, before the retained finalizer joins.
+      await expect(withinTest(closed, signal)).resolves.toEqual({
+        code: 1012,
+        reason: "service restart",
+      });
+      expect(await readReceipt()).toEqual(receipts);
+      expect(await blockedBackends()).toHaveLength(1);
+      expect(child.exitCode).toBeNull();
+      expect(child.signalCode).toBeNull();
+      expect(readBridgeStarts()).toEqual([bridge]);
+      await lock.disposeAsync();
+      await disconnectGatewayClient(gateway);
+      await expect
+        .poll(
+          async () => {
+            try {
+              const response = await fetch(`http://127.0.0.1:${instance.port}/startupz`, {
+                headers: {
+                  "x-openclaw-startup-boot-id": "1",
+                },
+                signal,
+              });
+              const body: { gatewayBootId?: string } = await response.json();
+              return {
+                status: response.status,
+                changed: Boolean(body.gatewayBootId && body.gatewayBootId !== bootId),
+              };
+            } catch {
+              // The old listener closes before the next in-process boot opens it.
+              return undefined;
+            }
+          },
+          { timeout: 30_000 },
+        )
+        .toEqual({ status: 200, changed: true });
+      const nextBoot = createDeferred<string | undefined>();
+      const restarted = await connectGatewayClient({
+        url: instance.url,
+        token: instance.gatewayToken,
+        clientDisplayName: "vitest-postgres-cron-in-process",
+        signal,
+        onHelloOk: (hello) => nextBoot.resolve(hello.server.bootId),
+      });
+      resources.defer(() => disconnectGatewayClient(restarted));
+      const nextBootId = await nextBoot.promise;
+      expect(nextBootId).toEqual(expect.any(String));
+      expect(nextBootId).not.toBe(bootId);
+      expect(instance.child).toBe(child);
+      expect(child.pid).toBe(pid);
+      expect(child.exitCode).toBeNull();
+      expect(child.signalCode).toBeNull();
+      expect(
+        (
+          await fetch(`http://127.0.0.1:${instance.port}/readyz`, {
+            headers: { authorization: `Bearer ${instance.gatewayToken}` },
+            signal,
+          })
+        ).status,
+      ).toBe(200);
+      // Live count alone would also pass if all four services had been replaced.
+      await expect.poll(readBridgeStarts).toEqual([bridge, bridge]);
+      await expect(restarted.request("diagnostics.lanes", {})).resolves.toMatchObject(pool);
+      expect(await readReceipt()).toEqual([
+        { receipt_id: receipts[0]!.receipt_id, status: "interrupted" },
+      ]);
+      await expect(
+        restarted.request("cron.runs", { id: job.id, limit: 10 }),
+      ).resolves.toMatchObject({
+        entries: [{ runId: run.runId, status: "error", completionStatus: "failed" }],
+      });
+      const retiredJob = await restarted.request<CronJob>("cron.get", { id: job.id });
+      expect(retiredJob.state.runningAtMs).toBeUndefined();
+      const probe = await restarted.request<{ id: string }>("cron.add", {
+        name: "after-in-process-restart",
+        agentId: "main",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: probePrompt },
+        delivery: { mode: "none" },
+      });
+      await expect(
+        restarted.request(
+          "cron.run",
+          { id: probe.id, mode: "force", waitTimeoutMs: 30_000 },
+          { timeoutMs: 35_000 },
+        ),
+      ).resolves.toMatchObject({
+        enqueued: true,
+        run: { status: "ok", completionStatus: "succeeded", summary },
+      });
+      await disconnectGatewayClient(restarted);
+      const exited = once(child, "exit");
+      process.kill(pid, "SIGINT");
+      expect(await withinTest(exited, signal)).toEqual([0, null]);
+      await instance.stopGateway();
+      await expect.poll(ownedBackends).toEqual([]);
+      expect(requests.filter((body) => body.includes(prompt))).toHaveLength(1);
+      expect(requests.filter((body) => body.includes(probePrompt))).toHaveLength(1);
+      const runs = await queryRows<{ status: string; detail_json: string }>(
+        `SELECT status, detail_json FROM ${quoteIdentifier(anchor.namespace)}.task_runs WHERE runtime = 'cron' AND source_id = $1`,
+        [job.id],
+      );
+      expect(runs).toEqual([{ status: "failed", detail_json: expect.any(String) }]);
+      expect(JSON.parse(runs[0]!.detail_json)).toMatchObject({ runId: run.runId });
+    },
+  );
 
   it(
     "drains accepted cron finalization before graceful stop and preserves it on restart",
@@ -239,24 +477,16 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       // SIGINT enters shutdown without a restart-intent read queued behind the held write.
       // Signal the command directly; the fixture adapter's kill cancels its whole tree.
       process.kill(firstChild.pid!, "SIGINT");
+      // Readiness shares the retiring HTTP transport, so its draining 503 can be missed.
+      // Deliberately cross transport retirement while the accepted finalizer is held:
+      // its database owner and original process must survive until the lock is released.
       await expect
-        .poll(
-          async () => {
-            const response = await fetch(`http://127.0.0.1:${instance.port}/readyz`, {
-              headers: { authorization: `Bearer ${instance.gatewayToken}` },
-              signal,
-            });
-            return { status: response.status, body: await response.json() };
-          },
-          { timeout: 15_000 },
-        )
-        .toMatchObject({
-          status: 503,
-          body: { ready: false, failing: expect.arrayContaining(["gateway-draining"]) },
-        });
+        .poll(() => instance.logs(), { timeout: 15_000 })
+        .toContain("restart trace: restart.close.http-server ");
       expect(await blockedBackends()).toEqual(blocked);
       expect(firstChild.exitCode).toBeNull();
       expect(firstChild.signalCode).toBeNull();
+      expect(() => process.kill(firstChild.pid!, 0)).not.toThrow();
       await lock.disposeAsync();
       expect(await withinTest(exited, signal)).toEqual([0, null]);
       await expect.poll(ownedBackends).toEqual([]);
