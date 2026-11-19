@@ -86,6 +86,12 @@ on a direct `local_operator` Control UI connection. Over the tunnel the Gateway 
 many people and devices lose access, that the address stops working at once and that the claw's
 name can never be used again, by any account.
 
+Unlinking needs Discovery to hold the current binding, because Discovery accepts a ClawUnlink
+only for the binding it stores. While a move to new keys or an owner reset is not yet published
+(the binding is newer than the one Discovery confirmed), the Gateway refuses with
+`binding_unpublished` and keeps everything; the owner publishes first (`openclaw id status`,
+`openclaw id publish`). A claw that was never registered at Discovery unlinks locally only.
+
 Unlinking:
 
 - signs `ClawUnlink { claw_id, binding_seq }` with the K_gw of the current binding;
@@ -108,8 +114,12 @@ opens no socket, does not retry and shows "This claw was unlinked by its owner."
 does not verify is not final; the client keeps its pin and treats the claw as unavailable.
 
 Part 2 (OCF-597) unlinks from OpenClaw ID home when the machine is lost. It reuses the same
-statement and endpoint with another signer (an owner device or the recovery kit's R): the body
-names no signer kind, so only the verifiers' accepted signers change.
+statement body and endpoint with another signer (the recovery kit's R, or an owner device). The
+body names no signer kind, so neither needs a new statement type. Accepting R needs only the
+pin's `root_fp`. Accepting an owner device is more than a new signer: part 2 must also define
+the evidence that the device was a current owner (for example the K_gw-signed snapshot
+Discovery stored), which Discovery keeps in its tombstone and serves with `unlinked`, and how a
+pinned client judges its freshness and a device's removal.
 
 Owner device certificates have **no expiry unless the person approving the device enters
 one** (`expires_at: null`). A device stops being an owner when its certificate expires or

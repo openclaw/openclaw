@@ -348,7 +348,8 @@ error code (and anchor when not the default), and pin checks (fresh pin, rollbac
 substitution, host mismatch, a new root, an owner reset vouched for by the pinned K_gw, one
 whose RootReset K_gw did not sign, and a genuine reset seen by a pin without `k_gw`), and
 unlink pin checks (`unlink_pins`: the pinned K_gw, a later binding, a forged signer, a pin
-without `k_gw`, another claw, an older binding).
+without `k_gw`, another claw, an older binding, a bad signature, a signature under another
+type's domain).
 
 Regenerate after an intentional change:
 

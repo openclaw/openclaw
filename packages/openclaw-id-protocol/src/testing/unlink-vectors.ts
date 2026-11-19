@@ -37,6 +37,12 @@ export async function buildUnlinkVectors(input: {
   const otherClaw = await sign(input.gateway, { claw_id: "f".repeat(32) });
   const older = await sign(input.gateway, { binding_seq: 1 });
   const ahead = await sign(input.gateway, { binding_seq: 3 });
+  // Named signer is K_gw, but the signature is over another body or another type's domain.
+  const corrupted = { ...unlink, sig: older.sig };
+  const crossType = {
+    ...unlink,
+    sig: (await signStatement("RootReset", body as never, input.gateway)).sig,
+  };
   const refused = (
     name: string,
     statement: SignedStatement<"ClawUnlink">,
@@ -55,6 +61,8 @@ export async function buildUnlinkVectors(input: {
       refused("unlink for another claw", otherClaw, "wrong_claw"),
       refused("unlink replayed from an older binding", older, "rollback"),
       refused("unlink for a binding that was never published", ahead, "not_yet_valid"),
+      refused("unlink from K_gw with a signature over another body", corrupted, "bad_signature"),
+      refused("unlink signed under another statement type", crossType, "bad_signature"),
     ],
     pins: [
       pin("unlink signed by the pinned K_gw", input.keyedPin, unlink, { ok: true }),
@@ -66,6 +74,14 @@ export async function buildUnlinkVectors(input: {
       pin("unlink seen by a pin that never stored K_gw", input.seenPin, unlink, {
         ok: false,
         error: "wrong_signer",
+      }),
+      pin("unlink from the pinned K_gw with a bad signature", input.keyedPin, corrupted, {
+        ok: false,
+        error: "bad_signature",
+      }),
+      pin("unlink signed under another statement type", input.keyedPin, crossType, {
+        ok: false,
+        error: "bad_signature",
       }),
       pin("unlink for another claw", input.keyedPin, otherClaw, {
         ok: false,
