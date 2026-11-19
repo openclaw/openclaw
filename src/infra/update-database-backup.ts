@@ -251,7 +251,6 @@ export async function createUpdateDatabaseBackupInProcess(
   const { warnings } = await checkUpdateDatabaseBackupSpace(
     directory,
     await measureUpdateStateFiles(inventory.present),
-    input,
   );
   const { identities, checkpointed } = await prepareRestorableDatabaseFiles(
     inventory.present,
