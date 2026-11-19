@@ -1,2 +1,2 @@
-86
-# Worktree activity and removed-binding regressions, reusing existing lifecycle fixtures.
+235
+# Worktree activity, removed-binding, and Discord requester FIFO regressions.
