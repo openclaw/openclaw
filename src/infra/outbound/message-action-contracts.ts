@@ -50,6 +50,7 @@ export type MessageActionInput = Pick<
   | "cfg"
   | "runId"
   | "executionIdentityToken"
+  | "gatewayClientScopes"
   | "mediaAccess"
   | "deps"
   | "preparedMessageId"
@@ -307,6 +308,7 @@ export function createChannelActionContext(params: {
     inboundEventKind: params.ctx.input.inboundEventKind,
     agentId: params.ctx.agentId,
     gateway: params.ctx.gateway,
+    gatewayClientScopes: params.ctx.input.gatewayClientScopes,
     toolContext: params.ctx.input.toolContext,
     dryRun: params.ctx.dryRun,
     deliveryRetryOwner: params.ctx.input.actionOrigin === "message-tool" ? "caller" : undefined,

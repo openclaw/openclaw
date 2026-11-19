@@ -22,6 +22,7 @@ const location = { latitude: 48.858844, longitude: 2.294351, accuracy: 12 };
 const mediaUrls = ["https://example.test/first.pdf", "https://example.test/second.pdf"];
 const cases = [
   { name: "text", params: { message: "A visible result" }, text: "A visible result" },
+  { name: "core text", params: { message: "Core result" }, text: "Core result", core: true },
   {
     name: "all media references",
     params: { message: "Documents", mediaUrls },
@@ -38,10 +39,12 @@ const cases = [
 
 afterEach(() => resetPluginRuntimeStateForTest());
 
-describe("Gateway direct plugin sends own destination transcript persistence", () => {
+describe("Gateway sends preserve caller scopes and own destination persistence", () => {
   it.each(cases)("persists $name exactly once after replay", async (scenario) => {
     await withOpenClawTestState({ prefix: "gateway-destination-transcript-" }, async (state) => {
       const accepted: Record<string, unknown>[] = [];
+      const receivedScopes: (readonly string[] | undefined)[] = [];
+      const scopes = ["operator.write"];
       // Fake only platform acceptance; routing and SQLite persistence stay real.
       const storePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
       const cfg: OpenClawConfig = {
@@ -58,24 +61,30 @@ describe("Gateway direct plugin sends own destination transcript persistence", (
         }),
         outbound: {
           deliveryMode: "direct",
-          sendText: async () => {
-            throw new Error("Synthetic plugin action must own delivery");
+          sendText: async ({ text, gatewayClientScopes }) => {
+            expect(scenario.core).toBe(true);
+            accepted.push({ message: text });
+            receivedScopes.push(gatewayClientScopes);
+            return { channel: "transcript-test", messageId: "core-message" };
           },
         },
-        actions: {
-          describeMessageTool: () => ({ actions: ["send"] }),
-          supportsAction: ({ action }) => action === "send",
-          handleAction: async ({ params }) => {
-            accepted.push(params);
-            return jsonResult({
-              ok: true,
-              result: {
-                messageId: "platform-" + accepted.length,
-                receipt: { threadId: scenario.confirmedThread },
+        actions: scenario.core
+          ? undefined
+          : {
+              describeMessageTool: () => ({ actions: ["send"] }),
+              supportsAction: ({ action }) => action === "send",
+              handleAction: async ({ params, gatewayClientScopes }) => {
+                receivedScopes.push(gatewayClientScopes);
+                accepted.push(params);
+                return jsonResult({
+                  ok: true,
+                  result: {
+                    messageId: "platform-" + accepted.length,
+                    receipt: { threadId: scenario.confirmedThread },
+                  },
+                });
               },
-            });
-          },
-        },
+            },
         messaging: {
           targetResolver: { looksLikeId: () => true },
           resolveOutboundSessionRoute: ({ threadId }) => ({
@@ -103,13 +112,15 @@ describe("Gateway direct plugin sends own destination transcript persistence", (
             params: { to: "-1001234567890", ...params },
             idempotencyKey,
           },
-          directCliClientForTests(),
+          {
+            connect: { ...directCliClientForTests().connect, scopes },
+          },
           context,
         );
         expect(respond).toHaveBeenCalledOnce();
         expect(respond.mock.calls[0]?.slice(0, 3)).toEqual([
           true,
-          expect.objectContaining({ ok: true }),
+          expect.objectContaining(scenario.core ? { deliveryStatus: "sent" } : { ok: true }),
           undefined,
         ]);
       };
@@ -126,6 +137,8 @@ describe("Gateway direct plugin sends own destination transcript persistence", (
       await send(scenario.params, "first-delivery");
       await send(scenario.params, "first-delivery");
       expect(accepted).toHaveLength(1);
+      // Undefined means trusted internal writeback to transports such as Telegram.
+      expect(receivedScopes).toEqual([scopes]);
       const first = await history(destination);
       expect.soft(first).toHaveLength(1);
       expect.soft(first[0]).toMatchObject({

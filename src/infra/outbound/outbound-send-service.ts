@@ -306,6 +306,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     queuePolicy,
     deps: params.ctx.input.deps,
     gateway: params.ctx.gateway,
+    gatewayClientScopes: params.ctx.input.gatewayClientScopes,
     idempotencyKey: params.ctx.idempotencyKey,
     runId: params.ctx.input.runId,
     executionIdentityToken: params.ctx.input.executionIdentityToken,
