@@ -36,7 +36,9 @@ assert.equal(accountHome, "/home/appuser", "Expected the disposable E2E account"
 assert(candidateArg && artifactsArg, "Expected candidate tarball and artifact directory");
 const requestedDriver = parseReleaseVersion(driverTag);
 assert(
-  driverTag === "latest" || (requestedDriver && classifyReleaseTrain(requestedDriver) === "stable"),
+  driverTag === "latest" ||
+    (requestedDriver &&
+      ["stable", "extended-stable"].includes(classifyReleaseTrain(requestedDriver))),
   "Driver must be a published stable version",
 );
 const candidate = fs.realpathSync(candidateArg);
@@ -222,8 +224,8 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     }
     const driverRelease = parseReleaseVersion(driverVersion);
     assert(
-      driverRelease && classifyReleaseTrain(driverRelease) === "stable",
-      "npm latest must resolve to stable",
+      driverRelease && ["stable", "extended-stable"].includes(classifyReleaseTrain(driverRelease)),
+      "Driver must resolve to a final release",
     );
     const driverSeed = "/tmp/published-driver-cache/driver.tar";
     if (fs.existsSync(driverSeed)) {
