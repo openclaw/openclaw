@@ -21,6 +21,12 @@ import {
 } from "./lib/qualification-admission-baselines.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
+  parseReleaseValidationWaivers,
+  RELEASE_VALIDATION_WAIVERS_PATH,
+  releaseQualificationExemptions,
+  validateQualificationExemptions,
+} from "./lib/release-validation-waivers.mjs";
+import {
   QUALIFICATION_COVERAGE_PATH,
   resolveQualificationCoverage,
   validateQualificationCoverage,
@@ -427,17 +433,9 @@ export function produceQualificationAdmission({
     initial.run.display_title === "Qualification Admission " + request.requestId,
     "Admission request differs from its workflow dispatch title",
   );
-  // An independent Q must be reviewed repository tooling, not merely a caller SHA.
-  // The authenticated P operator request selects the frozen revision explicitly.
-  if (request.qualificationSha !== request.candidateSha) {
-    verifyReleaseToolingIdentity({
-      repository: request.repository,
-      workflowRef: "main",
-      workflowFullRef: "refs/heads/main",
-      workflowSha: request.qualificationSha,
-      runGh,
-    });
-  }
+  // P authenticates the operator-selected immutable Q, including off-main tooling.
+  // Read Q only from the canonical repository; the dispatch owner separately binds
+  // its exact release-ci transport before execution. This grants no publication authority.
   const workflow = readSource(
     request.repository,
     request.qualificationSha,
@@ -459,6 +457,14 @@ export function produceQualificationAdmission({
     request,
     readSource(request.repository, request.candidateSha, "package.json", runGh),
     readSource(request.repository, request.candidateSha, QUALIFICATION_BASELINE_POLICY_PATH, runGh),
+  );
+  const waiverPolicy = parseReleaseValidationWaivers(
+    readSource(
+      request.repository,
+      request.qualificationSha,
+      RELEASE_VALIDATION_WAIVERS_PATH,
+      runGh,
+    ).toString("utf8"),
   );
   const final = verifyProducer(producer, runGh, false);
   requireValue(
@@ -728,15 +734,17 @@ export function verifyQualificationAdmission({
       (inputs === undefined || qualificationInputsMatch(request.inputs, inputs)),
     "Qualification evidence differs from the authenticated operator request",
   );
-  if (candidateSha !== qualificationSha) {
-    verifyReleaseToolingIdentity({
-      repository,
-      workflowRef: "main",
-      workflowFullRef: "refs/heads/main",
-      workflowSha: qualificationSha,
-      runGh,
-    });
-  }
+  const waiverPolicy = parseReleaseValidationWaivers(
+    readSource(repository, qualificationSha, RELEASE_VALIDATION_WAIVERS_PATH, runGh).toString(
+      "utf8",
+    ),
+  );
+  validateQualificationExemptions(
+    receipt.coverage.exemptions ?? [],
+    receipt.baselinePolicy.candidateVersion,
+    receipt.coverage.profile,
+    waiverPolicy,
+  );
   const finalMetadata = api(repository, "actions/artifacts/" + artifactId, runGh);
   const final = verifyProducer(producer, runGh, true);
   validateArtifact(descriptor, finalMetadata, final.run, jobs);

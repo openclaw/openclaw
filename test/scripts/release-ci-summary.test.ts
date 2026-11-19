@@ -2517,7 +2517,7 @@ describe("release CI summary child correlation", () => {
           ? /advisory jobs differ/u
           : scenario === "missing-gate" || scenario === "skipped-gate"
             ? /openclaw\/ci-gate/u
-            : /failed selected job evidence/u,
+            : /manifest child run does not pass release policy/u,
       );
       expect(JSON.stringify(f.manifest)).toBe(before);
     },

@@ -45,6 +45,8 @@ const TOOLING_MODULE_PATHS = [
   "scripts/lib/record-shared.mjs",
   "scripts/lib/release-plan-source.mts",
   "scripts/lib/release-upgrade-baseline.mjs",
+  "scripts/lib/release-validation-waivers.mjs",
+  "scripts/lib/release-validation-waivers.json",
   "scripts/lib/release-version.mjs",
   "scripts/release-plan-contract.mjs",
   "scripts/release-plan-producer-core.mts",
@@ -369,14 +371,8 @@ function captureQualificationIdentity(
   api("actions/artifacts/" + artifactId);
   api("actions/runs/" + runId + "/attempts/" + runAttempt + "/jobs?per_page=100");
   api("actions/artifacts/" + artifactId + "/zip", true);
-  if (params.candidateSha !== params.toolingSha) {
-    // Independent Q must be a main ancestor; retain the observation for P.
-    verifyRemoteTooling(
-      { ...params, toolingFullRef: "refs/heads/main" },
-      (args) => String(capture(args)),
-      false,
-    );
-  }
+  api("contents/scripts/lib/release-validation-waivers.json?ref=" + params.toolingSha);
+  const finalAuthorityStart = responses.length;
   api("actions/artifacts/" + artifactId);
   producer();
   return responses;

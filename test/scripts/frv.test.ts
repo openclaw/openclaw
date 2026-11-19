@@ -37,6 +37,10 @@ import {
 import { sourceFact } from "./full-release-validation-state.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const emptyWaiverSource = JSON.stringify({
+  schema: "openclaw.release-validation-waivers/v1",
+  waivers: [],
+});
 
 function preflightMethods(
   children: ReturnType<typeof child>[],
@@ -63,7 +67,10 @@ function preflightMethods(
   return {
     getReleaseEvidenceClient: () => ({
       ...createReleaseEvidenceClient(REPOSITORY),
-      getWorkflowSource: () => "name: Full Release Validation\n",
+      getWorkflowSource: (_sha: string, sourcePath?: string) =>
+        sourcePath === "scripts/lib/release-validation-waivers.json"
+          ? emptyWaiverSource
+          : "name: Full Release Validation\n",
     }),
     getJobLog: async (jobId: number) => {
       if (jobId === 1) {
@@ -467,34 +474,36 @@ describe("FRV continuation preflight", () => {
       ...methods,
       getReleaseEvidenceClient: () => ({
         ...methods.getReleaseEvidenceClient(),
-        getWorkflowSource: () =>
-          [
-            "name: Full Release Validation",
-            "env:",
-            '  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "2"',
-            "jobs:",
-            "  prepare_npm_package:",
-            '    name: "Prepare release npm artifacts"',
-            "    env:",
-            "      CHILD_WORKFLOW_KIND: artifact-npm",
-            '      PUBLICATION_ARTIFACTS_REUSED: "${{ needs.evidence_reuse.outputs.publication_artifacts_reused }}"',
-            "    steps:",
-            "      - id: reused",
-            "        if: env.PUBLICATION_ARTIFACTS_REUSED == 'true'",
-            "  prepare_docker_release:",
-            "    name: Prepare release Docker artifacts",
-            "    env:",
-            "      CHILD_WORKFLOW_KIND: artifact-docker",
-            '      PUBLICATION_ARTIFACTS_REUSED: "${{ needs.evidence_reuse.outputs.publication_artifacts_reused }}"',
-            "    steps:",
-            "      - id: reused",
-            "        if: env.PUBLICATION_ARTIFACTS_REUSED == 'true'",
-            "  candidate_acquisition:",
-            "    name: Acquire full release candidate",
-            "    env:",
-            "      CHILD_WORKFLOW_KIND: artifact-candidate",
-            "",
-          ].join("\n"),
+        getWorkflowSource: (_sha: string, sourcePath?: string) =>
+          sourcePath === "scripts/lib/release-validation-waivers.json"
+            ? emptyWaiverSource
+            : [
+                "name: Full Release Validation",
+                "env:",
+                '  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "2"',
+                "jobs:",
+                "  prepare_npm_package:",
+                '    name: "Prepare release npm artifacts"',
+                "    env:",
+                "      CHILD_WORKFLOW_KIND: artifact-npm",
+                '      PUBLICATION_ARTIFACTS_REUSED: "${{ needs.evidence_reuse.outputs.publication_artifacts_reused }}"',
+                "    steps:",
+                "      - id: reused",
+                "        if: env.PUBLICATION_ARTIFACTS_REUSED == 'true'",
+                "  prepare_docker_release:",
+                "    name: Prepare release Docker artifacts",
+                "    env:",
+                "      CHILD_WORKFLOW_KIND: artifact-docker",
+                '      PUBLICATION_ARTIFACTS_REUSED: "${{ needs.evidence_reuse.outputs.publication_artifacts_reused }}"',
+                "    steps:",
+                "      - id: reused",
+                "        if: env.PUBLICATION_ARTIFACTS_REUSED == 'true'",
+                "  candidate_acquisition:",
+                "    name: Acquire full release candidate",
+                "    env:",
+                "      CHILD_WORKFLOW_KIND: artifact-candidate",
+                "",
+              ].join("\n"),
       }),
       getParentJobs: async () => [
         ...(await methods.getParentJobs()),
@@ -532,17 +541,19 @@ describe("FRV continuation preflight", () => {
     const evidence = fixture.client.getReleaseEvidenceClient();
     fixture.client.getReleaseEvidenceClient = () => ({
       ...evidence,
-      getWorkflowSource: () =>
-        [
-          "name: Full Release Validation",
-          "env:",
-          '  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "2"',
-          "jobs:",
-          "  prepare_plugin_npm:",
-          "    name: Prepare exact plugin npm artifacts",
-          "    env:",
-          "      CHILD_WORKFLOW_KIND: plugin-npm-preflight",
-        ].join("\n"),
+      getWorkflowSource: (_sha: string, sourcePath?: string) =>
+        sourcePath === "scripts/lib/release-validation-waivers.json"
+          ? emptyWaiverSource
+          : [
+              "name: Full Release Validation",
+              "env:",
+              '  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "2"',
+              "jobs:",
+              "  prepare_plugin_npm:",
+              "    name: Prepare exact plugin npm artifacts",
+              "    env:",
+              "      CHILD_WORKFLOW_KIND: plugin-npm-preflight",
+            ].join("\n"),
     });
     const parentJobs = fixture.client.getParentJobs;
     fixture.client.getParentJobs = async () => [
@@ -655,16 +666,18 @@ describe("FRV continuation preflight", () => {
     const evidenceClient = fixture.client.getReleaseEvidenceClient();
     fixture.client.getReleaseEvidenceClient = () => ({
       ...evidenceClient,
-      getWorkflowSource: () =>
-        [
-          "name: Full Release Validation",
-          "jobs:",
-          "  prepare_npm_package:",
-          '    name: "Prepare release npm artifacts"',
-          "    steps:",
-          "      - run: node scripts/full-release-artifacts.mjs resolve",
-          "",
-        ].join("\n"),
+      getWorkflowSource: (_sha: string, sourcePath?: string) =>
+        sourcePath === "scripts/lib/release-validation-waivers.json"
+          ? emptyWaiverSource
+          : [
+              "name: Full Release Validation",
+              "jobs:",
+              "  prepare_npm_package:",
+              '    name: "Prepare release npm artifacts"',
+              "    steps:",
+              "      - run: node scripts/full-release-artifacts.mjs resolve",
+              "",
+            ].join("\n"),
     });
     fixture.logs.dispatch = [
       `TARGET_SHA: ${TARGET_SHA}`,
@@ -1261,8 +1274,10 @@ describe("FRV continuation preflight", () => {
       ...preflightMethods([selected], (entry) => runFor(entry, 1, "failure")),
       getReleaseEvidenceClient: () => ({
         ...createReleaseEvidenceClient(REPOSITORY),
-        getWorkflowSource: () =>
-          'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n',
+        getWorkflowSource: (_sha: string, sourcePath?: string) =>
+          sourcePath === "scripts/lib/release-validation-waivers.json"
+            ? emptyWaiverSource
+            : 'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n',
       }),
       getAttemptJobs: vi.fn(async () => [job("test", "failure")]),
       getRun: vi.fn(async () => runFor(selected, 1, "failure")),
@@ -1449,6 +1464,61 @@ describe("FRV continuation preflight", () => {
 });
 
 describe("FRV same-parent recovery", () => {
+  it.each([
+    ["matching current Q grant", true, false, 1, true],
+    ["removed current Q grant", false, false, 1, false],
+    ["unrelated failure", true, true, 1, false],
+    ["different original attempt", true, false, 2, false],
+  ])(
+    "classifies raw failures with %s only",
+    async (_label, granted, unrelated, originalAttempt, passed) => {
+      const selected = {
+        ...child("normalCi", "101"),
+        runAttempt: originalAttempt,
+        workflowSha: "c".repeat(40),
+      };
+      const currentPlan = {
+        ...plan([selected]),
+        targetVersion: "2099.1.1",
+        trustedWorkflow: { ...plan([selected]).trustedWorkflow, sha: "d".repeat(40) },
+      };
+      const grant = {
+        targetVersion: "2099.1.1",
+        targetSha: TARGET_SHA,
+        childRole: "normalCi",
+        jobName: "synthetic known failure",
+        reason: "Synthetic current-Q regression fixture",
+        aggregates: [],
+        evidence: { runId: "101", runAttempt: 1 },
+      };
+      const result = await inspectContinuation(currentPlan, {
+        getReleaseEvidenceClient: () => ({
+          ...createReleaseEvidenceClient(REPOSITORY),
+          getWorkflowSource: (sha: string, sourcePath?: string) => {
+            expect(sha).toBe(currentPlan.workflowSha);
+            expect(sourcePath).toBe("scripts/lib/release-validation-waivers.json");
+            return JSON.stringify({
+              schema: "openclaw.release-validation-waivers/v1",
+              waivers: granted ? [grant] : [],
+            });
+          },
+        }),
+        getRun: async () => runFor(selected, originalAttempt + 1, "failure"),
+        getAttemptJobs: async () => [
+          job("synthetic known failure", "failure"),
+          ...(unrelated ? [job("unrelated failure", "failure")] : []),
+        ],
+        repository: REPOSITORY,
+      });
+      expect(result.children[0]).toMatchObject({
+        conclusion: "failure",
+        plannedRunAttempt: originalAttempt,
+        effectiveRunAttempt: originalAttempt + 1,
+        status: passed ? "passed" : "failed",
+      });
+    },
+  );
+
   it("reports missing selected children without reading nonexistent runs", async () => {
     const selected = child("normalCi", "101");
     const missing = withoutChildRunIdentity(child("pluginPrerelease", "202"));
@@ -1464,6 +1534,7 @@ describe("FRV same-parent recovery", () => {
         return runFor(selected, 1, "success");
       },
       repository: REPOSITORY,
+      getReleaseEvidenceClient: preflightMethods([], () => ({})).getReleaseEvidenceClient,
     });
 
     expect(runReads).toEqual(["101"]);
@@ -1496,6 +1567,7 @@ describe("FRV same-parent recovery", () => {
       ],
       getRun: async () => runFor(selected, 2, "success"),
       repository: REPOSITORY,
+      getReleaseEvidenceClient: preflightMethods([], () => ({})).getReleaseEvidenceClient,
     });
     expect(result.children[0]).toMatchObject({
       compositeJobsSha256: releaseCompositeJobsSha256({
@@ -2046,6 +2118,7 @@ describe("FRV same-parent recovery", () => {
           return jobs;
         },
         repository: REPOSITORY,
+        getReleaseEvidenceClient: preflightMethods([], () => ({})).getReleaseEvidenceClient,
       };
       vi.useFakeTimers();
       vi.stubEnv("OPENCLAW_FRV_RECONCILE_TIMEOUT_MS", "100");
@@ -2695,6 +2768,7 @@ describe("FRV watch", () => {
       getParentJobs: async () => [{ ...job("Seal release execution plan"), run_attempt: 1 }],
       getReleaseEvidenceClient: () => ({
         ...createReleaseEvidenceClient(REPOSITORY),
+        getWorkflowSource: () => emptyWaiverSource,
         loadExecutionPlanEvidence: () => ({ artifact: {}, plan: immutable }),
       }),
       getRef: async () => ({
@@ -2844,6 +2918,7 @@ describe("FRV watch", () => {
         getAttemptJobs: async () => [job("checks")],
         getReleaseEvidenceClient: () => ({
           ...createReleaseEvidenceClient(REPOSITORY),
+          getWorkflowSource: () => emptyWaiverSource,
           loadExecutionPlanEvidence: () => {
             if (unavailable === "execution plan") {
               throw new Error("publication execution plan artifact identity mismatch");

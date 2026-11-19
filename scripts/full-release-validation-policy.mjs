@@ -49,7 +49,7 @@ function validateReleaseAdvisoryJobs(value, expected = []) {
   return expected;
 }
 
-export function validateReleaseManifestAdvisoryJobs(manifest) {
+export function validateReleaseManifestAdvisoryJobs(manifest, { deferWaiverPolicy = false } = {}) {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw new Error("Release advisory manifest is invalid");
   }
@@ -67,6 +67,7 @@ export function validateReleaseManifestAdvisoryJobs(manifest) {
       throw new Error("Release advisory child evidence is invalid");
     }
     if (
+      !deferWaiverPolicy &&
       evaluateReleaseChildPolicy({
         child: { ...normalCi, key: "normalCi" },
         targetVersion: manifest.validationInputs?.targetVersion,
@@ -1561,8 +1562,8 @@ function blockerIndex(issues) {
   return issues.map((issue) => jsonSha256(blockerEvidence(issue))).toSorted();
 }
 
-export function terminalPolicyPass(child, targetVersion) {
-  const policy = evaluateReleaseChildPolicy({ child, targetVersion });
+export function terminalPolicyPass(child, targetVersion, targetSha, waiverPolicy) {
+  const policy = evaluateReleaseChildPolicy({ child, targetVersion, targetSha, waiverPolicy });
   return (
     child.status === "completed" &&
     child.jobs.every((job) => job.status === "completed") &&

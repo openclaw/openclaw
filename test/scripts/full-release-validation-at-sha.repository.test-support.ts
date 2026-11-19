@@ -97,6 +97,7 @@ console.log(JSON.stringify({ valid: true, current: { runId: "123" }, root: { run
       ".github/workflows/openclaw-release-prepare.yml",
       "scripts/lib/release-qualification-coverage.json",
       "scripts/lib/upgrade-survivor-scenarios.json",
+      "scripts/lib/release-validation-waivers.json",
     ]) {
       write(path, readFileSync(path));
     }

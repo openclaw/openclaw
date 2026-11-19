@@ -224,18 +224,86 @@ describe("full release same-parent recovery workflow", () => {
     expect(source).not.toContain("continuation_plan_json");
   });
 
-  it("routes compact reuse revalidation through the admitted verifier and exact target", () => {
-    expect(step("evidence_reuse", "Find reusable validation evidence").env).toMatchObject({
-      OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR:
-        "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/workflow/scripts/release-ci-summary.mjs', github.workspace) }}",
-      TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
-    });
-    expect(step("summary", "Write release validation manifest").env).toMatchObject({
-      OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR:
-        "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}",
-      TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
-    });
-  });
+  it.each([
+    ["failure", false, "/workspace"],
+    ["success", true, "/workspace/qualification-verifier"],
+  ] as const)(
+    "uses materialized verifier paths after %s target resolution",
+    (result, verifierCheckedOut, verifierRoot) => {
+      const verifierSha = "a".repeat(40);
+      const targetSha = "b".repeat(40);
+      const evaluate = (expression: unknown): unknown => {
+        assert(typeof expression === "string");
+        return runInNewContext(expression.replace(/^\$\{\{|\}\}$/gu, ""), {
+          needs: {
+            resolve_target: {
+              result,
+              outputs: {
+                source_admission_json: JSON.stringify({
+                  qualificationAdmission: { workflowSha: verifierSha },
+                }),
+                sha: targetSha,
+              },
+            },
+          },
+          github: { workspace: "/workspace" },
+          inputs: { qualification_workflow_sha: verifierCheckedOut ? verifierSha : "" },
+          fromJSON: JSON.parse,
+          format: (pattern: string, value: string) => pattern.replace("{0}", value),
+        });
+      };
+      for (const caller of ["release_decision", "diagnostic_drain"]) {
+        expect(evaluate(workflowJob(caller).with?.qualification_workflow_sha)).toBe(
+          verifierCheckedOut ? verifierSha : "",
+        );
+      }
+      expect(evaluate(step("watch", "Checkout release state tooling").if ?? "true")).toBe(true);
+      expect(watcher.jobs.watch.env?.OPENCLAW_RELEASE_WAIVERS_PATH).toBe(
+        "${{ github.workspace }}/scripts/lib/release-validation-waivers.json",
+      );
+      for (const jobName of ["watch", "summary", "release_execution_plan", "evidence_reuse"]) {
+        const job = jobName === "watch" ? watcher.jobs.watch : workflow.jobs[jobName];
+        assert(job);
+        const checkout = step(jobName, "Checkout admitted qualification verifier");
+        expect(evaluate(checkout.if), jobName).toBe(verifierCheckedOut);
+        expect(evaluate((checkout.with as Record<string, unknown>).ref), jobName).toBe(
+          jobName === "watch" && !verifierCheckedOut ? "" : verifierSha,
+        );
+        if (job.env?.RELEASE_STATE_SCRIPT) {
+          expect(evaluate(job.env.RELEASE_STATE_SCRIPT), jobName).toBe(
+            `${verifierRoot}/scripts/full-release-validation-state.mjs`,
+          );
+        }
+        for (const entry of job.steps) {
+          const env = entry.env as Record<string, unknown> | undefined;
+          if (env?.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR) {
+            expect(
+              env.OPENCLAW_RELEASE_WAIVERS_PATH ?? job.env?.OPENCLAW_RELEASE_WAIVERS_PATH,
+              jobName,
+            ).toBe(
+              jobName === "evidence_reuse"
+                ? "${{ github.workspace }}/workflow/scripts/lib/release-validation-waivers.json"
+                : "${{ github.workspace }}/scripts/lib/release-validation-waivers.json",
+            );
+            const root =
+              jobName === "evidence_reuse" && !verifierCheckedOut
+                ? "/workspace/workflow"
+                : verifierRoot;
+            expect(evaluate(env.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR), jobName).toBe(
+              `${root}/scripts/release-ci-summary.mjs`,
+            );
+          }
+        }
+      }
+      for (const [jobName, stepName] of [
+        ["evidence_reuse", "Find reusable validation evidence"],
+        ["summary", "Write release validation manifest"],
+      ] as const) {
+        const env = step(jobName, stepName).env as Record<string, unknown>;
+        expect(evaluate(env.TARGET_SHA)).toBe(targetSha);
+      }
+    },
+  );
 
   it("restores the immutable attempt-one plan instead of rebuilding child identity", () => {
     const cache = step("release_execution_plan", "Cache immutable release execution plan");

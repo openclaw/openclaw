@@ -57,6 +57,12 @@ import {
   selectDeferredRunCandidates,
   selectLatestRunsPerLane,
 } from "./lib/release-priority.mjs";
+import {
+  decodeReleaseValidationWaivers,
+  evaluateReleaseChildPolicy,
+  parseReleaseValidationWaivers,
+  RELEASE_VALIDATION_WAIVERS_PATH,
+} from "./lib/release-validation-waivers.mjs";
 import { sleep } from "./lib/sleep.mjs";
 import { sameJobExecution } from "./npm-prepared-bundle.mjs";
 import {
@@ -932,8 +938,10 @@ export async function preflightContinuation(
       request: sourceAdmission,
       client: {
         ...evidenceClient,
-        getWorkflowSource: (sha) =>
-          sha === plan.workflowSha ? workflow : evidenceClient.getWorkflowSource(sha),
+        getWorkflowSource: (sha, sourcePath) =>
+          sha === plan.workflowSha && sourcePath === undefined
+            ? workflow
+            : evidenceClient.getWorkflowSource(sha, sourcePath),
       },
     });
     const validated = validateReleaseExecutionPlanArtifact(plan, {
@@ -1088,7 +1096,21 @@ async function readChildAttemptEvidence(child, client, options) {
   }
 }
 
+// The bounded publication reader returns the Contents API payload; the ordinary
+// evidence client authenticates that payload itself and returns decoded source.
+async function readReleaseWaiverPolicy(plan, client) {
+  const sourceClient = client.getReleaseEvidenceClient?.() ?? client;
+  const source = await sourceClient.getWorkflowSource(
+    plan.workflowSha,
+    RELEASE_VALIDATION_WAIVERS_PATH,
+  );
+  return typeof source === "string"
+    ? parseReleaseValidationWaivers(source)
+    : decodeReleaseValidationWaivers(source);
+}
+
 export async function inspectContinuation(plan, client, options = {}) {
+  const waiverPolicy = await readReleaseWaiverPolicy(plan, client);
   const children = await Promise.all(
     selectedChildren(plan).map(async (child) => {
       if (!hasExactChildRunIdentity(child)) {
@@ -1125,11 +1147,21 @@ export async function inspectContinuation(plan, client, options = {}) {
         jobs: evidence.jobs,
         key: child.key,
         runId: child.runId,
+        runAttempt: child.runAttempt,
         status: run.status,
       };
-      const passed = !active && terminalPolicyPass(policyChild);
+      const policy = evaluateReleaseChildPolicy({
+        child: policyChild,
+        targetVersion: plan.targetVersion,
+        targetSha: plan.targetSha,
+        waiverPolicy,
+      });
+      const passed =
+        !active &&
+        terminalPolicyPass(policyChild, plan.targetVersion, plan.targetSha, waiverPolicy);
       return {
         activeJobs,
+        blockingJobs: policy.blockingJobs,
         compositeJobsSha256: evidence.compositeJobsSha256,
         conclusion: String(run.conclusion ?? ""),
         dispatchActor: evidence.dispatchActor,
@@ -1210,6 +1242,10 @@ async function inspectQualificationStatus(plan, runId, client) {
     throw new Error("status parent identity differs from the immutable execution plan");
   }
   const currentJobs = jobs.filter((job) => Number(job.run_attempt) === Number(parent.run_attempt));
+  const blockers = [
+    ...parentJobBlockers(currentJobs, parent.run_attempt),
+    ...childJobBlockers(status.children),
+  ];
   const drainJobs = currentJobs.filter((job) => job.name === "Diagnostic Drain");
   const drainJob = drainJobs.length === 1 ? drainJobs[0] : undefined;
   const drain = {
@@ -2852,6 +2888,12 @@ async function createPublicationReader(repository) {
     repository,
     getRun,
     getRunAttempt,
+    getWorkflowSource(sha, sourcePath) {
+      requirePublication(
+        /^[a-f0-9]{40}$/u.test(sha) && sourcePath === RELEASE_VALIDATION_WAIVERS_PATH,
+      );
+      return json("contents/" + sourcePath + "?ref=" + sha);
+    },
     authenticate,
     readArtifact,
     listArtifacts,
@@ -3278,6 +3320,7 @@ async function inspectPublicationStatus(options) {
     for (const child of status.children) {
       // Keep publication observations within their bounded validation projection.
       delete child.jobs;
+      delete child.blockingJobs;
       child.url = child.runId
         ? `https://github.com/${options.repository}/actions/runs/${child.runId}`
         : "";
@@ -3378,7 +3421,39 @@ function formatProgressEvent(command, event) {
   return `[frv ${command}] ${formatFrvTimestamp()} ${event.message}${event.url ? ` ${event.url}` : ""}`;
 }
 
-function failedJobEvent(owner, job, attempt, runId) {
+function parentJobBlockers(jobs, attempt) {
+  return jobs
+    .filter(
+      (job) => job.status === "completed" && FAILED_JOB_CONCLUSIONS.has(String(job.conclusion)),
+    )
+    .map((job) => ({
+      owner: "parent",
+      job: String(job.name),
+      conclusion: String(job.conclusion),
+      runAttempt: Number(attempt),
+      url: String(job.html_url ?? ""),
+    }));
+}
+
+function childJobBlockers(children) {
+  return children.flatMap((child) =>
+    child.blockingJobs
+      ? child.blockingJobs.map((job) => ({
+          owner: child.key,
+          job: job.name,
+          conclusion: job.conclusion,
+          runAttempt: job.acceptedRunAttempt,
+          url: job.url,
+        }))
+      : [],
+  );
+}
+
+function formatBlocker(blocker) {
+  return `${blocker.owner} job "${blocker.job}" ${blocker.conclusion} (attempt ${blocker.runAttempt})${blocker.url ? ` ${blocker.url}` : ""}`;
+}
+
+function failedJobEvent(owner, job, attempt, runId, sourceAttempt = job.run_attempt ?? attempt) {
   if (job.status !== "completed" || !FAILED_JOB_CONCLUSIONS.has(String(job.conclusion))) {
     return undefined;
   }
@@ -3500,6 +3575,40 @@ async function pollRelease(state, client, pending, observation, readOptions) {
     }
     state.reported.add(`log:${job.id}`);
   }
+  // The execution plan binds the candidate, not the parent's tooling SHA. Before sealing,
+  // candidate identity is unknown; retained in-process bytes never replace a fresh tip read.
+  if (
+    !observation.plan &&
+    parentJobs?.some(
+      (job) =>
+        job.name === "Seal release execution plan" &&
+        (job.conclusion === "success" ||
+          job.steps?.some(
+            (step) =>
+              step.name === "Upload immutable release execution plan" &&
+              step.conclusion === "success",
+          )),
+    )
+  ) {
+    observation.plan = await read(
+      "execution plan",
+      async () => {
+        const evidence = await client
+          .getReleaseEvidenceClient()
+          .loadExecutionPlanEvidence(parentRunId);
+        return validateReleaseExecutionPlanArtifact(evidence.plan, {
+          parentRunId,
+          workflowSha: parent.head_sha,
+        });
+      },
+      false,
+    );
+  }
+  if (observation.plan && !observation.waiverPolicy) {
+    observation.waiverPolicy = await read("current Q waiver policy", () =>
+      readReleaseWaiverPolicy(observation.plan, client),
+    );
+  }
   // Bounded fanout keeps shared GitHub quota for the rest of the release.
   const childStates = await mapBounded(
     Object.entries(state.children),
@@ -3559,37 +3668,6 @@ async function pollRelease(state, client, pending, observation, readOptions) {
       return done && scansComplete;
     },
   );
-  // Required tree reads precede advisory metadata so a tip throttle cannot suppress
-  // terminal evidence; its shared backoff still prevents requests before the retry boundary.
-  // The execution plan binds the candidate, not the parent's tooling SHA. Before sealing,
-  // candidate identity is unknown; retained in-process bytes never replace a fresh tip read.
-  if (
-    !observation.plan &&
-    parentJobs?.some(
-      (job) =>
-        job.name === "Seal release execution plan" &&
-        (job.conclusion === "success" ||
-          job.steps?.some(
-            (step) =>
-              step.name === "Upload immutable release execution plan" &&
-              step.conclusion === "success",
-          )),
-    )
-  ) {
-    observation.plan = await read(
-      "execution plan",
-      async () => {
-        const evidence = await client
-          .getReleaseEvidenceClient()
-          .loadExecutionPlanEvidence(parentRunId);
-        return validateReleaseExecutionPlanArtifact(evidence.plan, {
-          parentRunId,
-          workflowSha: parent.head_sha,
-        });
-      },
-      false,
-    );
-  }
   // Candidate metadata is advisory: absent artifacts or refs stay unknown, never hold
   // an independently verified terminal tree open or grant qualification authority.
   const candidate =
