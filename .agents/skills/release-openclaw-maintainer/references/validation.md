@@ -138,6 +138,13 @@ also defers Package Acceptance Telegram, broad live/E2E, QA-live and Parallels.
 Package Telegram deferral applies to beta-profile `main` too, but it does not
 qualify for `npm-beta-v1`.
 
+Default new approved job waivers to the exact
+release version, child role, and job for all future FRV runs, attempts, and
+candidates of that release. Do not bind ordinary waivers to the diagnostic run
+or candidate. Attempt-specific waivers are only for exceptionally high-risk
+cases with an explicitly limited approval; document the risk and honor any
+operator-requested narrower scope.
+
 FRV `normalCi` Windows Node shards and all other hard-gate failures block. Decide
 blocker or flake for every failure,
 rerun flakes on the same Release SHA at most twice, and file a fix-in-parallel

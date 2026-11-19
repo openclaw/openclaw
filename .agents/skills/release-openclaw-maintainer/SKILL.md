@@ -80,6 +80,16 @@ recommended bookkeeping, not another release gate.
 
 FRV must conclude **success** under pinned P's
 [checked-in release-tooling policy](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers).
+When an operator approves a job waiver, default
+to the exact release version, child role, and job across all future FRV runs,
+attempts, and candidates for that release. Do not add `evidence` run/attempt or
+`targetSha` restrictions by default. Reserve attempt-specific waivers for
+exceptionally high-risk cases where approval intentionally covers only the
+reviewed execution; record that risk and the explicit limit in the PR/handoff.
+Preserve any narrower scope the operator explicitly requested. Diagnostic run
+IDs belong in the PR/handoff, not in matching restrictions merely because they
+identify the original failure. See the [attempt-binding correction in #201694](https://github.com/openclaw/openclaw/pull/201694)
+and the [operator-directed release-wide default in #201769](https://github.com/openclaw/openclaw/pull/201769).
 Only exact failed live-provider or Telegram leaves may be waived, without
 skipping tests or changing C/Q. All other required lanes must succeed: Windows
 and macOS Node and other normal CI jobs, install smoke, survivor

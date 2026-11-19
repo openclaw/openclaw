@@ -101,6 +101,16 @@ and short reason; optional `targetSha` and `evidence: { runId, runAttempt }` res
 candidate/execution. Checked-in list is authoritative; retain release-specific
 authorization/diagnostics in PR or handoff.
 
+For a newly approved job waiver, default to the exact release version, child
+role, and job across all future FRV runs, attempts, and candidates for that
+release. Omit `evidence` and `targetSha` restrictions unless the operator
+explicitly limits the approval. Reserve attempt-specific waivers for
+exceptionally high-risk cases where only the reviewed execution is accepted;
+record the risk and the explicit limit in the PR or handoff. A diagnostic run
+ID is evidence of the original failure, not a reason to restrict an ordinary
+waiver to that attempt. This default does not broaden existing grants or waive
+other jobs, versions, required execution, or evidence-integrity checks.
+
 Changing P alone does not invalidate retained evidence for unchanged C/Q, coverage,
 inputs, and source digests. With reuse enabled, admitted P reevaluates sealed child
 receipts, including failures covered by current exact waivers. Accepted receipts
