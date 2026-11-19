@@ -578,7 +578,6 @@ async function withDownloadFixture(
           await Promise.all(pending);
           interleaving.lookup = undefined;
           interleaving.afterMime = undefined;
-          interleaving.afterGatewayMirror = undefined;
           __setFsSafeTestHooksForTest(undefined);
         }
       } finally {

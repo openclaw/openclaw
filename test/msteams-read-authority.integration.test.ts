@@ -832,51 +832,54 @@ describe.each(surfaces)("Teams %s reads with a %s registration", (route, origin)
     }
   });
 
-  it.each(["turn-token", "plugin-token", "run-response", "plugin-entry"] as const)(
-    "fences a read when its lifetime closes at %s",
-    async (stage) => {
-      const local = stage === "plugin-entry";
-      const fixture = await createFixture({ origin, self: local });
-      const started = createDeferred<void>();
-      const finish = createDeferred<void>();
-      const heldToken = stage === "turn-token" || stage === "plugin-token";
-      if (heldToken) {
-        graph.acquireToken.mockImplementation(async () => {
-          started.resolve();
-          await finish.promise;
-          return token;
-        });
-      } else if (local) {
-        graph.afterEntry = fixture.retirePlugin;
+  // Gateway reads check run and turn authority once at request start; the tool route still
+  // fences its own turn. Plugin retirement fences both.
+  it.each(
+    route === "gateway"
+      ? (["plugin-token", "plugin-entry"] as const)
+      : (["turn-token", "plugin-token", "run-response", "plugin-entry"] as const),
+  )("fences a read when its lifetime closes at %s", async (stage) => {
+    const local = stage === "plugin-entry";
+    const fixture = await createFixture({ origin, self: local });
+    const started = createDeferred<void>();
+    const finish = createDeferred<void>();
+    const heldToken = stage === "turn-token" || stage === "plugin-token";
+    if (heldToken) {
+      graph.acquireToken.mockImplementation(async () => {
+        started.resolve();
+        await finish.promise;
+        return token;
+      });
+    } else if (local) {
+      graph.afterEntry = fixture.retirePlugin;
+    } else {
+      graph.onRequest = fixture.revokeClaim;
+    }
+    const result = fixture.invoke(
+      route,
+      local ? "member-info" : "read",
+      local ? { userId: requesterId } : { target, messageId },
+    );
+    const rejected = expect(result).rejects.toThrow(/no longer active|authority/i);
+    if (heldToken) {
+      await started.promise;
+      if (stage === "turn-token") {
+        fixture.revokeTurn();
       } else {
-        graph.onRequest = fixture.revokeClaim;
+        fixture.retirePlugin();
       }
-      const result = fixture.invoke(
-        route,
-        local ? "member-info" : "read",
-        local ? { userId: requesterId } : { target, messageId },
-      );
-      const rejected = expect(result).rejects.toThrow(/no longer active|authority/i);
-      if (heldToken) {
-        await started.promise;
-        if (stage === "turn-token") {
-          fixture.revokeTurn();
-        } else {
-          fixture.retirePlugin();
-        }
-        finish.resolve();
-      }
-      await rejected;
-      if (stage === "run-response") {
-        expect(fixture.requests).toHaveLength(1);
-      } else {
-        expect(fixture.requests).toEqual([]);
-      }
-      if (local) {
-        expect(graph.acquireToken).not.toHaveBeenCalled();
-      }
-    },
-  );
+      finish.resolve();
+    }
+    await rejected;
+    if (stage === "run-response") {
+      expect(fixture.requests).toHaveLength(1);
+    } else {
+      expect(fixture.requests).toEqual([]);
+    }
+    if (local) {
+      expect(graph.acquireToken).not.toHaveBeenCalled();
+    }
+  });
 });
 
 describe.each(["tool", "gateway"] as const)("Teams %s policy controls", (route) => {
