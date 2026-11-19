@@ -510,7 +510,7 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
       if (version !== undefined) {
         db.exec(`PRAGMA user_version = ${version}`);
       }
-      return db.prepare("PRAGMA user_version").get().user_version;
+      return Number(db.prepare("PRAGMA user_version").get().user_version);
     } finally {
       db.close();
     }

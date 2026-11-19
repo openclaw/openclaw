@@ -1,12 +1,10 @@
-import type { prepareUpdateCommand } from "./update-command-run.js";
+import type { ManagedServicePackageUpdatePlan } from "./update-command-service-context-types.js";
 
 /** Admission follows the managed service root before a redirect or discovered install. */
-export function resolveUpdateCommandAdmissionRoot(
-  prepared: Pick<
-    Awaited<ReturnType<typeof prepareUpdateCommand>>,
-    "servicePlan" | "discoveredRoot"
-  >,
-): string {
+export function resolveUpdateCommandAdmissionRoot(prepared: {
+  servicePlan?: Pick<ManagedServicePackageUpdatePlan, "serviceRoot" | "rootRedirect"> | null;
+  discoveredRoot: string;
+}): string {
   return (
     prepared.servicePlan?.serviceRoot ??
     prepared.servicePlan?.rootRedirect?.root ??
