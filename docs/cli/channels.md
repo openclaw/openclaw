@@ -197,8 +197,9 @@ entries in the [shared secret store](/gateway/secrets/secret-store-and-egress).
 `openclaw.json` keeps a `store` SecretRef instead of the credential. Existing
 references, environment-backed setup, and token-file choices are preserved.
 Store writes use the local Gateway when it is running, or exclusive offline
-ownership when it is stopped. If config publication fails, setup retains saved
-entries and reports their names so you can inspect the config before cleanup.
+ownership when it is stopped. If config publication fails, saved entries are
+retained; `channels add` also reports their names so you can inspect the config
+before cleanup.
 Unchanged plaintext credentials are left for the existing Doctor and secrets
 migration workflows; upgrading does not silently rewrite them.
 
