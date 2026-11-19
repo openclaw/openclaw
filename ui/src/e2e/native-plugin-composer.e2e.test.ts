@@ -32,6 +32,10 @@ const fixture = `export default { id: "composer-fixture", activate(host) {
     run({ composer }) { composer.setDraft("written by another action"); },
   });
   host.ui.registerAction({
+    id: "restore", label: "Restore rewrite", icon: "rotateCcw", placement: "composer",
+    run({ composer }) { composer.setDraft(${JSON.stringify(PROPOSED)}); },
+  });
+  host.ui.registerAction({
     id: "broken", label: "Broken", icon: "alertTriangle", placement: "composer",
     run() { throw new Error("Fixture action failed"); },
   });
@@ -169,6 +173,11 @@ suite.define(() => {
       // The receipt no longer matches the draft, so it cannot undo over the newer text.
       await expect.poll(() => page.getByRole("button", { name: "Undo" }).count()).toBe(0);
       expect(await textarea.inputValue()).toBe("written by another action");
+      // Restoring the accepted text later does not revive the retired receipt.
+      await page.getByRole("button", { name: "Restore rewrite", exact: true }).click();
+      await expect.poll(() => textarea.inputValue()).toBe(PROPOSED);
+      await page.waitForTimeout(300);
+      expect(await page.getByRole("button", { name: "Undo" }).count()).toBe(0);
     });
   });
 

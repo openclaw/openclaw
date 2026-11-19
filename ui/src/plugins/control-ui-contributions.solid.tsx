@@ -32,6 +32,8 @@ type ContributionsProps = {
   presented: boolean;
   /** The pane's draft owner, exposed to composer actions. */
   composer: ControlUiComposerDraft | undefined;
+  /** The pane has a composer toolbar for icon actions; without one they render as text buttons. */
+  composerToolbar: boolean;
 };
 export type ContributionsElement = SolidBridgeElement<ContributionsProps>;
 
@@ -199,7 +201,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
         .filter(
           (entry) =>
             entry.value.placement === placement() &&
-            (props.kind !== "composer" || !entry.value.icon) &&
+            (props.kind !== "composer" || !entry.value.icon || !props.composerToolbar) &&
             (props.kind !== "composer-toolbar" || Boolean(entry.value.icon)),
         )
         .flatMap((entry) => {
@@ -406,6 +408,7 @@ defineSolidBridge<ContributionsProps>("openclaw-plugin-contributions", PluginCon
     navigationMenus: { default: undefined, attribute: false },
     presented: { default: true, type: Boolean },
     composer: { default: undefined, attribute: false },
+    composerToolbar: { default: true, type: Boolean },
   },
 });
 

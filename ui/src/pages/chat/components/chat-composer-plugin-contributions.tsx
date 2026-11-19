@@ -17,6 +17,8 @@ export function ChatComposerPluginContributions(props: {
   kind: "composer" | "composer-toolbar";
   composer: ComposerPluginProps;
   presented: boolean;
+  /** Composer kind only: false when no toolbar exists, so icon actions render as text buttons. */
+  toolbar?: boolean;
 }) {
   const application = useOptionalApplication();
   const handle: ControlUiComposerDraft = {
@@ -36,6 +38,7 @@ export function ChatComposerPluginContributions(props: {
         prop:agentId={props.composer.currentAgentId}
         prop:presented={props.presented}
         prop:composer={handle}
+        prop:composerToolbar={props.toolbar ?? true}
       />
     </Show>
   );

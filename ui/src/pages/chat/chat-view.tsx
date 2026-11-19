@@ -141,6 +141,7 @@ function ChatFooterContent(
   input: ChatViewInput & {
     mobileComposition?: boolean;
     activities?: ChatActivityPillsProps;
+    toolbar?: boolean;
   },
 ) {
   const pendingInputs = () => input.frame.pendingInputs;
@@ -215,6 +216,7 @@ function ChatFooterContent(
         kind="composer"
         composer={input.props}
         presented={input.presented}
+        toolbar={input.toolbar}
       />
     </>
   );
@@ -343,7 +345,7 @@ function ChatComposerCompanion(input: ChatViewInput) {
   );
   return (
     <div class="chat-footer__context">
-      <ChatFooterContent {...input} />
+      <ChatFooterContent {...input} toolbar={false} />
       <div class="agent-chat__composer-notices">
         <ChatComposerNoticesView {...input.props} presented={input.presented} />
       </div>

@@ -154,6 +154,7 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
       if (previous && current.draftKey !== previous.context.draftKey) {
         state.proposal.dismiss();
       }
+      state.proposal.syncDraft(current.visibleDraft);
       const options = current.dictationOptions;
       voice.picker.syncCatalog(options.client, options.connected, options.sessionKey);
       voice.dictation.update(options);

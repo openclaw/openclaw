@@ -166,6 +166,8 @@ async function mountActions(
     placement?: "header" | "composer";
     session?: GatewaySessionRow;
     agentId?: string;
+    icon?: string;
+    composerToolbar?: boolean;
   } = {},
 ) {
   const request = vi.fn().mockResolvedValue({ ok: true });
@@ -202,6 +204,7 @@ async function mountActions(
     id: "review",
     label: "Review session",
     placement: options.placement ?? "header",
+    ...(options.icon ? { icon: options.icon } : {}),
     resolve,
     run,
   };
@@ -244,6 +247,7 @@ async function mountActions(
   const provider = createApplicationContextProvider(context);
   const element = document.createElement("openclaw-plugin-contributions") as ContributionsElement;
   element.kind = options.placement ?? "header";
+  element.composerToolbar = options.composerToolbar ?? true;
   element.sessionKey = session.key;
   element.agentId = options.agentId;
   cleanups.push(() => {
@@ -497,6 +501,19 @@ describe("native plugin session actions", () => {
     expect(run.mock.calls.length).toBe(0);
     await element.updateComplete;
     expect(element.querySelector("button")).toBeNull();
+  });
+
+  it("keeps icon composer actions above the composer only when no toolbar shows them", async () => {
+    const withToolbar = await mountActions({ placement: "composer", icon: "pencilSparkles" });
+    // The built-in composer's toolbar renders it; this region would duplicate it.
+    expect(withToolbar.element.querySelector("button")).toBeNull();
+    withToolbar.element.remove();
+    const replacement = await mountActions({
+      placement: "composer",
+      icon: "pencilSparkles",
+      composerToolbar: false,
+    });
+    expect(replacement.element.querySelector("button")?.textContent?.trim()).toBe("Review Ready");
   });
 
   it("updates composer action presentation and retires hidden invocations", async () => {
