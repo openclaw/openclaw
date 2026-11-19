@@ -222,6 +222,7 @@ export function updateChatRunProgressSnapshot(
           ({ facts: candidate }) =>
             candidate.stream === "run_status" && candidate.data.phase === "waiting_for_model",
         )));
+  const isToolPreparation = event.stream === "run_status" && phase === "preparing_tool";
   const isRetryStatus = event.stream === "run_status" && phase === "retrying";
   const isFallbackStatus = event.stream === "lifecycle" && phase === "fallback_step";
   const isFinishing = event.stream === "lifecycle" && phase === "finishing";
@@ -279,6 +280,7 @@ export function updateChatRunProgressSnapshot(
     );
   const isSummaryProgress =
     isModelWait ||
+    isToolPreparation ||
     isTool ||
     isItem ||
     isUsage ||
@@ -354,6 +356,7 @@ export function updateChatRunProgressSnapshot(
     removeWhere((candidate) => candidate.stream === "usage");
   } else if (
     isStartupStatus ||
+    isToolPreparation ||
     isRetryStatus ||
     isFallbackStatus ||
     isFinishing ||
