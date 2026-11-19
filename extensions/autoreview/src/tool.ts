@@ -454,9 +454,20 @@ export function createAutoReviewTool(context: OpenClawPluginToolContext<2>): Any
                   response,
                 );
                 if (submitted.code !== 0) {
-                  throw new Error(
-                    submitted.stderr || "Auto Review rejected the response submission.",
-                  );
+                  const submitError =
+                    submitted.stderr || "Auto Review rejected the response submission.";
+                  // Helper cleanup removes the exchange before a late submit. Keep its
+                  // timeout instead of replacing it with the missing-file error.
+                  if (/FileNotFoundError|No such file or directory/u.test(submitError)) {
+                    const completed = await helperRun?.catch(() => undefined);
+                    const diagnostic = [completed?.stderr, completed?.stdout]
+                      .filter(Boolean)
+                      .join("\n");
+                    if (diagnostic.includes("OpenClaw execution result timed out")) {
+                      throw new Error(diagnostic);
+                    }
+                  }
+                  throw new Error(submitError);
                 }
               }
               const completed = await helperRun!;

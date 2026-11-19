@@ -46,6 +46,7 @@ let request: typeof baseRequest & Record<string, unknown>;
 let next: Record<string, unknown>;
 let result: ReturnType<typeof commandResult>;
 let helperFailure: string;
+let submitFailure: string;
 type Response = { pass: number; status: string; output: string | null; model: string | null };
 let response: Response | undefined;
 let cwd: string | undefined;
@@ -68,6 +69,7 @@ beforeEach(() => {
   next = {};
   result = commandResult({ stdout: "complete", cleanup: "normal" });
   helperFailure = "";
+  submitFailure = "";
   response = undefined;
   cwd = undefined;
   helperArgv = undefined;
@@ -104,6 +106,9 @@ beforeEach(() => {
           if (!done || response?.pass === request.passes) {
             const details = helperFailure ? {} : reportDetails(request.model);
             helper.resolve(json({ code: 1, ...details }, done ? 1 : 2, helperFailure));
+          }
+          if (submitFailure) {
+            return { code: 1, stdout: "", stderr: submitFailure };
           }
           return { code: 0, stdout: "", stderr: "" };
         }
@@ -187,6 +192,15 @@ it.each([
 it("preserves helper diagnostics without a report", async () => {
   helperFailure = "source changed; rerun autoreview against the updated tree";
   await expect(execute()).rejects.toThrow(helperFailure);
+});
+it("keeps the helper handoff timeout when late submit loses the exchange", async () => {
+  helperFailure = "OpenClaw execution result timed out";
+  submitFailure =
+    "FileNotFoundError: [Errno 2] No such file or directory: '/tmp/openclaw-autoreview/handoff'";
+  const failure = await execute().catch((error: unknown) => error);
+  assert(failure instanceof Error, "Expected handoff timeout");
+  expect(failure.message).toContain(helperFailure);
+  expect(failure.message).not.toContain("FileNotFoundError");
 });
 it.each(["installation", "authority"])("requires protected %s", (requirement) => {
   if (requirement === "installation") {
