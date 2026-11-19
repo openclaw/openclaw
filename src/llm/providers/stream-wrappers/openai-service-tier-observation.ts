@@ -75,6 +75,10 @@ export function createOpenAIServiceTierObservationWrapper(
         return;
       }
       const responseTier = observation.rejected ? undefined : observation.responseTier;
+      // OpenAI can report Fast as "fast" even though the request uses "priority".
+      if (requestedTier === "priority" && responseTier === "fast") {
+        return;
+      }
       const changed = recordObservation(model, { requestedTier, responseTier });
       if (requestedTier !== responseTier) {
         log[changed ? "info" : "debug"](

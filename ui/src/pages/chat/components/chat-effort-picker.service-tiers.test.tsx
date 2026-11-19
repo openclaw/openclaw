@@ -76,11 +76,11 @@ it("keeps Ultrafast selectable while showing and clearing a provider downgrade",
   expect(summary().title).not.toContain("available right now");
 
   const independent = [
-    { requestedTier: "priority", responseTier: "fast" },
+    { requestedTier: "priority", responseTier: "default" },
     { requestedTier: "ultrafast", responseTier: "fast" },
   ];
   show(true, independent);
-  expect(summary().title).toContain("Running at fast. Fast isn’t available right now.");
+  expect(summary().title).toContain("Running at default. Fast isn’t available right now.");
   show("ultrafast", independent);
   expect(summary().title).toContain("Running at fast. Ultrafast isn’t available right now.");
 
