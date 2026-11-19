@@ -3,6 +3,7 @@
  */
 import fs from "node:fs/promises";
 import type { Server } from "node:http";
+import path from "node:path";
 import type { Context } from "@openclaw/ai";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expect, it, describe, afterEach } from "vitest";
@@ -12,6 +13,7 @@ import { createNativeRuntime, type NativeRuntime } from "../worker/native-runtim
 import { closeNativeServers, nativeProviderFixture } from "../worker/native-worker.test-support.js";
 import { resolveBootstrapContextForRun } from "./bootstrap-files.js";
 import { markBootstrapMissingContextFile } from "./embedded-agent-helpers/bootstrap.js";
+import { remapInjectedContextFilesToWorkspace } from "./embedded-agent-runner/run/attempt-setup.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -40,6 +42,17 @@ describe("Cross-workspace provider cache proof", () => {
           content: `[MISSING] Expected at: ${ws}/TOOLS.md`.slice(0, 27) + "…",
         }),
       );
+      const [remappedMissing] = remapInjectedContextFilesToWorkspace({
+        files: [
+          markBootstrapMissingContextFile({
+            path: `/source/ws/${path.basename(ws)}/RELOAD.md`,
+            content: `[MISSING] Expected at: /source/ws/${path.basename(ws)}/RELOAD.md`,
+          }),
+        ],
+        sourceWorkspaceDir: `/source/ws/${path.basename(ws)}`,
+        targetWorkspaceDir: ws,
+      });
+      contextFiles.push(remappedMissing!);
       const p = await nativeProviderFixture(
         servers,
         "local-model",
@@ -105,7 +118,9 @@ describe("Cross-workspace provider cache proof", () => {
         "## USER.md",
         "## BOOTSTRAP.md",
         "## TOOLS.md",
+        "## RELOAD.md",
         "[MISSING] Expected at: BOOTSTRAP.md",
+        "[MISSING] Expected at: RELOAD.md",
         "[MISSING] Expected at: TOOL…",
         "[MISSING] Expected at: /tmp",
         "# Soul\nConcise.",
@@ -118,6 +133,7 @@ describe("Cross-workspace provider cache proof", () => {
       expect(prompt).not.toMatch(/## [A-Z]:\\/);
       expect(prompt).not.toMatch(/## \//);
       expect(prompt).not.toContain(otherWs);
+      expect(prompt).not.toContain("/source/ws");
     }
   }, 60_000);
 });

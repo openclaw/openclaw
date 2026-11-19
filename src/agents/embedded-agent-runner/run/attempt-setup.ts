@@ -43,6 +43,10 @@ import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { decideContextPressure } from "../../context-pressure.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
+import {
+  isBootstrapMissingContextFile,
+  markBootstrapMissingContextFile,
+} from "../../embedded-agent-helpers/bootstrap.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers/context-file.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { isSandboxProvisioningError } from "../../sandbox/provisioning-error.js";
@@ -614,14 +618,19 @@ export function remapInjectedContextFilesToWorkspace(params: {
   }
   return params.files.map((file) => {
     const relative = path.relative(params.sourceWorkspaceDir, file.path);
-    return !isPathRelativeEscape(relative)
-      ? {
-          ...file,
-          path:
-            relative === ""
-              ? params.targetWorkspaceDir
-              : path.join(params.targetWorkspaceDir, relative),
-        }
-      : file;
+    if (isPathRelativeEscape(relative)) {
+      return file;
+    }
+    const remapped: EmbeddedContextFile = {
+      ...file,
+      path:
+        relative === ""
+          ? params.targetWorkspaceDir
+          : path.join(params.targetWorkspaceDir, relative),
+    };
+    if (isBootstrapMissingContextFile(file)) {
+      markBootstrapMissingContextFile(remapped);
+    }
+    return remapped;
   });
 }
