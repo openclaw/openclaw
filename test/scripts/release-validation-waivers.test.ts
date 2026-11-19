@@ -113,6 +113,22 @@ const stableCauses = [
   "macos-swift finished with failure (selected=true)",
 ];
 const failedJob = { status: "completed", conclusion: "failure" };
+it.each([
+  "checks-ui-e2e-real-gateway (1/2)",
+  "checks-node-compact-large-36 (node)",
+  "checks-node-compact-large-41 (node)",
+])("keeps the November 19 shard waiver candidate-scoped: %s", (name) => {
+  const observedChild = { key: "normalCi", jobs: [{ ...failedJob, id: 1, name }] };
+  const policy = (candidateSha: string) =>
+    evaluateReleaseChildPolicy({
+      child: observedChild,
+      targetVersion: "2026.11.6",
+      targetSha: candidateSha,
+    });
+  expect(policy("06afb10d3272cc9deaf38ca6a3b7b839d5935638").waivers).toHaveLength(1);
+  expect(policy("0000000000000000000000000000000000000000").waivers).toHaveLength(0);
+});
+
 describe("2026.11.6 observed OpenCode Go availability failure", () => {
   const candidateSha = "06afb10d3272cc9deaf38ca6a3b7b839d5935638";
   const leaf = {

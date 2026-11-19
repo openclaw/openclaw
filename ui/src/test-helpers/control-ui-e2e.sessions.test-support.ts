@@ -14,6 +14,8 @@ type Controls = {
   rejectDeferred: (method: string) => void;
   setMethodResponse: (method: string, payload: unknown) => void;
   setSessionsListResponse: ControlUiMockGateway["setSessionsListResponse"];
+  setHistoryMessages: ControlUiMockGateway["setHistoryMessages"];
+  setSessionRow: ControlUiMockGateway["setSessionRow"];
 };
 
 export const sessionGatewayTest = mockGatewayTest.extend<{
