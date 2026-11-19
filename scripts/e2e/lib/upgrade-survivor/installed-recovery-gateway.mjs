@@ -505,21 +505,21 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
       db.close();
     }
   };
-  const waitForReady = async (name) => {
-    const deadline = Date.now() + 120_000;
-    while ((await readyz()) !== 200) {
-      assert(Date.now() < deadline, `${name}: Gateway did not become ready`);
-      await delay(1_000);
-    }
-  };
   const repairMarked = async (name, marked) => {
     const before = new Set(runs().map((row) => row.run_id));
     const result = await run(name, ["update", "repair", "--yes"], null);
-    const repairRun = runs().find((row) => !before.has(row.run_id));
+    // Repair can first settle an earlier killed run as its own ledger row, so pick the
+    // run that did the repair work rather than the first new row.
+    const created = runs().filter((row) => !before.has(row.run_id));
+    const repairRun =
+      created.find((row) => row.steps.some(({ step }) => step.startsWith("finalize:"))) ??
+      created.find((row) => !hasStep(row, "reconcile:settle")) ??
+      created[0];
     const output = `${result.stdout}\n${result.stderr}`;
     evidence.dataAtRisk[name] = {
       markedRunId: marked.runId,
       exit: result.status,
+      createdRunIds: created.map((row) => row.run_id),
       repairRunId: repairRun?.run_id,
       repairStatus: repairRun?.status,
       steps: repairRun?.steps.map(({ step, status }) => `${step}:${status}`),
@@ -531,13 +531,12 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
   /** A recorded data-at-risk mark is checked against state on disk before anything acts on it. */
   const verifyRecordedDataAtRisk = async (servingPid) => {
     evidence.dataAtRisk = {};
-    // A false mark while the operator has started the Gateway again: the next plain
-    // update checks it, resolves it in one line and proceeds, with no repair first.
+    // A false mark on an update killed after it stopped the Gateway: the next plain
+    // update checks it, resolves it in one line, finishes that update and installs its own
+    // version, with no repair first. (A Gateway serving through a mark is the Git
+    // release-mode cell's already-current case.)
     const marked = await killUpdate("marked-update", 1, servingPid);
     recordDataAtRiskMark(marked.runId);
-    await run("operator-start", ["gateway", "start"], 0);
-    await waitForReady("operator-start");
-    const operatorPid = await assertServing("operator-start", marked.version);
     const nextTarget = path.join(artifacts, "after-mark-update.tgz");
     packFirstHopUpdateFixture(tarball, nextTarget, 2);
     const nextVersion = packedVersion(nextTarget);
@@ -564,7 +563,7 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
       runs().some((row) => hasStep(row, `finalize:data-at-risk-verified:${marked.runId}`)),
       "after-mark-update: an update run must record the verification",
     );
-    const nextPid = await assertServing("after-mark-update", nextVersion, operatorPid);
+    const nextPid = await assertServing("after-mark-update", nextVersion, servingPid);
     fs.unlinkSync(nextTarget);
 
     // A false mark on an update that stopped the Gateway: repair verifies it, then starts
@@ -583,7 +582,7 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
       "marked-repair: the repair run must record the verification",
     );
     const resolvedPid = await assertServing("marked-repair", stopped.version, nextPid);
-    evidence.dataAtRisk.gatewayPids = [operatorPid, nextPid, resolvedPid];
+    evidence.dataAtRisk.gatewayPids = [servingPid, nextPid, resolvedPid];
     write(summary, evidence);
 
     // A real inconsistency: the marked update's database rollback moved migrated state

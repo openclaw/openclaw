@@ -224,8 +224,6 @@ function installedRecoveryCurrent(value, sanitize) {
           // The data-at-risk cell's commands.
           "marked-update",
           "stopped-marked-update",
-          "operator-start",
-          "operator-start-probe",
           "marked-repair",
           "marked-repair-probe",
           "after-mark-update",
