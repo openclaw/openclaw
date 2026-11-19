@@ -1,11 +1,13 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import type {
   ControlUiAction,
+  ControlUiComposerTask,
   ControlUiDraftProposal,
   ControlUiSession,
 } from "../../../src/plugin-sdk/control-ui.js";
 import type { PluginSessionMenuAction } from "../components/session-menu-solid.tsx";
 import { i18n } from "../i18n/lib/translate.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import type { ComposerTasks } from "../pages/chat/components/chat-composer-task.ts";
 import type { ControlUiPluginCapability } from "./control-ui-capability.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
@@ -113,8 +115,9 @@ export async function runControlUiPluginAction(
       throw new Error("This plugin UI view has ended.");
     }
   };
-  // Tasks this invocation started: once one is cancelled or retired, its error is expected.
-  const tasks: AbortSignal[] = [];
+  // Tasks this invocation started. A cancelled or retired one makes its error expected; a live
+  // one shows the error itself, so its card never stays working after the action has ended.
+  const tasks: ControlUiComposerTask[] = [];
   try {
     await entry.value.run({
       ...context,
@@ -134,7 +137,7 @@ export async function runControlUiPluginAction(
           const task = composer
             .tasks()
             .start({ title, signal, actionKey: entry.key, retry: params.retry });
-          tasks.push(task.signal);
+          tasks.push(task);
           return task;
         },
         propose: async (text: string, proposal: ControlUiDraftProposal) => {
@@ -144,7 +147,12 @@ export async function runControlUiPluginAction(
       },
     });
   } catch (error) {
-    if (tasks.some((task) => task.aborted)) {
+    if (tasks.some((task) => task.signal.aborted)) {
+      return;
+    }
+    const live = tasks.at(-1);
+    if (live) {
+      live.fail(formatUiError(error));
       return;
     }
     throw error;

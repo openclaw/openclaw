@@ -39,6 +39,14 @@ const fixture = `export default { id: "composer-fixture", activate(host) {
     run({ composer }) { composer.setDraft(${JSON.stringify(PROPOSED)}); },
   });
   host.ui.registerAction({
+    id: "task-broken", label: "Task broken", icon: "wandSparkles", placement: "composer",
+    async run({ composer }) {
+      composer.startTask({ title: "Breaking" });
+      await Promise.resolve();
+      throw new Error("Backend went away");
+    },
+  });
+  host.ui.registerAction({
     id: "slow-broken", label: "Slow broken", icon: "pencilLine", placement: "composer",
     async run() {
       await new Promise((resolve) => { proof.failSlow = resolve; });
@@ -172,6 +180,20 @@ suite.define(() => {
         .getByText("Fixture action failed")
         .waitFor();
       expect(await input.boundingBox()).toEqual(before);
+    });
+  });
+
+  it("fails the action's own task when the action rejects after starting it", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      await open(page);
+      const action = page.getByRole("button", { name: "Task broken", exact: true });
+      await action.click();
+      const failed = page.locator('.agent-chat__composer-task[data-state="failed"]');
+      await failed.getByText("Backend went away").waitFor();
+      expect(await page.locator('.agent-chat__composer-task[data-state="working"]').count()).toBe(
+        0,
+      );
+      expect(await action.getAttribute("aria-pressed")).toBe("false");
     });
   });
 
