@@ -141,6 +141,8 @@ describe("steering input custody", () => {
     { scenario: "same requester protocol metadata drift", allowCollaborativeSteering: false },
     { scenario: "same requester protocol metadata drift", allowCollaborativeSteering: true },
     { scenario: "same requester binding drift", allowCollaborativeSteering: true },
+    { scenario: "same requester Normal to Fast", allowCollaborativeSteering: true },
+    { scenario: "same requester Fast to Ultrafast", allowCollaborativeSteering: true },
     { scenario: "same requester sandboxed session writer", allowCollaborativeSteering: false },
     {
       scenario: "same requester sandboxed revoked after acceptance",
@@ -157,6 +159,12 @@ describe("steering input custody", () => {
   ])(
     "preserves authenticated chat.send steering authority across callers ($scenario, collaboration: $allowCollaborativeSteering)",
     async ({ scenario, allowCollaborativeSteering }, { signal }) => {
+      const priorityChange =
+        scenario === "same requester Normal to Fast"
+          ? ([false, true] as const)
+          : scenario === "same requester Fast to Ultrafast"
+            ? ([true, "ultrafast"] as const)
+            : undefined;
       const startOwnerTurn = scenario === "same permissions across profiles";
       const background = scenario.includes(" into ");
       const subagent = scenario === "owner into subagent";
@@ -185,7 +193,10 @@ describe("steering input custody", () => {
           ? { createdActor: { type: "human", source: "profile", id: incomingProfile.id } as const }
           : {}),
       });
-      await patchSessionEntryCore(fixture.scope, () => ({ displayName: "Steering custody" }));
+      await patchSessionEntryCore(fixture.scope, () => ({
+        displayName: "Steering custody",
+        ...(priorityChange ? { fastMode: priorityChange[0] } : {}),
+      }));
       const initialConfig = fixture.context.getRuntimeConfig();
       const initialQueue = { ...initialConfig.messages?.queue };
       delete initialQueue.allowCollaborativeSteering;
@@ -237,7 +248,7 @@ describe("steering input custody", () => {
       const accepted =
         sharedSecretOwner ||
         scenario === "same grant" ||
-        (continuation && !nonowner) ||
+        (continuation && !nonowner && !priorityChange) ||
         (collaborative && scenario !== "no native admission across profiles");
       const refused = acrossProfiles && allowCollaborativeSteering !== true;
       const forwarded = !accepted && scenario !== "revoked grant";
@@ -484,6 +495,9 @@ describe("steering input custody", () => {
           persistedUserIdempotencyKey: startOwnerTurn ? "owner-input:user" : undefined,
         });
         await providerStarted.promise;
+        if (priorityChange) {
+          await patchSessionEntryCore(fixture.scope, () => ({ fastMode: priorityChange[1] }));
+        }
         if (startOwnerTurn) {
           const firstContext = streamMocks.streamSimple.mock.calls[0]![1] as Context;
           const ownerUserContext = JSON.stringify(
@@ -571,6 +585,16 @@ describe("steering input custody", () => {
         );
         if (accepted || forwarded) {
           expect(dispatch.send).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
+        }
+        if (priorityChange) {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              followupDispatched.promise,
+              steeringAccepted.promise,
+              "A message sent with a different priority steered the active turn",
+            ),
+            signal,
+          );
         }
         if (accepted) {
           await withinTest(

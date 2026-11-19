@@ -26,6 +26,7 @@ type ExecutionSelectionEntry = Pick<
   | "providerOverride"
   | "modelOverride"
   | "modelOverrideSource"
+  | "fastMode"
 >;
 
 type ExecutionSelectionRun = {
@@ -63,6 +64,8 @@ export function captureReplySessionExecutionSelection(params: {
       agentRuntimeOverride: sessionEntry?.agentRuntimeOverride,
       agentHarnessId: sessionEntry?.agentHarnessId,
       modelSelectionLocked: sessionEntry?.modelSelectionLocked,
+      // Priority is selected when the harness prepares a turn, not when it steers input.
+      fastMode: sessionEntry?.fastMode,
       model:
         sessionEntry?.modelOverrideSource !== "auto" &&
         (sessionEntry?.providerOverride ||

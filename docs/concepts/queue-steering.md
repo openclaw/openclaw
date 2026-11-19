@@ -14,6 +14,8 @@ Discord guild channels and threads keep ordinary messages from different authent
 
 This page covers queue-mode steering for normal inbound messages in `steer` mode. In `followup` or `collect` mode, normal messages skip this path and wait until the active run finishes. For the explicit `/steer <message>` command, see [Steer](/tools/steer).
 
+The chat priority picker saves a session setting; it does not change the priority of work already running. If you change the saved priority and send another chat message while a turn is active, the message queues for a new turn instead of steering under the old setting. You do not need to press **Stop** unless you want to end the current work. The queued turn uses the saved setting when it starts, subject to model and account support.
+
 An older followup does not disable steering for later input. OpenClaw tries each new steer against the active run after earlier steering attempts settle. When the runtime cannot accept steering, messages remain queued in their original order; accepted steering goes to the active turn. When collaborative steering is disabled, another requester’s input queues quietly as their own turn. An explicit `collaborativeSteeringFallback: "reject"` instead refuses it.
 
 ## Runtime boundary
