@@ -421,7 +421,7 @@ it("steers its watched raw child while another agent has a newer row", async () 
             sourceSessionKey: children.get("main")!.parentKey,
             sourceTool: "sessions_send",
           },
-          __openclaw: { steerTargetRunId: "main-1", requesterOrigin: caller.requesterOrigin },
+          __openclaw: { requesterOrigin: caller.requesterOrigin },
         }),
       }),
     );
