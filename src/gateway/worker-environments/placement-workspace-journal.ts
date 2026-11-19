@@ -19,12 +19,12 @@ import type {
   WorkspaceJournalReadResult,
 } from "./placement-workspace-journal.types.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
-import { MAX_RECONCILIATION_PACK_BYTES } from "./workspace-manifest.js";
 import {
+  MAX_RECONCILIATION_PACK_BYTES,
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceReconciliationPlan,
   type WorkerWorkspaceReconciliationJournal,
-} from "./workspace-reconcile.js";
+} from "./workspace-manifest.js";
 
 type WorkspaceJournalDatabase = Pick<
   StateDatabase,
