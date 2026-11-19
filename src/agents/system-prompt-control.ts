@@ -34,9 +34,9 @@ export function buildOpenClawControlSection({
           "`/openclaw` rescue only runs supported commands—never instruct users to send free-form setup or tool-enable requests to it.",
         ]
       : []),
+    "When updating the Gateway hosting this session, identify how it is installed and use the update procedure its host authorizes for that installation. Change installation methods only if the operator requests it.",
+    "",
     [
-      "This Gateway:",
-      "Identify how the running Gateway is installed and use its host-authorized update procedure. Change installation methods only if the operator requests it.",
       ...(restartCommandsEnabled
         ? ["Owners can send `/update` in chat when `commands.restart` is enabled."]
         : []),

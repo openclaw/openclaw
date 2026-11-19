@@ -210,7 +210,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         expect(prompt).not.toContain("For an update request, use the Control UI");
         expect(prompt).not.toContain("For updates there, use `openclaw update --yes`");
         expect(prompt).toContain(
-          "Identify how the running Gateway is installed and use its host-authorized update procedure. Change installation methods only if the operator requests it.",
+          "When updating the Gateway hosting this session, identify how it is installed and use the update procedure its host authorizes for that installation. Change installation methods only if the operator requests it.",
         );
         expect(prompt).toContain("Keep a working restart path before stopping");
         expect(prompt).toContain(
