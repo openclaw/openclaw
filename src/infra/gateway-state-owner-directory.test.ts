@@ -5,9 +5,9 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ensureOwnerDirectory } from "./gateway-state-owner-directory.js";
 
 const directories = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
+  afterEach(() => {
     vi.restoreAllMocks();
-    await cleanup();
+    cleanup();
   }),
 );
 
