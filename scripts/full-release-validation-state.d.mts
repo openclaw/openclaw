@@ -13,6 +13,7 @@ export function readChild(
     targetVersion?: string;
     targetSha?: string;
     readJobLog?: (jobId: number) => string | Promise<string>;
+    readDesktopReceipt?: (job: ReleaseRecord) => unknown;
     reuseSelection?: { runAttempt: number };
     readAttemptJobs?: (
       runId: string,
