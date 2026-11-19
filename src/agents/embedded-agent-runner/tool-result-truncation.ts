@@ -511,7 +511,7 @@ export function truncateToolResultMessage(
     return {
       ...msg,
       content: keepToolResultTextPrefix(blocks, maxChars, suffixFactory, budgetOptions),
-    } as AgentMessage;
+    } as AgentMessage; // SAFETY: Existing block shapes are retained; the only new block is text.
   }
   const distributableBudget = remainingBudget - reducibleNoticeChars;
   const newContent = blocks.map(({ block, textChars, small, noticeChars }) => {
