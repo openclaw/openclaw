@@ -474,6 +474,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/commands/doctor-channel-ingress.test.ts",
   "src/plugins/registry.runtime-config.test.ts",
   "src/plugins/registry-runtime.skill-usage.test.ts",
+  "src/plugins/plugin-state-migration-readiness.postgres.test.ts",
   "src/plugins/contracts/host-hook-state.identity.test.ts",
   "src/plugins/contracts/host-hooks.contract.test.ts",
   "src/acp/control-plane/manager.owner.test.ts",
