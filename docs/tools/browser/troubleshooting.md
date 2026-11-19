@@ -104,6 +104,67 @@ Close the browser using that profile and check its Chromium lock before retrying
 Locks naming another hostname remain unverified, including after a machine rename;
 starting the browser also preserves that locked profile's preferences.
 
+## Recover a Chromium lock that names another hostname
+
+`openclaw browser start` reports `Chromium profile lock names another hostname`
+when the profile's `SingletonLock` symlink points at a different hostname than
+the current `os.hostname()`. On macOS this can happen when
+`scutil --get HostName` is unset and DHCP or reverse DNS alternately reports
+`<name>.local` and `<name>.<router-domain>`.
+
+Only remove the lock after confirming it is stale. The managed profile keeps
+cookies and history; the singleton files are not user data.
+
+<Steps>
+  <Step title="Inspect the lock">
+    The managed profile's user-data directory defaults to
+    `~/.openclaw/browser/openclaw/user-data` (under your configured state dir).
+
+    ```bash
+    ls -l ~/.openclaw/browser/openclaw/user-data/SingletonLock
+    ```
+
+    It is a symlink whose target looks like `<hostname>-<pid>`. Note the
+    hostname and PID.
+
+  </Step>
+  <Step title="Confirm the owner is gone">
+    The lock is stale when the hostname is this machine's previous name, the PID
+    is no longer running, and no browser is using that profile. Do not remove a
+    lock that names a live browser on another host that shares the profile.
+
+    ```bash
+    ps -p <pid>
+    openclaw browser stop
+    ```
+
+  </Step>
+  <Step title="Remove only the singleton files">
+    ```bash
+    cd ~/.openclaw/browser/openclaw/user-data
+    rm -f SingletonLock SingletonSocket SingletonCookie
+    ```
+
+    Leave every other file in the directory in place.
+
+  </Step>
+  <Step title="Restart the browser">
+    ```bash
+    openclaw browser start
+    ```
+
+    The managed browser writes a fresh lock and the profile keeps its data.
+
+  </Step>
+</Steps>
+
+To prevent recurrence on a headless Mac whose hostname changes, set a stable
+name once:
+
+```bash
+sudo scutil --set HostName openclaw-mac
+```
+
 Security guidance:
 
 - Do **not** relax browser SSRF policy by default.
