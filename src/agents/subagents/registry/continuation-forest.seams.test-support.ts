@@ -17,7 +17,7 @@ import type {
   markPendingWorkTurnGranted,
 } from "../../../auto-reply/continuation/work-store.js";
 import type { getReplyFromConfig } from "../../../auto-reply/reply/get-reply.js";
-import type { stopSessionResetSubagents } from "../../../auto-reply/reply/session-reset-cleanup.js";
+import type { stopSessionResetWork } from "../../../auto-reply/reply/session-reset-cleanup.js";
 import type {
   enqueueSessionDelivery,
   QueuedSessionDeliveryPayload,
@@ -115,11 +115,13 @@ export function logLines(actual: { createSubsystemLogger: typeof createSubsystem
   };
 }
 
-export function resetKill(actual: { stopSessionResetSubagents: typeof stopSessionResetSubagents }) {
+// Upstream's chat reset kill is stopSessionResetWork (subagents, then exec processes); the
+// retention hook calls it through the module export, so the gate wraps that export.
+export function resetKill(actual: { stopSessionResetWork: typeof stopSessionResetWork }) {
   return {
-    stopSessionResetSubagents: async (...args: Parameters<typeof stopSessionResetSubagents>) => {
+    stopSessionResetWork: async (...args: Parameters<typeof stopSessionResetWork>) => {
       await continuationForestSeams.beforeResetKill?.(args[0].sessionKey);
-      return await actual.stopSessionResetSubagents(...args);
+      return await actual.stopSessionResetWork(...args);
     },
   };
 }
