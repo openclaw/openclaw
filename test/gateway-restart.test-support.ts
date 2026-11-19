@@ -91,6 +91,15 @@ export function restartProviderServer(
   options: { ignoreAborted?: boolean } = {},
 ) {
   return createServer((request, response) => {
+    if (request.method !== "POST") {
+      // Model requests are POSTs. Another local process probing this port is not the
+      // Gateway under test, so it must not fail the test.
+      process.stderr.write(
+        `restart provider ignored ${request.method} ${request.url} from port ${request.socket.remotePort}\n`,
+      );
+      response.writeHead(404).end();
+      return;
+    }
     void (async () => {
       await handle(request, response, asRecord(JSON.parse(await readRequestText(request))));
     })().catch((error: unknown) => {
