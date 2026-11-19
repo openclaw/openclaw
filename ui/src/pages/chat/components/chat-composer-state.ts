@@ -47,12 +47,19 @@ function createChatComposerState(): ChatComposerState {
     dictationSelection: null,
     tasks,
     // The owner loads with the first plugin composer action, outside the chat boot bundle.
+    // A failed fetch is not cached, so the next action tries again.
     loadTasks: () =>
-      (loading ??= import("./chat-composer-task.ts").then(({ createComposerTasks }) => {
-        const owner = createComposerTasks(() => state.taskPresenters > 0);
-        setTasks(owner);
-        return owner;
-      })),
+      (loading ??= import("./chat-composer-task.ts").then(
+        ({ createComposerTasks }) => {
+          const owner = createComposerTasks(() => state.taskPresenters > 0);
+          setTasks(owner);
+          return owner;
+        },
+        (error: unknown) => {
+          loading = undefined;
+          throw error;
+        },
+      )),
     taskPresenters: 0,
   };
   return state;
