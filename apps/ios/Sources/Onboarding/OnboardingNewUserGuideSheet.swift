@@ -57,7 +57,6 @@ struct OnboardingNewUserGuideSheet: View {
             .padding(.top, 28)
             .padding(.bottom, 24)
         }
-        .presentationDetents([.large])
         .presentationDragIndicator(.visible)
     }
 }
