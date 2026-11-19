@@ -579,3 +579,16 @@ it("decides the computer schema from session facts, whatever the run allowlist n
   await prepareTools({ runId: "user", trigger: "user", senderIsOwner: true }, config);
   expect(computerAllowedByRun).toEqual([true, true]);
 });
+
+it("builds a registration-denied tool for the owner's list and refuses it for the guest", async () => {
+  // progress_card registration reads the plugin denylist; a guest deny must not drop it.
+  const config = withSenderPolicy({ deny: ["progress_card"] });
+  const guest = await prepareTools(guestGroup, config);
+  const owner = await prepareTools(
+    { ...guestGroup, senderId: "owner", senderIsOwner: true },
+    config,
+  );
+  expect(owner.listed).toContain("progress_card");
+  expect(guest.listed).toEqual(owner.listed);
+  expect(guest.callable).not.toContain("progress_card");
+});
