@@ -101,7 +101,9 @@ export function deriveGoalSessionTitle(firstUserMessage?: string | null): string
   if (!firstUserMessage) {
     return undefined;
   }
-  const stripped = resolveSessionTitleSource(firstUserMessage)?.replace(/\s+/g, " ").trim();
+  const stripped = resolveSessionTitleSource(firstUserMessage.replaceAll("\0", " "))
+    ?.replace(/\s+/g, " ")
+    .trim();
   if (!stripped || isHostEnvelope(stripped)) {
     return undefined;
   }
