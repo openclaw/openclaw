@@ -47,6 +47,16 @@ const fixture = `export default { id: "composer-fixture", activate(host) {
     },
   });
   host.ui.registerAction({
+    id: "replace-broken", label: "Replace and break", icon: "sparkles", placement: "composer",
+    async run({ composer }) {
+      const first = composer.startTask({ title: "First" });
+      composer.startTask({ title: "Second" });
+      proof.firstAborted = first.signal.aborted;
+      await Promise.resolve();
+      throw new Error("Second task failed");
+    },
+  });
+  host.ui.registerAction({
     id: "slow-broken", label: "Slow broken", icon: "pencilLine", placement: "composer",
     async run() {
       await new Promise((resolve) => { proof.failSlow = resolve; });
@@ -103,6 +113,7 @@ type ComposerProofWindow = Window & {
     mode: string;
     cancelled?: boolean;
     failSlow?: () => void;
+    firstAborted?: boolean;
   };
   openclawControlUiE2eGateway: { findRequests: (method: string) => unknown[] };
 };
@@ -194,6 +205,23 @@ suite.define(() => {
         0,
       );
       expect(await action.getAttribute("aria-pressed")).toBe("false");
+    });
+  });
+
+  it("aborts a replaced task at once and fails the latest one on rejection", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      await open(page);
+      await page.getByRole("button", { name: "Replace and break", exact: true }).click();
+      const failed = page.locator('.agent-chat__composer-task[data-state="failed"]');
+      await failed.getByText("Second task failed").waitFor();
+      expect(
+        await page.evaluate(
+          () => (window as unknown as ComposerProofWindow).composerProof?.firstAborted,
+        ),
+      ).toBe(true);
+      expect(await page.locator('.agent-chat__composer-task[data-state="working"]').count()).toBe(
+        0,
+      );
     });
   });
 

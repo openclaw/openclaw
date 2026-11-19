@@ -115,8 +115,8 @@ export async function runControlUiPluginAction(
       throw new Error("This plugin UI view has ended.");
     }
   };
-  // Tasks this invocation started. A cancelled or retired one makes its error expected; a live
-  // one shows the error itself, so its card never stays working after the action has ended.
+  // Tasks this invocation started. A rejection fails the latest one, so its card never stays
+  // working after the action has ended; a cancelled or retired latest task expects the error.
   const tasks: ControlUiComposerTask[] = [];
   try {
     await entry.value.run({
@@ -147,15 +147,14 @@ export async function runControlUiPluginAction(
       },
     });
   } catch (error) {
-    if (tasks.some((task) => task.signal.aborted)) {
-      return;
+    // Only the latest task matters: starting a newer one retires the earlier ones.
+    const latest = tasks.at(-1);
+    if (!latest) {
+      throw error;
     }
-    const live = tasks.at(-1);
-    if (live) {
-      live.fail(formatUiError(error));
-      return;
+    if (!latest.signal.aborted) {
+      latest.fail(formatUiError(error));
     }
-    throw error;
   }
   check();
 }

@@ -22,6 +22,8 @@ export type ComposerTaskCard =
 
 type Current = {
   id: number;
+  /** Synchronous phase; the reactive card is presentation and commits later. */
+  phase: ComposerTaskCard["kind"];
   cancel: AbortController;
   resolve: ((outcome: ComposerProposalOutcome) => void) | null;
 };
@@ -48,14 +50,13 @@ export function createComposerTasks() {
   /** Ends the current task: a proposal resolves `outcome`; unfinished work is aborted. */
   function settle(outcome: ComposerProposalOutcome = "dismissed") {
     const ending = current;
-    const working = state.card?.kind === "working";
     current = null;
     setState((draft) => {
       draft.card = null;
     });
     ending?.resolve?.(outcome);
-    if (working) {
-      ending?.cancel.abort();
+    if (ending?.phase === "working") {
+      ending.cancel.abort();
     }
   }
 
@@ -72,7 +73,7 @@ export function createComposerTasks() {
     settle();
     const id = ++nextId;
     const cancel = new AbortController();
-    current = { id, cancel, resolve: null };
+    current = { id, phase: "working", cancel, resolve: null };
     const live = () => current?.id === id;
     const signal = AbortSignal.any([options.signal, cancel.signal]);
     // The action retiring (chat switch, pane change, plugin reload) or Cancel ends the card.
@@ -114,6 +115,7 @@ export function createComposerTasks() {
         }
         const { promise, resolve } = Promise.withResolvers<ComposerProposalOutcome>();
         current!.resolve = resolve;
+        current!.phase = "proposal";
         setState((draft) => {
           draft.card = { kind: "proposal", title: proposal.title, text };
         });
@@ -123,6 +125,7 @@ export function createComposerTasks() {
         if (!live()) {
           return;
         }
+        current!.phase = "failed";
         setState((draft) => {
           draft.card = {
             kind: "failed",
