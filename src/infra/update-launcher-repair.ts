@@ -33,7 +33,7 @@ function findStageDirectory(target: string): string | undefined {
  * `root`'s entry, and its stage sits beside that live project. Ownership and relocation
  * use the same bytes, and the rename is skipped if the launcher changed meanwhile.
  */
-export async function repairStagedRuntimeLauncher(
+async function repairStagedRuntimeLauncher(
   file: string,
   root: string,
   entryName = "openclaw.mjs",
