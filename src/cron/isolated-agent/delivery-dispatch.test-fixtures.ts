@@ -58,6 +58,7 @@ export function makeBaseParams(overrides: {
       deleteAfterRun: false,
       delivery,
       payload: { kind: "agentTurn", message: "hello" },
+      state: {},
     } as never,
     agentId: "main",
     agentSessionKey: "agent:main:cron:test-job",
