@@ -121,7 +121,7 @@ struct RootSidebarLifecycleTests {
 
     @MainActor
     @Observable
-    private final class Scene {
+    fileprivate final class Scene {
         var phase: ScenePhase = .inactive
     }
 
@@ -143,12 +143,14 @@ struct RootSidebarLifecycleTests {
 
     @MainActor
     @Observable
-    private final class Requests {
+    fileprivate final class Requests {
         var loads: [String: Int] = [:]
         var visibility: [Bool] = []
 
         func record(_ request: WireRequest) {
-            if request.method == "sessions.list", request.params?.limit == 200 {
+            // Only the root roster pages with an offset; chat's own 200-row metadata read reacts
+            // to the same events and is not part of the sidebar's shared work.
+            if request.method == "sessions.list", request.params?.limit == 200, request.params?.offset != nil {
                 self.loads[request.method, default: 0] += 1
             } else if ["usage.cost", "cron.list", "sessions.subscribe"].contains(request.method) {
                 self.loads[request.method, default: 0] += 1
@@ -162,6 +164,7 @@ struct RootSidebarLifecycleTests {
 private struct WireRequest: Decodable, Sendable {
     struct Params: Decodable, Sendable {
         let limit: Int?
+        let offset: Int?
         let visible: Bool?
     }
 
