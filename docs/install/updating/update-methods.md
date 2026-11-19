@@ -160,7 +160,7 @@ commands before building. Discovered macOS LaunchDaemons are inspected in the
 `system` domain; global LaunchAgents remain in the invoking user’s GUI domain.
 This observation does not grant the updater control of a system LaunchDaemon.
 
-Agents use the built-in updater by default. For a Gateway running directly from
+Agents first check how the running Gateway is managed. For a Gateway running directly from
 a Git checkout, an agent can update that checkout with Git when the host
 authorizes it. You don't need to specify a commit or tag. To switch installation
 methods, ask for that change explicitly.

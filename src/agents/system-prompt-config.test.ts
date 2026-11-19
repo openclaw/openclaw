@@ -209,9 +209,8 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         expect(prompt).not.toContain("restart, config, channels");
         expect(prompt).not.toContain("For an update request, use the Control UI");
         expect(prompt).not.toContain("For updates there, use `openclaw update --yes`");
-        expect(prompt).toContain("Use the built-in updater by default.");
         expect(prompt).toContain(
-          "Use another host-authorized update method if the running Gateway is managed that way or the operator's requested change calls for it.",
+          "First check how the running Gateway is managed. Default to the built-in updater unless the installation or requested change calls for another host-authorized method, such as Git for a directly served checkout.",
         );
         expect(prompt).toContain("Keep a working restart path before stopping");
         expect(prompt).toContain(
