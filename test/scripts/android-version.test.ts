@@ -6,6 +6,7 @@ import {
   normalizePinnedAndroidVersion as normalizePinned,
   renderAndroidReleaseNotes,
   resolveAndroidVersion,
+  resolveAndroidBuildVersion,
   syncAndroidVersioning,
 } from "../../scripts/lib/android-version.ts";
 import { extractChangelogSection } from "../../scripts/lib/mobile-changelog.ts";
@@ -81,6 +82,66 @@ describe("Android versioning", () => {
     expect(() => renderAndroidReleaseNotes({ canonicalVersion: "2026.6.2" }, changelog)).toThrow(
       "Unable to find Android changelog notes for 2026.6.2",
     );
+  });
+
+  it("rejects stale local build defaults without changing the pinned metadata owner", () => {
+    const rootDir = writeAndroidFixture({ packageVersion: "2026.9.2" });
+    expect(resolveAndroidVersion(rootDir).canonicalVersion).toBe("2026.6.2");
+    expect(() => resolveAndroidBuildVersion(rootDir, "")).toThrow(
+      "Android version pin 2026.6.2 is stale for Gateway 2026.9.2",
+    );
+  });
+
+  it("preserves a source-bound release plan even when the local pin is stale", () => {
+    const rootDir = writeAndroidFixture({ packageVersion: "2026.9.2" });
+    expect(spawnSync("git", ["init", "--quiet"], { cwd: rootDir }).status).toBe(0);
+    expect(
+      spawnSync(
+        "git",
+        [
+          "-c",
+          "user.name=Test",
+          "-c",
+          "user.email=test@example.invalid",
+          "commit",
+          "--allow-empty",
+          "--quiet",
+          "-m",
+          "Synthetic version fixture",
+        ],
+        { cwd: rootDir },
+      ).status,
+    ).toBe(0);
+    const sourceSha = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: rootDir,
+      encoding: "utf8",
+    }).stdout.trim();
+    const planPath = `${rootDir}/android-plan.json`;
+    const plan = {
+      version: "2026.9.2",
+      versionCode: 2026090201,
+      wearVersionCode: 2026090251,
+      sourceSha,
+    };
+    fs.writeFileSync(planPath, JSON.stringify(plan));
+    expect(resolveAndroidBuildVersion(rootDir, planPath)).toMatchObject({
+      canonicalVersion: plan.version,
+      versionCode: plan.versionCode,
+      wearVersionCode: plan.wearVersionCode,
+    });
+    fs.writeFileSync(planPath, JSON.stringify({ ...plan, sourceSha: "0".repeat(40) }));
+    expect(() => resolveAndroidBuildVersion(rootDir, planPath)).toThrow(/sourceSha must match/);
+  });
+
+  it("accepts an aligned pin for stable and prerelease local builds", () => {
+    for (const packageVersion of ["2026.6.2", "2026.6.2-beta.1"]) {
+      const version = resolveAndroidBuildVersion(writeAndroidFixture({ packageVersion }), "");
+      expect([version.canonicalVersion, version.versionCode, version.wearVersionCode]).toEqual([
+        "2026.6.2",
+        2026060201,
+        2026060251,
+      ]);
+    }
   });
 
   it("checks only pinned metadata even when the Gateway has different release notes", () => {

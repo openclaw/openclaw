@@ -141,6 +141,12 @@ export function resolveAndroidBuildVersion(
 ): ResolvedAndroidVersion {
   const pinned = resolveAndroidVersion(rootDir);
   if (!planPath) {
+    const expected = resolveGatewayVersionForAndroidRelease(rootDir).pinnedAndroidVersion;
+    if (pinned.canonicalVersion !== expected) {
+      throw new Error(
+        `Android version pin ${pinned.canonicalVersion} is stale for Gateway ${expected}. Run pnpm android:version:pin -- --from-gateway, or use a source-bound Android release plan.`,
+      );
+    }
     return pinned;
   }
   const plan = JSON.parse(readFileSync(planPath, "utf8")) as {
