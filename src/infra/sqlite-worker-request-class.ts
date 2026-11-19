@@ -174,6 +174,8 @@ const coreCommands = new Set([
   "append",
   "appendChunk",
   "assistant",
+  "authority.capture",
+  "authority.read",
   "batch",
   "boards.applyOps",
   "boards.grant",

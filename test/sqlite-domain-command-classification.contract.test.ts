@@ -177,6 +177,8 @@ const domains = {
   >,
   "src/config/sessions/session-sharing-store.worker.ts": {
     add: true,
+    "authority.capture": true,
+    "authority.read": true,
     "category.apply": true,
     "category.prepare": true,
     involvement: true,
