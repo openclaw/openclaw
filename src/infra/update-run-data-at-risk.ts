@@ -51,8 +51,13 @@ export type RecordedDataAtRisk = {
 
 /** A mark with the run facts its verification needs. */
 export function describeRecordedDataAtRisk(run: UpdateRunRecord, mark: string): RecordedDataAtRisk {
+  // Compaction can evict the ordinary step but keeps the rollback's diagnostic receipt,
+  // which only a completed restore writes.
   const restored = run.steps.some(
-    (entry) => entry.step === "database rollback" && entry.status === "completed",
+    (entry) =>
+      (entry.step === "database rollback" && entry.status === "completed") ||
+      (entry.step === "diagnostic:database rollback" &&
+        entry.detail?.startsWith("Restored pre-migration databases") === true),
   );
   return { runId: run.runId, mark, ...(restored ? { databaseRestored: true as const } : {}) };
 }

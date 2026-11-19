@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as registryListing from "../state/openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -19,6 +20,9 @@ import { requireNodeSqlite } from "./node-sqlite.js";
 import * as snapshotSource from "./sqlite-snapshot-source.js";
 import { verifyUpdateStateConsistency } from "./update-data-at-risk.js";
 import { createRetainedCheckpointFixture } from "./update-retained-checkpoint.test-support.js";
+import { describeRecordedDataAtRisk } from "./update-run-data-at-risk.js";
+import { createUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 let state: OpenClawTestState;
 beforeEach(async () => {
@@ -160,6 +164,103 @@ it.each(["shared", "agent"] as const)(
     }
   },
 );
+
+it.each([
+  { registry: "unreadable", leftover: true },
+  { registry: "unreadable", leftover: false },
+  { registry: "readable", leftover: true },
+  { registry: "readable", leftover: false },
+] as const)(
+  "keeps an unfinished migration and agent leftovers both in view (registry $registry, leftover $leftover)",
+  async ({ registry, leftover }) => {
+    const agentPath = openOpenClawAgentDatabase({
+      agentId: "external",
+      path: state.path("external-store", "openclaw-agent.sqlite"),
+    }).path;
+    closeOpenClawAgentDatabasesForTest();
+    setStateUserVersion(OPENCLAW_STATE_SCHEMA_VERSION - 1);
+    if (leftover) {
+      await fs.writeFile(`${agentPath}.migrated-run-1`, "migrated state");
+    }
+    if (registry === "unreadable") {
+      vi.spyOn(registryListing, "readRegisteredAgentDatabases").mockImplementation(() => {
+        throw new Error("registry locked");
+      });
+    }
+
+    const verdict = await verifyUpdateStateConsistency({
+      env: process.env,
+      formatCommand: (command) => command,
+      marks: [{ runId: "run-1", mark: "rollback-state-unverified" }],
+    });
+
+    if (registry === "unreadable") {
+      // Never deferred to Doctor: leftovers that could not be looked for stay a reason to stop.
+      expect(verdict).toMatchObject({ status: "unverifiable", leftoversUnchecked: true });
+      expect(verdict).not.toHaveProperty("finishable");
+      expect(verdict.detail).toContain("rollback leftovers beside agent databases are unchecked");
+      expect(verdict.detail).toContain("migration did not finish");
+    } else if (leftover) {
+      expect(verdict).toMatchObject({ status: "inconsistent" });
+      expect(verdict.detail).toContain(`${agentPath}.migrated-run-1`);
+    } else {
+      expect(verdict).toMatchObject({ status: "inconsistent", finishable: true });
+    }
+  },
+);
+
+it("reports an agent rollback leftover even when that agent database cannot be read", async () => {
+  openOpenClawStateDatabase();
+  const agentPath = openOpenClawAgentDatabase({
+    agentId: "external",
+    path: state.path("external-store", "openclaw-agent.sqlite"),
+  }).path;
+  closeOpenClawAgentDatabasesForTest();
+  // An unreadable agent database alone is unverifiable, which a plain update continues past.
+  await fs.writeFile(agentPath, "not a sqlite database".repeat(256));
+  await fs.writeFile(`${agentPath}.migrated-run-1`, "migrated state");
+
+  const verdict = await verifyUpdateStateConsistency({
+    env: process.env,
+    formatCommand: (command) => command,
+    marks: [{ runId: "run-1", mark: "rollback-state-unverified" }],
+  });
+
+  expect(verdict).toMatchObject({
+    status: "inconsistent",
+    detail: expect.stringContaining(`${agentPath}.migrated-run-1`),
+  });
+});
+
+it("keeps a completed rollback's retained files out of the check after compaction", async () => {
+  openOpenClawStateDatabase();
+  const run = createUpdateRun({ trigger: "cli" });
+  for (const step of updateRunStepsFromResultStep({
+    name: "database rollback",
+    exitCode: 0,
+    diagnostics: ["Restored pre-migration databases from /backup."],
+  })) {
+    recordUpdateRunStep(run.runId, step);
+  }
+  // A long update's later steps push the ordinary rollback step out of the bounded row.
+  for (let index = 0; index < 140; index += 1) {
+    recordUpdateRunStep(run.runId, { step: `later-${index}`, status: "completed" });
+  }
+  const compacted = getUpdateRun(run.runId)!;
+  expect(compacted.steps.some(({ step }) => step === "database rollback")).toBe(false);
+  await fs.writeFile(
+    `${resolveOpenClawStateSqlitePath(process.env)}.migrated-${run.runId}`,
+    "kept for manual recovery",
+  );
+
+  const verdict = await verifyUpdateStateConsistency({
+    env: process.env,
+    formatCommand: (command) => command,
+    marks: [describeRecordedDataAtRisk(compacted, "rollback-state-unverified")],
+  });
+
+  expect(verdict).toMatchObject({ status: "consistent" });
+});
 
 it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
   "reports an unlistable state directory as unverifiable, not as an interrupted restore",

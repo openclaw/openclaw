@@ -35,6 +35,8 @@ export type UpdateStateVerification =
       newerState?: true;
       /** Doctor's maintenance settles it: an unfinished migration or writers it waits out. */
       finishable?: true;
+      /** Rollback leftovers beside agent databases could not be looked for. */
+      leftoversUnchecked?: true;
     };
 
 function retryRepair(formatCommand: (command: string) => string): string {
@@ -175,12 +177,35 @@ export async function verifyUpdateStateConsistency(params: {
     rollbackRuns
       .map(({ runId }) => ({ runId, file: findRollbackLeftover(paths, runId) }))
       .find((entry): entry is { runId: string; file: string } => entry.file !== undefined);
-  // The shared database needs no registry; agent databases are checked after the schema
-  // verdict, so an unreadable registry cannot hide a schema finding.
-  const sharedLeftover = findLeftover([databasePath]);
-  if (sharedLeftover) {
-    return leftoverFinding(sharedLeftover);
+  // Leftovers are checked before anything else, so no other verdict can skip past one.
+  const agentPaths = rollbackRuns.length > 0 ? readAgentDatabasePaths(params.env) : [];
+  const leftover = findLeftover([databasePath, ...(agentPaths ?? [])]);
+  if (leftover) {
+    return leftoverFinding(leftover);
   }
+  const verdict = await checkStateEvidence(params, databasePath);
+  if (agentPaths) {
+    return verdict;
+  }
+  // Unchecked leftovers are never deferred or continued past: anything that can start or
+  // restart the Gateway refuses on them. Another finding is kept beside that fact.
+  const unchecked =
+    "the agent database registry could not be read, so database rollback leftovers beside agent databases are unchecked";
+  return {
+    status: "unverifiable",
+    leftoversUnchecked: true,
+    detail: verdict.status === "consistent" ? unchecked : `${unchecked}; and ${verdict.detail}`,
+    nextAction:
+      verdict.status === "consistent"
+        ? retryRepair(params.formatCommand)
+        : `${retryRepair(params.formatCommand)} Then: ${verdict.nextAction}`,
+  };
+}
+
+async function checkStateEvidence(
+  params: Parameters<typeof verifyUpdateStateConsistency>[0],
+  databasePath: string,
+): Promise<UpdateStateVerification> {
   try {
     await assertUpdateRecoveryDirectoryAdmission(databasePath);
   } catch (error) {
@@ -221,32 +246,6 @@ export async function verifyUpdateStateConsistency(params: {
     };
   }
   const verdict = classify(schemas, params.formatCommand);
-  // A finding that refuses outright reports first. One a caller may defer to Doctor or
-  // continue past (an unfinished migration, newer state) must not hide a rollback leftover.
-  const deferrable =
-    verdict.status !== "consistent" && (verdict.finishable === true || verdict.newerState === true);
-  if (verdict.status !== "consistent" && !deferrable) {
-    return verdict;
-  }
-  if (rollbackRuns.length > 0) {
-    const agentPaths = readAgentDatabasePaths(params.env);
-    if (!agentPaths && verdict.status !== "consistent") {
-      // The schema finding is the more useful answer; it still refuses resolution.
-      return verdict;
-    }
-    if (!agentPaths) {
-      return {
-        status: "unverifiable",
-        detail:
-          "the agent database registry could not be read to check for database rollback leftovers",
-        nextAction: retryRepair(params.formatCommand),
-      };
-    }
-    const agentLeftover = findLeftover(agentPaths);
-    if (agentLeftover) {
-      return leftoverFinding(agentLeftover);
-    }
-  }
   if (verdict.status !== "consistent") {
     // A schema finding explains why recovery rows may be unreadable, so it reports first.
     return verdict;

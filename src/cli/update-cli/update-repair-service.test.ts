@@ -22,6 +22,8 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
+import * as registryListing from "../../state/openclaw-agent-db-registry-listing.js";
+import * as databasePreflight from "../../state/openclaw-database-preflight.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../version.js";
@@ -489,6 +491,38 @@ it("fails repair and leaves recovery open when the mark is still refused after D
   expect(events).toEqual(["finalized", "finalized", "start", "verified"]);
   expect(listUpdateRuns()[0]?.steps).toContainEqual(
     expect.objectContaining({ step: `finalize:data-at-risk-verified:${original}` }),
+  );
+});
+
+it("refuses before Doctor when an unfinished migration comes with unchecked agent leftovers", async () => {
+  const original = seed(true, markedRisk);
+  // The agent registry cannot be read, so rollback leftovers beside agent databases are unknown.
+  vi.spyOn(registryListing, "readRegisteredAgentDatabases").mockImplementation(() => {
+    throw new Error("registry locked");
+  });
+  const preflight = databasePreflight.preflightOpenClawDatabaseSchemas;
+  vi.spyOn(databasePreflight, "preflightOpenClawDatabaseSchemas").mockImplementation(
+    async (params, purpose) =>
+      purpose === "runtime" && params?.preserveSourceArtifacts === false
+        ? {
+            incompatible: [],
+            indeterminate: [],
+            pendingMigrations: [
+              {
+                kind: "state",
+                path: "/state/openclaw.sqlite",
+                foundVersion: 39,
+                supportedVersion: 40,
+              },
+            ],
+          }
+        : await preflight(params, purpose),
+  );
+
+  await repair();
+
+  expectRefusedBeforeDoctor(
+    `Update ${original} recorded data at risk (rollback-state-unverified). The Gateway is stopped. Repair left the Gateway as it was. ${triageLead}retry \`openclaw update repair\` once that reason is cleared. Then: run \`openclaw doctor --fix\` to finish the migration. Could not verify: the agent database registry could not be read, so database rollback leftovers beside agent databases are unchecked; and the state database /state/openclaw.sqlite is at schema 39;`,
   );
 });
 

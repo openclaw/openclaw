@@ -223,55 +223,67 @@ it("verifies a recorded data-at-risk mark before the next update and records the
 
 it.each([
   { finding: "unfinished migration", refuses: true },
+  { finding: "unchecked agent leftovers", refuses: true },
   { finding: "newer state", refuses: false },
-] as const)("handles a recorded mark whose verification finds $finding", async ({ refuses }) => {
-  const { root, marked, error } = markedFailedUpdate("update-admission-marked-refused-");
-  vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency").mockResolvedValue(
-    refuses
-      ? {
-          status: "inconsistent",
-          detail: "the state database is at schema 7",
-          nextAction: "run `openclaw doctor --fix` to finish the migration.",
-        }
-      : {
-          status: "inconsistent",
-          newerState: true,
-          detail: "the state database is at schema 99",
-          nextAction: "run `openclaw update` to a version that supports it.",
-        },
-  );
-  const admission = admitUpdateCommandRun({ env: process.env, opts: {}, root });
+] as const)(
+  "handles a recorded mark whose verification finds $finding",
+  async ({ finding, refuses }) => {
+    const { root, marked, error } = markedFailedUpdate("update-admission-marked-refused-");
+    vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency").mockResolvedValue(
+      finding === "unfinished migration"
+        ? {
+            status: "inconsistent",
+            detail: "the state database is at schema 7",
+            nextAction: "run `openclaw doctor --fix` to finish the migration.",
+          }
+        : finding === "unchecked agent leftovers"
+          ? {
+              // Unverifiable, but never continued past: the update restarts the Gateway.
+              status: "unverifiable",
+              leftoversUnchecked: true,
+              detail: "the state database is at schema 7",
+              nextAction: "run `openclaw doctor --fix` to finish the migration.",
+            }
+          : {
+              status: "inconsistent",
+              newerState: true,
+              detail: "the state database is at schema 99",
+              nextAction: "run `openclaw update` to a version that supports it.",
+            },
+    );
+    const admission = admitUpdateCommandRun({ env: process.env, opts: {}, root });
 
-  if (refuses) {
-    await expect(admission).rejects.toThrow(
-      `Update ${marked.runId} recorded data at risk (rollback-state-unverified). The Gateway`,
+    if (refuses) {
+      await expect(admission).rejects.toThrow(
+        `Update ${marked.runId} recorded data at risk (rollback-state-unverified). The Gateway`,
+      );
+      await expect(admission).rejects.toThrow(
+        `The update changed nothing. Run \`openclaw triage\` for an agent with the recorded facts, or by hand: run \`openclaw doctor --fix\` to finish the migration. ${finding === "unfinished migration" ? "Found" : "Could not verify"}: the state database is at schema 7.`,
+      );
+      // The refusing run keeps the finding for the agent that triage opens.
+      const [refusing] = updateRunLedger.listUpdateRuns({ limit: 1 });
+      expect(refusing?.runId).not.toBe(marked.runId);
+      expect(refusing?.steps).toContainEqual(
+        expect.objectContaining({
+          step: "data-at-risk verification",
+          status: "failed",
+          detail: expect.stringContaining("the state database is at schema 7"),
+        }),
+      );
+      return;
+    }
+    const next = await admission;
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining("The update continues; its own checks still guard activation."),
     );
-    await expect(admission).rejects.toThrow(
-      "The update changed nothing. Run `openclaw triage` for an agent with the recorded facts, or by hand: run `openclaw doctor --fix` to finish the migration. Found: the state database is at schema 7.",
-    );
-    // The refusing run keeps the finding for the agent that triage opens.
-    const [refusing] = updateRunLedger.listUpdateRuns({ limit: 1 });
-    expect(refusing?.runId).not.toBe(marked.runId);
-    expect(refusing?.steps).toContainEqual(
-      expect.objectContaining({
-        step: "data-at-risk verification",
-        status: "failed",
-        detail: expect.stringContaining("the state database is at schema 7"),
-      }),
-    );
-    return;
-  }
-  const next = await admission;
-  expect(error).toHaveBeenCalledWith(
-    expect.stringContaining("The update continues; its own checks still guard activation."),
-  );
-  // Unverified, so no receipt: the next repair or update checks again.
-  expect(
-    getUpdateRun(next.runId)?.steps.some((step) =>
-      step.step.startsWith("finalize:data-at-risk-verified:"),
-    ),
-  ).toBe(false);
-});
+    // Unverified, so no receipt: the next repair or update checks again.
+    expect(
+      getUpdateRun(next.runId)?.steps.some((step) =>
+        step.step.startsWith("finalize:data-at-risk-verified:"),
+      ),
+    ).toBe(false);
+  },
+);
 
 it.each([false, true])(
   "new update settles a dead driver only outside preview (dryRun=%s)",

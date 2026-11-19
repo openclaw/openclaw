@@ -50,7 +50,9 @@ export async function recoverInterruptedManagedUpdate(params: {
   if (!run || run.status !== "running") {
     throw new Error("Interrupted updater has no current running record");
   }
-  assertRestartSafe(run);
+  // Only this run's own mark blocks entry: post-core repair below verifies earlier marks
+  // and records their receipts before the history-wide check after it.
+  assertRunRestartSafe(readRecordedDataAtRisk(run));
   assertCurrent();
   const anchor = resolvePackageActivationAnchor(root);
   let publication;
@@ -168,9 +170,12 @@ function assertRestartSafe(run: UpdateRunRecord | undefined) {
   } catch {
     history = undefined;
   }
-  const dataAtRisk = history
-    ? listUnverifiedDataAtRisk(history)[0]?.mark
-    : readRecordedDataAtRisk(run);
+  assertRunRestartSafe(
+    history ? listUnverifiedDataAtRisk(history)[0]?.mark : readRecordedDataAtRisk(run),
+  );
+}
+
+function assertRunRestartSafe(dataAtRisk: string | undefined) {
   if (dataAtRisk) {
     throw new Error(
       `gateway left stopped: data at risk (${dataAtRisk}) recorded and not verified by repair`,

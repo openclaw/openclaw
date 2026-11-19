@@ -526,6 +526,12 @@ finalization runs Doctor maintenance, check it only after that maintenance has h
 exclusive ownership of the state, so no earlier writer can still be active. Before
 that point the mark is reported as a warning, not resolved.
 
+Before anything else, the check looks for `<database>.migrated-<run>` files that
+the marked update's database rollback left beside the shared database and every
+registered agent database. If the agent database registry cannot be read, those
+files cannot be ruled out. Both the next update and repair then refuse instead of
+continuing, name `openclaw triage`, and keep any other finding beside that one.
+
 A rollback that completed keeps the displaced `<database>.migrated-<run>` files
 for manual recovery. Those files do not count against that run's mark. If a
 mark is still refused after repair's Doctor maintenance has run, repair exits

@@ -1,11 +1,12 @@
 # Recorded data-at-risk marks: one new verification owner proved against real SQLite
 # (consistent beside a live writer without a copy, newer, behind, unfinished recovery,
 # interrupted restore, unreadable, live Doctor writers before and after Doctor holds the
-# state, partial rollback leftovers that a live-writer mark must not hide, and files a
-# completed rollback keeps on purpose), its readers (repair before and after Doctor,
-# including a refusal after Doctor that fails repair and stays retryable; next-update
-# admission including already-current) with exact rendered text per outcome, Git
-# release-mode service ownership against real git worktrees with copied, foreign and
-# out-of-prefix negative controls, and the stale-Gateway stop that is skipped when the
-# service identity cannot be inspected or its stop cannot be confirmed. Exact net growth.
-313
+# state, rollback leftovers beside shared and agent databases found before any other
+# check, an unreadable agent registry kept beside a schema finding, and files a completed
+# rollback keeps on purpose, also after ledger compaction), its readers (repair before
+# and after Doctor, including refusals on unchecked leftovers and after Doctor; the next
+# plain update, including already-current and its refusal on unchecked leftovers; the
+# interrupted managed handoff past an earlier verified mark) with exact rendered text per
+# outcome, the Git release-launcher refusal message, and Doctor's skipped and unconfirmed
+# stale-Gateway stops. Exact net growth.
+472

@@ -108,8 +108,9 @@ export function formatDataAtRiskRefusal(params: {
  * Before a plain update creates its run: verify every unverified data-at-risk mark.
  * Consistent: report one line and return the recorder for the receipts on the new run.
  * Newer state or an unreadable database: warn and continue, since the update's own
- * schema checks still guard activation and updating is the named fix. Any other
- * finding refuses once its run exists, so the finding is recorded; nothing changes.
+ * schema checks still guard activation and updating is the named fix. Unchecked
+ * rollback leftovers and any other finding refuse once its run exists, so the finding
+ * is recorded; nothing changes.
  */
 export async function verifyRecordedDataAtRiskBeforeUpdate(
   env: NodeJS.ProcessEnv,
@@ -145,7 +146,10 @@ export async function verifyRecordedDataAtRiskBeforeUpdate(
       }
     };
   }
-  const continues = verification.status === "unverifiable" || verification.newerState === true;
+  // Unchecked rollback leftovers stop the update: it restarts the Gateway.
+  const continues =
+    !verification.leftoversUnchecked &&
+    (verification.status === "unverifiable" || verification.newerState === true);
   const refusal = formatDataAtRiskRefusal({
     marks,
     verification,

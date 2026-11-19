@@ -5,11 +5,7 @@ import { isStandaloneRuntimeExecutable } from "../../cli-invocation.mjs";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { consumeRootCommandOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { pathExists } from "../infra/fs-safe.js";
-import {
-  GIT_RELEASE_LAUNCHER,
-  resolveGitReleaseEntrypointForLauncher,
-} from "../infra/git-release-paths.js";
-import { readGitMetadataDirectories } from "../infra/git-root.js";
+import { resolveGitReleaseEntrypointForLauncher } from "../infra/git-release-paths.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
 import { realpathOrResolve } from "../infra/path-existence.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -189,45 +185,6 @@ export function resolveServiceEntrypoint(
   return undefined;
 }
 
-/**
- * Whether a service that starts the Git release launcher runs a release of `checkout`:
- * the launcher is the entrypoint, the release sits in that launcher's `releases/`, and it
- * is a linked worktree Git itself registered for the checkout's repository (its private
- * Git directory points back at it, so a copied release does not qualify).
- */
-async function isGitReleaseOf(
-  command: Pick<GatewayServiceCommandConfig, "programArguments">,
-  release: string,
-  checkout: string,
-): Promise<boolean> {
-  const index = resolveServiceEntrypointIndex(command.programArguments);
-  const launcher = index === undefined ? undefined : command.programArguments[index];
-  if (!launcher || !path.isAbsolute(launcher) || path.basename(launcher) !== GIT_RELEASE_LAUNCHER) {
-    return false;
-  }
-  const releases = await realpathOrResolve(path.join(path.dirname(launcher), "releases"));
-  if (!release.startsWith(`${releases}${path.sep}`)) {
-    return false;
-  }
-  const releaseGit = readGitMetadataDirectories(release);
-  const checkoutGit = readGitMetadataDirectories(checkout);
-  // A linked worktree has its own Git directory; Git records the worktree it belongs to.
-  if (!releaseGit || !checkoutGit || releaseGit.gitDir === releaseGit.commonDir) {
-    return false;
-  }
-  const backPointer = await fs
-    .readFile(path.join(releaseGit.gitDir, "gitdir"), "utf8")
-    .then((value) => value.trim())
-    .catch(() => "");
-  return (
-    backPointer !== "" &&
-    (await realpathOrResolve(path.resolve(releaseGit.gitDir, backPointer))) ===
-      (await realpathOrResolve(path.join(release, ".git"))) &&
-    (await realpathOrResolve(releaseGit.commonDir)) ===
-      (await realpathOrResolve(checkoutGit.commonDir))
-  );
-}
-
 function tryRealpath(value: string): Promise<string>;
 function tryRealpath(value: string | undefined): Promise<string | undefined>;
 async function tryRealpath(value: string | undefined): Promise<string | undefined> {
@@ -355,11 +312,6 @@ export async function gatewayServiceCommandMatchesRoot(
     [expectedRootReal, serviceRootReal].map((directory) => fs.stat(directory).catch(() => null)),
   );
   if (expected && actual && expected.dev === actual.dev && expected.ino === actual.ino) {
-    return true;
-  }
-  // A Git release-mode service starts the release launcher; each release is a
-  // linked worktree of the checkout, which stays the installation's own root.
-  if (command && (await isGitReleaseOf(command, serviceRootReal, expectedRootReal))) {
     return true;
   }
   const managed = command?.managedDefinition;
