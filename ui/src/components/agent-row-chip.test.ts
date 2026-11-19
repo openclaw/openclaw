@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { readFileSync } from "node:fs";
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
@@ -92,4 +93,22 @@ it("leaves retained chip DOM untouched when only the parent's loading state chan
   const mutations = observer.takeRecords();
   observer.disconnect();
   expect(mutations).toEqual([]);
+});
+
+it("preserves the identity avatar grid so a loaded portrait does not share its row with fallback", async () => {
+  const identityCss = readFileSync("src/styles/identity-avatar.css", "utf8");
+  const chipCss = readFileSync("src/styles/agent-row-chip.css", "utf8");
+  const style = document.createElement("style");
+  style.textContent = identityCss + chipCss;
+  document.head.append(style);
+  try {
+    const { container } = mountChip(() => createComponent(AgentRowChip, { agentId: "research" }));
+    const avatar = container.querySelector(".agent-row-chip__avatar")!;
+    expect(getComputedStyle(avatar).display).toBe("inline-grid");
+    expect(getComputedStyle(avatar.querySelector(".identity-avatar__fallback")!).gridArea).toBe(
+      "1 / 1",
+    );
+  } finally {
+    style.remove();
+  }
 });
