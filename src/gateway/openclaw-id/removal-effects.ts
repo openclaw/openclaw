@@ -17,13 +17,26 @@ import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-cli
 import { invalidateGatewayPolicyClient } from "../server/ws-policy-close.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { removeNodePairings, reconcileNodePairings } from "./node-pairing.js";
-import type { OpenClawIdEffects } from "./service.js";
+import type { OpenClawIdConnectionCloseCause, OpenClawIdEffects } from "./service.js";
 import {
   openclawIdTunnelConnectionsOf,
   setOpenClawIdRunOwnerConnections,
 } from "./tunnel-connections.js";
 
 type EffectsLogger = { warn: (message: string) => void };
+
+// Both causes are policy closes (1008); the reason tells removal and sign-out apart.
+const CLOSE_POLICIES: Record<
+  OpenClawIdConnectionCloseCause,
+  { reason: string; code: number; message: string }
+> = {
+  removed: { reason: "openclaw-id-removed", code: 1008, message: "removed from this claw" },
+  "signed-out": {
+    reason: "openclaw-id-signed-out",
+    code: 1008,
+    message: "signed out of OpenClaw ID",
+  },
+};
 
 // Connection ids that still own a registered (queued or running) run source.
 function runOwnerConnections(): Set<string> {
@@ -118,16 +131,13 @@ export function createOpenClawIdRemovalEffects(params: {
       return cancelled;
     },
 
-    closeConnections(connectionIds) {
+    closeConnections(connectionIds, cause = "removed") {
+      const policy = CLOSE_POLICIES[cause];
       for (const id of connectionIds) {
         const client = byConnection.get(id);
         byConnection.delete(id);
         if (client) {
-          invalidateGatewayPolicyClient(client, {
-            reason: "openclaw-id-removed",
-            code: 1008,
-            message: "removed from this claw",
-          });
+          invalidateGatewayPolicyClient(client, policy);
         }
       }
     },
