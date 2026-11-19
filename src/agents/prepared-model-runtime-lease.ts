@@ -1,4 +1,5 @@
 /** Agent-run lease admission for lifecycle-owned prepared model runtimes. */
+import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
@@ -22,7 +23,6 @@ import {
   ownerKey,
   normalizePreparedModelRuntimeInput,
   preparedModelRuntimeConfigsMatch,
-  preparedModelRuntimeCatalogInputsMatch,
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
   resolveConfiguredOwner,
@@ -96,6 +96,29 @@ function createPreparedModelRuntimeAdmissionClaim(context: PreparedModelRuntimeL
     },
     release,
   };
+}
+
+/** Passive inventory may cross execution isolation, but never its configured source or scope. */
+function preparedModelRuntimeCatalogInputsMatch(
+  left: PreparedModelRuntimeInput,
+  right: PreparedModelRuntimeInput,
+): boolean {
+  const inventoryKey = (input: PreparedModelRuntimeInput) =>
+    ownerKey({
+      ...input,
+      readOnly: false,
+      loadRuntimePlugins: false,
+      runtimePluginPurpose: undefined,
+      runtimePluginSelections: undefined,
+      allowGatewaySubagentBinding: false,
+    });
+  return (
+    inventoryKey(left) === inventoryKey(right) &&
+    preparedModelRuntimeConfigsMatch(
+      projectConfigOntoRuntimeSourceSnapshot(left.config),
+      projectConfigOntoRuntimeSourceSnapshot(right.config),
+    )
+  );
 }
 
 function preparedModelRuntimeBorrowMatchesInput(
