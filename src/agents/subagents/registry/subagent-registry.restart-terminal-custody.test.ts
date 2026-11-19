@@ -36,6 +36,7 @@ import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
 import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
 import { PROVISIONAL_KILL_RECONCILIATION_MS } from "./subagent-registry-helpers.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
@@ -405,4 +406,89 @@ it("3: the root's resume input does not stand in for a delegate's custody receip
   });
   expect(fixture.gateway).not.toHaveBeenCalled();
   expect(fixture.announce).not.toHaveBeenCalled();
+});
+
+it("3: activation settles an earlier process's delegate before the sweeper, so its requester gets no second outcome", async () => {
+  await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: parent,
+    defaultSessionId: "sess-parent",
+  });
+  // Rows the earlier Gateway process created, owed to this requester: upstream's sweeper fails
+  // such a child with its own notice once the root's resume re-admits completion custody.
+  const earlier = Math.floor(performance.timeOrigin) - 10 * 60_000;
+  const earlierRow = {
+    requesterAgentId: "main",
+    createdAt: earlier,
+    execution: {
+      status: "running" as const,
+      startedAt: earlier,
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    },
+  };
+  const reached = await addRunningChild("swept-reached");
+  await addRunningChild("swept-delegate", earlierRow);
+  await addRunningChild("swept-plain", {
+    ...earlierRow,
+    drainsContinuationDelegateQueue: undefined,
+  });
+  await shutDownGracefully([reached]);
+  const enqueue = vi
+    .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
+    .mockImplementation(() => ({
+      id: "resume-event",
+      accepted: Promise.resolve({ ok: true as const }),
+      cancel: () => true,
+      settled: Promise.resolve({
+        status: "completed" as const,
+        executionStarted: true,
+        delivered: true,
+      }),
+    }));
+  const registryWarn = vi.spyOn(subagentRegistryLog, "warn");
+
+  await restartGateway();
+  // Activation has already settled the delegate, before the root resume and any sweep. A sweep
+  // this early fails nothing: retired custody still owes the plain child's notice.
+  expectInterrupted(subagentRuns.get("swept-delegate"));
+  await testing.sweepOnceForTests();
+  await fixture.settle();
+  expect(subagentRuns.get("swept-plain")?.execution.endedAt).toBeUndefined();
+  const warn = vi.fn();
+  const context = createContext();
+  // Restart completion recovery re-admits custody through the Gateway that resumes the root.
+  context.resolveGatewayContext = () => context;
+  await resumeMarkedSessions({ context, signal: new AbortController().signal, log: { warn } });
+  await fixture.settle();
+  await testing.sweepOnceForTests();
+  await fixture.settle();
+
+  const durable = loadSubagentRegistryFromSqlite();
+  const noticeRunIds = () =>
+    [...fixture.announce.mock.calls, ...fixture.wake.mock.calls].map(([request]) => {
+      const params = request as { childRunId?: string; settledEntry?: { runId?: string } };
+      return params.childRunId ?? params.settledEntry?.runId;
+    });
+  // The sweeper is live here: it failed the plain child and announced that failure...
+  expect(durable.get("swept-plain")?.execution.outcome).toMatchObject({
+    status: "error",
+    error: expect.stringContaining("did not survive the restart"),
+  });
+  expect(noticeRunIds()).toContain("swept-plain");
+  // ...but the delegate keeps the receipt activation wrote, and nothing reaches its requester
+  // beyond the root's one resume input.
+  expectInterrupted(durable.get("swept-delegate"));
+  expect(durable.get("swept-delegate")?.execution.outcome).toMatchObject({
+    error: "subagent run interrupted: the Gateway restarted before it ended",
+  });
+  expect(registryWarn).not.toHaveBeenCalledWith(
+    "Settling subagent interrupted by Gateway restart",
+    expect.objectContaining({ runId: "swept-delegate" }),
+  );
+  expect(noticeRunIds()).not.toContain("swept-delegate");
+  expect(enqueue.mock.calls.filter(([, options]) => options.source === "restart")).toEqual([
+    [expect.any(String), expect.objectContaining({ sessionKey: parent, source: "restart" })],
+  ]);
+  expect(warn).not.toHaveBeenCalled();
 });

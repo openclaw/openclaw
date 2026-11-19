@@ -18,6 +18,7 @@ import { replaceSessionEntrySync } from "../../../config/sessions/session-access
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { runSpawnPipeline } from "../../spawn-pipeline.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import type {
@@ -352,6 +353,55 @@ describe("armed registration: accepted-spawn custody (H1)", () => {
     expect(dispatchAgent).not.toHaveBeenCalled();
     expectNoDelivery();
   });
+
+  // Upstream #200807 fails, from the sweeper, a running row an earlier Gateway process created;
+  // the fork's activation settles an ownerless continuation delegate. Neither owns H1 custody.
+  it.each([
+    ["a native spawn without a completion notice", { expectsCompletionMessage: false }],
+    ["a continuation delegate", { drainsContinuationDelegateQueue: true }],
+  ] as const)(
+    "T3d: %s an earlier process armed stays with its acceptance owner through restart",
+    async (_name, row) => {
+      const result = await spawnNative({
+        deferred: true,
+        expectsCompletionMessage: "expectsCompletionMessage" in row ? false : undefined,
+      });
+      expect(result.ok).toBe(true);
+      const crashImage = loadSubagentRegistryFromSqlite();
+      const armed = crashImage.get(runId)!;
+      expect(armed.spawnAcceptance).toMatchObject({ gatewayRunId });
+      // The earlier process created and ran it, under a lifecycle this one does not own.
+      const earlier = Math.floor(performance.timeOrigin) - 10_000;
+      crashImage.set(runId, {
+        ...armed,
+        ...row,
+        createdAt: earlier,
+        execution: { ...armed.execution, startedAt: earlier, lifecycleGeneration: "earlier" },
+      });
+      const registryWarn = vi.spyOn(subagentRegistryLog, "warn");
+
+      const dispatchAgent = await restartFrom(crashImage);
+      // Activation leaves the arm to its owner...
+      expect(liveRow()).toMatchObject({
+        spawnAcceptance: { gatewayRunId },
+        execution: { status: "running" },
+      });
+      await testing.sweepOnceForTests();
+      await testing.sweepOnceForTests();
+
+      // ...and the sweeper's acceptance owner stops and rolls it back before the restart
+      // settle can fail it: no interruption, no notice.
+      expect(successfulAborts).toEqual([gatewayRunId]);
+      expect(liveRow()).toBeUndefined();
+      expect(durableRow()).toBeUndefined();
+      expect(registryWarn).not.toHaveBeenCalledWith(
+        "Settling subagent interrupted by Gateway restart",
+        expect.anything(),
+      );
+      expect(dispatchAgent).not.toHaveBeenCalled();
+      expectNoDelivery();
+    },
+  );
 
   it("T4 (guard): a confirmed spawn is durable without an arm and resumes normally after restart", async () => {
     const result = await spawnNative({});
