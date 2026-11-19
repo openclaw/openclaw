@@ -38,6 +38,32 @@ import { rewriteTranscriptEventRowsExact } from "./session-accessor.sqlite-trans
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as navigationPages from "./session-model-context-pages.js";
 
+// A cold rebuild captures page receipts after reading rows; a write between the two must keep the
+// rebuild out of the cache. Armed per test, the hook commits that write just before a page receipt read.
+const receiptHook = vi.hoisted(() => ({
+  beforePageReceipt: undefined as (() => void) | undefined,
+  sessionReceiptReads: [] as string[],
+}));
+vi.mock("../../infra/sqlite-database-admission.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/sqlite-database-admission.js")>();
+  return {
+    ...actual,
+    readSqliteDatabaseScopedWriteToken: (
+      ...args: Parameters<typeof actual.readSqliteDatabaseScopedWriteToken>
+    ) => {
+      const scopes = JSON.stringify(args[1]);
+      if (scopes.includes("model-context-page:")) {
+        const write = receiptHook.beforePageReceipt;
+        receiptHook.beforePageReceipt = undefined;
+        write?.();
+      } else {
+        receiptHook.sessionReceiptReads.push(scopes);
+      }
+      return actual.readSqliteDatabaseScopedWriteToken(...args);
+    },
+  };
+});
+
 async function seedScope(state: { statePath(name: string): string }, sessionId: string) {
   const scope = {
     agentId: "main",
@@ -461,4 +487,88 @@ it("does not label an older SQL snapshot with a newer writer receipt", () =>
     } finally {
       writer.close();
     }
+  }));
+
+it("keeps a cold rebuild out of the cache when a rewrite lands before its page receipt", () =>
+  withOpenClawTestState({ label: "navigation-cold-receipt" }, async (state) => {
+    const scope = await seedScope(state, "cold-receipt");
+    const prompt = {
+      type: "message",
+      id: "prompt",
+      parentId: null,
+      message: { role: "user", content: "Prompt", timestamp: 1 },
+    };
+    await replaceTranscriptEvents(scope, [
+      { type: "session", id: scope.sessionId, version: 3 },
+      prompt,
+    ]);
+    const resolved = resolveSqliteTranscriptScope(scope);
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+    const writer = openNodeSqliteDatabase(database.path);
+    let scanned = 0;
+    const original = navigationPages.readModelContextNavigationPages;
+    const observe = vi
+      .spyOn(navigationPages, "readModelContextNavigationPages")
+      .mockImplementation((params) =>
+        original({
+          ...params,
+          *readRows(after, through) {
+            for (const row of params.readRows(after, through)) {
+              scanned += 1;
+              yield row;
+            }
+          },
+        }),
+      );
+    const read = () => {
+      scanned = 0;
+      return readSessionTranscriptModelContext(scope, undefined, { maxEvents: 10, maxBytes: 8192 });
+    };
+    try {
+      admitSqliteSchema(writer);
+      // A native prompt annotation keeps navigation warm but changes the row's bytes.
+      const annotated = {
+        ...prompt,
+        message: { ...prompt.message, __openclaw: { mirrorIdentity: "native-turn:prompt" } },
+      };
+      receiptHook.beforePageReceipt = () =>
+        runSqliteImmediateTransactionSync(writer, () => {
+          rewriteSqliteTranscriptEventRowsInTransaction({ ...database, db: writer }, resolved, [
+            { seq: 1, expectedEventJson: JSON.stringify(prompt), event: annotated },
+          ]);
+        });
+      read();
+      expect(receiptHook.beforePageReceipt).toBeUndefined();
+      // Cached with the post-write receipt, the next read would trust the pre-write row bytes.
+      read();
+      expect(scanned).toBeGreaterThan(0);
+    } finally {
+      receiptHook.beforePageReceipt = undefined;
+      observe.mockRestore();
+      writer.close();
+    }
+  }));
+
+it("takes the navigation receipt only for event-limited reads", () =>
+  withOpenClawTestState({ label: "navigation-unbounded-receipt" }, async (state) => {
+    const scope = await seedScope(state, "unbounded-receipt");
+    await replaceTranscriptEvents(scope, [
+      { type: "session", id: scope.sessionId, version: 3 },
+      {
+        type: "message",
+        id: "hello",
+        parentId: null,
+        message: { role: "user", content: "Hello", timestamp: 1 },
+      },
+    ]);
+    const reads = () =>
+      receiptHook.sessionReceiptReads
+        .splice(0)
+        .filter((scopes) => scopes.includes(scope.sessionId));
+    reads();
+    // A read without an event-count limit never reuses the history index, so it registers nothing.
+    readSessionTranscriptContextMessages(scope, (context) => [...context]);
+    expect(reads()).toEqual([]);
+    readSessionTranscriptModelContext(scope, undefined, { maxEvents: 10, maxBytes: 8192 });
+    expect(reads().length).toBeGreaterThan(0);
   }));

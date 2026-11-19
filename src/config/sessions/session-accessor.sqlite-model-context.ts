@@ -334,12 +334,14 @@ function withTranscriptContextSnapshot<T>(
 ): { found: true; value: T } | { found: false } {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   return withOpenClawAgentDatabaseReadOnly((database) => {
-    // Capture before SQLite pins its view; live receipts must not certify older rows.
-    const navigationReadToken = getSqliteReadOperationRevision(database.db)
-      ? readSqliteDatabaseScopedWriteToken(database.db, [
-          sqliteSessionIdWriteScope(resolved.sessionId),
-        ])
-      : undefined;
+    // Capture before SQLite pins its view; live receipts must not certify older rows. Only reads
+    // with an event-count limit can reuse the history index; other reads skip the receipt.
+    const navigationReadToken =
+      limits?.maxEvents !== undefined && getSqliteReadOperationRevision(database.db)
+        ? readSqliteDatabaseScopedWriteToken(database.db, [
+            sqliteSessionIdWriteScope(resolved.sessionId),
+          ])
+        : undefined;
     return runSqliteReadSnapshotSync(
       database.db,
       () => {
