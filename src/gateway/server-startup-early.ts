@@ -5,6 +5,7 @@ import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import type { GatewayDiscovery } from "./server-discovery-runtime.js";
@@ -50,6 +51,7 @@ export async function startGatewayEarlyRuntime(params: {
     | "runDeliveryQueueMediaGc"
   >;
   getRuntimeConfig: () => OpenClawConfig;
+  getPluginMetadataSnapshot: () => PluginMetadataSnapshot | undefined;
   startupTrace?: GatewayStartupTrace;
 }) {
   await setSessionMcpRuntimeScheduler(params.scheduler);
@@ -162,7 +164,10 @@ export async function startGatewayEarlyRuntime(params: {
         return null;
       }
       try {
-        await refreshSkillsDiscovery({ config: params.getRuntimeConfig() });
+        await refreshSkillsDiscovery({
+          config: params.getRuntimeConfig(),
+          pluginMetadataSnapshot: params.getPluginMetadataSnapshot(),
+        });
       } catch (error) {
         params.log.warn(`failed to refresh skills during startup: ${String(error)}`);
       }
