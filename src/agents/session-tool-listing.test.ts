@@ -128,7 +128,7 @@ type SessionPromptState = ReturnType<typeof retainEmbeddedSessionPromptState>["s
 function send(
   state: SessionPromptState,
   options: ToolOptions,
-  live: { node?: boolean; mcp?: boolean } = {},
+  live: { node?: boolean; mcp?: boolean; compactions?: number } = {},
 ) {
   const catalogRef = createToolSearchCatalogRef();
   onTestFinished(() => clearToolSearchCatalog({ catalogRef }));
@@ -150,7 +150,7 @@ function send(
     routeKey: "listing-route",
     toolPolicy: "listing-policy",
     entries: [],
-    historyBoundaryCount: 0,
+    historyBoundaryCount: live.compactions ?? 0,
     tools: compacted.tools,
     // The production default for a fixed listing: a later turn never extends the pin.
     admitNewTools: false,
@@ -203,6 +203,18 @@ it("sends one tool list across user, cron, exec-wake, subagent and steer turns",
   expect(built).toEqual(built.map(() => built[0]));
   const sent = turnsSent.map(definitions);
   expect(sent).toEqual(sent.map(() => sent[0]));
+});
+
+it("re-pins after /compact on a cron turn with the owner turn's tool list", () => {
+  // From the #201655 upgrade run: a cron turn right after /compact pinned one more tool than
+  // the chat had, and the next owner turn stayed on that list.
+  using chat = retainEmbeddedSessionPromptState(sessionId);
+  const owner = send(chat.state, turns.user!);
+  const before = definitions(owner);
+  const cron = send(chat.state, turns.cron!, { compactions: 1 });
+  expect(definitions(cron.built)).toEqual(definitions(owner.built));
+  expect(definitions(cron)).toEqual(before);
+  expect(definitions(send(chat.state, turns.user!, { compactions: 1 }))).toEqual(before);
 });
 
 it("builds one tool list for every sender of a group chat", () => {
