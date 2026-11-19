@@ -1,14 +1,16 @@
 import { dynamic } from "@solidjs/web";
-import { createMemo, createSignal, lazy, Show } from "solid-js";
+import { createMemo, createSignal, lazy, onSettled, Show } from "solid-js";
 import { createFooterControlRef } from "../../../app/shell-layout-traits-solid.tsx";
 import { McpAppCatalog } from "../../../components/mcp-app-catalog.tsx";
 import { McpAppResources } from "../../../components/mcp-app-resources.tsx";
+import { createMemberWelcomeSlot } from "../../../components/openclaw-id/member-welcome-slot.tsx";
 import { createBackgroundLayoutRef } from "../../../components/session-background-layout-context.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { McpAppContextStrip } from "../../../components/solid/mcp-app-context-strip.tsx";
 import "../../../styles/chat/composer-surface.css";
 import "../../../styles/chat/composer-mobile.css";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
+import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { PaneSubagentStop } from "../chat-pane-header-view.tsx";
@@ -29,15 +31,13 @@ import "../../../styles/chat/mention-menu.css";
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createComposerMobileInteraction } from "./chat-composer-mobile-interaction.tsx";
+import { ChatComposerPluginContributions } from "./chat-composer-plugin-contributions.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
-import {
-  ComposerQueue,
-  ComposerInputScope,
-  ComposerProgress,
-  ComposerWaiters,
-} from "./chat-composer-regions.tsx";
+import { ComposerQueue, ComposerInputScope, ComposerProgress } from "./chat-composer-regions.tsx";
+import { presentComposerTasks } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
+import { ComposerTaskSlot } from "./chat-composer-task-slot.tsx";
 import { renderComposerTextarea, type ComposerTextareaProps } from "./chat-composer-textarea.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import { ComposerWidthEdge, prepareComposerWidthEdge } from "./chat-composer-width-ref.tsx";
@@ -205,8 +205,12 @@ export function renderChatComposerView(
       )}
     </Show>
   );
+  // The built-in composer can show plugin tasks; a replacement composer cannot.
+  onSettled(() => presentComposerTasks(state));
+  const application = useOptionalApplication();
+  const memberWelcome = createMemberWelcomeSlot(() => application);
   const showComposerInput = createMemo(
-    () => context().showComposer && props.disabledBanner?.kind !== "composer-replacement",
+    () => !memberWelcome.active() && props.disabledBanner?.kind !== "composer-replacement",
   );
   const disabledReasonId = () => paneDomId(props.paneId, "disabled-reason");
   const composerAlerts = createMemo(() =>
@@ -308,6 +312,12 @@ export function renderChatComposerView(
       <div class="agent-chat__composer-float" ref={[elementRef(props.onComposerFloatRef)]}>
         <div class="chat-footer__context" ref={(element) => (state.composerContext = element)}>
           {props.footerContent}
+          <ComposerTaskSlot
+            state={state}
+            draft={context().visibleDraft}
+            canCompose={context().canCompose}
+            keyHints={!props.mobileComposer}
+          />
           <div class="agent-chat__composer-notices">
             {props.notices} {composerStatus()} {composerAlerts()} {fallbackStatus()}
             <Show when={context().cancellationCaveat}>
@@ -324,7 +334,7 @@ export function renderChatComposerView(
           </div>
           <ComposerQuestionDock panel={context().questionPanelProps} />
           {props.disabledBanner?.kind === "above-composer" ? disabledBanner : undefined}
-          <ComposerProgress composer={props} shown={context().showComposer} />{" "}
+          <ComposerProgress composer={props} shown={context().showComposerProgress} />{" "}
           <Show when={!props.mobileComposer}>
             <ComposerQueue composer={props} showAbortableUi={context().showAbortableUi} />
           </Show>
@@ -368,7 +378,6 @@ export function renderChatComposerView(
               </div>
             )}
           </Show>
-          <ComposerWaiters composer={props} />
           <Show when={props.composerRecovery}>
             {(recovery) => {
               const Recovery = dynamic(() => recovery().component);
@@ -501,12 +510,11 @@ export function renderChatComposerView(
                   props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0
                 }
               />
-              <ComposerDictationStatus readDictation={() => context().dictation} />
               <ChatAttachmentInputs
                 {...props}
                 inputHandle={inputHandle}
                 disabled={!context().canCompose}
-                cameraActive={context().showComposer && props.cameraActive !== false}
+                cameraActive={props.cameraActive !== false}
               />
               {props.realtimeTalkVideoStream ? (
                 <div class="agent-chat__video-preview">
@@ -593,6 +601,9 @@ export function renderChatComposerView(
                 <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
                   {predictionAnnouncement()}
                 </span>
+                <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+                  {state.tasks()?.announcement}
+                </span>
                 <span
                   id={slashMenuAnnouncementId()}
                   class="sr-only"
@@ -633,6 +644,11 @@ export function renderChatComposerView(
                     onViewChange: setCapabilityView,
                   }}
                 />
+                <ChatComposerPluginContributions
+                  kind="composer-toolbar"
+                  composer={props}
+                  presented={props.pluginActionsPresented ?? true}
+                />
                 {composerLeadControl}
               </div>
               <div class="agent-chat__composer-trail">
@@ -667,6 +683,7 @@ export function renderChatComposerView(
                     );
                   }}
                 </Show>
+                <ComposerDictationStatus readDictation={() => context().dictation} />
                 <div class="agent-chat__composer-actions">
                   <ChatPrimaryActions {...context().runControlsProps} />
                 </div>
@@ -675,6 +692,8 @@ export function renderChatComposerView(
           </div>
           <ComposerWidthEdge options={() => props} shell={() => shell} />
         </ComposerInputScope>
+      ) : memberWelcome.active() ? (
+        memberWelcome.step()
       ) : props.disabledBanner?.kind === "composer-replacement" ? (
         disabledBanner
       ) : undefined}

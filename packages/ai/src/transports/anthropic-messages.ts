@@ -22,7 +22,7 @@ import {
   type AnthropicInlineImageBudget,
 } from "../internal/anthropic-inline-images.js";
 import { isImageWithMediaPayload } from "../media-payload.js";
-import { preparedRequestSuffix, uncachedSuffixMessage } from "../provider-options.js";
+import { preparedRequestSuffix } from "../provider-options.js";
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../provider-options.js";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import {
@@ -208,7 +208,6 @@ export async function buildAnthropicRequest(
   }
   const replayPlan = buildAnthropicReplayPlan(context.messages, model, {
     enabled: !isOAuthToken && options?.anthropicServerCompaction === true,
-    authProfileId: options?.authProfileId,
     sessionId: options?.sessionId,
   });
   const cacheBreakpointOptOutMessageIndexes = new Set<number>();
@@ -487,9 +486,6 @@ export async function buildAnthropicRequest(
     }
     if (output) {
       appendMessage(output);
-      if (transformed.slice(i, end).some((source) => uncachedSuffixMessage.has(source))) {
-        cacheBreakpointOptOutMessageIndexes.add(messages.length - 1);
-      }
       if (msg.role === "user") {
         const runtimeContextRetained =
           msg.runtimeContext !== undefined

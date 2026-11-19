@@ -104,6 +104,12 @@ export type UpdateDatabaseBackup = z.infer<typeof UpdateDatabaseBackupSchema> & 
   };
   restoreRefusal?: string;
   restoreRefusalDiagnostics?: string[];
+  /**
+   * The run's plugin cohort pair, bound at capture while the state is still on the
+   * previous schema. Restore runs in the previous build, which cannot admit a
+   * migrated (newer) schema through its normal state reads.
+   */
+  pluginCohortRecovery?: import("./update-plugin-cohort-schema.js").PluginCohortRecoveryBinding;
 };
 
 type BackupInput = {
@@ -245,7 +251,6 @@ export async function createUpdateDatabaseBackupInProcess(
   const { warnings } = await checkUpdateDatabaseBackupSpace(
     directory,
     await measureUpdateStateFiles(inventory.present),
-    input,
   );
   const { identities, checkpointed } = await prepareRestorableDatabaseFiles(
     inventory.present,
@@ -453,7 +458,7 @@ export async function createUpdateDatabaseBackupInProcess(
               sourceGenerations[sourcePath] = after.generation;
             } else {
               warnings.push(
-                `Database changed during capture; its snapshot requires manual recovery: ${sourcePath}`,
+                `Database write generation changed or could not be confirmed during capture (the running Gateway may have written to it); automatic rollback keeps the live database instead of this snapshot: ${sourcePath}`,
               );
             }
           }

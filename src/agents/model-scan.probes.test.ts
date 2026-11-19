@@ -4,9 +4,9 @@ import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { scanOpenRouterModels } from "./model-scan.js";
 
 const { complete } = vi.hoisted(() => ({ complete: vi.fn() }));
-vi.mock("@openclaw/ai", () => ({
+vi.mock("@openclaw/ai", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/ai")>()),
   createLlmRuntime: () => ({ complete, registry: {} }),
-  configureAiTransportHost: vi.fn(),
 }));
 vi.mock("@openclaw/ai/providers", () => ({ registerBuiltInApiProviders: vi.fn() }));
 

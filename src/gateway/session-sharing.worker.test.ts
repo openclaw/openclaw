@@ -470,7 +470,7 @@ it.each([
         }
       } finally {
         commit.mockRestore();
-        receipt?.finish("interrupted");
+        receipt?.finish("interrupted", "failed");
         await receipt?.settled?.();
         work.release();
         registration.cleanup();
@@ -571,7 +571,6 @@ it.each([
     });
     const read = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
     let revoked = false;
-    let inventories = 0;
     let closing: Promise<void> | undefined;
     const runExternalClose = AsyncLocalStorage.snapshot();
     const spy = vi.spyOn(sessionStoreLane.pool, "run").mockImplementation(async (...args) => {
@@ -580,9 +579,6 @@ it.each([
         reply.ok && typeof reply.value === "object" && reply.value !== null && "kind" in reply.value
           ? reply.value.kind
           : undefined;
-      if (kind === "session-target-inventory") {
-        inventories += 1;
-      }
       if (boundary.endsWith("before-consume") && !revoked && kind === "session-exact-entries") {
         revoked = true;
         if (boundary === "owner-before-consume") {
@@ -613,7 +609,6 @@ it.each([
       }
       await expect(authorization.admittedInputAuthority!.withCurrent(effect)).rejects.toThrow();
       expect(effect).not.toHaveBeenCalled();
-      expect(inventories).toBe(0);
       if (boundary.endsWith("before-consume")) {
         expect(revoked).toBe(true);
       }
@@ -649,7 +644,7 @@ it.each(["membership", "routing", "policy"] as const)(
 );
 
 it.each(["role", "agent", "sandbox", "unprepared-role"] as const)(
-  "rechecks prepared %s policy at the next worker admission",
+  "keeps admitted role facts but retains config/data fences (%s)",
   (change) =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       let cfg = rolePolicyConfig();
@@ -672,8 +667,13 @@ it.each(["role", "agent", "sandbox", "unprepared-role"] as const)(
         cfg = restrictView(cfg, change === "agent" ? { agents: [] } : { sandbox: "required" });
       }
       const effect = vi.fn();
-      await expect(authorization.withCurrent!(effect)).rejects.toThrow();
-      expect(effect).not.toHaveBeenCalled();
+      if (change === "role" || change === "unprepared-role") {
+        await authorization.withCurrent!(effect);
+        expect(effect).toHaveBeenCalledOnce();
+      } else {
+        await expect(authorization.withCurrent!(effect)).rejects.toThrow();
+        expect(effect).not.toHaveBeenCalled();
+      }
       if (change === "unprepared-role") {
         expect(client.preparedSessionProfile).toBeUndefined();
       }

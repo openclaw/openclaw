@@ -76,7 +76,7 @@ describe("tool descriptions", () => {
     const processWithCron = createProcessTool({ hasCronTool: true });
 
     expect(execWithCron.description).toContain(
-      "When the running result says its exit wakes this conversation, end the turn instead of polling",
+      "When the running result says its exit wakes this conversation, end the turn instead of polling; when it says to call sessions_yield, do that",
     );
     expect(processWithCron.description).toContain("completion without auto-wake");
     expect(processWithCron.description).toContain("write, send-keys, submit, paste, kill");

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok } from "@openclaw/normalization-core/result";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import {
@@ -10,7 +11,7 @@ import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { AgentDatabaseOperations } from "../../state/openclaw-agent-execution-contract.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { resolveStateDir } from "../state-dir.js";
@@ -363,9 +364,17 @@ export async function registerConversationAddresses(
       });
     },
   };
-  const execution = captureOpenClawAgentDatabaseExecution(options);
+  const captured = captureOpenClawAgentDatabaseExecutionAsync(options).then(
+    (execution) => ok(execution),
+    (error: unknown) => err<never, unknown>(error),
+  );
   try {
     return await runOpenClawAgentWorkerWrite(options, async () => {
+      const acquired = await captured;
+      if (!acquired.ok) {
+        throw acquired.error;
+      }
+      const execution = acquired.value;
       const eligible = selectCurrent();
       input.identities = input.identities.filter((_, index) => eligible[index]);
       if (input.identities.length === 0) {
@@ -401,7 +410,10 @@ export async function registerConversationAddresses(
       );
     });
   } finally {
-    await execution.release();
+    const acquired = await captured;
+    if (acquired.ok) {
+      await acquired.value.release();
+    }
   }
 }
 
@@ -441,11 +453,19 @@ export async function withConversationAuthority<T>(
     return await select(facts)();
   }
   const { options } = pinConversationDatabaseScope(scope);
-  const execution = captureOpenClawAgentDatabaseExecution(options);
+  const captured = captureOpenClawAgentDatabaseExecutionAsync(options).then(
+    (execution) => ok(execution),
+    (error: unknown) => err<never, unknown>(error),
+  );
   let consumed: Promise<{ ok: true; value: T } | { ok: false; error: unknown }> | undefined;
   try {
     try {
       await runOpenClawAgentWorkerWrite(options, async () => {
+        const acquired = await captured;
+        if (!acquired.ok) {
+          throw acquired.error;
+        }
+        const execution = acquired.value;
         const settled = await execution.runExisting(
           {
             assertCurrent() {},
@@ -492,7 +512,10 @@ export async function withConversationAuthority<T>(
         }
       });
     } finally {
-      await execution.release();
+      const acquired = await captured;
+      if (acquired.ok) {
+        await acquired.value.release();
+      }
     }
   } catch (cause) {
     if (!consumed) {

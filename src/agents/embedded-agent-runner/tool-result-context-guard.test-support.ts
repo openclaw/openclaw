@@ -61,24 +61,3 @@ export function expectOpenClawTruncation(text: string): void {
   expect(text).not.toContain("[compacted: tool output trimmed to free context]");
   expect(text).not.toContain("[truncated: output exceeded context limit]");
 }
-
-export function sumToolResultTextChars(messages: AgentMessage[]): number {
-  let sum = 0;
-  for (const message of messages) {
-    const content = (message as { content?: unknown }).content;
-    if (message.role !== "toolResult" || !Array.isArray(content)) {
-      continue;
-    }
-    for (const block of content) {
-      if (
-        block &&
-        typeof block === "object" &&
-        block.type === "text" &&
-        typeof block.text === "string"
-      ) {
-        sum += block.text.length;
-      }
-    }
-  }
-  return sum;
-}

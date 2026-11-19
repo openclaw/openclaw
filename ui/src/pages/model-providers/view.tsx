@@ -303,7 +303,7 @@ function ProviderAccess(props: ModelProvidersViewProps) {
             {renderProviderNoticeRow(t("usage.providerUsage.unavailable"))}
           </SettingsGroup>
         ) : undefined}
-        {props.cards.length === 0 ? (
+        {props.cards.length === 0 && !props.error ? (
           <SettingsGroup>
             <SettingsEmpty
               message={

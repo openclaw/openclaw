@@ -21,7 +21,10 @@ import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 
 const sentinel = (key: string) => key === "global" || key === "unknown";
-type SelectionScope = ReturnType<ReturnType<typeof prepareSessionRowScopes>["select"]>;
+type SelectionScope = Omit<
+  ReturnType<ReturnType<typeof prepareSessionRowScopes>["select"]>,
+  "targets"
+>;
 const EMPTY_KEYS: ReadonlySet<string> = Object.freeze(new Set<string>());
 type IndexedTarget = { row: SelectionTarget; pair: SessionEntryPair };
 

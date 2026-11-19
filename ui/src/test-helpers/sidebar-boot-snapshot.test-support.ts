@@ -8,8 +8,6 @@ export function sidebarBootSnapshot(roster: BootRoster | null): SidebarSnapshotM
     roster: roster ? bootRosterSchema.parse(roster) : null,
     mode: "roster",
     navigationView: "sessions",
-    pages: [],
-    pageScopeId: null,
     pinnedSessions: [],
     entries: [],
     sections: [],

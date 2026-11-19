@@ -1,4 +1,5 @@
 import type { AgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
+import type { AgentInputRecoveryAdmission } from "./agent-database-preparation-context.js";
 import type { AgentDatabaseStartupVerifier } from "./agent-database-startup-integrity.js";
 import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
@@ -7,9 +8,11 @@ export type PendingAgentDatabaseInspection = {
   target: { agentId?: string; path: string };
   result: Promise<OpenClawDatabaseSchemaPreflight>;
 };
-export type AgentRestartInputRecovery = {
+export type AgentRestartInputRecovery = Pick<
+  AgentInputRecoveryAdmission,
+  "sessions" | "deferred"
+> & {
   run: () => Promise<void>;
-  sessions: ReadonlyMap<string, Promise<void>>;
 };
 type AgentDatabaseStartupPreparationInput = {
   agentId: string;

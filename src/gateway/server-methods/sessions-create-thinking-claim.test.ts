@@ -254,13 +254,14 @@ test.each(["later-read", "delivered-event", "ui-patch", "title-event", "clear-ev
         lowListPublished.resolve(undefined);
       }
     });
+    let creation: ReturnType<typeof sessions.createResult> | undefined;
     try {
       await initializeSessionReadContext(context);
       // Thinking reconciliation needs compact detail facts, not the sidebar display projection.
       await refresh();
       expect(row()).toBeUndefined();
       const created = await waitFor(
-        sessions.createResult(
+        (creation = sessions.createResult(
           {
             key,
             agentId: "main",
@@ -269,7 +270,7 @@ test.each(["later-read", "delivered-event", "ui-patch", "title-event", "clear-ev
             message: "/think low",
           },
           { reconciliation: "background" },
-        ),
+        )),
         "create response",
       );
       if (titleFixture) {
@@ -380,6 +381,8 @@ test.each(["later-read", "delivered-event", "ui-patch", "title-event", "clear-ev
       releaseReply.resolve(undefined);
       releaseFirstList.resolve(undefined);
       try {
+        // A response timeout does not cancel creation; join admission before draining its runs.
+        await creation?.catch(() => undefined);
         await settleWorkspaceRuns(context, storePath, key, true);
         if (clearPatched) {
           await waitFor(lowListPublished.promise, "clear canonical cleanup");

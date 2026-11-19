@@ -1060,7 +1060,7 @@ private fun SidebarPagesHeader(
     Box {
       IconButton(
         onClick = { onMenuModeChange(SidebarPagesMenuMode.Navigate) },
-        modifier = Modifier.size(44.dp).testTag("sidebar-pages-menu"),
+        modifier = Modifier.size(48.dp).testTag("sidebar-pages-menu"),
       ) {
         Icon(
           painter = painterResource(R.drawable.ic_web_pen_line),

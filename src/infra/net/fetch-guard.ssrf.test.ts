@@ -39,7 +39,15 @@ vi.mock("../../logger.js", async (original) => ({
   ...(await original<typeof import("../../logger.js")>()),
   logWarn: logWarnMock,
 }));
-vi.mock("node:dns/promises", { spy: true });
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup: vi.fn(actual.lookup),
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 vi.mock("node:net", async (original) => ({
   ...(await original<typeof import("node:net")>()),
   getDefaultAutoSelectFamily: () => true,

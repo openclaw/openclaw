@@ -1,9 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { Type } from "typebox";
-import { assert, beforeEach, expect, it, vi } from "vitest";
-import type { OpenClawToolsOptions } from "../agents/openclaw-tools.types.js";
-import type { AnyAgentTool } from "../agents/tools/common.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import {
   withOpenClawTestState as withTestState,
@@ -16,8 +11,6 @@ import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
 import type { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
-let useRealSessionSpawnTool = false;
-
 export function withToolsInvokeTestState<T>(
   options: Parameters<typeof withTestState>[0],
   run: (state: TestState) => Promise<T>,
@@ -25,97 +18,6 @@ export function withToolsInvokeTestState<T>(
   return withTestState(options, async (state) => {
     await captureRuntimeConfigAsyncReader()();
     return await run(state);
-  });
-}
-
-export async function createToolsInvokeSessionSpawnFixture(
-  options: OpenClawToolsOptions,
-): Promise<AnyAgentTool> {
-  if (useRealSessionSpawnTool) {
-    const { createSessionsSpawnTool } = await import("../agents/tools/sessions-spawn-tool.js");
-    return createSessionsSpawnTool(options);
-  }
-  return {
-    name: "sessions_spawn",
-    label: "Spawn",
-    description: "HTTP spawn context fixture",
-    parameters: Type.Object({}),
-    execute: async () => ({
-      content: [],
-      details: {},
-      inheritedToolDenylist: options.inheritedToolDenylist,
-    }),
-  };
-}
-
-export function registerToolsInvokeSpawnWorkspaceTests(params: {
-  sessionEntries: Map<string, Record<string, unknown>>;
-  setConfig: (config: Record<string, unknown>) => void;
-  invoke: (input: {
-    tool: string;
-    args: Record<string, unknown>;
-    sessionKey: string;
-  }) => Promise<Response>;
-}) {
-  beforeEach(() => {
-    useRealSessionSpawnTool = false;
-  });
-  it.each([
-    { name: "restricted rootless workspace", restricted: true, explicitRoot: false },
-    { name: "restricted explicit root", restricted: true, explicitRoot: true },
-    { name: "unrestricted inherited tools", restricted: false, explicitRoot: true },
-  ])("preserves the HTTP hidden-spawn boundary for $name", async (scenario) => {
-    const configuredWorkspace = "/tmp/http-configured";
-    const storedWorkspace = "/tmp/http-requester";
-    const explicitRoot = "/tmp/http-requester/scoped";
-    const sessionKey = "agent:main:subagent:http-requester";
-    params.setConfig({
-      agents: { entries: { main: { workspace: configuredWorkspace } } },
-      tools: { allow: ["read", "sessions_spawn"] },
-      gateway: { tools: { allow: ["sessions_spawn"] } },
-    });
-    params.sessionEntries.set(sessionKey, {
-      sessionId: "http-requester-session",
-      updatedAt: 1,
-      spawnedBy: "agent:main:main",
-      spawnDepth: 1,
-      inheritedToolPolicyVersion: 1,
-      ...(scenario.restricted ? { inheritedToolPolicySource: "sender" } : {}),
-      inheritedToolAllow: ["read", "sessions_spawn"],
-      spawnedWorkspaceDir: storedWorkspace,
-      permissionMode: "guarded",
-      ...(scenario.explicitRoot ? { sessionRoot: explicitRoot } : {}),
-    });
-    const spawnRuntime = await import("../agents/subagents/spawn/subagent-spawn.js");
-    using spawn = vi.spyOn(spawnRuntime, "spawnSubagentDirect").mockResolvedValue({
-      status: "accepted",
-      context: "isolated",
-      childSessionKey: "agent:main:subagent:http-helper",
-      runId: "http-helper-run",
-    });
-    useRealSessionSpawnTool = true;
-    const response = await params.invoke({
-      tool: "sessions_spawn",
-      sessionKey,
-      args: { task: "Inspect workspace", agentId: "main", visible: false },
-    });
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
-      ok: true,
-      result: { details: { status: "accepted" } },
-    });
-    expect(spawn).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ task: "Inspect workspace", agentId: "main" }),
-      expect.objectContaining({
-        agentSessionKey: sessionKey,
-        inheritedToolPolicySource: scenario.restricted ? "sender" : undefined,
-        workspaceDir: scenario.restricted ? storedWorkspace : configuredWorkspace,
-        sessionPermissionPolicy: scenario.restricted
-          ? { mode: "guarded", root: scenario.explicitRoot ? explicitRoot : storedWorkspace }
-          : undefined,
-      }),
-    );
   });
 }
 
@@ -158,13 +60,3 @@ export function createToolsInvokeHttpTestServer(params: {
     },
   };
 }
-
-export const expectOkInvokeResponse = async (res: Response) => {
-  expect(res.status).toBe(200);
-  const body: unknown = await res.json();
-  assert(
-    isRecord(body) && body.ok === true && (body.result === undefined || isRecord(body.result)),
-    "Expected an object tool response",
-  );
-  return { ok: body.ok, result: body.result };
-};

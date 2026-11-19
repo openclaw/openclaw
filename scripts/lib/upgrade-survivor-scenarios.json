@@ -1,5 +1,5 @@
 {
-  "oldestSupportedBaseline": "2026.6.34",
+  "oldestSupportedBaseline": null,
   "scenarios": [
     "base",
     "session-share",

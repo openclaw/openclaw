@@ -23,7 +23,11 @@ import {
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "OpenClaw ID account menu" });
+const suite = createControlUiE2eSuite({
+  name: "OpenClaw ID account menu",
+  // Native clipboard contents are shared across contexts in one Chromium process.
+  browserLaunchOptions: { headless: true },
+});
 const label = "Sign in with OpenClaw ID";
 
 suite.define(() => {

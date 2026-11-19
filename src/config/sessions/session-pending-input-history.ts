@@ -19,18 +19,17 @@ import { projectSessionPendingInput } from "./session-pending-input-value.js";
 import { captureSessionStoreReadTarget } from "./session-store-read-target.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
-import type { InternalSessionEntry } from "./types.js";
 
 type Scope = SessionAccessScope & { agentId: string; sessionId: string };
 
 /** Capture live queue custody now; preserve it only after the session marker commits. */
 export async function captureSessionQueuedInputsForRestart(scope: Scope) {
-  const captured = captureSessionStoreReadTarget(
+  const captured = await captureSessionStoreReadTarget(
     scope,
     "Queued shutdown inputs changed their database owner",
   );
   const resolved = await prepareSqliteScope(scope);
-  const physical = captured.resolve(resolved);
+  const physical = await captured.resolve(resolved);
   physical.assertCurrent();
   const queuedInputs = listLiveSessionPendingInputs(
     physical.identity.canonicalPath,
@@ -39,20 +38,8 @@ export async function captureSessionQueuedInputsForRestart(scope: Scope) {
     true,
   );
   const queuedInputIds = queuedInputs.map((input) => input.inputId);
-  const queuedInputSources: NonNullable<
-    InternalSessionEntry["resumeAfterRestart"]
-  >["queuedInputSources"] = {};
-  for (const input of queuedInputs) {
-    if (input.runId) {
-      queuedInputSources[input.inputId] = {
-        runId: input.runId,
-        source: input.recoverySource ?? { kind: "unavailable" },
-      };
-    }
-  }
   return {
     queuedInputIds,
-    queuedInputSources: queuedInputs.length > 0 ? queuedInputSources : undefined,
     preserve: () => {
       physical.assertCurrent();
       preserveSessionQueuedInputOwnersForRestart(queuedInputIds);
@@ -114,7 +101,7 @@ async function readPendingInputRows(
     ...scope,
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
-  const target = captureSessionStoreReadTarget(
+  const target = await captureSessionStoreReadTarget(
     captured,
     "Pending input history changed its captured database owner",
   );
@@ -124,7 +111,7 @@ async function readPendingInputRows(
     identity,
     source: readSource,
     assertReadCurrent,
-  } = target.resolve(resolved);
+  } = await target.resolve(resolved);
   const query = {
     ...options,
     sessionKey: resolved.sessionKey,
@@ -140,7 +127,7 @@ async function readPendingInputRows(
   }
   assertReadCurrent();
   if (
-    !query.queuedInputIds &&
+    !query.queuedOnly &&
     hasSessionActorEmptyPendingInputHistory(identity, resolved.sessionKey, query.sessionId)
   ) {
     return { rows: [], total: 0 };
@@ -196,16 +183,11 @@ export async function listSessionPendingInputs(
   };
 }
 
-/** Called only for a session explicitly marked by graceful shutdown. */
-export async function readSessionQueuedInputPage(
-  scope: Scope,
-  options: { queuedInputIds: readonly string[]; before?: number },
-) {
-  if (options.queuedInputIds.length === 0) {
-    return { rows: [], total: 0 };
-  }
+/** Read all unconsumed durable queued inputs without current process custody. */
+export async function readSessionQueuedInputPage(scope: Scope, options: { before?: number } = {}) {
   return readPendingInputRows(scope, {
     ...options,
+    queuedOnly: true,
     limit: 20,
     includeTotal: false,
   });

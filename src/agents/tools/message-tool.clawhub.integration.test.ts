@@ -123,6 +123,23 @@ it("preserves a media caption alongside intentional recommendation cards", async
   expect(recommendations).toMatchObject([{ name: "WhatsApp", installed: false }]);
   expectNotice(result, "WhatsApp: Available to install.");
 });
+it("keeps a caption-free verified card and omits a conflicting padded location", async () => {
+  registry.detail.mockResolvedValue(remotePlugin);
+  const { result, reply, recommendations } = await search(
+    { plugin: "@openclaw/whatsapp" },
+    undefined,
+    undefined,
+    { location: { latitude: 0, longitude: 0 } },
+  );
+  expect(reply?.text).toBeUndefined();
+  expect(reply).not.toHaveProperty("location");
+  expect(recommendations).toMatchObject([{ kind: "plugin", name: "WhatsApp" }]);
+  expect(result.content).toEqual([
+    { type: "text", text: expect.stringContaining("WhatsApp: Available to install.") },
+    { type: "text", text: expect.stringContaining("location omitted") },
+  ]);
+});
+
 it("rejects model-supplied installation and official claims", async () => {
   await expect(search({ query: "whatsapp", installed: true, official: true })).rejects.toThrow();
   expect(registry.plugins).not.toHaveBeenCalled();

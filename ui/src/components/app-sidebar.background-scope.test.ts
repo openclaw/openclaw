@@ -424,7 +424,7 @@ describe("AppSidebar initial managed-list hydration", () => {
           expect(sessions.state.result?.sessions[0]?.label).toBe("Canonical session"),
         );
         expect(listQueries).toHaveLength(2);
-        expect(listQueries[1]?.agentId).toBe(filter === "involving-me" ? "main" : undefined);
+        expect(listQueries[1]?.agentId).toBe("main");
         expect(matchesFilter(listQueries[1])).toBe(true);
 
         filtered.resolve(filteredResult);

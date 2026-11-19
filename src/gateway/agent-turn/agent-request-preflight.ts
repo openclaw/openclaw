@@ -175,7 +175,6 @@ export async function prepareAgentRequestPreflight(params: {
   }
   const allowModelOverride =
     hasGatewayAdminScope(params.client) || params.client?.internal?.allowModelOverride === true;
-  const canUseCronRunContinuation = params.client?.internal?.cronRunContinuation === true;
   const expectedSessionResult = resolveExpectedExistingSessionConstraint({
     canUseInternalRuntimeHandoff,
     expectedExistingSessionId: request.expectedExistingSessionId,
@@ -220,6 +219,14 @@ export async function prepareAgentRequestPreflight(params: {
   // Plugin tools read the starting run named on exec completion wakes; only the host stamps it.
   if (isExecCompletionInputProvenance(inputProvenance) && !canUseInternalRuntimeHandoff) {
     return rejectInvalidRequest("Exec completion input is reserved for background exec owners.");
+  }
+  // Restart input may wait for a surviving turn or a reconnecting node; only recovery stamps it.
+  if (
+    inputProvenance?.kind === "internal_system" &&
+    inputProvenance.sourceTool === "restart" &&
+    !canUseInternalRuntimeHandoff
+  ) {
+    return rejectInvalidRequest("Restart input is reserved for restart recovery.");
   }
   if (inputProvenance?.kind === "inter_session" && inputProvenance.sourceTool === "sessions_send") {
     const sourceSessionKey = inputProvenance.sourceSessionKey;
@@ -279,7 +286,6 @@ export async function prepareAgentRequestPreflight(params: {
     runId,
     allowModelOverride,
     canUseInternalRuntimeHandoff,
-    canUseCronRunContinuation,
     expectedSession: expectedSessionResult.constraint,
     expectedExistingSessionId: expectedSessionResult.constraint?.sessionId,
     providerOverride: allowModelOverride ? request.provider : undefined,

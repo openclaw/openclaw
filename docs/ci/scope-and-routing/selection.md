@@ -141,8 +141,12 @@ The checksum gate prints both digests and rejects mismatches before starting
 the update. The download action's `digest-mismatch: error` input configures its
 archive verification policy; that input line is not a reported mismatch.
 
-The published driver version is resolved once from npm. Its installed prefix is
-cached as an archive keyed by that version, runner platform, and the pinned
+The published driver version is resolved once. Main uses npm `latest`; frozen
+`extended-stable/` targets use the existing release upgrade-baseline resolver and
+the captured qualification baselines when supplied. This prevents a newer driver
+from creating state that the frozen candidate cannot read. Database compatibility
+admission remains unchanged. The driver's installed prefix is cached as an
+archive keyed by that version, runner platform, and the pinned
 Docker recipe. PRs only restore this exact key and mount the seed read-only;
 the update runs against a private extraction. Only upstream main push,
 scheduled, and manual runs prepare and save missing seeds, before any candidate
@@ -156,7 +160,7 @@ running-build, and readiness assertions are unchanged.
 The cell reserves termination and diagnostic time within its twenty-minute budget.
 Its command deadline returns a failed step with the active phase recorded,
 instead of cancelling the workflow through a job-level timeout. The shared bare
-Docker runner installs the latest stable npm package as the driver and supplies
+Docker runner installs the selected published npm package as the driver and supplies
 a disposable OS account for managed-service ownership. A private Docker volume
 holds the disposable npm installation and retained runtime on one native
 filesystem, avoiding OverlayFS's forced full-runtime copies. The runner removes
@@ -192,6 +196,31 @@ swap inside the directory behind it; that record is an observation, not an
 assertion. Run it with `pnpm test:docker:published-driver-linked-root`. No CI
 workflow selects this lane; `ci-published-driver-update.yml` runs only the
 scoped-restore mode.
+
+`OPENCLAW_PUBLISHED_DRIVER_OWNED_PREFIX=1` installs into an
+`install-cli.sh`-shaped prefix (`tools/node-v<version>` beside a `tools/node`
+link), which OpenClaw owns. `OPENCLAW_PUBLISHED_DRIVER_FOLLOW_UP` then runs the
+candidate's own updater once more after the published driver's update:
+`switch` checks adoption of the plain directory and the release switch,
+and `rollback` gives the new release a Doctor that fails after activation and
+checks the link points back. `launcher` replaces the prefix's `bin/openclaw`
+with an absolute link, which the candidate's staged launcher does not match,
+checks that the update takes the swap and records why, then runs a second
+update that adopts the layout again. With the linked-root mode, `rebind`
+starts from published `2026.10.9`, whose service install binds the service to a
+release's real path, and checks that the candidate replaces that release in
+place, its restart rebinds the service to the package path, and the next update
+switches releases. `in-place` starts the same way, stops the Gateway, updates
+with `--no-restart`, and checks that the replaced release serves the new version
+after a service restart. The Gateway is stopped first because a running one can
+restart itself into the replaced package while update Doctor stops it, which
+fails any `--no-restart` package update; that race is not specific to releases. Run them with
+`pnpm test:docker:published-driver-release-adoption`,
+`pnpm test:docker:published-driver-release-rollback`,
+`pnpm test:docker:published-driver-release-launcher`,
+`pnpm test:docker:published-driver-release-rebind`, and
+`pnpm test:docker:published-driver-release-in-place`. No CI workflow selects
+these lanes.
 
 After the Docker cell, the same job reuses its verified candidate tarball for the
 [native systemd survivor flow](/help/testing-updates-plugins#native-systemd-update-matrix),
@@ -232,7 +261,7 @@ The iOS, macOS, and both shared OpenClawKit Periphery scans use Xcode 27 on GitH
 - **Native inputs beside Node changes** retain the platform checks admitted by their event tier and the Node tests that own, directly import, or explicitly watch those inputs. Native-only inputs do not request the complete Node inventory. Independent static compiler and boundary checks retain their existing selection.
 - **Compact planner policy changes** select the planner, inventory, routing, and policy tests owned by those files, plus affected import consumers, protected regressions, and the fixed smoke set. They do not select the complete compact core or every extension. Hourly main and Full Release Validation still exercise the full inventories through their existing owners.
 - **Control UI source selection** retains the complete ordinary UI unit family when its area changes. The area includes `scripts/lib/ci-test-runtime.mts`, which owns the Bun UI environment and UI runtime selection: main runs UI on Node, so its PR selects the existing three UI unit shards on Bun as the only automatic Bun UI proof. Control UI E2E on PRs uses the existing PR-exempt owner policy: a fixed smoke cohort plus tests whose source owners, imported dependencies, harness inputs, or test files changed. Unmapped tests run on hourly main and in release validation; PRs still select them when their own file or an imported dependency changes. Only the core E2E harness, UI bundle configuration, explicit global app-shell owners, or unavailable changed-path information select the full Control UI E2E inventory. Shared components, styles, and feature modules follow explicit route/component owners and direct runtime imports instead; test and fixture imports retain transitive selection. Shared shell/store cycles do not make a leaf change select every route. Hourly and release validation own the full transitive composition. Owner selections share one browser row per 30 files, bounded by the existing row cap; full validation and the kill switch retain their existing row counts. The preflight job summary lists every selected file and its reasons. Set the repository variable `OPENCLAW_CI_UI_E2E_FULL` to `true` or `1` to restore full coverage for admitted Control UI E2E jobs on PRs. Hourly main and manual/release validation select the full Control UI E2E inventory, including the mapped compositions formerly restricted to release validation. Real-Gateway proof is deferred on ordinary PRs. The browser-extension family retains its independent owner, so a browser-extension change need not select Control UI jobs. Node excludes files delegated to a selected UI job.
-- **Documentation beside code** keeps all `docs/` content, including navigation JSON, generated metadata, and assets, plus README files, `AGENTS.md`, and skill Markdown from widening the code's Node plan. Packaged workspace templates and test fixtures retain their runtime owners. Docs-only routing still selects no Node rows; unrelated runtime Markdown outside `docs/` retains its owner.
+- **Documentation beside code** keeps all `docs/` content, including navigation JSON, generated metadata, and assets, plus README files, `AGENTS.md`, and skill Markdown from widening the code's Node plan. Packaged workspace templates and test fixtures retain their runtime owners: a diff touching only `docs/reference/templates/` is not docs-only, keeps the docs checks, and selects the Node lane so the owner tests of the seeded workspace files run. Other docs-only routing still selects no Node rows; unrelated runtime Markdown outside `docs/` retains its owner.
 - **PR dependency and helper selection** combines bounded owner areas, transitive test import/re-export reachability through workspace and public SDK aliases, explicit policy watches, and protected regressions. Protected tests also follow runtime imports across owner areas. Runtime-worker descriptors (`currentModuleUrl: import.meta.url` with a literal `sourceWorkerName`) are runtime edges too: an inline descriptor connects its declaring module to the spawned fixture, while an exported descriptor connects only the test code that reads that descriptor (a whole-group read connects the whole group). Build manifests that compile descriptors without executing them gain no fixture edges. One-hop proximity alone misses observed catches. Unrelated global inputs do not request the full runtime repository; owner and protected-test policy supplies the retained coverage.
 - **PR extension lint** reports directly changed plugin directories, the Telegram/Codex/Slack smoke cohort for shared source changes, and direct consumers of changed public SDK entries (including test imports). It shares package-selection policy with the boundary checker; transitive and ambient-type fan-out runs on hourly main and release validation. The planner records selected extensions and reasons in its summary; no selected extensions means no extension lint work. Selected stripes retain the existing full declaration preparation, native typed lint program, and diagnostics. Lint/type policy changes, directly changed loose extension sources, and unavailable public-entry inventories retain full coverage. The existing `OPENCLAW_CI_EXTENSION_LINT_FULL=true|1` switch restores full PR coverage; unset keeps the aggressive default. Historical targets retain their full coverage, and non-extension checks keep their existing owners.
 - **Changed runtime exports** also select tests that mock the changed module, including consumers of shared mock factories. The existing dependency-free source scanner uses Node's native syntax stripping to compare the changed module's runtime export names with preflight's fetched base tree and resolves relative, TypeScript-path, and workspace-package specifiers through the import-graph owner. These mock consumers bypass ordinary importer depth and hub limits. Newly imported names from an already mocked module also retain tests that consume the changed caller and install that mock, covering callers that begin using an existing export. Implementation-only edits keep normal selection; missing history or unfamiliar export syntax conservatively retain mock consumers. Hourly and release inventories are unchanged. Current-source read errors fail preflight. Hand-written object fakes without a module-mock edge still rely on their ordinary owner/import coverage.

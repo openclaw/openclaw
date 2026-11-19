@@ -428,7 +428,7 @@ describe("ModelProvidersPage agent scope", () => {
             },
           },
         },
-        note: "Update defaults from Control UI",
+        note: "Update defaults from the OpenClaw app",
         replacePaths: ["agents.defaults.model.fallbacks", "agents.defaults.utilityModel.fallbacks"],
       });
     },
@@ -455,7 +455,7 @@ describe("ModelProvidersPage agent scope", () => {
           },
         },
       },
-      note: "Update defaults from Control UI",
+      note: "Update defaults from the OpenClaw app",
       replacePaths: ["agents.defaults.model.fallbacks", "agents.defaults.utilityModel.fallbacks"],
     });
   });
@@ -513,6 +513,7 @@ describe("ModelProvidersPage agent scope", () => {
     expect(message).toContain("API key saved");
     expect(message).toContain("Provider diagnostic.");
     expect(message).toContain(guidance);
+    expect(page.view.props.probeResults.openai?.status).toBe(status);
     if (status === "billing") {
       expect(message).not.toContain("Enter a different key");
     }
@@ -905,6 +906,28 @@ describe("ModelProvidersPage agent scope", () => {
     );
   });
 
+  it("replaces a successful check when the next check request fails", async () => {
+    const { context, request } = createHarness("main");
+    const page = appendPage(context);
+    await waitForProviders(page);
+    page.view.props.onProbe("openai", ["openai"]);
+    await waitForSolid(() => expect(page.view.props.probeResults.openai?.status).toBe("ok"));
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method) => {
+      if (method === "models.probe") {
+        throw new Error("Connection interrupted");
+      }
+      return originalRequest(method);
+    });
+    page.view.props.onProbe("openai", ["openai"]);
+    await waitForSolid(() => expect(page.view.props.busy["probe:openai"]).toBeUndefined());
+    expect(page.view.props.probeResults.openai).toMatchObject({
+      status: "unknown",
+      error: expect.stringContaining("Connection interrupted"),
+      results: [],
+    });
+  });
+
   it("stops queued provider probes after switching away from and back to the selected agent", async () => {
     const { settingsAgentSelection, context, notifySelection, request } = createHarness("main");
     const page = appendPage(context);
@@ -988,7 +1011,7 @@ it("finishes loading with a system-only roster and keeps global defaults editabl
           },
         },
       },
-      note: "Update defaults from Control UI",
+      note: "Update defaults from the OpenClaw app",
       replacePaths: ["agents.defaults.model.fallbacks", "agents.defaults.utilityModel.fallbacks"],
     });
     expect(request.mock.calls.some(([method]) => method.startsWith("models."))).toBe(false);

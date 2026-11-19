@@ -20,7 +20,6 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { decodeLocalWorkspaceTree, localWorkspaceDigestBytes } from "./local-workspace-cas.js";
 import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
-import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-manifest-scan.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import * as workspaceStore from "./local-workspace-store.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
@@ -28,6 +27,7 @@ import {
   observeLocalWorkspaceStoreSql,
   readLocalWorkspaceProjection,
 } from "./local-workspace-store.test-support.js";
+import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-store.types.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
@@ -300,6 +300,7 @@ export async function proveSharedSandboxCheckpoints(
           const result = await store.manifest(row, action);
           if (
             (action.kind === "scan" || (action.kind === "probe" && result.kind === "scan")) &&
+            !action.prehash &&
             action.target === "canonical"
           ) {
             scans++;
@@ -398,7 +399,7 @@ export async function proveSandboxMutationCheckpoints(owner: LocalWorkspaceOwner
       run({
         ...store,
         manifest: async (row, action) => {
-          if (action.kind === "scan") {
+          if (action.kind === "scan" && !action.prehash) {
             scans.push(action.target);
           }
           return await store.manifest(row, action);

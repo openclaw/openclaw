@@ -1,10 +1,6 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { onSettled, Show, untrack } from "solid-js";
-import {
-  formatDocumentTitle,
-  isSettingsNavigationRoute,
-  pageTitleForRoute,
-} from "../app-navigation.ts";
+import { formatDocumentTitle, isSettingsTakeover, pageTitleForRoute } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import type { RouteId } from "../app-routes.ts";
 import "../components/app-topbar-solid.tsx";
@@ -158,7 +154,14 @@ export class ShellOwner
   get workspaceChromeVisible(): boolean {
     const routeId = this.routeState.routeId;
     // Hidden workspace chrome must not preload its sidebar and panel graphs.
-    return (routeId === undefined || !isSettingsNavigationRoute(routeId)) && !this.onboardingMode;
+    return (
+      !isSettingsTakeover(
+        routeId,
+        this.context?.gateway.snapshot.hello?.controlUiTabs,
+        this.routeState.location,
+        this.context?.basePath,
+      ) && !this.onboardingMode
+    );
   }
 
   storedOutboxScopeHost(context: ApplicationContext): StoredOutboxScopeHost {
@@ -490,14 +493,10 @@ export class ShellOwner
       this.syncConnectionFeedback(state.gatewayStatus.kind);
       if ((!state.settingsTakeover || state.railAvailable) && !state.nativeEmbed) {
         Object.assign(this.navigationSidebar, state.sidebarProperties, {
-          gatewayStatus: state.gatewayStatus,
+          gatewayStatus: state.chromeGatewayStatus,
           connectionRecovery: this.connectionRecovery,
           connectionFlagVisible: this.connectionFlagVisible,
-          // The floating refresh notice speaks for the collapsed sidebar.
-          connectionFlagAllowed:
-            state.navCollapsed &&
-            !state.mobileNavLayout &&
-            !state.floatingUpdateCard.refreshRequired,
+          connectionFlagAllowed: state.navCollapsed && !state.mobileNavLayout,
         });
       }
       this.syncNavigationPresentation(state);

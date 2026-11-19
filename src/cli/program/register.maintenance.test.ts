@@ -104,6 +104,15 @@ describe("registered maintenance commands", () => {
     expect(mocks.requestOneShotSettledExitWatchdog).toHaveBeenCalledOnce();
   });
 
+  it("passes the upgrade publication directory through Doctor's repair options", async () => {
+    await runCli("doctor --fix --non-interactive --state-upgrade-live-state-dir /state/live");
+    expectDoctorOptions({
+      repair: true,
+      nonInteractive: true,
+      stateUpgradeLiveStateDir: "/state/live",
+    });
+  });
+
   const mapping = JSON.stringify({
     from: "openai/gpt-daybreak-blue-latest",
     to: "openai/gpt-6.1-sol",
@@ -215,8 +224,10 @@ describe("registered maintenance commands", () => {
         findings: [{ severity: "error", message: expect.stringContaining(message) }],
       });
     }
-    expect(JSON.stringify(runtime.writeJson.mock.calls)).not.toContain(token);
-    expectNoCalls(runtime.error);
+    expect(
+      JSON.stringify([...runtime.writeJson.mock.calls, ...runtime.error.mock.calls]),
+    ).not.toContain(token);
+    expect(runtime.error.mock.calls).toHaveLength(args === "--state-sqlite compact" ? 1 : 0);
     expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 

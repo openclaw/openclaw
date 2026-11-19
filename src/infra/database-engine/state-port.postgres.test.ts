@@ -50,7 +50,7 @@ describe.skipIf(!connection)("shared-state database port", () => {
     }
     source.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
       INSERT INTO schema_meta VALUES ('primary', 'global', ${OPENCLAW_STATE_SCHEMA_VERSION}, NULL, NULL, 1, 1);
-      INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION}', 1);
+      INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION - 1}', 1);
       INSERT INTO state_leases VALUES ('test', 'lease', 'synthetic', 2, 1, NULL, 1, 1);
       INSERT INTO secret_store_entries VALUES ('team', '', 'synthetic', 'retained', 'secret', 1, 1, NULL, NULL, NULL);
       INSERT INTO plugin_blob_entries VALUES ('test', 'test', 'ttl', '{}', X'00ff80', 1, 2);
@@ -81,7 +81,8 @@ describe.skipIf(!connection)("shared-state database port", () => {
       storeId,
       assertCurrent() {},
     });
-    expect(staged).toEqual({ tables: before.tables, allocations: before.allocations });
+    const { catalog: _catalog, ...sourceVerification } = before;
+    expect(staged).toEqual(sourceVerification);
     const plannerRows = (schema: string) =>
       rows(
         `SELECT c.reltuples FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -193,6 +194,19 @@ describe.skipIf(!connection)("shared-state database port", () => {
         `INSERT INTO "${namespace}".audit_events (event_id, source_id, source_sequence, occurred_at, kind, action, status, actor_type, actor_id) VALUES ('next', 'next', 3, 1, 'test', 'test', 'ok', 'test', 'test') RETURNING sequence`,
       ),
     ).toEqual([{ sequence: "9007199254741000" }]);
+    for (const marker of ["{", String(OPENCLAW_STATE_SCHEMA_VERSION + 1)]) {
+      await client.query(
+        `UPDATE "${namespace}".config_machine_state SET value_json = $1 WHERE state_key = 'state.schema.contentVersion'`,
+        [marker],
+      );
+      await expect(
+        descriptor.admit!(anchorPath, { connection: connection!, schemaPrefix: "test" }),
+      ).rejects.toThrow("PostgreSQL state metadata mismatch");
+    }
+    await client.query(
+      `UPDATE "${namespace}".config_machine_state SET value_json = $1 WHERE state_key = 'state.schema.contentVersion'`,
+      [String(OPENCLAW_STATE_SCHEMA_VERSION - 1)],
+    );
     await client.query(`DROP INDEX "${namespace}".idx_state_leases_owner`);
     await expect(
       descriptor.admit!(anchorPath, { connection: connection!, schemaPrefix: "test" }),
