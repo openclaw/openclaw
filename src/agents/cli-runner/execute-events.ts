@@ -258,8 +258,21 @@ export function createCliEventHandlers(params: {
       }).catch(() => {});
     }
     const strippedName = stripOpenClawMcpToolPrefix(event.name);
+    // Native network tools need no projected MCP counterpart. Use the backend's
+    // capability mapping, not a provider-specific spelling or a client result field.
+    const nativeCapabilities =
+      tracked &&
+      startedCall &&
+      startedCall.kind !== "mcp_tool_use" &&
+      !event.name.startsWith("mcp_")
+        ? context.backendResolved.projectNativeToolAuthority?.([event.name])
+        : undefined;
     const resultContentSource = tracked
-      ? context.resultContentSourceByToolName?.get(strippedName)
+      ? nativeCapabilities?.some(
+          (capability) => capability === "web_fetch" || capability === "web_search",
+        )
+        ? "network"
+        : context.resultContentSourceByToolName?.get(strippedName)
       : undefined;
     getAdmittedRunTurnTaintState(runParams.admittedRunContext)?.observe({
       toolName: strippedName,

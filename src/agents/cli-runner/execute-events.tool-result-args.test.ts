@@ -396,6 +396,35 @@ describe("cli tool result events", () => {
   });
 });
 
+describe("CLI native network metadata", () => {
+  it.each(["undeclared", "mcp", "display"] as const)(
+    "does not infer native network content from a %s tool name",
+    (mode) => {
+      const context = buildContext("native-network-" + mode);
+      const projectNativeToolAuthority = vi.fn(() => ["web_fetch"]);
+      if (mode !== "undeclared") {
+        context.backendResolved.projectNativeToolAuthority = projectNativeToolAuthority;
+      }
+      const { handlers, start, emitResult, data } = eventFixture(context);
+      const name = mode === "mcp" ? "mcp__other__WebFetch" : "WebFetch";
+      if (mode === "display") {
+        handlers.emitCliDisplayToolUseStart({
+          toolCallId: "call",
+          name,
+          args: {},
+          kind: "tool_use",
+        });
+        handlers.emitCliDisplayToolResult({ toolCallId: "call", name, isError: false });
+      } else {
+        start("call", name, {}, mode === "mcp" ? "mcp_tool_use" : "tool_use");
+        emitResult("call", name);
+      }
+      expect(data("tool", "result")[0]).not.toHaveProperty("resultContentSource");
+      expect(projectNativeToolAuthority).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe("CLI progress-card plan projection", () => {
   it.each(["replacement", "clear", "ambiguous"] as const)(
     "projects only unambiguous executed progress-card arguments: %s",

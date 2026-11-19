@@ -15,6 +15,7 @@ import {
 } from "../../plugins/memory-state.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveBootstrapContextForRun } from "../bootstrap-files.js";
+import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { createCliDispatchTranscriptRecorder } from "../embedded-agent-runner/cli-backend-dispatch-transcript.js";
 import {
   createMemoryWriteProvenanceObserver,
@@ -56,7 +57,12 @@ const hook = (name) => send({ type: "control_request", request_id: name + index,
   input: { hook_event_name: name, tool_name: calls[index].name, tool_input: calls[index].input, cwd: process.cwd() },
 } });
 const next = () => {
-  if (index < calls.length) hook("PreToolUse");
+  if (index < calls.length) {
+    send({ type: "assistant", message: { role: "assistant", content: [{
+      type: "tool_use", id: "mutation-" + index, name: calls[index].name, input: calls[index].input,
+    }] } });
+    hook("PreToolUse");
+  }
   else send({ type: "result", subtype: "success", is_error: false, result: "completed", session_id: "fixture-session" });
 };
 for await (const line of createInterface({ input: process.stdin })) {
@@ -72,9 +78,14 @@ for await (const line of createInterface({ input: process.stdin })) {
       const call = calls[index];
       if (decision?.permissionDecision === "allow" && !call.fail) {
         const input = decision.updatedInput;
-        const content = call.name === "Write" ? input.content : readFileSync(input.file_path, "utf8").replace(input.old_string, input.new_string);
-        writeFileSync(input.file_path, content);
-        if (hooks.PostToolUse) { hook("PostToolUse"); continue; }
+        if (!call.network) {
+          const content = call.name === "Write" ? input.content : readFileSync(input.file_path, "utf8").replace(input.old_string, input.new_string);
+          writeFileSync(input.file_path, content);
+        }
+        send({ type: "user", message: { role: "user", content: [{ type: "tool_result",
+          tool_use_id: "mutation-" + index, content: [{ type: "text", text: call.network ? "Synthetic native network note" : "File updated" }],
+        }] } });
+        if (!call.network && hooks.PostToolUse) { hook("PostToolUse"); continue; }
       }
     }
     index++;
@@ -90,10 +101,11 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-it.each(["clean", "network", "non-owner", "delegation-only"])(
+it.each(["clean", "network", "WebFetch", "WebSearch", "non-owner", "delegation-only"])(
   "observes native pre/post writes for %s without widening authority",
   async (mode) => {
-    const tainted = mode === "network";
+    const nativeNetworkTool = mode === "WebFetch" || mode === "WebSearch" ? mode : undefined;
+    const tainted = mode === "network" || nativeNetworkTool !== undefined;
     const untrusted = tainted || mode === "non-owner";
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const workspaceDir = state.workspaceDir;
@@ -123,13 +135,20 @@ it.each(["clean", "network", "non-owner", "delegation-only"])(
       };
       const { context } = await createExecution({
         config,
-        nativeTools: mode === "delegation-only" ? ["Agent", "Workflow"] : ["Edit", "Write"],
+        nativeTools:
+          mode === "delegation-only"
+            ? ["Agent", "Workflow"]
+            : ["Edit", "Write", ...(nativeNetworkTool ? [nativeNetworkTool] : [])],
         timeoutMs: 20_000,
       });
       context.workspaceDir = workspaceDir;
       context.cwd = workspaceDir;
       context.params.senderIsOwner = mode !== "non-owner";
-      context.resultContentSourceByToolName = new Map([["web_fetch", "network"]]);
+      // Native-only turns have no projected MCP network-tool metadata.
+      context.resultContentSourceByToolName =
+        mode === "network" ? new Map([["web_fetch", "network"]]) : undefined;
+      const backend = buildAnthropicCliBackend();
+      context.backendResolved = { ...backend, bundleMcp: false };
       const recorder = createCliDispatchTranscriptRecorder({
         admittedRunContext: context.params.admittedRunContext,
         sessionId: "native-proof",
@@ -158,7 +177,7 @@ it.each(["clean", "network", "non-owner", "delegation-only"])(
         toolTracking: tracking,
         getRunState: () => ({ failed: false, error: undefined }),
       });
-      if (tainted) {
+      if (mode === "network") {
         events.emitParsedToolUseStart({
           name: "mcp__openclaw__web_fetch",
           toolCallId: "network",
@@ -172,7 +191,6 @@ it.each(["clean", "network", "non-owner", "delegation-only"])(
           result: [{ type: "text", text: "Synthetic network note" }],
         });
       }
-      const backend = buildAnthropicCliBackend();
       const prepared = await backend.prepareExecution?.({
         workspaceDir,
         provider: "claude-cli",
@@ -182,9 +200,21 @@ it.each(["clean", "network", "non-owner", "delegation-only"])(
       if (!prepared?.execute) {
         throw new Error("Claude transport unavailable");
       }
+      const parser = createCliJsonlStreamingParser({
+        backend: backend.config,
+        providerId: backend.id,
+        onAssistantDelta: () => {},
+        onToolUseStart: events.emitParsedToolUseStart,
+        onToolResult: events.emitParsedToolResult,
+      });
       const fixture = path.join(workspaceDir, "native-fixture.mjs");
       await fs.writeFile(fixture, NATIVE_FIXTURE);
-      const calls = [...FILES, "memory/drift.md", "memory/failed.md"].map((file, index) => ({
+      const calls: Array<{
+        name: string;
+        input: Record<string, unknown>;
+        fail?: boolean;
+        network?: boolean;
+      }> = [...FILES, "memory/drift.md", "memory/failed.md"].map((file, index) => ({
         name: index === 0 ? "Write" : "Edit",
         input:
           index === 0
@@ -192,6 +222,16 @@ it.each(["clean", "network", "non-owner", "delegation-only"])(
             : { file_path: file, old_string: "seed", new_string: "native" },
         fail: file === "memory/failed.md",
       }));
+      if (nativeNetworkTool) {
+        calls.unshift({
+          name: nativeNetworkTool,
+          input:
+            nativeNetworkTool === "WebFetch"
+              ? { url: "https://example.com/proof", prompt: "Read the note" }
+              : { query: "synthetic memory note" },
+          network: true,
+        });
+      }
       let retainedObserver: CliBackendExecuteContext["observeToolMutation"];
       const execute = prepared.execute;
       try {
@@ -212,18 +252,21 @@ it.each(["clean", "network", "non-owner", "delegation-only"])(
           prompt: "Synthetic proof",
           useResume: false,
           noOutputTimeoutMs: 10_000,
-          consumeStdout: () => {},
+          consumeStdout: (chunk) => parser.push(chunk),
         });
       } finally {
         unsubscribe();
+        parser.finish();
         tracking.finalizeCapture(events.finalizeParsedTools);
         await recorder.finalize("completed");
         await prepared.cleanup?.();
       }
       if (tainted) {
-        expect(vi.mocked(appendTranscriptMessage).mock.calls.at(-1)?.[1].message).toMatchObject({
-          __openclaw: { turnTainted: true },
-        });
+        expect
+          .soft(vi.mocked(appendTranscriptMessage).mock.calls.at(-1)?.[1].message)
+          .toMatchObject({
+            __openclaw: { turnTainted: true },
+          });
       }
       await expect(
         retainedObserver?.({
@@ -244,14 +287,18 @@ it.each(["clean", "network", "non-owner", "delegation-only"])(
       }
       for (const relativePath of FILES) {
         expect(await fs.readFile(path.join(workspaceDir, relativePath), "utf8")).toBe("native");
-        expect(await readMemoryArtifactProvenance({ workspaceDir, relativePath })).toMatchObject({
-          originClass: untrusted ? "untrusted" : "agent",
-          sessionId: context.params.sessionId,
-        });
+        expect
+          .soft(await readMemoryArtifactProvenance({ workspaceDir, relativePath }))
+          .toMatchObject({
+            originClass: untrusted ? "untrusted" : "agent",
+            sessionId: context.params.sessionId,
+          });
         await operations.writeFile(path.join(workspaceDir, relativePath), "later clean edit");
-        expect(await readMemoryArtifactProvenance({ workspaceDir, relativePath })).toMatchObject({
-          originClass: untrusted ? "untrusted" : "agent",
-        });
+        expect
+          .soft(await readMemoryArtifactProvenance({ workspaceDir, relativePath }))
+          .toMatchObject({
+            originClass: untrusted ? "untrusted" : "agent",
+          });
       }
       expect(
         await readMemoryArtifactProvenance({ workspaceDir, relativePath: "memory/drift.md" }),
@@ -266,9 +313,9 @@ it.each(["clean", "network", "non-owner", "delegation-only"])(
         agentId: "main",
         sessionKey: "agent:main:main",
       });
-      expect(contextFiles.some((file) => file.content.includes("later clean edit"))).toBe(
-        !untrusted,
-      );
+      expect
+        .soft(contextFiles.some((file) => file.content.includes("later clean edit")))
+        .toBe(!untrusted);
     });
   },
 );

@@ -285,6 +285,8 @@ or other harnesses' native tools. For an already tracked file, a missed native
 completion hook leaves the previous hash in place; the next tracked write
 still detects the mismatch. CLI loopback tools share the admitted turn's
 network taint with native-write observation and transcript recording.
+Native network results use the backend's declared capabilities, so Claude
+`WebFetch` and `WebSearch` taint the turn even without matching loopback tools.
 
 A tracked write records `untrusted` when the turn is
 not an owner turn, when the turn is tainted by network-sourced tool results, or
