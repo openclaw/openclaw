@@ -92,9 +92,8 @@ export const readToolInputSchema = Type.Object({
   cursor: Type.Optional(
     Type.Integer({ minimum: 0, description: "Character position within the start line; 0-based." }),
   ),
-  // Models send false for "required"; only true changes behavior.
   optional: Type.Optional(
-    Type.Boolean({
+    Type.Literal(true, {
       description: "Missing paths return structured not_found instead of failing.",
     }),
   ),
