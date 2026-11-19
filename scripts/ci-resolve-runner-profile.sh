@@ -99,12 +99,17 @@ try {
   if (limits.teamId !== org) throw new Error('account scope mismatch');
   budget = resolveBoatNodeJobBudget(limits);
 } catch {
-  console.error('::warning::Boat limits unavailable; using hybrid CI.');
+  console.error('::warning::Boat limits unavailable; using GitHub-hosted CI.');
 }
 console.log(budget);
 JS
       )"
-      echo "Boat admission: up to $boat_node_job_limit Node jobs; remaining jobs use hybrid CI."
+      if [[ "$boat_node_job_limit" == "0" ]]; then
+        runner_profile=github
+        node_runner_backend=github
+        effective_runner_backend=github
+      fi
+      echo "Boat admission: up to $boat_node_job_limit Node jobs; remaining jobs use $runner_profile CI."
     fi
   else
     runner_profile=github
