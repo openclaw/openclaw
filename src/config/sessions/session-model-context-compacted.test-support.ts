@@ -24,15 +24,12 @@ DatabaseSync.prototype.prepare = new Proxy(DatabaseSync.prototype.prepare, {
   apply(prepare, database, parameters) {
     const statement: StatementSync = Reflect.apply(prepare, database, parameters);
     const iterate = statement.iterate.bind(statement);
-    statement.iterate = function* (...bindings) {
+    statement.iterate = function* (...bindings): ReturnType<typeof iterate> {
       const rows: ReturnType<typeof iterate> = Reflect.apply(iterate, statement, bindings);
       for (const row of rows) {
-        if ("model_bytes" in row) {
-          navigationRows += 1;
-        }
+        navigationRows += Number("model_bytes" in row);
         yield row;
       }
-      return undefined;
     };
     return statement;
   },

@@ -24,6 +24,9 @@ import type {
 import { readActiveTranscriptEntryAnchorAsync } from "./session-transcript-anchor-read.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 
+const timestamp = "2026-01-01T00:00:00.000Z";
+const header = { type: "session", version: 3, timestamp, cwd: "/synthetic" };
+
 async function readWorker(
   input: CompactedContextWorkerInput,
   afterRead?: (index: number) => Promise<void>,
@@ -91,7 +94,6 @@ it.each(cases)("preserves exact model bytes for %s and bounds eligible navigatio
       sessionKey: `agent:main:${kind}`,
       storePath: state.statePath("transcript.sqlite"),
     };
-    const timestamp = "2026-01-01T00:00:00.000Z";
     let rewritePrefix = false;
     const seed = () =>
       importSqliteSessionRowsBatch([
@@ -100,73 +102,64 @@ it.each(cases)("preserves exact model bytes for %s and bounds eligible navigatio
           entry: { sessionId: kind, updatedAt: 1 },
           transcriptMtimeMs: 1,
           readTranscriptEvents(append) {
-            append({ type: "session", id: kind, version: 3, timestamp, cwd: "/synthetic" });
+            append({ ...header, id: kind });
             let parentId: string | null = null;
             const add = (id: string, event: Record<string, unknown>) => {
               append({ id, parentId, timestamp, ...event });
               parentId = id;
             };
+            const message = (id: string, value: Record<string, unknown>) =>
+              add(id, { type: "message", message: value });
             add("thinking", { type: "thinking_level_change", thinkingLevel: "high" });
             for (let turn = 0; turn < 80; turn++) {
-              add(`user-${turn}`, {
-                type: "message",
-                message: { role: "user", content: `Question ${turn}`, timestamp: turn },
+              message(`user-${turn}`, {
+                role: "user",
+                content: `Question ${turn}`,
+                timestamp: turn,
               });
-              add(`assistant-${turn}`, {
-                type: "message",
-                message: {
-                  role: "assistant",
-                  provider: "openai",
-                  model: "synthetic",
-                  timestamp: turn,
-                  content: [{ type: "toolCall", id: `call-${turn}`, name: "read", arguments: {} }],
-                  providerReplay: {
-                    type: "openai-responses-compaction",
-                    replayIndex: 0,
-                    id: "synthetic-checkpoint",
-                  },
+              message(`assistant-${turn}`, {
+                role: "assistant",
+                provider: "openai",
+                model: "synthetic",
+                timestamp: turn,
+                content: [{ type: "toolCall", id: `call-${turn}`, name: "read", arguments: {} }],
+                providerReplay: {
+                  type: "openai-responses-compaction",
+                  replayIndex: 0,
+                  id: "synthetic-checkpoint",
                 },
               });
               if (turn === 79) {
-                add("synthetic-result", {
-                  type: "message",
-                  message: {
-                    role: "toolResult",
-                    toolCallId: `call-${turn}`,
-                    toolName: "read",
-                    timestamp: turn,
-                    content: [{ type: "text", text: "Missing result" }],
-                    isError: true,
-                    details: { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true },
-                  },
-                });
-              }
-              add(`result-${turn}`, {
-                type: "message",
-                message: {
+                message("synthetic-result", {
                   role: "toolResult",
                   toolCallId: `call-${turn}`,
                   toolName: "read",
                   timestamp: turn,
-                  content: [
-                    { type: "text", text: (turn % 2 ? "synthetic\0" : "synthetic").repeat(2048) },
-                    { type: "image", data: "a".repeat(256), mimeType: "image/png" },
-                  ],
-                  details: { private: "not-model-input" },
-                },
+                  content: [{ type: "text", text: "Missing result" }],
+                  isError: true,
+                  details: { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: true },
+                });
+              }
+              message(`result-${turn}`, {
+                role: "toolResult",
+                toolCallId: `call-${turn}`,
+                toolName: "read",
+                timestamp: turn,
+                content: [
+                  { type: "text", text: (turn % 2 ? "synthetic\0" : "synthetic").repeat(2048) },
+                  { type: "image", data: "a".repeat(256), mimeType: "image/png" },
+                ],
+                details: { private: "not-model-input" },
               });
               if (turn === 1 && (kind === "pending" || kind === "placed" || rewritePrefix)) {
-                add("pending", {
-                  type: "message",
-                  message: {
-                    role: "assistant",
-                    provider: "openclaw",
-                    model: "automation-result",
-                    excludeFromContext: true,
-                    openclawModelPlacement: "pending",
-                    content: [{ type: "text", text: "Accepted background result" }],
-                    timestamp: 1,
-                  },
+                message("pending", {
+                  role: "assistant",
+                  provider: "openclaw",
+                  model: "automation-result",
+                  excludeFromContext: true,
+                  openclawModelPlacement: "pending",
+                  content: [{ type: "text", text: "Accepted background result" }],
+                  timestamp: 1,
                 });
               }
               if (turn === 1 && kind === "restart") {
@@ -214,10 +207,7 @@ it.each(cases)("preserves exact model bytes for %s and bounds eligible navigatio
                 data: { afterEntryId: parentId, resultEntryIds: ["pending"] },
               });
             }
-            add("latest", {
-              type: "message",
-              message: { role: "user", content: "Continue", timestamp: 100 },
-            });
+            message("latest", { role: "user", content: "Continue", timestamp: 100 });
           },
         },
       ]);
@@ -241,7 +231,6 @@ it.each(cases)("preserves exact model bytes for %s and bounds eligible navigatio
     if (kind === "fence" || kind === "anchor") {
       assert(anchor);
     }
-    const through = kind === "anchor" ? anchor : undefined;
     const admission =
       kind === "fence" && anchor
         ? { ...anchor, role: "user" as const, logicalTurnId: "synthetic-turn" }
@@ -252,24 +241,22 @@ it.each(cases)("preserves exact model bytes for %s and bounds eligible navigatio
         maxEvents: 100,
         toolResultOverflow: omit ? "omit" : undefined,
       },
-      through,
+      through: kind === "anchor" ? anchor : undefined,
       admission,
     }));
     // The supported synchronous caller retains the original full-navigation implementation.
-    const expected = requests.map((request) =>
+    const read = (request: CompactedContextWorkerInput["requests"][number]) =>
       JSON.stringify(
         runWithSessionTranscriptReadFence(request.admission, () =>
           readSessionTranscriptModelContext(scope, request.through, request.limits),
         ),
-      ),
-    );
+      );
+    const expected = requests.map(read);
     const actual = await readWorker({ scope, requests }, async (index) => {
       if (kind === "prefix-rewrite" && index === 0) {
         rewritePrefix = true;
         await seed();
-        expected[1] = JSON.stringify(
-          readSessionTranscriptModelContext(scope, undefined, requests[1]!.limits),
-        );
+        expected[1] = read(requests[1]!);
       }
     });
     expect(actual.map((result) => result.json)).toEqual(expected);
@@ -278,10 +265,7 @@ it.each(cases)("preserves exact model bytes for %s and bounds eligible navigatio
       expect(actual[1]!.navigationRows).toBeGreaterThan(200);
     }
     if (kind === "compaction" || kind === "branch" || kind === "prior-reset") {
-      expect(
-        actual[0]!.navigationRows,
-        JSON.stringify(actual.map((row) => row.navigationRows)),
-      ).toBeLessThan(20);
+      expect(actual[0]!.navigationRows).toBeLessThan(20);
       expect(actual[1]!.navigationRows).toBe(0);
     }
   }),
@@ -303,14 +287,7 @@ it("keeps discarded-prefix projected costs when there is no semantic boundary", 
           entry: { sessionId: scope.sessionId, updatedAt: 1 },
           transcriptMtimeMs: 1,
           readTranscriptEvents(append) {
-            const timestamp = "2026-01-01T00:00:00.000Z";
-            append({
-              type: "session",
-              version: 3,
-              id: "same-header",
-              cwd: "/synthetic",
-              timestamp,
-            });
+            append({ ...header, id: "same-header" });
             let parentId: string | null = null;
             let seq = 0;
             for (let turn = 0; turn < 20; turn++) {
@@ -343,11 +320,10 @@ it("keeps discarded-prefix projected costs when there is no semantic boundary", 
         },
       ]);
       const request = { limits: { maxBytes: 12127, maxEvents: 10000 } };
-      const expected = JSON.stringify(
-        readSessionTranscriptModelContext(scope, undefined, request.limits),
-      );
       const [actual] = await readWorker({ scope, requests: [request] });
-      expect(actual!.json).toBe(expected);
+      expect(actual!.json).toBe(
+        JSON.stringify(readSessionTranscriptModelContext(scope, undefined, request.limits)),
+      );
       const events = (JSON.parse(actual!.json) as { events: Array<{ id: string }> }).events;
       expect(events.some((event) => event.id === "e3")).toBe(false);
       outputs.push(events.map((event) => event.id).join(","));
