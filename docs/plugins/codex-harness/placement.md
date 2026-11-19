@@ -171,7 +171,10 @@ placement lifecycle, and cleanup.
 When `appServer.workerHostedCloud` is enabled in the Codex plugin config, a Full
 cloud placement runs the pinned app-server on its enrolled node. Its model login
 and native state stay in that workspace's owned home. Gateway API keys are never
-forwarded. A configured GitHub execution identity is admitted for the original
-operator and session, installed in a private worker profile, refreshed only after
-worker acknowledgement, and revoked when the duplex ends. Enterprise credentials
-remain bound to their issuer host.
+forwarded. A selected GitHub App can use native tools on a dedicated cloud
+worker. The Gateway binds the exact App and placement to the original operator
+and session before issuing a credential. It is installed in a private worker
+profile, refreshed only after worker acknowledgement, and revoked when the
+duplex ends. Enterprise credentials remain bound to their issuer host. Shared or
+ordinary paired nodes do not receive that credential. Other managed GitHub
+identities still require Gateway-owned execution.

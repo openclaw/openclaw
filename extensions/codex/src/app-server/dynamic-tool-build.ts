@@ -508,6 +508,7 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     agentId?: string;
     runtimeSessionKey?: string;
     sandboxExecServerEnabled?: boolean;
+    workerAppProfileId?: string;
     nativeExecutionPolicy: PreparedCodexNativeExecutionPolicy;
   },
 ): boolean {
@@ -520,9 +521,10 @@ export function shouldEnableCodexAppServerNativeToolSurface(
     // Strict one-shots need the host tool owner's joined process cleanup.
     // Native command completion cannot certify retired descendant settlement.
     params.oneShotCliRun === true ||
-    // Codex's environment policy is a serialized overlay, not a launch binding.
-    // Let the common host tools own credentials, approvals, and process lifetime.
-    params.hostCapabilities.preparedEnvironment?.().hostExecutionRequired === true
+    // The dedicated worker transport binds the pinned App to owned process launches.
+    // All other managed identities still require the host tool surface, not an env overlay.
+    (params.hostCapabilities.preparedEnvironment?.().hostExecutionRequired === true &&
+      !options.workerAppProfileId)
   ) {
     return false;
   }

@@ -64,7 +64,10 @@ import {
   getLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
-import { withCodexAppServerGitConfig } from "./transport-stdio.js";
+import {
+  projectCodexAppServerShellEnvironment,
+  withCodexAppServerGitConfig,
+} from "./transport-stdio.js";
 
 export async function prepareCodexAttemptConnection({ params, options }: CodexRunAttemptInput) {
   const attemptStartedAt = Date.now();
@@ -128,12 +131,19 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const workerHostedCloud =
     pluginConfig.appServer?.workerHostedCloud === true &&
     isCodexRemoteExecPlacementSandbox(sandbox);
+  const preparedEnvironment = params.hostCapabilities.preparedEnvironment?.();
+  const workerAppProfileId =
+    !options.clientFactory && workerHostedCloud && sandbox?.backendId === "node"
+      ? preparedEnvironment?.appInstallationProfileId
+      : undefined;
   const attemptClientFactory =
     options.clientFactory ??
     (workerHostedCloud && sandbox
       ? createCodexWorkerClientFactory({
           runtime: options.runtime,
-          agentId: sessionAgentId,
+          githubApp: workerAppProfileId
+            ? { agentId: sessionAgentId, profileId: workerAppProfileId, runId: params.runId }
+            : undefined,
           permissionMode: params.permissionMode,
           sandbox,
           signal: params.abortSignal ?? new AbortController().signal,
@@ -155,7 +165,6 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     agentId: policyAgentId,
   });
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
-  const preparedEnvironment = params.hostCapabilities.preparedEnvironment?.();
   const remoteExec = isCodexRemoteExecPlacementSandbox(sandbox);
   const assertLocalTargetSupported = (unsupported: boolean) => {
     if (preparedEnvironment?.localProcessEnv && unsupported) {
@@ -165,27 +174,10 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     }
   };
   assertLocalTargetSupported(sandbox?.enabled === true || remoteExec);
-  const preparedShellEnvironment = preparedEnvironment
-    ? {
-        ...preparedEnvironment.credentialScrubEnv,
-        ...(sandbox?.enabled || remoteExec || preparedEnvironment.hostExecutionRequired
-          ? undefined
-          : preparedEnvironment.localIdentityEnv),
-        ...preparedEnvironment.localProcessEnv,
-      }
-    : undefined;
-  const baseShellEnvironment =
-    preparedShellEnvironment && Object.keys(preparedShellEnvironment).length > 0
-      ? preparedShellEnvironment
-      : undefined;
-  // An empty system-detected overlay intentionally keeps the runtime user's native shell identity.
-  // Selected, scrubbed, or remote identities must not let a later profile replace that decision.
-  const disableLoginShell =
-    remoteExec ||
-    preparedEnvironment?.localProcessEnv !== undefined ||
-    preparedEnvironment?.managedLocalIdentity === true ||
-    (preparedEnvironment !== undefined &&
-      Object.keys(preparedEnvironment.credentialScrubEnv).length > 0);
+  const { baseShellEnvironment, disableLoginShell } = projectCodexAppServerShellEnvironment(
+    preparedEnvironment,
+    { sandboxed: sandbox?.enabled === true, remoteExec },
+  );
   let shellEnvironment = baseShellEnvironment;
   let shellPathPrepend: readonly string[] | undefined;
   let shellGitConfigParameters: string | undefined;
@@ -680,6 +672,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       preDynamicStartupStages,
       attemptClientFactory,
       workerHostedCloud,
+      workerAppProfileId,
       callerOwnedAttemptClient:
         workerHostedCloud || attemptClientFactory === createIsolatedCodexAppServerClient,
       runtimeArtifactRequest,

@@ -18,6 +18,7 @@ import {
   resolveCodexAppServerHookChannelId,
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
+import { resolveCodexToolConstructionPlan } from "./dynamic-tool-construction-plan.js";
 import { prepareCodexNativeExecutionPolicyForRun } from "./native-execution-policy.js";
 import {
   assertCodexNativeHookRelayAllowed,
@@ -285,9 +286,14 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
         agentId: policyAgentId,
         runtimeSessionKey: sandboxSessionKey,
         sandboxExecServerEnabled,
+        workerAppProfileId: connection.workerAppProfileId,
         nativeExecutionPolicy,
       },
     );
+    // A policy-restricted turn must not open a credentialed probe duplex.
+    if (connection.workerAppProfileId && !nativeToolSurfaceEnabled) {
+      resolveCodexToolConstructionPlan(sandbox, false, params.requireWorkspaceOnly);
+    }
     if (
       nativeToolSurfaceEnabled &&
       sandbox?.enabled &&

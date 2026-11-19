@@ -449,6 +449,13 @@ describe("worker launch capabilities", () => {
             if (original.state !== "attached") {
               throw new Error("expected an attached environment");
             }
+            const credentialRequest = { ...request, requireDedicatedWorker: true as const };
+            vi.mocked(environments.get).mockReturnValueOnce({ ...original, sharedHost: false });
+            expect(() => assertCurrent!(credentialRequest)).not.toThrow();
+            vi.mocked(environments.get).mockReturnValueOnce({ ...original, sharedHost: true });
+            expect(() => assertCurrent!(credentialRequest)).toThrow(
+              "requires a dedicated cloud worker",
+            );
             for (const changed of [
               { ...original, nodeDeviceId: "replacement" },
               { ...original, leaseId: "replacement" },

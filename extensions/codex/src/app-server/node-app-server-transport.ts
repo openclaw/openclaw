@@ -24,7 +24,7 @@ const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 
 export function createCodexWorkerClientFactory(params: {
   runtime?: Pick<PluginRuntime, "nodes">;
-  agentId?: string;
+  githubApp?: { agentId: string; profileId: string; runId: string };
   permissionMode?: EmbeddedRunAttemptParamsV2["permissionMode"];
   sandbox: SandboxContext;
   signal: AbortSignal;
@@ -55,11 +55,17 @@ export function createCodexWorkerClientFactory(params: {
     await options?.assertCurrentAsync?.();
     assertCurrent();
     const workspace = readCodexPlacementWorkspaceIdentity(params.sandbox);
-    const grant = params.agentId
+    const grant = params.githubApp
       ? await prepareWorkerGitHubBindingGrant({
           sessionId: workspace.sessionId,
           sessionKey: workspace.sessionKey,
-          agentId: params.agentId,
+          agentId: params.githubApp.agentId,
+          expectedProfileId: params.githubApp.profileId,
+          workerPlacement: {
+            runId: params.githubApp.runId,
+            nodeId,
+            workspace: { ...workspace, workspaceDir: sandbox.containerWorkdir },
+          },
           signal,
           assertCurrent: () => {
             assertCurrent();
@@ -67,6 +73,9 @@ export function createCodexWorkerClientFactory(params: {
           },
         })
       : undefined;
+    if (params.githubApp && !grant) {
+      throw new Error("Selected GitHub App credential is unavailable for this worker.");
+    }
     let acquiredChannel: Awaited<ReturnType<PluginRuntime["nodes"]["openDuplex"]>> | undefined;
     try {
       assertCurrent();

@@ -106,7 +106,7 @@ function credentialTransport() {
   };
   const factory = createCodexWorkerClientFactory({
     runtime,
-    agentId: "main",
+    githubApp: { agentId: "main", profileId: "synthetic-app", runId: "test-run" },
     permissionMode: "full",
     sandbox,
     signal: new AbortController().signal,
@@ -141,6 +141,13 @@ function credentialTransport() {
   };
 }
 
+it("refuses to launch the worker without the selected App grant", async () => {
+  const h = credentialTransport();
+  vi.mocked(prepareWorkerGitHubBindingGrant).mockResolvedValue(undefined);
+  await expect(h.start()).rejects.toThrow("Selected GitHub App credential is unavailable");
+  expect(h.runtime.nodes.openDuplex).not.toHaveBeenCalled();
+});
+
 it.each([
   { stage: "renewal", acknowledgment: "exact", response: { generation: 1 } },
   { stage: "initial", acknowledgment: "mismatched", response: { generation: 1 } },
@@ -170,6 +177,17 @@ it.each([
       agentId: "main",
       sessionId: "session",
       sessionKey: "agent:main:worker",
+      expectedProfileId: "synthetic-app",
+      workerPlacement: {
+        runId: "test-run",
+        nodeId: "node",
+        workspace: expect.objectContaining({
+          sessionId: "session",
+          sessionKey: "agent:main:worker",
+          environmentId: "environment",
+          ownerEpoch: 1,
+        }),
+      },
       signal: expect.any(AbortSignal),
       assertCurrent: expect.any(Function),
     });
