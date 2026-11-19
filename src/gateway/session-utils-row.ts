@@ -52,7 +52,7 @@ import { sessionClassificationForRow } from "./session-classification.js";
 import { projectSessionRowProfiles } from "./session-identity-projection.js";
 import { sessionModelRevision } from "./session-model-revision.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
-import { reuseSessionRowFields } from "./session-row-identity.js";
+import { freezeSessionRow } from "./session-row-identity.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { projectSessionRowProviderReview } from "./session-row-provider-review.js";
 import type { SessionRuntimeResolution } from "./session-runtime-resolution.js";
@@ -118,6 +118,7 @@ export function readSessionRowInputs(params: {
   skipTranscriptUsageFallback?: boolean;
   transcriptUsage?: SessionTranscriptUsageSnapshot | null;
   lightweightListRow?: boolean;
+  hasMessages?: boolean;
   includeSwarmChildren?: boolean;
 }) {
   const { cfg, storePath, store, key, entry, agentId } = params;
@@ -183,7 +184,7 @@ export function readSessionRowInputs(params: {
     catalogEntry,
     selected: entry?.contextWindow,
   });
-  const modelContext = resolveModelContextTokenProjection({
+  const modelContext = (params.runtimeResolution?.context ?? resolveModelContextTokenProjection)({
     cfg,
     provider,
     model,
@@ -234,9 +235,12 @@ export function readSessionRowInputs(params: {
       displayName,
       derivedTitle: params.preparedTitle?.derivedTitle,
       lastMessagePreview: params.preparedTitle?.lastMessagePreview,
+      hasMessages: params.hasMessages,
       lastAssistantMessage: params.preparedTitle?.lastAssistantMessage,
       thinkingProjection,
-      agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
+      agentRuntime: (params.runtimeResolution?.placement ?? projectWorkerPlacementAgentRuntime)(
+        thinkingProjection.agentRuntime,
+      ),
       contextWindowProfile,
       fastModeState: resolveFastModeState({
         cfg,
@@ -446,6 +450,7 @@ export function materializeSessionRow(
       : input.displayName,
     derivedTitle: input.derivedTitle,
     lastMessagePreview: input.lastMessagePreview,
+    hasMessages: input.hasMessages,
     lastAssistantMessage: input.lastAssistantMessage,
     channel,
     subject: entry?.subject,
@@ -550,9 +555,7 @@ export function materializeSessionRow(
   });
   return Object.freeze({
     publicationIdentity: previous?.publicationIdentity ?? {},
-    row: freezeTrustedJsonSnapshot<Readonly<GatewaySessionRow>>(
-      reuseSessionRowFields(row, previous?.row),
-    ),
+    row: freezeSessionRow(row, previous?.row),
     source: Object.freeze({
       parsedKey: parseAgentSessionKey(key),
       backgroundProcessScope: prepareGatewaySessionBackgroundProcessScope(input),
@@ -594,16 +597,11 @@ export function replaceSessionRowFacts(
   source?: Partial<ReturnType<typeof materializeSessionRow>["source"]>,
 ): ReturnType<typeof materializeSessionRow> {
   const nextSource = source ? { ...materialized.source, ...source } : materialized.source;
-  freezeTrustedJsonSnapshot(nextSource.childLinks);
+  freezeTrustedJsonSnapshot(source?.childLinks);
   return Object.freeze({
     publicationIdentity: materialized.publicationIdentity,
     row: row
-      ? freezeTrustedJsonSnapshot(
-          reuseSessionRowFields(
-            omitUndefinedFields({ ...materialized.row, ...row }),
-            materialized.row,
-          ),
-        )
+      ? freezeSessionRow({ ...materialized.row, ...row }, materialized.row, Object.keys(row))
       : materialized.row,
     source: Object.freeze(nextSource),
   });

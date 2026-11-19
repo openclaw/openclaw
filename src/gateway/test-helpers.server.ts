@@ -1113,7 +1113,7 @@ export async function rpcReq<T extends Record<string, unknown>>(
   ws: WebSocket,
   method: string,
   params?: unknown,
-  timeoutMs?: number,
+  timeout?: number | AbortSignal,
 ) {
   // Config publication leaves in-flight session writers owned by the Gateway.
   publishGatewayTestConfig();
@@ -1126,10 +1126,13 @@ export async function rpcReq<T extends Record<string, unknown>>(
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();
   const started = performance.now();
+  if (typeof timeout === "object") {
+    timeout.throwIfAborted();
+  }
   const responsePromise = onceMessage<GatewayTestResponse<T | null | undefined>>(
     ws,
     responseForId(id),
-    timeoutMs,
+    timeout,
   );
   ws.send(JSON.stringify({ type: "req", id, method, params }));
   try {
