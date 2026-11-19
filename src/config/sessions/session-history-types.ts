@@ -46,7 +46,7 @@ export type ChatHistoryResponsePage = {
   activity?: AgentHistoryActivity[];
   messagesBytes: number;
   responseHistoryBytes: number;
-  omission?: { omittedCount: number; normalizedBytes: number; byteLimited?: true };
+  omission?: { omittedCount: number; byteLimited?: true };
   nextOffset?: number;
   olderCursor?: string;
   newerCursor?: string;

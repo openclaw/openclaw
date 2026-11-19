@@ -95,6 +95,18 @@ export function createRecoveryDestinationVerifier(
       }
       const paths = resolveSqliteDatabaseFilePaths(target.sqlitePath);
       assertDoctorSqliteMaintenancePathsNotAliased("update recovery cleanup", paths, [stateDir]);
+      if (target.databaseIdentity && run.manifest.updateRunId) {
+        // Its update run's outcome released this backup. The live file may legitimately be
+        // a new inode (the updater's own rollback and the startup swap replace it), but a
+        // backup is never released while its database is missing or aliased.
+        const live = fs.lstatSync(target.sqlitePath, { bigint: true, throwIfNoEntry: false });
+        if (!live?.isFile() || live.nlink !== 1n) {
+          throw new Error(
+            "Recovery destination database is missing or aliased; originals retained.",
+          );
+        }
+        continue;
+      }
       const expected = destinations.get(target.sqlitePath);
       let agentId = expected?.agentId;
       if (!expected) {
