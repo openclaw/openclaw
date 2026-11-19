@@ -1610,9 +1610,12 @@ console.log("relocated session card renders with bundled fonts");
           [entry]: source,
           ...(target === "worker"
             ? {
-                "worker/worker-chunk-highlight": "node_modules/highlight.js/lib/index.js",
-                "worker/worker-chunk-fs-safe-watch-io":
+                "worker/worker-chunk-highlight": path.resolve(
+                  "node_modules/highlight.js/lib/index.js",
+                ),
+                "worker/worker-chunk-fs-safe-watch-io": path.resolve(
                   "node_modules/@openclaw/fs-safe/dist/watch-io-worker.js",
+                ),
               }
             : {}),
         });
