@@ -9,6 +9,7 @@ import {
   Repeat,
   Show,
 } from "solid-js";
+import { strokePathData, type IconData } from "../../components/icon-data-types.ts";
 import type { IconName } from "../../components/icon-data.ts";
 import {
   CatalogDiscoveryChip,
@@ -16,7 +17,7 @@ import {
   CatalogDiscoverySearch,
   CatalogDiscoverySection,
 } from "../../components/solid/catalog-discovery.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
+import { Icon, IconSvg } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { registerTemplatesEnglish } from "../../i18n/locales/en-templates.ts";
@@ -42,13 +43,21 @@ import {
 
 registerEnglishCatalog(registerTemplatesEnglish);
 
+// Lucide popcorn (ISC). Only the lazy Templates page needs this artwork.
+const popcornIcon = strokePathData(
+  "M18 8a2 2 0 0 0 0-4 2 2 0 0 0-4 0 2 2 0 0 0-4 0 2 2 0 0 0-4 0 2 2 0 0 0 0 4",
+  "M10 22 9 8",
+  "m14 22 1-14",
+  "M20 8c.5 0 .9.4.8 1l-2.6 12c-.1.5-.7 1-1.2 1H7c-.6 0-1.1-.4-1.2-1L3.2 9c-.1-.6.3-1 .8-1Z",
+);
+
 // ClawHub's current Template taxonomy. The "other" bucket is assigned by ClawHub.
 const templateCategories = [
   ["", "templatesCatalog.categoryAll", "layoutGrid"],
   ["engineering", "templatesCatalog.categoryEngineering", "codeXml"],
   ["operations", "templatesCatalog.categoryOperations", "workflow"],
   ["household", "templatesCatalog.categoryHousehold", "home"],
-  ["entertainment", "templatesCatalog.categoryEntertainment", "popcorn"],
+  ["entertainment", "templatesCatalog.categoryEntertainment", popcornIcon],
   ["travel", "templatesCatalog.categoryTravel", "plane"],
   ["productivity", "templatesCatalog.categoryProductivity", "listTodo"],
   ["research", "templatesCatalog.categoryResearch", "search"],
@@ -56,7 +65,7 @@ const templateCategories = [
   ["sales", "templatesCatalog.categorySales", "handshake"],
   ["product", "templatesCatalog.categoryProduct", "lightbulb"],
   ["other", "templatesCatalog.categoryOther", "shapes"],
-] as const satisfies readonly (readonly [string, string, IconName])[];
+] as const satisfies readonly (readonly [string, string, IconName | IconData])[];
 const SECTION_SIZE = 4;
 // Enough placeholders and decoded artwork to cover a tall first screen.
 const SKELETON_SECTIONS = 4;
@@ -317,7 +326,7 @@ export function TemplatesExplore(
                   <CatalogDiscoveryChip
                     active={view.category === slug}
                     onClick={() => selectCategory(slug)}
-                    icon={<Icon name={icon} />}
+                    icon={typeof icon === "string" ? <Icon name={icon} /> : <IconSvg data={icon} />}
                   >
                     {t(label)}
                   </CatalogDiscoveryChip>
