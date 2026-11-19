@@ -711,6 +711,25 @@ process.stdout.write(JSON.stringify(createReleaseEvidenceClient("openclaw/opencl
       expect(readFileSync(plainLog, "utf8").trim()).toBe(
         JSON.stringify(["api", `repos/openclaw/openclaw/actions/artifacts/${artifactId}/zip`]),
       );
+      const acquire = (attempt: number) =>
+        spawnSync(
+          process.execPath,
+          [
+            SCRIPT,
+            "--acquire-publication-manifest",
+            runId,
+            "--expected-run-attempts-json",
+            JSON.stringify({ [runId]: attempt }),
+          ],
+          { encoding: "utf8", env },
+        );
+      const acquired = acquire(fixture.parentRun.run_attempt);
+      expect(acquired.stderr).toBe("");
+      expect(acquired.status).toBe(0);
+      expect(JSON.parse(acquired.stdout)).toEqual(fixture.manifest);
+      const staleAttempt = acquire(fixture.parentRun.run_attempt + 1);
+      expect(staleAttempt.status).not.toBe(0);
+      expect(staleAttempt.stderr).toMatch(/attempt/i);
     },
   );
 });

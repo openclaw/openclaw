@@ -10,12 +10,6 @@ import {
   Show,
   type Accessor,
 } from "solid-js";
-import {
-  pathForAgentPanel,
-  pathForPluginCatalogEntry,
-  pathForPluginSettings,
-  type RouteId,
-} from "../app-route-paths.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
 import { isMobileBrowserPlatform, keepMobileReturnNative } from "../lib/browser-platform.ts";
 import { MAX_HUMAN_MENTIONS } from "../lib/chat/human-mentions.ts";
@@ -26,6 +20,10 @@ import {
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
+import {
+  resolveSessionPreferredFace,
+  sessionNavigationTarget,
+} from "../lib/sessions/route-navigation.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import { paneDomId } from "../pages/chat/components/chat-composer-dom.ts";
 import { HumanMentionMenuView } from "../pages/chat/components/chat-composer-mention-menu.tsx";
@@ -55,15 +53,11 @@ import {
 } from "./command-palette-input.tsx";
 import { createCommandPaletteMatches } from "./command-palette-matches.ts";
 import { createModeGlide } from "./command-palette-mode-glide.ts";
+import { pageDestination, selectItem } from "./command-palette-navigation.ts";
 import { CommandPaletteResult } from "./command-palette-result.tsx";
-import { SESSION_ACTION_PREFIX } from "./command-palette-session-search.ts";
 import type { CommandPaletteState, PaletteFilter } from "./command-palette-state.ts";
 import { ImageLightboxItemView } from "./image-lightbox.tsx";
 import type { ImageLightboxItem } from "./image-lightbox.types.ts";
-import {
-  CUSTODIAN_PANEL_TOGGLE_EVENT,
-  DESKTOP_PANEL_TOGGLE_EVENT,
-} from "./panel-toggle-contract.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd, KeyboardShortcut, ShortcutHint } from "./solid/kbd.tsx";
 import "./modal-dialog.tsx";
@@ -85,46 +79,6 @@ function groupItems(items: CommandPaletteItem[]): Array<[string, CommandPaletteI
 }
 
 const paletteListboxId = "cmd-palette-listbox";
-
-function selectItem(item: CommandPaletteItem, props: CommandPaletteProps) {
-  if (props.draft.submitting || props.searchDebouncing) {
-    return;
-  }
-  if (item.action === "nav:new-session") {
-    props.onModeChange("compose");
-    return;
-  }
-  if (item.action.startsWith("nav:")) {
-    // SAFETY: the palette catalog builds every nav: action from a RouteId value.
-    const routeId = item.action.slice(4) as RouteId;
-    if (item.agentId) {
-      props.onNavigate?.(routeId, {
-        pathname: pathForAgentPanel(item.agentId, null, props.basePath),
-      });
-    } else if (item.catalogId) {
-      props.onNavigate?.(routeId, {
-        pathname: pathForPluginCatalogEntry(item.catalogId, props.basePath),
-      });
-    } else if (item.pluginId && routeId === "plugin-settings") {
-      props.onNavigate?.(routeId, {
-        pathname: pathForPluginSettings(item.pluginId, props.basePath),
-      });
-    } else if (item.search || item.hash) {
-      props.onNavigate?.(routeId, { search: item.search, hash: item.hash });
-    } else {
-      props.onNavigate?.(routeId);
-    }
-  } else if (item.action.startsWith(SESSION_ACTION_PREFIX)) {
-    props.onSelectSession?.(item.action.slice(SESSION_ACTION_PREFIX.length));
-  } else if (item.action === "panel:desktop") {
-    window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
-  } else if (item.action === "panel:custodian") {
-    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
-  } else {
-    props.onSlashCommand?.(item.action);
-  }
-  props.onToggle();
-}
 
 function handleKeydown(
   event: KeyboardEvent,
@@ -264,7 +218,7 @@ function PaletteSearch(props: {
   sessionRead: Accessor<void | undefined>;
   catalogRead: Accessor<void | undefined>;
   modelRead: Accessor<unknown>;
-  optionElements: Map<string, HTMLDivElement>;
+  optionElements: Map<string, HTMLElement>;
 }) {
   const current = () => props.readProps();
   const sessionSearchPending = () => isPending(props.sessionRead);
@@ -351,7 +305,7 @@ function PaletteSearch(props: {
               <For each={group()[1]} keyed={(item) => item.id}>
                 {(item) => {
                   const optionRef = (key: string) =>
-                    elementRef<HTMLDivElement>((element) => {
+                    elementRef<HTMLElement>((element) => {
                       props.optionElements.set(key, element);
                       return () => props.optionElements.delete(key);
                     });
@@ -365,8 +319,27 @@ function PaletteSearch(props: {
                     agentId()
                       ? (current().agents.find((row) => row.id === agentId()) ?? { id: agentId()! })
                       : undefined;
+                  const href = createMemo(() => {
+                    const row = item().session;
+                    const { basePath, defaultAgentId, mainKey } = current();
+                    return row
+                      ? row.key.isWellFormed() &&
+                          sessionNavigationTarget({
+                            face: resolveSessionPreferredFace(row),
+                            sessionKey: row.key,
+                            fallbackAgentId: defaultAgentId,
+                            row,
+                            mainKey,
+                            basePath,
+                            exactKey: true,
+                          }).href
+                      : pageDestination(item(), basePath)?.href;
+                  });
+                  const disabled = () => current().draft.submitting || current().searchDebouncing;
                   return (
-                    <div
+                    <a
+                      href={disabled() ? undefined : href() || undefined}
+                      tabindex={href() ? -1 : undefined}
                       ref={[optionRef(`${item().category}:${item().id}`)]}
                       id={getOptionId(index())}
                       class={[
@@ -378,13 +351,20 @@ function PaletteSearch(props: {
                       ]}
                       role="option"
                       aria-selected={active() ? "true" : "false"}
-                      aria-disabled={
-                        current().draft.submitting || current().searchDebouncing
-                          ? "true"
-                          : undefined
-                      }
-                      onClick={(event) => {
+                      aria-disabled={disabled() ? "true" : undefined}
+                      onClick={(event: MouseEvent) => {
                         event.stopPropagation();
+                        if (
+                          event.defaultPrevented ||
+                          event.button !== 0 ||
+                          event.metaKey ||
+                          event.ctrlKey ||
+                          event.shiftKey ||
+                          event.altKey
+                        ) {
+                          return;
+                        }
+                        event.preventDefault();
                         selectItem(item(), props.readCurrentProps());
                       }}
                       onMouseEnter={() => props.readCurrentProps().onActiveIdChange(item().id)}
@@ -398,7 +378,7 @@ function PaletteSearch(props: {
                         onPluginIconError={current().onPluginIconError}
                         registerPluginIcon={current().registerPluginIcon}
                       />
-                    </div>
+                    </a>
                   );
                 }}
               </For>
@@ -455,7 +435,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
   const catalogRead = createDeferred(() => catalogRequest()?.promise);
   const modelRequest = createMemo(() => search().modelSearchRead);
   const modelRead = createDeferred(() => modelRequest()?.promise);
-  const optionElements = new Map<string, HTMLDivElement>();
+  const optionElements = new Map<string, HTMLElement>();
   const activeElement = () => {
     if (hideSearch()) {
       return undefined;

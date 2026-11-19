@@ -221,7 +221,7 @@ export function createSqliteDatabaseDescriptorOwner(
             assertDatabaseFileIdentity(opened, observed);
           }
           // Numeric fd custody outlives cancellation; this publishes no native admission.
-          state.registry.retainDescriptorCustody(descriptor, opened);
+          state.registry.retainDescriptorCustody(observed.canonicalPath, descriptor, opened);
           accepted?.resolve();
         } catch (error) {
           if (acquired === undefined) {

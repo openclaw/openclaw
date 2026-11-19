@@ -151,7 +151,9 @@ function processLifetime(command, payload, mutexFd) {
     "python3",
     ["-I", "-B", "-c", lifetimeProcessSource, ...(Array.isArray(command) ? command : [command])],
     {
-      input: JSON.stringify(payload),
+      // Shared-lock acquisition reads only its inherited FD. Writing "null"
+      // can race that short-lived helper's exit and turn success into EPIPE.
+      input: payload === null ? undefined : JSON.stringify(payload),
       encoding: "utf8",
       stdio,
       timeout: 60_000,

@@ -240,7 +240,7 @@ async function fixture({
     assertUpdatePluginCohortReportingContinuation: () => {},
     assertUpdatePluginCohortReportingAdmission: async () => {},
     // Every case here fails after the swap, so none retires its own capture.
-    failedBeforeActivation: () => false,
+    failedUpdateCanCleanUp: () => false,
     prepareResult: async (value) => () => printed.push(value),
     printResult: (value) => printed.push(value),
     writeControlPlaneUpdateRestartSentinel: async () => {},
