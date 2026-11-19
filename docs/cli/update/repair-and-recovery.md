@@ -526,6 +526,11 @@ finalization runs Doctor maintenance, check it only after that maintenance has h
 exclusive ownership of the state, so no earlier writer can still be active. Before
 that point the mark is reported as a warning, not resolved.
 
+A rollback that completed keeps the displaced `<database>.migrated-<run>` files
+for manual recovery. Those files do not count against that run's mark. If a
+mark is still refused after repair's Doctor maintenance has run, repair exits
+nonzero, leaves the interrupted update open, and the next repair checks it again.
+
 If the state is inconsistent or cannot be read, repair leaves the Gateway and
 state as they were and reports the finding and the Gateway's current state. Both
 repair and a refused update name `openclaw triage` first, which opens a coding agent
