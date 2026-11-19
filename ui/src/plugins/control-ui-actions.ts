@@ -98,7 +98,7 @@ export async function runControlUiPluginAction(
   const composer = params.placement === "composer" ? params.composer : undefined;
   const state = entry.value.resolve?.({
     ...context,
-    ...(composer ? { draft: composer.getDraft?.() ?? composer.draft } : {}),
+    draft: composer && (composer.getDraft?.() ?? composer.draft),
   });
   // A resolver can synchronously withdraw its registration or remove the view.
   check();

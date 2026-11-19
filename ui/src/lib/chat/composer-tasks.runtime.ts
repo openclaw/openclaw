@@ -34,11 +34,13 @@ type Current = {
  * the user accepts it; accepting replaces the draft as one editor history step, so undo
  * restores the previous draft with its mentions.
  */
-export function createComposerTasks(
-  presented: () => boolean,
-  /** The pane's editor when an insert may write it now; null mid-composition. */
-  insertTarget: () => HTMLTextAreaElement | null,
-) {
+export function createComposerTasks(pane: {
+  /** Mounted built-in composers; a replacement composer mounts none and so cannot run tasks. */
+  readonly taskPresenters: number;
+  readonly composerComposing: boolean;
+  readonly composerTextarea: HTMLTextAreaElement | null;
+}) {
+  const presented = () => pane.taskPresenters > 0;
   const [state, setState] = createStore<{
     card: ComposerTaskCard | null;
     /** The one-row receipt after Use; it lasts until the draft changes, a send, or dismissal. */
@@ -121,7 +123,8 @@ export function createComposerTasks(
         const { promise, resolve } = Promise.withResolvers<ComposerProposalOutcome>();
         current!.resolve = resolve;
         current!.phase = "proposal";
-        const target = proposal.insert ? insertTarget() : null;
+        // Mid-composition the proposal waits for Use, like a locked editor.
+        const target = proposal.insert && !pane.composerComposing ? pane.composerTextarea : null;
         // A locked or composing editor keeps the proposal, so Use writes it once writable.
         if (target && writable(target)) {
           apply(target, text, proposal.title);

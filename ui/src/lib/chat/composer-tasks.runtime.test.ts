@@ -7,10 +7,11 @@ function setup(value: string) {
     const textarea = document.createElement("textarea");
     textarea.value = value;
     document.body.append(textarea);
-    const tasks = createComposerTasks(
-      () => true,
-      () => textarea,
-    );
+    const tasks = createComposerTasks({
+      taskPresenters: 1,
+      composerComposing: false,
+      composerTextarea: textarea,
+    });
     return {
       tasks,
       textarea,
