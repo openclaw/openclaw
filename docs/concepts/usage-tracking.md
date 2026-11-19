@@ -448,7 +448,8 @@ provider-neutral for CLI, app, and Control UI consumers.
 - **Anthropic (Claude)**: OAuth tokens in auth profiles. If the OAuth token lacks
   `user:profile` scope, falls back to a `claude.ai` web session (`CLAUDE_AI_SESSION_KEY`,
   `CLAUDE_WEB_SESSION_KEY`, or a `sessionKey=` cookie in `CLAUDE_WEB_COOKIE`) when set.
-  Model-scoped limits and enabled extra-usage monthly spend/budgets are included
+  Stored setup-token profiles never call the OAuth usage endpoint: they use that web
+  session, and Anthropic usage is skipped when none is set. Model-scoped limits and enabled extra-usage monthly spend/budgets are included
   when Anthropic reports them. An explicit Anthropic Admin API key, or an
   auto-detected `sk-ant-admin...` provider profile, instead shows 30-day
   organization cost and Messages API history.

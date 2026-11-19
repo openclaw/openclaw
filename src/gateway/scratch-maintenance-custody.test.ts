@@ -20,6 +20,7 @@ import {
   reserveSessionControllerSource,
   retireSessionControllerInput,
 } from "../sessions/session-controller.mailbox.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { SCRATCH_TTL_MS } from "../shared/scratch-expiry.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { prepareScratchMaintenanceTargets } from "./scratch-maintenance-custody.js";
@@ -30,7 +31,9 @@ const fixtures = vi.hoisted(() => ({
   revisions: new Map<string, number>(),
   projectRoot: "/fixture/project",
   busyRoot: "/fixture/busy",
-  records: undefined as { id: string; path: string }[] | undefined,
+  records: undefined as
+    | { id: string; path: string; createdAt?: number; ownerKind?: string; ownerId?: string }[]
+    | undefined,
 }));
 // mock-isolation: Fixed inventory replaces host database discovery; run custody remains real.
 vi.mock("../agents/worktrees/registry-read.js", () => ({
@@ -213,7 +216,7 @@ it.each(["running", "queued", "mailbox"] as const)(
   },
 );
 
-it("defers an unmapped newly admitted run instead of deleting from an unknown checkout", async () => {
+it("keeps unrelated roots eligible while a newly admitted run binds its checkout", async () => {
   const prepared = await prepareScratchMaintenanceTargets(config);
   const claim = claimAgentRunContext(
     "new-run",
@@ -222,7 +225,8 @@ it("defers an unmapped newly admitted run instead of deleting from an unknown ch
   );
   try {
     const idle = prepared.targets[0]!;
-    expect(() => idle.isLive()).toThrow("fresh checkout binding");
+    expect(idle.isLive()).toBe(false);
+    expect(prepared.targets[2]!.isLive()).toBe(true);
     await idle.prepare?.();
     expect(idle.isLive()).toBe(true);
     expect(prepared.targets[1]!.isLive()).toBe(false);
@@ -360,6 +364,170 @@ it("reclaims old scratch across restarts before a newer checkout exhausts the ca
     expect(await fs.readdir(path.join(older, ".openclaw/tmp"))).toEqual([]);
     expect(await fs.readdir(path.join(recent, ".openclaw/tmp"))).toHaveLength(258);
   } finally {
+    await tempDirs.cleanup();
+  }
+});
+
+it.each(["missing", "stale", "unmapped"] as const)(
+  "reclaims unrelated old roots under %s live bindings while preserving possible owners",
+  async (binding) => {
+    const tempDirs = createTrackedTempDirs();
+    const root = await fs.realpath(await tempDirs.make("scratch-binding-churn-"));
+    const now = Date.now();
+    const startedAt = now - 1_000;
+    const expired = new Date(now - SCRATCH_TTL_MS - 1_000);
+    const keys = ["old-idle", "busy", "new-idle"];
+    fixtures.records = keys.map((key) => ({
+      id: key,
+      path: path.join(root, key),
+      createdAt: key === "new-idle" ? now : startedAt - 1_000,
+      ownerKind: "session",
+      ownerId: `agent:main:${key}`,
+    }));
+    const files = await Promise.all(
+      fixtures.records.map(async (record) => {
+        const file = path.join(record.path, ".openclaw/tmp/expired/proof");
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, "expired scratch");
+        await fs.utimes(file, expired, expired);
+        return file;
+      }),
+    );
+    const claim = claimAgentRunContext(
+      "binding-churn",
+      {
+        ...(binding !== "missing"
+          ? { sessionKey: `agent:main:${binding === "stale" ? "busy" : "unmapped"}` }
+          : {}),
+        registeredAt: startedAt,
+      },
+      { trackOwner: true },
+    );
+    fixtures.read.mockImplementation(async () => {
+      sessionChanges.emit({ sessionKey: "agent:main:busy", scope: "session-entry" });
+      return new Map();
+    });
+    let prepared: Awaited<ReturnType<typeof prepareScratchMaintenanceTargets>> | undefined;
+    const cursor: ScratchCleanupCursor = {};
+    try {
+      prepared = await prepareScratchMaintenanceTargets(config);
+      const result = await cleanScratch({
+        targets: prepared.targets.filter((target) =>
+          keys.some((key) => target.root === path.join(root, key)),
+        ),
+        now,
+        cursor,
+        assertCurrent: () => {},
+        pause: async () => {},
+      });
+      // Missing identity protects only roots newer than its registration. A known
+      // session protects its own old root even while metadata churn stays continuous.
+      expect(result).toMatchObject({ entriesRemoved: 2, skippedLive: 1, deferred: 0, errors: [] });
+      const retained = binding === "stale" ? 1 : 2;
+      for (let index = 0; index < files.length; index++) {
+        if (index === retained) {
+          expect(await fs.readFile(files[index]!, "utf8")).toBe("expired scratch");
+        } else {
+          await expect(fs.stat(files[index]!)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      }
+    } finally {
+      releaseAgentRunContext("binding-churn", claim);
+      await closeScratchCleanupCursor(cursor);
+      prepared?.release();
+      await tempDirs.cleanup();
+    }
+  },
+);
+
+it("preserves a successor's existing project scratch while its changed binding is unresolved", async () => {
+  const tempDirs = createTrackedTempDirs();
+  const root = await fs.realpath(await tempDirs.make("scratch-successor-custody-"));
+  const previous = path.join(root, "previous");
+  await fs.mkdir(previous);
+  fixtures.projectRoot = path.join(root, "project");
+  const unrelated = path.join(root, "unrelated");
+  fixtures.records = [
+    {
+      id: "unrelated",
+      path: unrelated,
+      createdAt: 0,
+      ownerKind: "session",
+      ownerId: "agent:main:idle",
+    },
+  ];
+  const now = Date.now();
+  const expired = new Date(now - SCRATCH_TTL_MS - 1_000);
+  const files = await Promise.all(
+    [fixtures.projectRoot, unrelated].map(async (checkout) => {
+      const file = path.join(checkout, ".openclaw/tmp/proof");
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, "expired scratch");
+      await fs.utimes(file, expired, expired);
+      return file;
+    }),
+  );
+  const sessionKey = "agent:main:main";
+  const predecessor = claimAgentRunContext(
+    "predecessor",
+    { sessionKey, agentId: "main" },
+    { trackOwner: true },
+  );
+  let successor: string | undefined;
+  let cwd = previous;
+  let invalidate = false;
+  fixtures.read.mockImplementation(async () => {
+    const snapshot = new Map([
+      [
+        sessionKey,
+        {
+          canonicalKey: sessionKey,
+          agentId: "main",
+          entry: { sessionId: sessionKey, updatedAt: now, spawnedCwd: cwd },
+        },
+      ],
+    ]);
+    if (invalidate) {
+      if (!successor) {
+        releaseAgentRunContext("predecessor", predecessor);
+        cwd = fixtures.projectRoot;
+        successor = claimAgentRunContext(
+          "successor",
+          { sessionKey, agentId: "main" },
+          { trackOwner: true },
+        );
+      }
+      // Stored-row publications invalidate the captured reply during both cleanup prepares.
+      sessionChanges.emit({ sessionKey, scope: "session-entry" });
+    }
+    return snapshot;
+  });
+  let prepared: Awaited<ReturnType<typeof prepareScratchMaintenanceTargets>> | undefined;
+  const cursor: ScratchCleanupCursor = {};
+  try {
+    prepared = await prepareScratchMaintenanceTargets({
+      agents: { entries: { main: { workspace: previous } } },
+    });
+    const targets = prepared.targets.filter((target) =>
+      [fixtures.projectRoot, unrelated].includes(target.root),
+    );
+    invalidate = true;
+    sessionChanges.emit({ sessionKey, scope: "session-entry" });
+    const run = () =>
+      cleanScratch({ targets, now, cursor, assertCurrent: () => {}, pause: async () => {} });
+    const result = await run();
+    await expect(fs.stat(files[1]!)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(files[0]!, "utf8")).toBe("expired scratch");
+    expect(result).toMatchObject({ entriesRemoved: 1, skippedLive: 1, deferred: 0, errors: [] });
+    invalidate = false;
+    releaseAgentRunContext("successor", successor);
+    expect(await run()).toMatchObject({ entriesRemoved: 1, skippedLive: 0, errors: [] });
+    await expect(fs.stat(files[0]!)).rejects.toMatchObject({ code: "ENOENT" });
+  } finally {
+    releaseAgentRunContext("predecessor", predecessor);
+    releaseAgentRunContext("successor", successor);
+    await closeScratchCleanupCursor(cursor);
+    prepared?.release();
     await tempDirs.cleanup();
   }
 });

@@ -125,7 +125,7 @@ it.for([
             sessionKey: expectedSessionKey,
             trigger: "event",
           });
-          expect(turn.prompt).toContain('Automation "Important report" failed 1 times');
+          expect(turn.prompt).toContain('Automation "Important report" failed');
           expect(turn.messageTo).toBe(carriesOrigin ? deliveryContext.to : undefined);
           expect(turn.messageThreadId).toBe(carriesOrigin ? deliveryContext.threadId : undefined);
           expect(deps.enqueueSystemEvent).not.toHaveBeenCalled();

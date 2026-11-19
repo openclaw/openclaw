@@ -289,6 +289,8 @@ function buildAnthropicForwardCompatModel(
     id: trimmedModelId,
     name: trimmedModelId,
     provider,
+    // These rows are created by the native owner, whose catalog declares one developer.
+    family: manifest.modelCatalog.providers.anthropic.family,
     ...(compat ? { compat } : {}),
     ...(manifestModel?.contextWindows
       ? {

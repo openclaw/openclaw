@@ -6,7 +6,7 @@ import type {
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ReplyDeliveryState } from "../../agents/reply-completion.js";
-import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../../agents/sessions/compaction/preparation.types.js";
 import { resolveGroupSessionKey } from "../../config/sessions.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { logVerbose } from "../../globals.js";
@@ -113,6 +113,7 @@ export async function runEmbeddedFallbackCandidate(
   const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
     runId: params.runId,
     sessionKey: turn.sessionKey,
+    onTerminalEvent: turn.followupRun.run.internalEventExecution?.onTerminalEvent,
     getLifecycleGeneration: params.getLifecycleGeneration,
     resolveTerminationFields: (error) =>
       resolveReplyOperationTerminationFields(error, params.runAbortSignal, turn.replyOperation),

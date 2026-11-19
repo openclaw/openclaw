@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CommandRunner } from "./crabbox-runtime.js";
 import { createMantisCommandRunner, writeMantisArtifacts } from "./run.test-support.js";
@@ -92,7 +93,7 @@ describe("Mantis Slack artifact ownership", () => {
     };
   }
 
-  it("keeps overlapping runs from accepting each other's artifacts", async () => {
+  it("keeps overlapping runs from accepting each other's artifacts", async (context) => {
     const copied = createDeferred<void>();
     const release = createDeferred<void>();
     const firstRun = runMantisSlackDesktopSmoke(
@@ -104,13 +105,47 @@ describe("Mantis Slack artifact ownership", () => {
         }),
       ),
     );
+    let firstSettled = false;
+    const observedFirst = firstRun.then(
+      () => {
+        firstSettled = true;
+      },
+      () => {
+        firstSettled = true;
+      },
+    );
+    const runs = [firstRun];
+    const failures = new Set<unknown>();
     let secondStatus: string | undefined;
     try {
-      await copied.promise;
-      const second = await runMantisSlackDesktopSmoke(options(createRunner(async () => {})));
-      secondStatus = second.status;
+      await withinTest(
+        awaitGateBeforeSettlement(
+          copied.promise,
+          firstRun,
+          "first run finished before copying artifacts",
+        ),
+        context.signal,
+      );
+      const secondRun = runMantisSlackDesktopSmoke(options(createRunner(async () => {})));
+      runs.push(secondRun);
+      secondStatus = (await withinTest(secondRun, context.signal)).status;
+      expect(firstSettled).toBe(false);
+    } catch (error) {
+      failures.add(error);
     } finally {
       release.resolve();
+      for (const result of await Promise.allSettled(runs)) {
+        if (result.status === "rejected") {
+          failures.add(result.reason);
+        }
+      }
+      await observedFirst;
+    }
+    if (failures.size === 1) {
+      throw failures.values().next().value;
+    }
+    if (failures.size > 1) {
+      throw new AggregateError(failures, "overlapping runs failed");
     }
     expect((await firstRun).status).toBe("pass");
     expect(secondStatus).toBe("fail");

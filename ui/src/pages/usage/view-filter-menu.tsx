@@ -98,6 +98,7 @@ export function createUsageFilterFields(ctx: UsageFilterContext) {
       key,
       label: () => t(`usage.filters.${key}`),
       multiple: true,
+      optionsReady: () => ctx.props.data.filterOptions !== undefined,
       options: createMemo(() =>
         usageQueryFieldOptions(ctx.filterOptions()[key], ctx.counts(key), selected()),
       ),
@@ -298,7 +299,6 @@ export function UsageAppliedFilters(props: {
       type="button"
       class="usage-filter-chip__remove"
       aria-label={`${t("usage.filters.remove")}: ${label}`}
-      title={t("usage.filters.remove")}
       onClick={remove}
     >
       <Icon name="x" />

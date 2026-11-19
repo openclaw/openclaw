@@ -120,8 +120,8 @@ export function setupGatewaySessionsWorktreeTestHarness() {
       ...transcriptScope,
       contents: ["Preserve this conversation."],
     });
-    const tickWorktreeMaintenance = async () => {
-      await clock.advanceBy(0);
+    const tickWorktreeMaintenance = async (milliseconds = 0) => {
+      await clock.advanceBy(milliseconds);
     };
     const cleanupWorktrees = async () => {
       maintenance.request();

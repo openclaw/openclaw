@@ -142,7 +142,6 @@ export function createMusicGenerateTool(
           model,
           options,
           signal,
-          findDuplicate: createMusicGenerateDuplicateGuardResult,
           acquire: async (config) =>
             options?.preparedModelRuntime?.acquireMediaCapabilityProviders
               ? acquireMediaGenerationToolProviders("musicGenerationProviders", {

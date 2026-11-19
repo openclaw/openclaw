@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { build, createServer, type Plugin } from "vite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -221,7 +222,11 @@ it("builds bundled and root-excluded source Settings assets while preserving sib
   await writeFiles(at("extensions/manifest-only"), {
     "openclaw.plugin.json": { id: "manifest-only" },
   });
-  await fs.symlink(path.resolve("node_modules"), at("node_modules"), "junction");
+  await fs.symlink(
+    fileURLToPath(new URL("../../../node_modules", import.meta.url)),
+    at("node_modules"),
+    "junction",
+  );
   await writeFiles(root, {
     "package.json": {
       name: "openclaw",

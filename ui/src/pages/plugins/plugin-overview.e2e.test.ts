@@ -317,10 +317,12 @@ describeControlUiE2e("Plugin overview", () => {
           .getAttribute("disabled"),
       ).not.toBeNull();
       await captureScreenshot(page, `direct-settings-${entry}-permissions.png`, "viewport");
-      expect(new URL(page.url())).toMatchObject({
-        pathname: `/plugins/${plugin.catalogId}`,
-        search: "?view=settings",
-      });
+      // The detail's Settings action opens Settings; an existing inline link still renders.
+      expect(new URL(page.url())).toMatchObject(
+        entry === "refresh"
+          ? { pathname: `/settings/plugins/${plugin.id}`, search: "?view=settings&from=plugins" }
+          : { pathname: `/plugins/${plugin.catalogId}`, search: "?view=settings" },
+      );
     },
   );
 
@@ -567,6 +569,8 @@ describeControlUiE2e("Plugin overview", () => {
     }
     await role(page.locator(".plugin-catalog-detail__actions"), "link", "Settings").click();
     await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("settings");
-    expect(new URL(page.url()).pathname).toBe("/plugins/ch_Y2FsZW5kYXI");
+    // Settings stay in Settings, which returns to the Plugins workspace.
+    expect(new URL(page.url()).pathname).toBe("/settings/plugins/calendar-plus");
+    expect(new URL(page.url()).searchParams.get("from")).toBe("plugins");
   });
 });

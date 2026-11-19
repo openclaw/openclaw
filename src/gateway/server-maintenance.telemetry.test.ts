@@ -37,6 +37,12 @@ vi.mock("../infra/telemetry.js", () => ({
   checkTelemetryUpdate: checkTelemetryUpdateMock,
 }));
 
+// mock-isolation: Snapshot reclamation owns its worker-backed maintenance proof.
+vi.mock("../infra/sqlite-readonly-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/sqlite-readonly-worker.js")>()),
+  reclaimAbandonedSqliteSnapshots: async () => ({ removed: 0, bytes: 0, skipped: 0 }),
+}));
+
 // mock-isolation: Worker-free timers accept pool subscription but reject storage operations.
 vi.mock("../agents/worktrees/service.js", () => ({
   WORKTREE_GC_INTERVAL_MS: 60 * 60_000,

@@ -8,7 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { root as openRoot } from "@openclaw/fs-safe/root";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { collectNodeBootstrapDependencies } from "../src/gateway/worker-environments/node-bootstrap-dependencies.js";
 import { verifyInstalledRuntimeImageInputs } from "./lib/installed-runtime-image-inputs.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mts";

@@ -14,6 +14,7 @@ import {
   probeVideoDimensions,
 } from "openclaw/plugin-sdk/media-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { appendReplyMediaFailures, type ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -260,6 +261,7 @@ function createReplyDeliverer(
         mediaUrl,
         buildOutboundMediaLoadOptions({
           mediaLocalRoots: config.mediaLocalRoots,
+          mediaAccess: resolveOutboundMediaAccessForConfig(config.cfg),
           maxBytes: config.mediaMaxBytes,
         }),
       );
@@ -583,12 +585,13 @@ async function deliverReplyPlan(
     return receipt;
   };
 
+  // HTML-mode text bypasses the markdown -> rich-block converter, so native
+  // table rendering only applies to the rich markdown funnel.
+  const richMessages = params.richMessages === true && params.textMode !== "html";
   for (const originalReply of normalizedReplies) {
     let reply = canonicalizeTelegramPresentationPayload(originalReply, {
       allowWebAppButtons: resolveTelegramTargetChatType(params.chatId) === "direct",
-      // HTML-mode text bypasses the markdown -> rich-block converter, so native
-      // table rendering only applies to the rich markdown funnel.
-      richTables: params.richMessages === true && params.textMode !== "html",
+      richTables: richMessages,
     });
     const mediaList = reply.mediaUrls?.length
       ? reply.mediaUrls
@@ -662,6 +665,9 @@ async function deliverReplyPlan(
           channelId: "telegram",
           accountId: params.accountId,
           conversationId: params.chatId,
+          ...(params.sessionKeyForInternalHooks
+            ? { sessionKey: params.sessionKeyForInternalHooks }
+            : {}),
         },
       );
       if (hookResult?.cancel) {
@@ -690,11 +696,10 @@ async function deliverReplyPlan(
     try {
       const deliveredCountBeforeReply = deliveredCount();
       const replyMarkup = buildInlineKeyboard(
-        resolveTelegramInlineButtons({
-          buttons: telegramData?.buttons,
-          presentation,
-          interactive,
-        }),
+        resolveTelegramInlineButtons(
+          { buttons: telegramData?.buttons, presentation, interactive },
+          { supportsDisabled: richMessages },
+        ),
       );
       let firstDeliveredMessageId: number | undefined;
       let deliveredMediaUrls: string[] = [];

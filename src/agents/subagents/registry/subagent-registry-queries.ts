@@ -36,32 +36,16 @@ function isDeliveryTerminalForRequesterSettle(
   );
 }
 
-export function matchesSubagentRequesterSession(
-  entry: Pick<
-    SubagentRunRecord,
-    "completionRequesterSessionId" | "completionRequesterLifecycleRevision"
-  >,
-  requester: { sessionId: string; lifecycleRevision?: string },
-): boolean {
-  return (
-    entry.completionRequesterSessionId === requester.sessionId &&
-    entry.completionRequesterLifecycleRevision === requester.lifecycleRevision
-  );
-}
-
-/** Lists requester-owned runs, optionally scoped to a requester run or session incarnation. */
+/** Lists runs of a requester chat, optionally scoped to a requester run. */
 export function listRunsForRequesterFromRuns(
   runs: Map<string, SubagentRunRecord>,
   requesterSessionKey: string,
   options?: {
     requesterRunId?: string;
-    requesterSessionId?: string;
-    requesterLifecycleRevision?: string;
     requesterAgentId?: string;
     requesterStorePath?: string | null;
   },
   candidates: Iterable<SubagentRunRecord> = runs.values(),
-  preparedLatest?: LatestSubagentRunReadIndex,
 ): SubagentRunRecord[] {
   const key = requesterSessionKey.trim();
   if (!key) {
@@ -76,22 +60,10 @@ export function listRunsForRequesterFromRuns(
   const lowerBound =
     requesterRunMatchesScope?.execution.startedAt ?? requesterRunMatchesScope?.createdAt;
   const upperBound = requesterRunMatchesScope?.execution.endedAt;
-  // A newer owner outside this incarnation must still supersede its older row.
-  const latestRuns =
-    options?.requesterSessionId === undefined
-      ? undefined
-      : (preparedLatest ?? buildLatestSubagentRunReadIndexFromRuns(runs));
 
   return [...candidates].filter(
     (entry) =>
       entry.requesterSessionKey === key &&
-      (options?.requesterSessionId === undefined ||
-        matchesSubagentRequesterSession(entry, {
-          sessionId: options.requesterSessionId,
-          lifecycleRevision: options.requesterLifecycleRevision,
-        })) &&
-      (!latestRuns ||
-        latestRuns.getLatestSubagentRun(entry.childSessionKey, entry.childAgentId) === entry) &&
       (!options?.requesterAgentId ||
         resolveRecordedRequester(entry) === options.requesterAgentId) &&
       (options?.requesterStorePath === undefined ||

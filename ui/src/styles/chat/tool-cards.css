@@ -99,7 +99,8 @@
 }
 
 .chat-tool-msg-summary,
-.chat-activity-group__summary {
+.chat-activity-group__summary,
+.chat-reasoning {
   gap: 4px;
   padding: 0;
   font-family: var(--font-body);
@@ -111,6 +112,11 @@
   --chat-tool-secondary-color: color-mix(in oklab, var(--text) 40%, transparent);
 
   color: var(--chat-tool-activity-color);
+}
+
+.chat-tool-msg-summary,
+.chat-activity-group__summary {
+  font-size: var(--chat-text-size);
 }
 
 .chat-tool-msg-summary :where(span, code, button),
@@ -219,15 +225,25 @@
   color: inherit;
 }
 
+.chat-tool-row__subagent-name,
+.chat-tool-row__subagent-link {
+  color: color-mix(in oklab, var(--text) 80%, transparent);
+}
+
 /* The state stays whole; a long name gives way instead. */
 .chat-tool-row__subagent-state {
   flex: none;
   color: var(--chat-tool-secondary-color);
 }
 
-.chat-tool-row__subagent-state--failed,
-.chat-activity-group__review-status[data-outcome="denied"],
-.chat-tool-failure {
+.chat-tool-failure,
+.chat-activity-group__review-status[data-outcome="denied"] {
+  color: var(--muted);
+}
+
+.chat-activity-group[data-explicitly-expanded="true"]
+  > .chat-activity-group__body
+  .chat-tool-failure {
   color: var(--danger);
 }
 
@@ -314,6 +330,12 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-tool-row--command,
+.chat-tool-row--command:focus-within,
+.chat-tool-row--command:hover {
+  color: var(--chat-tool-activity-color);
 }
 
 .chat-tool-msg-summary__names,
@@ -555,6 +577,13 @@
   border-radius: calc(14px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
   background: transparent;
+}
+
+.row.chat-inspection {
+  width: fit-content;
+  align-items: start;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .chat-activity-group__body .chat-tool-msg-collapse.is-open {
@@ -938,12 +967,20 @@
   margin-inline: 12px;
 }
 
+/* The summary ends where the reply text does. An auto track would grow to the
+   unwrapped summary in WebKit and Firefox and carry it past the column. */
 .chat-activity-group {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
   width: 100%;
   min-width: 0;
-  max-width: var(--chat-message-max-width, min(760px, 100%));
+  max-width: var(--chat-message-max-width, 100%);
+}
+
+/* Author display rules must preserve the live disclosure's hidden state. */
+.chat-activity-group[hidden] {
+  display: none;
 }
 
 .chat-activity-group__label {
@@ -951,6 +988,7 @@
   min-width: 0;
   overflow: hidden;
   font: inherit;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -967,30 +1005,66 @@
   color: var(--warn);
 }
 
-/* Parent and child rows share one icon/text grid; order and whitespace carry
-   hierarchy without shrinking the available command width. */
+/* Expanded operations stay compact inside their own rail. The transcript owns
+   list scrolling; individual output blocks retain their existing bounds. */
 .chat-activity-group__body {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: min(420px, 58vh);
   margin: 0;
-  padding-left: 0;
-  border-left: 0;
-  overflow-y: auto;
 }
 
-/* Grouped activity owns vertical scrolling; inline trails keep per-card bounds. */
-.chat-activity-group:not(.chat-activity-group--inline)
-  > .chat-activity-group__body
-  :is(
-    .chat-tool-msg-body,
-    .chat-tool-term__out,
-    .chat-tool-card__block-content,
-    .chat-diff,
-    .chat-tool-msg-body > .chat-text
-  ) {
-  max-height: none;
+.chat-activity-group:not(.chat-activity-group--inline):not(.chat-activity-group--step)
+  > .chat-activity-group__body {
+  margin-inline-start: 8px;
+  padding-inline-start: 16px;
+  border-inline-start: 1px solid var(--border);
+}
+
+.chat-activity-group__body[hidden] {
+  display: none;
+}
+
+.chat-tool-msg-collapse--lifecycle {
+  gap: 4px;
+}
+
+/* Transparent run/card hosts still participate in sibling selection. Apply the
+   block gap to the visible box while keeping expanded children compact. */
+:is(.chat-group-messages, .chat-agent-run-body)
+  > :is(
+    .chat-activity-group,
+    .chat-tool-msg-collapse,
+    .chat-bubble--tool-shell,
+    openclaw-chat-tool-card
+  )
+  + .chat-activity-group,
+:is(.chat-group-messages, .chat-agent-run-body)
+  > :is(
+    .chat-activity-group,
+    .chat-tool-msg-collapse,
+    .chat-bubble--tool-shell,
+    openclaw-chat-tool-card
+  )
+  + .chat-tool-msg-collapse,
+:is(.chat-group-messages, .chat-agent-run-body)
+  > :is(
+    .chat-activity-group,
+    .chat-tool-msg-collapse,
+    .chat-bubble--tool-shell,
+    openclaw-chat-tool-card
+  )
+  + .chat-bubble--tool-shell,
+:is(.chat-group-messages, .chat-agent-run-body)
+  > :is(
+    .chat-activity-group,
+    .chat-tool-msg-collapse,
+    .chat-bubble--tool-shell,
+    openclaw-chat-tool-card
+  )
+  + openclaw-chat-tool-card
+  > .chat-tool-msg-collapse {
+  margin-block-start: calc(var(--chat-run-block-gap) - var(--chat-message-gap));
 }
 
 @keyframes chat-work-settle-in {
@@ -1022,15 +1096,8 @@
   font-weight: var(--control-ui-font-weight-semibold);
 }
 
-.chat-work-group__total {
-  flex: none;
-  white-space: nowrap;
-  color: var(--muted);
-}
-
 .chat-activity-group__label.chat-activity-group__label--live {
   color: inherit;
-  text-overflow: ellipsis;
 }
 
 @keyframes chat-activity-headline-enter {
@@ -1235,9 +1302,4 @@ openclaw-chat-tool-output {
   border: 0;
   background: transparent;
   text-decoration: underline;
-}
-
-.chat-activity-group--inline > .chat-activity-group__body {
-  max-height: none;
-  overflow: visible;
 }

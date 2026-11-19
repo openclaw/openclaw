@@ -2,28 +2,37 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import type { IrohEndpointKey } from "../../../packages/openclaw-id-protocol/src/index.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { approveDevicePairing } from "../../infra/device-pairing-approval.js";
 import { requestPairing } from "../../infra/device-pairing-fixtures.test-support.js";
 import { verifyDeviceToken } from "../../infra/device-pairing-tokens.js";
 import { getPairedDevice } from "../../infra/device-pairing.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { MEMBER_ROLE_PRESETS } from "./member-role-presets.test-support.js";
 import { linkedClaw } from "./openclaw-id.test-support.js";
 import { createOpenClawIdService } from "./service.js";
 
 const roots = createSuiteTempRootTracker({ prefix: "openclaw-remote-signout-" });
 let baseDir: string;
 beforeAll(async () => {
+  setRuntimeConfigSnapshot({
+    gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } },
+  });
   baseDir = await roots.setup();
   vi.stubEnv("OPENCLAW_STATE_DIR", baseDir);
 });
 afterAll(async () => {
+  clearRuntimeConfigSnapshot();
   await closeStateDatabaseForTest();
   vi.unstubAllEnvs();
   await roots.cleanup();
 });
 
-it.each(["owner", "operator", "viewer", "guest"])(
+it.each(["owner", "operator", "viewer", "guest", "unconfigured-role"])(
   "remote sign-out enforces role admission for %s without removing membership",
   async (role) => {
     const claw = await linkedClaw();
@@ -93,7 +102,7 @@ it.each(["owner", "operator", "viewer", "guest"])(
     });
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/_openclaw-id/v1/signout`;
     try {
-      if (role !== "guest") {
+      if (role !== "unconfigured-role") {
         expect((await fetch(url)).status).toBe(405);
       }
       // A body cannot select another browser: the authenticated peer owns the target.
@@ -101,7 +110,7 @@ it.each(["owner", "operator", "viewer", "guest"])(
         method: "POST",
         body: JSON.stringify({ peerKey: otherPeer }),
       });
-      if (role === "guest") {
+      if (role === "unconfigured-role") {
         expect(response.status).toBe(403);
         expect(await response.json()).toMatchObject({ error: { code: "not_admitted" } });
         expect(captureConnections).not.toHaveBeenCalled();

@@ -299,7 +299,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
       },
       progressCardVisibility: panePresentation,
       transcriptVisible: slotPresentation("conversation"),
-      latestBrowserTabs: this.active && this.presented ? latestBrowserTabs : undefined,
       historyState: catalog ? undefined : state,
     } satisfies Partial<ChatProps>);
     sessionWorkspace.transcriptAttachments = this.attachmentCatalog.read({

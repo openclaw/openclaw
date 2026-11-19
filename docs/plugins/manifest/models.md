@@ -249,10 +249,12 @@ catalog family again while they keep the catalog's route.
 
 Like other catalog facts, the family belongs to the catalog's route. A configured
 model that moves to another API or endpoint loses the catalog family, because that
-endpoint may serve a different model under the same id. Discovered rows keep the
-family only when they match a manifest row exactly. Provider plugins can also set
-`family` on the rows their catalog hooks return from provider metadata, such as
-GitHub Copilot's model `vendor`. The family appears on `models.list` rows and in the
+endpoint may serve a different model under the same id. Shared discovery keeps the
+family only when a row matches a manifest row exactly. Provider plugins can also
+set `family` from their own authoritative metadata: Anthropic's native listing and
+generated models carry its declared single-developer family, while GitHub Copilot
+uses each model's `vendor`. This does not infer a family for opaque deployments or
+other compatible hosts. The family appears on `models.list` rows and in the
 [requester-admitted model catalog](/plugins/sdk-runtime/models#requester-admitted-model-catalog).
 
 Do not put runtime-only data in `modelCatalog`. Use `static` only when manifest rows are complete enough for provider-filtered list and picker surfaces to skip registry/runtime discovery. Use `runtime` when OpenClaw must load provider runtime to know the list; manifest rows then only seed the picker until the listing publishes. `refreshable` is accepted and behaves exactly like `runtime`.

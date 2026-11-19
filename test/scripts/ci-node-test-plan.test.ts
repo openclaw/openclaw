@@ -633,9 +633,14 @@ function mockPackingEntries(entries: readonly PackingEntry[], timingName = (name
 }
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
-  it.each([false, true])(
-    "keeps the scheduled main inventory within its reserved compact capacity (extra group: %s)",
-    (extraGroup) => {
+  it.each(
+    ["hybrid", "github"].flatMap((runnerBackend) =>
+      [false, true].map((extraGroup) => ({ runnerBackend, extraGroup })),
+    ),
+  )(
+    "keeps the scheduled main inventory within its reserved compact capacity ($runnerBackend, extra group: $extraGroup)",
+    ({ runnerBackend, extraGroup }) => {
+      vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", "bun-all");
       const original = fullSuiteVitestShards.slice();
       if (extraGroup) {
         // A new isolated group must not exhaust main's capacity on arrival.
@@ -658,7 +663,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           compactMode: "pull-request",
           compactNodeJobCap: 77 - workerRows.length,
           mainValidation: true,
-          runnerBackend: "hybrid",
+          runnerBackend,
         });
         const jobs = [...compactRows, ...workerRows];
         expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
@@ -1572,9 +1577,13 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it.each(["hybrid", "github"])(
-    "gates Gateway method workers without changing complete coverage (%s)",
-    (runnerBackend) => {
+  it.each([
+    { runnerBackend: "hybrid", compactMode: "push" as const },
+    { runnerBackend: "github", compactMode: "push" as const },
+    { runnerBackend: "github", compactMode: "pull-request" as const },
+  ])(
+    "bounds Gateway method files and workers without losing coverage ($runnerBackend/$compactMode)",
+    ({ runnerBackend, compactMode }) => {
       const owner = "agentic-gateway-methods";
       const configs = new Set([
         configPath("gateway-methods"),
@@ -1587,13 +1596,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
 
       const jobs = bundleTests({
-        compactMode: "push",
+        compactMode,
         runnerBackend,
         includeReleaseOnlyPluginShards: false,
         includeReleaseOnlyRuntimeTests: true,
       });
       const groups = jobs.flatMap(jobGroups);
       expect(groups.length).toBeGreaterThan(0);
+      if (runnerBackend === "github") {
+        expectEvery(groups, (group) => requiredPatterns(group).length <= 96);
+      }
       expectSameEntries(groups.flatMap(optionalPatterns), [
         ...listMatchedTestFiles(createGatewayMethodsVitestConfig({})),
         ...listMatchedTestFiles(createGatewayMethodsIsolatedVitestConfig({})),
@@ -2167,6 +2179,37 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
+  it("keeps full-dispatch Gateway chunks off neighboring hosted rows", () => {
+    const jobs = bundleTests({
+      runnerBackend: "github",
+      compactMode: "pull-request",
+      includeReleaseOnlyPluginShards: false,
+      includeReleaseOnlyToolingShards: true,
+      includeReleaseOnlyRuntimeTests: true,
+      includePrExemptRuntimeTests: true,
+      includeProofTests: true,
+    });
+    expect(jobs.length).toBeLessThanOrEqual(96);
+    const gateway = jobs
+      .flatMap(jobGroups)
+      .filter((group) => /^agentic-gateway-methods(?:-hosted-\d+)?$/u.test(group.shard_name));
+    expect(gateway.length).toBeGreaterThan(0);
+    expectEvery(gateway, (group) => requiredPatterns(group).length <= 96);
+    for (const job of jobs) {
+      if (
+        job.groups.some((group) => gateway.includes(group) && requiredPatterns(group).length > 32)
+      ) {
+        expect(job.groups).toHaveLength(1);
+        expect(job.planConcurrency).toBe(1);
+        expect(workers(job.groups[0]!)).toBe("2");
+      }
+    }
+    expectSameEntries(gateway.flatMap(optionalPatterns), [
+      ...listMatchedTestFiles(createGatewayMethodsVitestConfig({})),
+      ...listMatchedTestFiles(createGatewayMethodsIsolatedVitestConfig({})),
+    ]);
+  });
+
   it("bounds Gateway cache collections without dropping or repeating owner files", () => {
     const config = configPath("gateway-methods");
     const groups = createVitestCacheWarmGroups().filter((group) => group.configs.includes(config));
@@ -2392,11 +2435,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       }));
       const options = compactOptions(profile, "push");
       const unmeasured = bundleTests(options);
-      const initialGroup = unmeasured
+      const supportGroups = unmeasured
         .flatMap(jobGroups)
-        .find((group) => group.shard_name === shardName);
+        .filter((group) => group.shard_name.startsWith("agentic-agents-support-hosted-"));
+      const initialGroup = supportGroups.find((group) => group.shard_name === shardName);
       expect(initialGroup?.timing_key).toMatch(
-        /^agentic-agents-support#selector-.+#generation-.+#part-2-of-2#include-.+$/u,
+        new RegExp(
+          `^agentic-agents-support#selector-.+#generation-.+#part-2-of-${supportGroups.length}#include-.+$`,
+          "u",
+        ),
       );
       const timingKey = initialGroup!.timing_key!;
       directTimings = { [timingKey]: 1 };
@@ -3008,22 +3055,42 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it("shares one prepared runtime across affordable github groups", () => {
+  it("shares one prepared runtime across affordable github groups", async () => {
     const runnerBackend = "github";
-
+    const config = configPath("infra");
     const targets = [
       PRIVATE_QA_TOOLING_TEST,
-      "src/infra/update-candidate-canary.integration.test.ts",
+      "src/infra/update-managed-service-handoff-lifecycle.test.ts",
     ];
-    spyTimings().mockReturnValue(
-      Object.fromEntries(defaultShards.map((shard) => [shard.shardName, 1])),
-    );
-    const plan = selectTests(targets, { runnerBackend });
+    // Keep the misc and system-runtime owners distinct so affordable groups
+    // exercise build sharing instead of coalescing into one prerequisite group.
+    vi.resetModules();
+    mockPlanShards(() => [fixtureShard("core-runtime", [config])]);
+    mockOriginal("database", { databaseWorkerCoreTestFiles: [] });
+    mockOriginal("inventory", {
+      listScopedOwnerTestFiles: ({ root }) => (root === "src/infra" ? targets : []),
+      listNodeTestConfigFiles: (candidate) => (candidate === config ? targets : []),
+    });
+    mockPlanTimings(() => ({
+      "core-runtime-infra-misc": 1,
+      "core-runtime-infra-system-runtime": 1,
+    }));
+    const { createSelectedNodeTestShardBundles: select } = await loadPlanModule([
+      "database",
+      "inventory",
+    ]);
+    const plan = select(targets, { runnerBackend });
     expect(plan).not.toBeNull();
     const readers = plan!.filter((shard) => !shard.requiresDist);
     const reader = only(readers);
     expect(reader).toMatchObject({ pretestBuildMode: "private-qa", planConcurrency: 1 });
     expect(reader.predictedSeconds).toBeLessThanOrEqual(210);
+    expect(reader.groups).toHaveLength(2);
+    expect(
+      reader.groups
+        .map((group) => required(group.pretestBuildMode))
+        .toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(["private-qa", "runtime"]);
     expectEvery(reader.groups, (group) => group.pretestBuildMode);
     expectSameEntries(reader.groups.flatMap(optionalPatterns), targets);
   });
@@ -3332,11 +3399,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     shards: typeof fullSuiteVitestShards;
     timings: Record<string, number>;
     fileTimings?: Readonly<Record<string, number>>;
+    githubFileTimings?: Readonly<Record<string, number>>;
     fileSeconds: (file: string) => number;
+    expectedSourcePatterns?: { file: string; patterns: string[] };
     options: {
       compactMode: "push" | "pull-request";
       runnerBackend?: string;
       includeReleaseOnlyPluginShards: false;
+      includeReleaseOnlyToolingShards?: boolean;
+      includePrExemptRuntimeTests?: boolean;
+      includeProofTests?: boolean;
       compactNodeJobCap?: number;
     };
   }) {
@@ -3345,7 +3417,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     mockFixture("timings", () => ({
       ...testTimings,
       readCompactGroupTimings: () => params.timings,
-      ...(params.fileTimings ? { readToolingFileTimings: () => params.fileTimings! } : {}),
+      ...(params.fileTimings
+        ? {
+            readToolingFileTimings: (profile?: CiTimingProfile) =>
+              profile === "github"
+                ? (params.githubFileTimings ?? params.fileTimings!)
+                : params.fileTimings!,
+          }
+        : {}),
     }));
     mockFixture("metadata", () => ({
       ...shardMetadata,
@@ -3353,7 +3432,19 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }));
     mockTrackedFiles((rootDir: string) => (rootDir === "test" ? params.files.toSorted() : []));
     return await withPlanModule(
-      ({ createNodeTestShardBundles: createPlan }) => {
+      ({ createNodeTestShardBundles: createPlan, createNodeTestShards: createShards }) => {
+        if (params.expectedSourcePatterns) {
+          const expected = params.expectedSourcePatterns;
+          const sources = createShards({
+            ...params.options,
+            includeReleaseOnlyToolingShards: true,
+          });
+          expect(
+            sources
+              .filter((source) => source.includePatterns?.includes(expected.file))
+              .map((source) => source.includePatterns),
+          ).toEqual([expected.patterns]);
+        }
         // These fixtures exercise a caller's 90-row reservation independently
         // of the profile ceiling; explicit tighter reservations remain authoritative.
         return createPlan({
@@ -3364,6 +3455,78 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ["metadata", "fast"],
     );
   }
+
+  it.each<{
+    label: string;
+    runnerBackend?: string;
+    compactMode?: "push" | "pull-request";
+    retainedSeconds?: number;
+    githubSeconds?: number;
+    known?: boolean;
+    discardSiblings?: boolean;
+    expectedSeconds: number;
+  }>([
+    { label: "scaled Blacksmith fallback", expectedSeconds: 32 },
+    { label: "direct GitHub timing", githubSeconds: 30, expectedSeconds: 30 },
+    { label: "startup floor", retainedSeconds: 1, expectedSeconds: 25 },
+    { label: "unknown retained file", known: false, expectedSeconds: 128 },
+    {
+      label: "nonbinding retained cost",
+      retainedSeconds: 80,
+      expectedSeconds: 128,
+    },
+    {
+      label: "unchanged selection",
+      retainedSeconds: 80,
+      discardSiblings: false,
+      expectedSeconds: 128,
+    },
+    { label: "Blacksmith parent floor", runnerBackend: "blacksmith", expectedSeconds: 80 },
+    { label: "hybrid parent floor", runnerBackend: "hybrid", expectedSeconds: 80 },
+    { label: "pull-request parent floor", compactMode: "pull-request", expectedSeconds: 128 },
+  ])("prices implicit reduced tooling with $label", async (params) => {
+    const retained = "test/vitest-pr-exempt-retention.test.ts";
+    // Two workers pair equal-cost files: fill fifteen pairs and one singleton first.
+    const discarded =
+      params.discardSiblings === false
+        ? []
+        : Array.from({ length: 31 }, (_, index) => `test/scripts/release-only-${index}.test.ts`);
+    const retainedSeconds = params.retainedSeconds ?? 20;
+    const discardedSeconds = 80;
+    const jobs = await createToolingFixturePlan({
+      files: [...discarded, retained],
+      shards: [
+        fixtureShard("core-tooling", [configPath("tooling")], configPath("full-core-tooling")),
+      ],
+      timings: {},
+      fileTimings: {
+        ...Object.fromEntries(discarded.map((file) => [file, discardedSeconds])),
+        ...(params.known === false ? {} : { [retained]: retainedSeconds }),
+      },
+      githubFileTimings:
+        params.githubSeconds === undefined ? {} : { [retained]: params.githubSeconds },
+      fileSeconds: (file) => (file === retained ? retainedSeconds : discardedSeconds),
+      expectedSourcePatterns: {
+        file: retained,
+        patterns: discarded.length ? [discarded.toSorted().at(-1)!, retained] : [retained],
+      },
+      options: {
+        compactMode: params.compactMode ?? "push",
+        runnerBackend: params.runnerBackend ?? "github",
+        includeReleaseOnlyPluginShards: false,
+        includeReleaseOnlyToolingShards: false,
+        includePrExemptRuntimeTests: true,
+        includeProofTests: true,
+      },
+    });
+    expectPlanFiles(jobs, [retained]);
+    const job = only(jobs);
+    expect(job.predictedTestSeconds).toBeCloseTo(params.expectedSeconds);
+    expect(job.planConcurrency).toBe(1);
+    expect(workers(only(job.groups))).toBe("2");
+    expect(job.requiresDist).toBe(false);
+    expect(job.pretestBuildMode).toBeUndefined();
+  });
 
   it.each([undefined, "blacksmith"])(
     "preserves compiler/artifact capacity (%s)",

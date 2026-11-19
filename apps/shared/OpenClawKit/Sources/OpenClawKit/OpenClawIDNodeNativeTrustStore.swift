@@ -75,6 +75,27 @@ public actor OpenClawIDNodeNativeTrustStore: OpenClawIDNodeTrustStore {
         return record
     }
 
+    /// Starts this enrollment's restart inputs from another enrollment of the same claw, for a new
+    /// key (an owner device turning its node back on). Grants nothing: the route re-verifies the key
+    /// in the claw's snapshot before it dials.
+    public func adopt(from source: UUID, hostname: String, peerKey: String) throws {
+        let database = try database()
+        try database.withImmediateTransaction {
+            try self.checkAuthority()
+            let query = try database.prepare("""
+            INSERT INTO openclaw_id_node_enrollments
+              (enrollment_id, discovery_origin, relay_url, server_key, peer_key, evidence_json, hostname)
+            SELECT ?, discovery_origin, relay_url, server_key, ?, evidence_json, hostname
+              FROM openclaw_id_node_enrollments WHERE hostname = ? AND enrollment_id = ?
+            """)
+            for (offset, value) in [self.enrollmentID.uuidString, peerKey, hostname, source.uuidString].enumerated() {
+                try query.bindText(value, at: Int32(offset + 1))
+            }
+            _ = try query.step()
+            try self.checkAuthority()
+        }
+    }
+
     public func observe(hostname: String, state: OpenClawIDNodeTrustState) throws {
         let database = try database()
         try database.withImmediateTransaction {

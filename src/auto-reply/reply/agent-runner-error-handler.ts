@@ -18,6 +18,7 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import { resolveReplyCompletion, resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { isChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { GatewayOperatorRecoveryAuthorizationError } from "../../infra/restart-recovery-errors.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
 import { hasReplyOperationExecutionStarted } from "../../sessions/session-controller.state.js";
@@ -77,6 +78,7 @@ export async function handleAgentExecutionError(params: {
       createAgentLifecycleTerminalBackstop({
         runId: params.runId,
         sessionKey: turn.sessionKey,
+        onTerminalEvent: turn.followupRun.run.internalEventExecution?.onTerminalEvent,
         startedAt: params.state.turnStartedAtMs,
         getLifecycleGeneration: () => params.state.lifecycleGeneration,
         resolveTerminationFields: (error) =>
@@ -183,6 +185,9 @@ export async function handleAgentExecutionError(params: {
     delete runState?.replyCompletion;
     return settleFailure({ text: `${err.message} This turn will not be continued automatically.` });
   }
+  if (err instanceof GatewayOperatorRecoveryAuthorizationError) {
+    return settleFailure({ text: err.message });
+  }
   if (isChannelRunAuthorizationError(err)) {
     if (isChannelRunAuthorizationError(err, "unavailable")) {
       return settleFailure({
@@ -206,7 +211,7 @@ export async function handleAgentExecutionError(params: {
     );
     takePendingLifecycleTerminal().emit("error", err);
     const switchErrorText = params.shouldSurfaceToControlUi
-      ? "⚠️ Couldn't switch models. Choose another model in the Control UI, then try again."
+      ? "⚠️ Couldn't switch models. Choose another model in the OpenClaw app, then try again."
       : isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel)
         ? "⚠️ Agent failed before reply: model switch could not be completed. " +
           "The requested model may be temporarily unavailable. Please try again shortly."
@@ -238,12 +243,13 @@ export async function handleAgentExecutionError(params: {
         : externalReply.text;
     return await settleFailure({ text }, externalReply.isGenericRunnerFailure);
   }
-  const failoverFacts = resolveReplyFailoverFacts(err, message);
+  const failoverFacts = resolveReplyFailoverFacts(err, message, params.runtimeConfig);
   const failureSummary = resolveReplyFailureSummary({
     error: err,
     message,
-    reason: failoverFacts.reason,
+    facts: failoverFacts,
     attempts: isFailoverError(err) ? err.attempts : undefined,
+    config: params.runtimeConfig,
   });
   const failoverReason = failoverFacts.reason;
   const isBilling = failureSummary?.kind === "billing";
@@ -284,8 +290,8 @@ export async function handleAgentExecutionError(params: {
       // Other facets keep their recovery advice, as in buildExternalRunFailureReply.
       text:
         failureSummary?.kind === "rate_limit" &&
-        isFailoverError(err) &&
-        err.rateLimitRetriesExhausted !== undefined
+        ((isFailoverError(err) && err.rateLimitRetriesExhausted !== undefined) ||
+          failoverFacts.rateLimitResetAt !== undefined)
           ? failureSummary.text
           : providerRequestError.userMessage,
     });

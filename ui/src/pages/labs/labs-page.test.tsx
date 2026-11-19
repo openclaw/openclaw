@@ -7,7 +7,10 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
-import { invalidateConfigConnection } from "../../lib/config/config-state-model.ts";
+import {
+  invalidateConfigConnection,
+  type ConfigAutoSaveStatus,
+} from "../../lib/config/config-state-model.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -16,6 +19,7 @@ import { LabsPage } from "./labs-page.tsx";
 type RuntimeConfigState = {
   connected: boolean;
   configLoading: boolean;
+  configAutoSaveStatus: ConfigAutoSaveStatus;
   configSnapshot: {
     hash: string;
     sourceConfig: Record<string, unknown>;
@@ -49,6 +53,7 @@ function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
   const state: RuntimeConfigState = {
     connected: true,
     configLoading: false,
+    configAutoSaveStatus: "idle",
     configSnapshot: { hash: "config-hash", sourceConfig },
     lastError: null,
   };
@@ -362,10 +367,16 @@ describe("LabsPage Decision assistance", () => {
       expect(toggle.hasAttribute("aria-disabled")).toBe(true);
     });
     expect(labRow(page, "Decision assistance").textContent).not.toContain("Preference saved.");
+    runtimeConfig.state.configAutoSaveStatus = "rejected";
+    runtimeConfig.state.lastError = "The setting was rejected";
+    runtimeConfig.notify();
     pendingPatch.resolve(false);
     await pendingPatch.promise;
     await waitForSolid(() => {
-      expect(toggle.checked).toBe(false);
+      expect(labToggle(page, "Decision assistance").checked).toBe(false);
+      expect(labRow(page, "Decision assistance").textContent).not.toContain(
+        "Couldn’t load this setting",
+      );
       expect(page.querySelector('[role="alert"]')).not.toBeNull();
     });
     expect(runtimeConfig.patch).toHaveBeenCalledOnce();

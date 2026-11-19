@@ -10,7 +10,6 @@ export type CronRunRecoveryInput = {
   defaultAgentId?: string;
   /** Receipts a cron owner in this process still holds; that owner settles them. */
   liveReceiptIds?: string[];
-  failureRepairTimeoutMs?: number;
 };
 
 export type CronRunRecoveryOutcome = {

@@ -8,8 +8,8 @@ const repoRoot = path.resolve(__dirname, "../..");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 // Release reports must still work when the execution runtime is unavailable.
 const withoutExecutionRuntime = `data:text/javascript,${encodeURIComponent(`
-  import { registerHooks } from "node:module";
-  registerHooks({
+  import nodeModule from "node:module";
+  nodeModule.registerHooks({
     resolve(specifier, context, nextResolve) {
       if (specifier.endsWith("/qa-lab/src/cli.runtime.ts")) {
         throw new Error("QA execution runtime is unavailable");

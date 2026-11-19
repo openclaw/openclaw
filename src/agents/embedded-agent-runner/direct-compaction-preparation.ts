@@ -59,6 +59,50 @@ export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSess
   summaryRefusal?: CompactionSummaryRefusalMode;
 };
 
+// Persistence intentionally drops runtime catalogs. Restore them before sandbox
+// selection and delivery, while already-prepared turns keep their exact snapshot.
+export async function hydratePersistedCompactionSkillsSnapshot(
+  params: CompactEmbeddedAgentSessionParams,
+  sessionAgentId: string,
+) {
+  const persistedSnapshot = params.skillsSnapshot;
+  if (
+    !persistedSnapshot ||
+    persistedSnapshot.resolvedSkills !== undefined ||
+    !(
+      persistedSnapshot.prompt.trim() ||
+      persistedSnapshot.discoverySkills?.length ||
+      persistedSnapshot.librarySelections?.length
+    )
+  ) {
+    return persistedSnapshot;
+  }
+  const skillRoots = persistedSnapshot.skillRoots;
+  const { snapshot } = await resolveReusableWorkspaceSkillSnapshot({
+    workspaceDir:
+      skillRoots?.agentWorkspaceDir ??
+      (params.config && hasAgentRosterProperty(params.config)
+        ? resolveAgentWorkspaceDir(params.config, sessionAgentId)
+        : (params.bootstrapWorkspaceDir ?? resolveUserPath(params.workspaceDir))),
+    executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
+    executionWorkspaceFileHost: resolveSkillSnapshotExecutionFileHost(persistedSnapshot),
+    config: params.config ?? {},
+    agentId: sessionAgentId,
+    existingSnapshot: persistedSnapshot,
+    skillFilter: persistedSnapshot.skillFilter,
+    skillOverrides: persistedSnapshot.skillOverrides,
+    resolveEligibility: () => ({
+      nodeSkills: persistedSnapshot.nodeSkillsEligibility,
+      remote: getRemoteSkillEligibility({
+        advertiseExecNode: persistedSnapshot.nodeSkillsEligibility?.canExec === true,
+      }),
+    }),
+    watch: false,
+    assertCurrent: () => params.abortSignal?.throwIfAborted(),
+  });
+  return snapshot;
+}
+
 export async function prepareDirectCompactionAttempt(
   params: PreparedCompactEmbeddedAgentSessionParams,
 ) {
@@ -322,42 +366,7 @@ export async function prepareDirectCompactionAttempt(
   const sandboxAgentId =
     params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined);
   const assertCurrent = () => params.abortSignal?.throwIfAborted();
-  let skillsSnapshot = params.skillsSnapshot;
-  if (
-    skillsSnapshot &&
-    skillsSnapshot.resolvedSkills === undefined &&
-    (skillsSnapshot.prompt.trim() ||
-      skillsSnapshot.discoverySkills?.length ||
-      skillsSnapshot.librarySelections?.length)
-  ) {
-    // Persistence intentionally drops runtime catalogs. Restore them before sandbox
-    // selection and delivery, while already-prepared turns keep their exact snapshot.
-    const persistedSnapshot = skillsSnapshot;
-    const skillRoots = persistedSnapshot.skillRoots;
-    const { snapshot } = await resolveReusableWorkspaceSkillSnapshot({
-      workspaceDir:
-        skillRoots?.agentWorkspaceDir ??
-        (params.config && hasAgentRosterProperty(params.config)
-          ? resolveAgentWorkspaceDir(params.config, sessionAgentId)
-          : (params.bootstrapWorkspaceDir ?? resolvedWorkspace)),
-      executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
-      executionWorkspaceFileHost: resolveSkillSnapshotExecutionFileHost(skillsSnapshot),
-      config: params.config ?? {},
-      agentId: sessionAgentId,
-      existingSnapshot: skillsSnapshot,
-      skillFilter: skillsSnapshot.skillFilter,
-      skillOverrides: skillsSnapshot.skillOverrides,
-      resolveEligibility: () => ({
-        nodeSkills: persistedSnapshot.nodeSkillsEligibility,
-        remote: getRemoteSkillEligibility({
-          advertiseExecNode: persistedSnapshot.nodeSkillsEligibility?.canExec === true,
-        }),
-      }),
-      watch: false,
-      assertCurrent,
-    });
-    skillsSnapshot = snapshot;
-  }
+  const skillsSnapshot = await hydratePersistedCompactionSkillsSnapshot(params, sessionAgentId);
   assertCurrent();
   const sandbox =
     params.sandbox === undefined

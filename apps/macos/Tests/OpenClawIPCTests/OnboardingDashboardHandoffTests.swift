@@ -151,8 +151,8 @@ struct OnboardingDashboardHandoffTests {
         try #require(names.contains("You’re all set!"))
         #expect(names.contains("Gateway added") == (completion == "browser"))
         #expect(names.contains("Node setup complete") == (completion == "node"))
-        #expect(names.contains("Open Dashboard → Settings → Channels") == (completion == "primary"))
-        #expect(names.contains("Open Dashboard → Skills") == (completion == "primary"))
+        #expect(names.contains("Open Settings → Channels") == (completion == "primary"))
+        #expect(names.contains("Open Skills") == (completion == "primary"))
         if completion != "primary" {
             try OnboardingRenderTests.capturePage(
                 view.readyPage(),

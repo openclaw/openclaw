@@ -25,7 +25,7 @@ import { navigateToModelProvider } from "../model-providers/navigation.ts";
 
 const AUTOMATIC = "";
 
-export type TalkTranscriptionCatalog = TalkCatalogResult["transcription"];
+type TalkTranscriptionCatalog = TalkCatalogResult["transcription"];
 
 /**
  * The picked model drives Talk only on the media-understanding path; on every
@@ -39,7 +39,7 @@ function talkUsesPickedModel(source: TalkTranscriptionCatalog["source"]) {
 type AudioModelEntry = { provider: string; model: string };
 
 /** Audio-tagged `tools.media.models` entries plus the preferred pick, from the config draft. */
-export function resolveTalkTranscriptionSelection(configObject: Record<string, unknown>) {
+function resolveTalkTranscriptionSelection(configObject: Record<string, unknown>) {
   const media = readRecord(readRecord(configObject.tools)?.media);
   const rawModels = Array.isArray(media?.models) ? media.models : [];
   const entries: AudioModelEntry[] = [];

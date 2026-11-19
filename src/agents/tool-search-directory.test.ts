@@ -44,16 +44,19 @@ function catalogRef(tools: ReturnType<typeof localCatalog>): ToolSearchCatalogRe
 }
 
 describe("run-granted tools in the Tool Search directory", () => {
-  it("keeps the cached directory identical whether or not the turn holds the grant", () => {
-    const base = localCatalog().slice(0, 3);
-    const granted = [...base, createStubTool("skill_library")];
-    const grantedRef = catalogRef(granted);
-    const withoutGrant = buildToolSchemaDirectoryPrompt({ catalogRef: catalogRef(base) });
+  it.each(["skill_library", "suggest_task", "dismiss_task"])(
+    "keeps the cached directory identical whether or not the turn holds the %s grant",
+    (name) => {
+      const base = localCatalog().slice(0, 3);
+      const granted = [...base, createStubTool(name)];
+      const grantedRef = catalogRef(granted);
+      const withoutGrant = buildToolSchemaDirectoryPrompt({ catalogRef: catalogRef(base) });
 
-    expect(buildToolSchemaDirectoryPrompt({ catalogRef: grantedRef })).toBe(withoutGrant);
-    expect(buildRunGrantedToolDirectory(grantedRef)).toContain("- skill_library (core)");
-    expect(buildRunGrantedToolDirectory(catalogRef(base))).toBeUndefined();
-  });
+      expect(buildToolSchemaDirectoryPrompt({ catalogRef: grantedRef })).toBe(withoutGrant);
+      expect(buildRunGrantedToolDirectory(grantedRef)).toContain(`- ${name} (core)`);
+      expect(buildRunGrantedToolDirectory(catalogRef(base))).toBeUndefined();
+    },
+  );
 
   it("lists an exact id that resolves when another source shares the granted name", async () => {
     const ref = catalogRef([createStubTool("skill_library")]);

@@ -20,7 +20,7 @@ export const RUNTIME_MODEL_VISIBILITY_NORMALIZATION = {
 } as const;
 
 /** Model refs agent settings select; the per-model metadata map is not a visibility source. */
-function resolveAdditionalConfiguredModelRefs(params: {
+export function resolveAdditionalConfiguredModelRefs(params: {
   cfg: OpenClawConfig;
   agentId?: string;
 }): string[] {

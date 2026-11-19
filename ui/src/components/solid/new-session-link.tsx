@@ -19,6 +19,8 @@ export function renderNewSessionLink(params: {
   target?: NewSessionTarget;
   class: string;
   label: string;
+  /** Shorter hover copy when the accessible label names its surrounding context. */
+  tooltip?: string;
   disabledReason?: string;
   showShortcut?: boolean;
   showTooltip?: boolean;
@@ -57,7 +59,10 @@ export function renderNewSessionLink(params: {
     link
   ) : (
     <openclaw-tooltip
-      prop:content={params.disabledReason ?? (params.showShortcut ? undefined : params.label)}
+      prop:content={
+        params.disabledReason ??
+        (params.showShortcut ? undefined : (params.tooltip ?? params.label))
+      }
       prop:pointerThrough={true}
     >
       <Show when={params.disabledReason == null && params.showShortcut}>
