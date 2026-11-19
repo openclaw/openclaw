@@ -174,13 +174,13 @@ it("awaits direct static writes while preserving keyed custom replay and admitte
         parentId: next,
         message: receipt.message,
       });
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       await expect(withSessionPendingInputPersistence(receipt, promote)).resolves.toBe(
         receipt.inputId,
       );
       expect(await readEvents(target)).toEqual(afterPromotion);
     } finally {
-      receipt.finish("interrupted");
+      receipt.finish("interrupted", "failed");
     }
   }));
 

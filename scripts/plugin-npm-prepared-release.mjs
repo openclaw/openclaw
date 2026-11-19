@@ -190,7 +190,8 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
     ),
     "Prepared npm adoption requires the exact FRV run and attempt.",
   );
-  const { createReleaseEvidenceClient } = await import("./release-ci-summary.mjs");
+  const { createReleaseEvidenceClient, loadPublicationParentEvidence } =
+    await import("./release-ci-summary.mjs");
   const { authenticateFullReleaseValidationEvidence, revalidateCandidateArtifactAuthority } =
     await import("./validate-full-release-validation-evidence.mjs");
   const client =
@@ -220,7 +221,12 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
   }
   const runId = String(params.fullReleaseValidationRunId);
   const runAttempt = Number(params.fullReleaseValidationRunAttempt);
-  const { manifest } = await client.loadManifest(runId, runAttempt);
+  const { manifestJson: manifest } = await loadPublicationParentEvidence({
+    client,
+    repository,
+    runId,
+    expectedRunAttempts: new Map([[runId, runAttempt]]),
+  });
   const selected = manifest.sourceAdmission?.publicationSelection;
   // Derive the operation only after the validator authenticates the whole
   // admission. Its owner decides whether this is a covered plugin-only subset.
@@ -272,8 +278,7 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
     current.manifest.workflowSha;
   if (producerSha !== workflowSha) {
     requireValue(
-      authenticated.qualification.kind !== "historical" &&
-        authenticated.qualification.candidateSha === sourceSha &&
+      authenticated.qualification.candidateSha === sourceSha &&
         authenticated.qualification.qualificationSha === producerSha &&
         typeof authenticated.revalidateAuthority === "function",
       "Prepared npm Q != P adoption requires live candidate-owned qualification.",

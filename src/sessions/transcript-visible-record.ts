@@ -1,6 +1,5 @@
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isIntermediateAssistantTranscriptMessage } from "../agents/embedded-agent-runner/message-visibility.js";
-import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
 import { extractStoredAssistantText } from "../agents/tools/chat-history-text.js";
 import type { SessionTranscriptEventMatch } from "../config/sessions/session-history-read.types.js";
 import {
@@ -13,18 +12,6 @@ import {
   readSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "./transcript-events.js";
-
-export function isVisibleTranscriptRecord(value: unknown): value is Record<string, unknown> {
-  const record = asOptionalRecord(value);
-  return (
-    Boolean(record?.message) ||
-    record?.type === "compaction" ||
-    record?.type === "reset" ||
-    (record?.type === "custom_message" &&
-      record.display === true &&
-      record.customType !== OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE)
-  );
-}
 
 export function isAssistantResultEventForRun(event: unknown, runId: string): boolean {
   if (

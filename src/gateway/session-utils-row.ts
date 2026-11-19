@@ -52,7 +52,7 @@ import { sessionClassificationForRow } from "./session-classification.js";
 import { projectSessionRowProfiles } from "./session-identity-projection.js";
 import { sessionModelRevision } from "./session-model-revision.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
-import { reuseSessionRowFields } from "./session-row-identity.js";
+import { freezeSessionRow } from "./session-row-identity.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { projectSessionRowProviderReview } from "./session-row-provider-review.js";
 import type { SessionRuntimeResolution } from "./session-runtime-resolution.js";
@@ -118,6 +118,7 @@ export function readSessionRowInputs(params: {
   skipTranscriptUsageFallback?: boolean;
   transcriptUsage?: SessionTranscriptUsageSnapshot | null;
   lightweightListRow?: boolean;
+  hasMessages?: boolean;
   includeSwarmChildren?: boolean;
 }) {
   const { cfg, storePath, store, key, entry, agentId } = params;
@@ -183,7 +184,7 @@ export function readSessionRowInputs(params: {
     catalogEntry,
     selected: entry?.contextWindow,
   });
-  const modelContext = resolveModelContextTokenProjection({
+  const modelContext = (params.runtimeResolution?.context ?? resolveModelContextTokenProjection)({
     cfg,
     provider,
     model,
@@ -234,9 +235,12 @@ export function readSessionRowInputs(params: {
       displayName,
       derivedTitle: params.preparedTitle?.derivedTitle,
       lastMessagePreview: params.preparedTitle?.lastMessagePreview,
+      hasMessages: params.hasMessages,
       lastAssistantMessage: params.preparedTitle?.lastAssistantMessage,
       thinkingProjection,
-      agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
+      agentRuntime: (params.runtimeResolution?.placement ?? projectWorkerPlacementAgentRuntime)(
+        thinkingProjection.agentRuntime,
+      ),
       contextWindowProfile,
       fastModeState: resolveFastModeState({
         cfg,
@@ -383,6 +387,14 @@ export function materializeSessionRow(
   // Snooze shares the pin root-session rule.
   const pinnable = isPinnableSessionEntry(key, entry);
   const pinnedAt = pinnable ? entry?.pinnedAt : undefined;
+  const classification = sessionClassificationForRow(cfg, key, input.agentId, entry);
+  // Custody identifiers stay in storage for recovery; clients receive their friendly display name.
+  // Explicit human labels and ordinary conversations retain normal label precedence.
+  const generatedPublicationLabel =
+    classification.classification === "github-publication" &&
+    /^github-publication-(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-8[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/iu.test(
+      entry?.label ?? "",
+    );
 
   const row = omitUndefinedFields<GatewaySessionRow>({
     key,
@@ -422,7 +434,7 @@ export function materializeSessionRow(
     forkSource: entry?.forkSource,
     previousSessionId: entry?.previousSessionId,
     kind: resolveGatewaySessionKind(key, entry),
-    label: entry?.label,
+    label: generatedPublicationLabel ? undefined : entry?.label,
     autoLabel: entry?.autoLabel,
     icon: entry?.icon,
     color: entry?.color,
@@ -432,10 +444,13 @@ export function materializeSessionRow(
     category: entry?.category,
     boardFace: entry?.boardFace,
     boardPresentation: entry?.boardPresentation,
-    ...sessionClassificationForRow(cfg, key, input.agentId, entry),
-    displayName: input.displayName,
+    ...classification,
+    displayName: generatedPublicationLabel
+      ? (normalizeOptionalString(entry?.displayName) ?? "GitHub publication")
+      : input.displayName,
     derivedTitle: input.derivedTitle,
     lastMessagePreview: input.lastMessagePreview,
+    hasMessages: input.hasMessages,
     lastAssistantMessage: input.lastAssistantMessage,
     channel,
     subject: entry?.subject,
@@ -540,9 +555,7 @@ export function materializeSessionRow(
   });
   return Object.freeze({
     publicationIdentity: previous?.publicationIdentity ?? {},
-    row: freezeTrustedJsonSnapshot<Readonly<GatewaySessionRow>>(
-      reuseSessionRowFields(row, previous?.row),
-    ),
+    row: freezeSessionRow(row, previous?.row),
     source: Object.freeze({
       parsedKey: parseAgentSessionKey(key),
       backgroundProcessScope: prepareGatewaySessionBackgroundProcessScope(input),
@@ -584,16 +597,11 @@ export function replaceSessionRowFacts(
   source?: Partial<ReturnType<typeof materializeSessionRow>["source"]>,
 ): ReturnType<typeof materializeSessionRow> {
   const nextSource = source ? { ...materialized.source, ...source } : materialized.source;
-  freezeTrustedJsonSnapshot(nextSource.childLinks);
+  freezeTrustedJsonSnapshot(source?.childLinks);
   return Object.freeze({
     publicationIdentity: materialized.publicationIdentity,
     row: row
-      ? freezeTrustedJsonSnapshot(
-          reuseSessionRowFields(
-            omitUndefinedFields({ ...materialized.row, ...row }),
-            materialized.row,
-          ),
-        )
+      ? freezeSessionRow({ ...materialized.row, ...row }, materialized.row, Object.keys(row))
       : materialized.row,
     source: Object.freeze(nextSource),
   });

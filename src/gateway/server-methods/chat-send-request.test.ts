@@ -195,6 +195,18 @@ it("keeps ordinary typed @names inert and fingerprints only explicit selections"
   expect(first.requestIdentity).toBe((await fingerprint("alex-one")).requestIdentity);
 });
 
+it.each(["openclaw-macos", "openclaw-linux", "openclaw-ios", "openclaw-android"] as const)(
+  "accepts signed-in native UI mention input from %s",
+  async (id) => {
+    const client = humanClient();
+    client.connect.client.id = id;
+    client.connect.client.mode = "ui";
+    expect((await normalize({ message: "@Bob hello", mentions: [mention(0, 4)] }, client)).ok).toBe(
+      true,
+    );
+  },
+);
+
 it("requires authenticated human ingress and rejects unsupported mention modes", async () => {
   const mentions = [mention(0, 4)];
   const unqualified = humanClient();

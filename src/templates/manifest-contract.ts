@@ -60,6 +60,11 @@ export type TemplateDiagnostic = {
 };
 
 export type TemplateOpenClawAgentSettings = {
+  /**
+   * Author's preferred model as an exact `provider/model` ref. A preference, not a
+   * requirement: Add applies it only when the receiving host offers that model.
+   */
+  model?: string;
   groupChat?: {
     mentionPatterns?: string[];
   };

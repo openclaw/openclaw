@@ -56,6 +56,9 @@ export async function readMemberView(
     binding_seq: current.binding!.body.binding_seq,
     account_id: principal.accountId,
     role: member.role,
+    root_fp: await fingerprint(current.authority.anchor.root_pub),
+    hostname: current.hostname,
+    recovery_kit: member.recovery_kit ?? null,
     devices: devices.map((device) =>
       Object.assign(device, { this_device: device.peer_key === principal.peerKey }),
     ),
@@ -89,6 +92,7 @@ export async function readOwnerView(
         display_name: profiles[account_id]?.displayName ?? null,
         email: profiles[account_id]?.email ?? null,
         role: member.role,
+        recovery_kit: member.recovery_kit ?? null,
         peer_keys: member.peer_keys,
         devices: await describeMemberDevices(member),
       })),

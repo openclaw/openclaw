@@ -533,6 +533,9 @@ After the package is installed, a failed post-plugin Doctor process is a recorde
 warning when it has no explicit writer or migration refusal. The updater still
 validates the final config and readiness, then starts the Gateway. A child whose
 termination cannot be confirmed remains blocking because it may still write state.
+A plugin convergence failure, or an updater failure around a started Doctor, can
+instead be recorded as an [owed step](#owed-steps), under the conditions listed
+there.
 
 Offline Doctor cron inspection reuses its admitted maintenance reader after the
 backup boundary instead of creating another disposable SQLite snapshot. If optional
@@ -703,6 +706,10 @@ Live snapshots use SQLite read transactions and private backups while writers
 continue. Artifact-preserving planning and Doctor checks retain byte-neutral
 copies that leave source SHM unchanged. WAL copies capture a bounded prefix
 within one verified WAL generation, so appended commits do not require a quiet database.
+When a live writer checkpoints during every copy attempt, the WAL family takes
+one read transaction instead of refusing: that writer keeps the WAL index current,
+so SQLite may update reader slots but not the commit header that update captures
+compare. Families without a live index never churn and stay byte-neutral.
 Incomplete WAL families and crash journals are recovered privately without
 creating missing source sidecars. Inspection budgets include database
 and journal sizes, cold startup, and repeated IO passes for every discovered
@@ -885,6 +892,108 @@ when they invoke the new version's `update finalize`. Older parents may omit the
 warning from their own summary; the finalizer prints it and records it in update
 history.
 
+#### Owed steps
+
+Some follow-up steps are not needed for the new version to run. When one of them
+fails and the update otherwise succeeds, the update records the step as owed,
+with its reason, prints it as a warning, and exits 0. In `--json` output the
+warning is an advisory step, and the `run` record lists the owed step. Four steps
+can be owed:
+
+- **Shell completion refresh** (`shell-completion`): the completion cache or the
+  shell profile could not be refreshed after a core update.
+- **Gateway service definition refresh** (`service-definition`): the service
+  installer failed and the update continued on the previous definition, or the
+  definition still points outside the updated installation after the refresh.
+- **Plugin convergence** (`plugin-convergence`): during a core update, plugin
+  sync, update, or repair threw before it published any plugin record or config
+  change. The updater restores every plugin package it replaced in that pass, so
+  plugins stay on their previous versions and records. The update then validates
+  the final config, runs readiness checks, and starts the Gateway as usual.
+- **Post-plugin Doctor** (`post-plugin-doctor`): Doctor started after plugin
+  convergence, and the updater then failed around it for a reason Doctor did not
+  report, such as a state read that failed after Doctor finished. Config
+  validation and readiness checks still run before the Gateway starts.
+
+Required database migrations, refused or invalid configuration, Doctor refusals,
+and Gateway readiness are never owed. They still block completion. A failed or
+rolled-back update owes nothing, including a step recorded before it failed.
+
+When plugin convergence changes no config, the updater publishes the plugin
+install records without writing the config file. The file keeps its bytes,
+including its `meta.lastTouchedVersion` stamp, and a config file the update
+cannot replace, such as a link to a provisioned read-only file, cannot fail
+that publication. Other writes in the same update, such as a requested channel
+change or a Doctor repair, still need a writable config. Plugin convergence
+that does change config needs a config write too, and a refused write still
+fails the update.
+
+A plugin or Doctor failure is owed only when the updater can show what it left
+behind. These failures still fail the command, and roll back a replaced core:
+
+- plugin convergence that throws where plugin installs are not restored
+  together: on an already-current core, in `openclaw update repair`, and in an
+  update whose updater did not retain the plugin set before activation
+- plugin convergence that throws while it must also restore channel config that
+  Doctor dropped during this update
+- a refused config write, or an unexpected failure while plugin records and
+  config are being published
+- a package that could not be restored after a failed plugin install
+- a post-core update process that exits nonzero, is terminated, or times out
+- a Doctor refusal: a migration or config-write refusal, a cancelled Doctor, and
+  any refusal that names data at risk
+- a missing updated entrypoint, a Gateway that could not be parked for Doctor,
+  or a state read that fails before Doctor starts
+- a command whose termination cannot be confirmed, and lost update authority
+
+Later commands settle what is owed:
+
+- The next `openclaw update` refreshes shell completion again, including when the
+  core is already current, where it does not prompt. A shell profile that still
+  loads completion the slow way keeps the step owed until an interactive update or
+  `openclaw completion --install` upgrades it.
+- An update settles an owed service definition refresh only when it refreshes the
+  service definition itself, as a core update with a restart does. Otherwise the
+  step stays owed and the update repeats the warning.
+- The next `openclaw update` runs plugin convergence again, including when the
+  core is already current, and settles the step when convergence completes.
+  Individual plugins that fail to update are reported as plugin warnings, as
+  before, and do not keep the step owed. Convergence that is deferred because
+  config changed during the update settles nothing: every plugin step stays
+  owed. Convergence that throws again during a core update is owed again for the
+  new reason. On an already-current core it fails the command as before, and the
+  step stays owed.
+- An update settles an owed post-plugin Doctor only when it changes plugins and
+  its own Doctor then completes. An update that leaves plugins unchanged does not
+  run full Doctor, so the step stays owed and the update repeats the warning.
+- `openclaw update repair` refreshes the completion cache when it runs
+  finalization. It does not run the service installer. After its Doctor
+  maintenance, it settles the service definition step when the managed definition
+  targets the active installation, or when no managed service remains. Repair
+  runs full Doctor and then plugin convergence, so it settles the post-plugin
+  Doctor step, and settles plugin convergence when its own convergence completes.
+  A repair that finds a healthy Gateway and skips finalization leaves owed steps
+  unchanged.
+
+A retry that fails keeps the step owed and warns again. It does not fail the
+command, except for the plugin convergence cases above. The command that retried
+it then holds the step in its own run. Gateway startup does not retry owed steps.
+With automatic updates on, a Gateway whose core is current can retry owed plugin
+convergence once through an update campaign; see
+[Automatic updates](/install/updating/automatic-updates#owed-plugin-steps). See
+[Status and history](/cli/update/status-and-history#update-status) to inspect them.
+
+An updater records and retries owed steps only when its own version supports
+them. On the first update to a version that does, the previously installed
+updater runs these steps and still drops a failed shell completion refresh
+without a record. It records no plugin step either. Plugin convergence runs in
+the new version's own process, which keeps that first update only when the
+previously installed updater retained the plugin set before activation, and
+otherwise fails as before. A convergence that changes no config writes no
+config file, so its plugin publication does not fail on a config the update
+cannot write. The post-plugin Doctor pass behaves as it did in the previously
+installed updater whenever that updater runs the pass itself.
+
 <a id="durable-serving-recovery" />
 
 ### Recovery limits
@@ -895,11 +1004,30 @@ retained package in `<package-backup>.databases`. Snapshot names use the backup
 archive's source-path layout so their original destinations remain identifiable
 after detailed run history is compacted. The report retains the directory location;
 per-file paths, schema versions, and digests appear in bounded diagnostics. Committed WAL data is included in each
-standalone snapshot. The snapshot volume needs `2 × total SQLite family bytes +
-3 × largest family + 64 MiB` for retained files and working space. Unknown free
-space produces a warning; a measured shortage refuses before migration.
-Each separate source volume also reserves its database-family total plus its
-largest family and 64 MiB for restoration while migrated originals remain.
+standalone snapshot. The snapshot needs what it writes: the total SQLite family
+bytes, plus the larger of one family of private staging during capture and, on
+the database volume, room for the migration that follows (the largest database
+plus 64 MiB). Restoration checks its own space when it runs, before it moves any
+live database, so the snapshot reserves nothing for it.
+
+A snapshot that the backup measures as not fitting never stops the update. The
+updater skips it before copying anything, records a `database snapshot` warning
+that names the space needed and free, and continues. Each schema migration
+commits in one SQLite transaction with its version bump, so an interrupted or
+failed migration loses nothing. What a skipped snapshot gives up is going back:
+once the new version's migration commits, the previous version refuses the newer
+schema, so a failed update stays on the new version and is fixed forward. Any
+other snapshot failure, including a disk that fills while a copy is running,
+still fails the update before migration. Unknown free space produces a warning
+and the snapshot is attempted.
+
+The update refuses before it changes anything only when the database volume
+cannot hold the migration itself: the largest database plus 64 MiB, because a
+schema migration's write-ahead log holds about one copy of each rewritten page
+(measured: 685 MB of log for a shared database of about 0.7 GB). The refusal
+names how much to free. Git release updates take no database snapshot; an install
+already serving from a release runs no snapshot check, and its databases migrate
+when the new Gateway starts.
 Hard-linked database or journal files refuse before migration because restoring
 one pathname cannot safely restore every alias.
 
@@ -1035,8 +1163,11 @@ post-failure [Triage](/cli/triage) starts only after update ownership and servic
 compensation settle; it does not rewrite the failed update or grant new restart
 authority. These temporary validation snapshots are not a full-state backup;
 see [Rollback](/install/updating#rollback).
-If schema state cannot be verified, rollback is refused with
-`rollback-state-unverified`; unknown state never counts as schema-neutral.
+If schema state cannot be verified after a new-version Doctor or boot check may have
+written it, rollback is refused with `rollback-state-unverified`; unknown state never
+counts as schema-neutral. Before any new-version process opened state (for example a Git
+release switch, where the previous Gateway keeps serving), an unreadable store is a
+recorded warning, not data at risk, and the update continues.
 
 If an update fails before activation, recovery observes the existing Gateway once
 without waiting for startup or restarting it. Native service and listener checks
@@ -1607,6 +1738,217 @@ reclaim these stages. If an interrupted update leaves one behind, confirm that
 no updater is still using it before removing that exact directory. This separation
 does not make simultaneous package swaps safe.
 
+### Replacing the package directory
+
+The swap publishes the staged package with or without a
+[package-publication journal](/install/updating#package-publication-recovery).
+On macOS and Linux both ways publish with one atomic exchange (`renameat2` with
+`RENAME_EXCHANGE` on Linux, `renamex_np` with `RENAME_SWAP` on macOS), so the
+package path names a complete package at every instant, also when the updater,
+its managed helper, or the machine dies. The tools that make the call are the
+ones the release-directory conversion below uses. The `package-swap` step of the
+update result reads `published by an atomic exchange (<tool>)`.
+
+A POSIX npm update that prepared a journal records a publish intent, gives the
+candidate the name `previous` inside the journal's recovery directory, and
+exchanges that name with the package path. The new package is then installed and
+the old one is under `previous`, which is where every recovery reader expects it
+after a publication.
+
+An updater killed between those two steps leaves the old package serving and the
+candidate waiting under `previous`, with the publish intent still in the
+journal. The next `openclaw update`, and `openclaw update repair`, settle that
+leftover before anything else. They claim the installation in the recorded
+update lease store, which succeeds only once the killed updater's processes are
+gone, return the candidate to its own name, abort the publication, and remove
+its recovery directory. The old package and its launchers are not touched. The
+update prints what it settled and continues, and its result and run history
+carry a `package-publication-recovery` warning. The journal's printed recovery
+command does the same by hand: `repair` aborts the publication and `retire`
+removes the recovery directory.
+
+A killed update usually also leaves the plugin recovery it reserved, which is a
+separate check from the publication. `openclaw update repair` settles it and
+then finishes what the killed update left: it runs Doctor and plugin convergence
+for the installed version and restarts a Gateway the update had stopped.
+
+The next `openclaw update` settles that recovery itself, after the publication,
+when nothing needs an operator:
+
+- the installation is a package install, or a source checkout that still holds
+  exactly the build the killed update installed (see below);
+- the killed update was a command-line `openclaw update`, not one the Gateway
+  started, whose recorded process is no longer running;
+- the update lease store still holds that process's lease, so claiming the
+  installation shows its child processes are gone too. When a restart emptied
+  that store, the update instead checks the boot each of that update's
+  processes recorded. If every one ran on this same Linux or macOS machine in an
+  earlier boot, none of them can still be running, and the update claims the
+  installation as usual before it settles anything.
+
+It settles the plugin and configuration changes the way repair does. When the
+version from before that update is still installed they are rolled back, and
+when the Gateway was verified on the version it installed they are kept. The
+update prints what it settled, continues, and records an
+`interrupted-update-recovery` warning in its run history.
+
+A source checkout's version does not show whether the killed update had
+replaced its build. An update of a checkout in place records the commit and
+build it activates before it reserves its plugin recovery. The next update
+settles that recovery only when all of these still hold:
+
+- the killed update recorded that activation, for the same build its plugin
+  recovery targets;
+- the checkout is still at that commit and has no local changes;
+- its build is complete, was made from that commit, and is that same build.
+
+Then the checkout runs the killed update's build, and the update treats it like
+a package install that has the candidate installed. A checkout that was pulled,
+edited or rebuilt by hand, or a run recorded by an older updater, keeps the
+refusal below. Updates through the Git release layout never reserve plugin
+recovery, so they are unaffected.
+
+Some killed updates also leave work that repair finishes and an update that
+finds its core already current would skip:
+
+- the killed update replaced the installed version and was not confirmed
+  finished;
+- it had begun rolling its plugin changes back on the version it installed;
+- it stopped the Gateway and never started it again.
+
+In those cases the update then finishes the installed version the way
+`openclaw update repair` does: it runs Doctor and plugin convergence for that
+version, and restarts and verifies a Gateway the killed update had stopped. This
+happens before the update checks for a newer version. That work is recorded on a
+separate repair run, exactly as repair records it, because the update's own run
+does not exist yet at that point. The update adds an
+`interrupted-update-finalization` warning that names that run, prints no
+separate result, and then continues. A stopped Gateway is restarted only when
+the update would restart it anyway. With `--no-restart` the update refuses,
+because the history cannot show whether the killed update or an operator
+stopped it. If Doctor, plugin convergence or the Gateway restart fails, or Doctor
+maintenance has to wait, the update stops. It names `openclaw update repair` and
+leaves the installation as repair would leave it.
+
+Otherwise the update stops with `Update <id> has unfinished recovery`. When
+repair can settle the recovery, the message adds the reason and the command:
+
+- **The killed update stopped the Gateway and this update was run with
+  `--no-restart`.** Run `openclaw update repair`, which settles the recovery,
+  then restarts and verifies the Gateway.
+- **The Gateway started the update**, or a managed helper adopted it. Wait if
+  the Gateway is still finishing it; otherwise run `openclaw update repair`.
+- **An update is still recorded as running** and its process is not known to
+  have exited, or another updater holds the installation. Wait for it; run
+  `openclaw update repair` if it has stopped.
+- **The update lease store no longer holds the killed update's lease.** The
+  store was removed or replaced, or another command already claimed the
+  installation. That includes an earlier `openclaw update` that claimed it and
+  then refused for one of the reasons above, so a second attempt reports this
+  reason. After a restart the update also refuses this way when the boot record
+  cannot show the killed update's processes gone: the killed update ran an
+  older version that did not record its boot, the machine has no stable
+  identity, it runs on Windows or inside a container, or one of that update's
+  processes recorded no boot. Run `openclaw update repair`.
+- **The recovery could not be settled.** The message includes the cause. Run
+  `openclaw update repair`.
+- **The installation is a source checkout that cannot show the killed update's
+  build.** The message names the reason: no recorded activation, a commit or
+  build that differs from it, or local changes. Run `openclaw update repair`.
+- **The recovery belongs to another installation.** Run `openclaw update repair`
+  from that installation.
+- **A dry run** changes nothing. Run `openclaw update`.
+
+Recovery that `openclaw update repair` cannot settle either keeps the plain
+refusal without a command.
+
+The updater does not settle the leftover when another updater still holds the
+installation, when the lease store is missing or was replaced, when the
+installed package or a launcher no longer matches the journal, or when a
+different OpenClaw build wrote the journal. It then refuses with the reason and
+a next step: wait for the other updater, reinstall, or run the recovery command.
+See
+[Unfinished publication and rollback](/install/updating#unfinished-publication-and-rollback).
+
+That state is read only with the recorded intent and the recorded identities of all
+three directories. A reader that finds the layout without that intent, and the
+recovery code of earlier releases, refuses it by its identity check instead of
+taking the candidate for the previous package. An updater killed after the
+exchange leaves the new package installed, as a killed publication always did
+from that point. The exchange tool is a separate short-lived process: when the
+updater is killed while it runs, it can still complete the exchange a moment
+later, and recovery then reads the publication as published.
+
+Without a journal, the same exchange covers pnpm and Bun, where the directory is
+the manager's whole global project, and npm when the journal is not used, for
+example with `--reapply-local-overrides`, for a release replaced in place behind
+its package link, or for a target without delegated post-core execution. The
+staged
+directory first takes the backup name `.openclaw.package-backup-<pid>-<time>`
+beside the directory it replaces. One exchange then puts the new directory in
+place and the old one under the backup name.
+
+An updater killed after the staged directory took the backup name and before the
+exchange leaves the old package serving and the new, unpublished one under that
+backup name. Nothing needs recovery, and that directory must not be moved into
+place. A later update that swaps the package in place removes it with the other
+historical package backups once that update is verified. The exchange tool is a
+separate short-lived process: when the updater is killed while the tool runs,
+the tool can still complete the exchange a moment later, which leaves the new
+package in place and the old one under the backup name.
+
+When the exchange is unavailable (a system without the tool, a filesystem that
+refuses the call, or a stage on another filesystem), the update still installs
+with two moves, and the step reads `published by two moves (atomic exchange
+unavailable: <reason>)`. Between the two moves the package path is missing and
+`openclaw` cannot start.
+
+With a journal, the candidate returns to its own name, the old package moves to
+`previous`, and the candidate moves into place. An updater killed before the old
+package moves is settled by the next update as above. If it dies between those
+moves, the package path is missing and `openclaw` cannot start from that
+installation, so neither `openclaw update` nor `openclaw update repair` can run
+there. The managed update helper, when it is still alive, or the journal's
+printed recovery command, run with the recorded external runtime, finishes the
+publication. An update or repair of the same build that still reaches admission
+for that installation publishes the recorded candidate into the gap.
+
+Without a journal, the staged directory returns to its stage, the old one moves
+to the backup name, and the staged one moves into place. If the updater dies
+between those moves, the old directory is intact under the backup name. Check
+the `version` in its
+`package.json` first (for pnpm and Bun, in the `openclaw` package inside it):
+the backup that holds the previous version is the one to restore. Rename it back
+to the directory it was taken from, the package path for npm or the global
+project directory for pnpm and Bun, then run the update again. No journal
+records this swap, and `openclaw update repair` cannot run while the package is
+missing.
+
+Windows, FreeBSD, an npm package link to a checkout, and a staged package that
+is itself a link to a checkout keep the two moves and do not attempt the
+exchange. The next update from that checkout restores a package link that a
+killed update left under the backup name.
+
+After the new package is verified, the updater removes that backup link without
+following it. If the filesystem refuses the removal and the link is unchanged,
+the update keeps the new package and exits 0. It records a
+`package-backup-retention` warning that names the link and any launcher backups
+or database snapshots left beside it, because cleanup stops at the link.
+Historical package backups from earlier updates also wait for a later update.
+The link still names your checkout, which the updater does not modify. After
+checking the installation, remove the link itself and not what it names: use
+`rm <link>` without a trailing slash, or `rmdir <link>` on Windows, and never a
+recursive delete. The other named paths are ordinary directories. A later update
+that swaps the package in place also removes the link with the other historical
+package backups once that update is verified, unless the filesystem refuses
+again. A backup link that was replaced or cannot be read still fails the update,
+because the updater can no longer show that the entry is the link it moved
+aside.
+
+Rollback after a failed verification still restores with two moves. A restore
+killed between them leaves the package path missing and the previous package
+under the backup name; rename it back to the directory it was taken from.
+
 ### Release directories on OpenClaw-owned prefixes
 
 On macOS and Linux, the prefix that `install-cli.sh` creates
@@ -1695,6 +2037,17 @@ also rejected before activation. Staged source-checkout exposure currently
 requires an npm-owned package symlink; package-to-package updates remain
 supported through the owning manager.
 
+The reverse switch is refused the same way when `openclaw` is a pnpm or Bun
+global link to the Git checkout (for example after
+`pnpm add -g openclaw@link:<checkout>`). Replacing that link changes what the
+Gateway's installation path means, so the updater refuses before stopping or
+changing anything; the CLI and Gateway keep running the checkout. To stay on the
+checkout and follow the channel through its release tags, set `update.channel`
+and run `openclaw update` without `--channel`. To switch anyway, run
+`openclaw triage` or ask the instance's agent, which can check database, runtime
+and Gateway service compatibility before moving the install. This check belongs
+to the installed updater; an older updater can still start the switch.
+
 When an npm package link points to a built Git checkout, rollback verifies that
 same checkout and build before restoring the link and launchers. Local source
 edits are preserved. Replacing the checkout or rebuilding it during the update
@@ -1703,8 +2056,11 @@ prevents automatic rollback; restoring a link alone does not prove runtime safet
 ### Local packaged overrides
 
 Package updates preserve local `dist` edits in a recovery bundle before replacing
-the old package. Capture happens after service drain and the old-tree move, so
-edits made while the new version installs are included. The report names the bundle
+the old package. Capture happens after service drain, so edits made while the new
+version installs are included. A macOS or Linux swap of a package directory
+reads the old package at its path immediately before publication. A swap on
+another platform, or of a staged link, captures after the old-tree move, and a
+release switch reads the previous release in place. The report names the bundle
 under the selected state directory's `update-recovery/` directory. Keep it until
 you have checked the updated installation; removal is manual.
 

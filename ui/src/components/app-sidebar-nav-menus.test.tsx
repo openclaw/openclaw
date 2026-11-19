@@ -5,7 +5,12 @@ import { de } from "../i18n/locales/de.ts";
 import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
-import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
+import {
+  createGateway,
+  createSessions,
+  mountSidebar,
+  TWO_AGENTS,
+} from "../test-helpers/app-sidebar.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -286,9 +291,92 @@ it("returns to the durable trigger without consuming native Tab", async () => {
 describe("sidebar rail pin menu", () => {
   setupSidebarTest();
 
+  it("keeps section pins above Pages and the separator, and every other pin below", async () => {
+    const { sidebar } = await mountSidebar(
+      createGateway(createTestGatewayClient(createGatewayRequestMock())),
+      createSessions("main", []),
+    );
+    const order = () =>
+      [
+        ...sidebar
+          .querySelector(".sidebar-rail__pins")!
+          .querySelectorAll("[data-sidebar-entry], [data-rail-more], .sidebar-rail__separator"),
+      ].map(
+        (element) =>
+          element.getAttribute("data-sidebar-entry") ??
+          (element.hasAttribute("data-rail-more") ? "pages" : "separator"),
+      );
+    await sidebar.updateComplete;
+    // A new rail: Automations, Customize and Usage, then the "more" menu.
+    expect(order()).toEqual(["route:cron", "route:plugins", "route:usage", "pages"]);
+    sidebar.sidebarEntries = ["person:ada", "route:usage", "route:cron"];
+    await sidebar.updateComplete;
+    expect(order()).toEqual(["route:usage", "route:cron", "pages", "separator", "person:ada"]);
+    // Search lives with the footer controls, not above the pins.
+    expect(sidebar.querySelector(".sidebar-rail__bottom .sidebar-brand__search")).not.toBeNull();
+    sidebar.sidebarEntries = ["route:usage"];
+    await sidebar.updateComplete;
+    expect(order()).toEqual(["route:usage", "pages"]);
+  });
+
+  it("opens Activity and the people list from the People rail item", async () => {
+    const { sidebar } = await mountSidebar(
+      createGateway(createTestGatewayClient(createGatewayRequestMock())),
+      createSessions("main", []),
+    );
+    const navigate = vi.fn();
+    sidebar.onNavigate = navigate;
+    sidebar.navigationCollapsed = true;
+    sidebar.onToggleSidebar = () => (sidebar.navigationCollapsed = !sidebar.navigationCollapsed);
+    await sidebar.updateComplete;
+    sidebar.querySelector<HTMLButtonElement>('[data-navigation-view="online"]')!.click();
+    await sidebar.updateComplete;
+    await vi.dynamicImportSettled();
+    await sidebar.updateComplete;
+    expect(navigate).toHaveBeenCalledWith("activity");
+    expect(sidebar).toMatchObject({ navigationView: "online", navigationCollapsed: false });
+    const overview = sidebar.querySelector<HTMLAnchorElement>(".sidebar-online__overview a")!;
+    expect(overview.textContent).toContain("Activity");
+    expect(overview.getAttribute("href")).toBe("/activity");
+  });
+
+  it("opens the Sessions list and agent picker from separate rail buttons", async () => {
+    const { sidebar } = await mountSidebar(
+      createGateway(createTestGatewayClient(createGatewayRequestMock())),
+      createSessions("main", []),
+      "panel",
+      TWO_AGENTS,
+    );
+    sidebar.navigationView = "automations";
+    sidebar.navigationCollapsed = true;
+    sidebar.onToggleSidebar = () => (sidebar.navigationCollapsed = !sidebar.navigationCollapsed);
+    await sidebar.updateComplete;
+    const agent = sidebar.querySelector<HTMLButtonElement>(
+      '.sidebar-rail button[aria-label="Molty · Switch agent"]',
+    )!;
+    const sessions = sidebar.querySelector<HTMLButtonElement>(
+      '.sidebar-rail button[aria-label="Sessions"]',
+    )!;
+
+    agent.click();
+    await sidebar.updateComplete;
+    await vi.dynamicImportSettled();
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-agent-menu")).not.toBeNull();
+    expect(sidebar).toMatchObject({ navigationView: "automations", navigationCollapsed: true });
+    expect(sessions.getAttribute("aria-pressed")).toBe("false");
+
+    sessions.click();
+    await sidebar.updateComplete;
+    expect(sidebar).toMatchObject({ navigationView: "sessions", navigationCollapsed: false });
+    expect(sessions.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  // Section pins and person pins sit on either side of the rail separator, so
+  // moves never cross it: route:sessions cannot move down, person:ada cannot move up.
   it.each([
     ["before", 1, "route:usage"],
-    ["after", 1, "person:ada"],
+    ["after", 0, "route:sessions"],
     ["remove", 0, "route:usage"],
     ["remove", 2, "person:ada"],
   ] as const)(
@@ -355,10 +443,10 @@ describe("sidebar rail pin menu", () => {
       await waitForSolid(() => expect(view.queryByRole("menu", { hidden: true })).not.toBeNull());
       const menu = view.getByRole("menu", { hidden: true });
       expect(menu.querySelector('[data-value="before"]')?.hasAttribute("disabled")).toBe(
-        index === 0,
+        index !== 1,
       );
       expect(menu.querySelector('[data-value="after"]')?.hasAttribute("disabled")).toBe(
-        index === 2,
+        index !== 0,
       );
       expect(menus.triggers.get("railPin")).toBe(trigger);
       menu.querySelector<HTMLButtonElement>(`[data-value="${action}"]`)!.click();
@@ -372,7 +460,7 @@ describe("sidebar rail pin menu", () => {
         expect(remove).toHaveBeenCalledExactlyOnceWith(target);
         expect(move).not.toHaveBeenCalled();
       } else {
-        expect(move).toHaveBeenCalledExactlyOnceWith("route:sessions", target, action);
+        expect(move).toHaveBeenCalledExactlyOnceWith(entries[index], target, action);
         expect(remove).not.toHaveBeenCalled();
       }
     },

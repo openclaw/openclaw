@@ -339,6 +339,7 @@ export async function executeFollowupTurn(params: {
   const inputAdmission = createReplyInputAdmission({
     followupRun: turn.queued,
     replyOperation: turn.operation,
+    runId: turn.runId,
     sourceTurnId,
     sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
     setEntry: (entry) => turn.session.publish(entry),

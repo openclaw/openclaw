@@ -1,7 +1,11 @@
+// Named imports let the Control UI use these features without the full server catalog.
+export const BOARD_WIDGET_PUT_CANVAS_DOC = "board-widget-put-canvas-doc";
+export const SYSTEM_AGENT_WIZARD_CANCEL = "openclaw-chat-wizard-cancel";
+
 /** Stable feature names advertised in Gateway hello responses. */
 export const GATEWAY_SERVER_CAPS = {
   AGENT_SESSION_ID_CREATE: "agent-session-id-create-v1",
-  BOARD_WIDGET_PUT_CANVAS_DOC: "board-widget-put-canvas-doc",
+  BOARD_WIDGET_PUT_CANVAS_DOC,
   /** Queue modes and exact input receipts, not active-backend injection availability. */
   CHAT_INPUT_CUSTODY: "chat-input-custody-v1",
   CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
@@ -47,7 +51,7 @@ export const GATEWAY_SERVER_CAPS = {
   SESSION_SETTINGS_CONTRACT: "session-settings-contract",
   SESSION_SETTINGS_CAS: "session-settings-cas-v1",
   SENDER_RESTRICTED_HIDDEN_HELPERS: "sender-restricted-hidden-helpers-v1",
-  SYSTEM_AGENT_WIZARD_CANCEL: "openclaw-chat-wizard-cancel",
+  SYSTEM_AGENT_WIZARD_CANCEL,
   SYSTEM_AGENT_SETUP_MODEL_REF: "openclaw-setup-model-ref",
   TASK_SUGGESTIONS_ACCEPT_MODES: "taskSuggestions.acceptModes",
   TALK_SESSION_CLOSE_DISPOSITION: "talk-session-close-disposition",

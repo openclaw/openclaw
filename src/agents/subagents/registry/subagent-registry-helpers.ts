@@ -282,7 +282,6 @@ export async function persistSubagentSessionTiming(
           storePath,
           sessionKey: childSessionKey,
           sessionId: persisted.sessionId,
-          expectedLifecycleRevision: persisted.lifecycleRevision,
         },
         runId: entry.runId,
         error: entry.execution.outcome?.error,

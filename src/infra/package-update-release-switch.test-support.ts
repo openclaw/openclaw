@@ -11,13 +11,18 @@ type ReleaseFixture = Pick<
   "prefix" | "globalRoot" | "slot"
 >;
 
-/** A verified candidate installed into its own release prefix, as npm leaves it. */
+/**
+ * A verified candidate installed into its own release prefix, as npm leaves it.
+ * With `stagePrefix` it is instead the stage of a prefix that keeps no releases,
+ * which the package swap installs.
+ */
 export async function stagePackageRelease(
   fixture: ReleaseFixture,
   version: string,
   build = `build-${version}`,
+  stagePrefix?: string,
 ): Promise<StagedPackageSwapParams> {
-  const prefix = await createPackageReleasePrefix(fixture.prefix, version);
+  const prefix = stagePrefix ?? (await createPackageReleasePrefix(fixture.prefix, version));
   const globalRoot = packageReleaseGlobalRoot(prefix);
   const packageRoot = path.join(globalRoot, "openclaw");
   fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
@@ -30,7 +35,7 @@ export async function stagePackageRelease(
     path.join(packageRoot, "dist", "build-info.json"),
     JSON.stringify({ buildId: build }),
   );
-  fs.mkdirSync(path.join(prefix, "bin"));
+  fs.mkdirSync(path.join(prefix, "bin"), { recursive: true });
   fs.symlinkSync("../lib/node_modules/openclaw/openclaw.mjs", path.join(prefix, "bin", "openclaw"));
   return {
     installTarget: createNpmTarget(fixture.globalRoot),
@@ -40,7 +45,7 @@ export async function stagePackageRelease(
       layout: { prefix, globalRoot, binDir: path.join(prefix, "bin") },
       packageRoot,
       installTarget: createNpmTarget(globalRoot),
-      release: { slot: fixture.slot, prefix: fixture.prefix },
+      ...(stagePrefix ? {} : { release: { slot: fixture.slot, prefix: fixture.prefix } }),
     },
   };
 }

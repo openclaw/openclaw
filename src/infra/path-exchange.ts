@@ -45,8 +45,12 @@ syscall($renameat2, -100, $ARGV[0], -100, $ARGV[1], 2) == 0 or die "renameat2: $
 
 type ExchangeRoute = { name: string; file: string; args: string[] };
 
+/** Whether this platform has an exchange call; `exchangePaths` can still report `unavailable`. */
+export const supportsPathExchange = () =>
+  process.platform === "darwin" || process.platform === "linux";
+
 function exchangeRoutes(first: string, second: string): ExchangeRoute[] {
-  if (process.platform !== "darwin" && process.platform !== "linux") {
+  if (!supportsPathExchange()) {
     return [];
   }
   const routes: ExchangeRoute[] = [];

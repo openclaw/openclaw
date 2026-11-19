@@ -1,21 +1,29 @@
 // This client-only card uses the signals export to keep its deferred runtime lazy.
 import { createDeferred } from "@solidjs/signals";
-import { createMemo, createSignal, Errored, isPending, Loading, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, isPending, Loading, onSettled, Show } from "solid-js";
 import type { ClawHubRecommendation } from "../../../../../src/shared/clawhub-recommendations.js";
+import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../../app/operator-access.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { WizardLogin } from "../../../components/wizard-login-controller.tsx";
 import { registerPluginManagementEnglish } from "../../../i18n/locales/en-plugin-management.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../../lib/gateway-methods.ts";
+import { resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
 import {
   loadPluginDiscoveryDetail,
+  type PluginInstallRequest,
   type PluginsInspectResult,
 } from "../../../lib/plugins/index.ts";
 import { useApplication } from "../../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ClawHubSkillDetail } from "../../../lib/skills/index.ts";
 import { loadSkillStatusReport } from "../../../lib/skills/status-report.ts";
+import { pluginInstallOperations } from "../../plugins/install-progress.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "../../plugins/plugin-icon-owner.ts";
-import { resolvePluginCatalogIconUrl } from "../../plugins/presentation.ts";
+import { createPluginMcpLogin } from "../../plugins/plugin-mcp-login.ts";
+import { installRequestForDiscoveryDetail } from "../../plugins/plugins-page-model.ts";
+import { resolvePluginCatalogIconUrl } from "../../plugins/presentation.tsx";
+import { installPluginFromChatCard } from "./chat-clawhub-card-install.ts";
 import { subscribeClawHubCardUpdates } from "./chat-clawhub-card-updates.ts";
 import type { ChatClawHubCardProps } from "./chat-clawhub-card.tsx";
 
@@ -29,12 +37,16 @@ type CardPresentation = Pick<
   pluginId?: string;
   author?: string;
   official: boolean;
+  inspection?: PluginsInspectResult;
 };
 type CardStatus = CardPresentation & {
   installed: boolean;
   canInstall: boolean;
-  /** An installed plugin still has an account this operator can sign in to. */
-  needsSignIn: boolean;
+  /** Official plugins install from this card; the plugin page installs every other one. */
+  install?: PluginInstallRequest;
+  restricted: boolean;
+  disabled: boolean;
+  connection?: "connected" | "connecting" | "sign-in";
 };
 type StatusRead =
   | { status: "empty" }
@@ -57,13 +69,7 @@ export function ChatClawHubCardBody(
     const current = status();
     return !statusPending() && current.status === "ready" ? current.result : undefined;
   };
-  const readFailure = () => {
-    const current = status();
-    if (!statusPending() && current.status === "failed") {
-      throw current.error;
-    }
-    return null;
-  };
+  const readFailed = () => !statusPending() && status().status === "failed";
   const state: {
     iconUrls: Record<string, string>;
     pluginIconUrls: Record<string, string>;
@@ -85,6 +91,33 @@ export function ChatClawHubCardBody(
   let controller: AbortController | undefined;
   let previousArgs: unknown[] = [];
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
+  const installations = pluginInstallOperations(context.gateway);
+  const mcpLogin = createPluginMcpLogin(
+    {
+      get client() {
+        return context.gateway.snapshot.client;
+      },
+      get snapshot() {
+        return context.gateway.snapshot;
+      },
+      capture: () => connection.capture(),
+      isCurrent: (scope) => connection.isCurrent(scope),
+    },
+    {
+      getDetail: () => {
+        const current = state.presentation;
+        return current?.pluginId && current.inspection
+          ? { pluginId: current.pluginId, inspection: current.inspection }
+          : null;
+      },
+      getName: () => state.presentation?.name,
+      refresh: async () => {
+        load(true);
+      },
+      // Sign-out remains on the Manage page; this card only starts authorization.
+      setMessage: () => {},
+    },
+  );
   const createIcons = (catalog: boolean) =>
     new PluginIconOwner({
       kind: catalog ? "catalog" : undefined,
@@ -111,6 +144,7 @@ export function ChatClawHubCardBody(
   }
   function presentCard(card: CardPresentation) {
     if (card.pluginId !== state.presentation?.pluginId) {
+      mcpLogin.reset();
       pluginIcons.reset();
     }
     state.presentation = card;
@@ -123,6 +157,7 @@ export function ChatClawHubCardBody(
   function load(force = false) {
     const snapshot = context.gateway.snapshot;
     if (connection.transition(snapshot)) {
+      mcpLogin.reset();
       resetIcons();
     }
     const card = props.recommendation;
@@ -167,9 +202,20 @@ export function ChatClawHubCardBody(
         try {
           const result = await (async (): Promise<CardStatus> => {
             if (card.kind === "plugin") {
-              const { plugin } = await loadPluginDiscoveryDetail(client, card.id, signal);
+              if (!hasOperatorReadAccess(snapshot.hello?.auth ?? null)) {
+                return {
+                  ...card,
+                  installed: false,
+                  canInstall: false,
+                  restricted: true,
+                  disabled: false,
+                };
+              }
+              const detail = await loadPluginDiscoveryDetail(client, card.id, signal);
+              const { plugin } = detail;
               signal.throwIfAborted();
               const pluginId = plugin.local.installed ? plugin.local.pluginId : undefined;
+              const admin = hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
               // The plugin page owns sign-in; only offer it where that page can start it.
               const inspection =
                 pluginId && canCallGatewayMethod(snapshot, "mcp.authLogin", "operator.admin")
@@ -188,11 +234,22 @@ export function ChatClawHubCardBody(
                 iconUrl: plugin.catalog.imageUrl,
                 pluginId: plugin.local.pluginId,
                 official: plugin.catalog.official,
+                inspection,
                 installed: plugin.local.installed,
-                canInstall: plugin.local.action === "install",
-                needsSignIn: Boolean(
-                  inspection?.mcpAuth?.some((server) => server.state !== "authorized"),
-                ),
+                canInstall: plugin.local.action === "install" && admin,
+                install:
+                  (admin && plugin.catalog.official && installRequestForDiscoveryDetail(detail)) ||
+                  undefined,
+                restricted: !admin,
+                disabled: plugin.local.installed && plugin.local.state === "disabled",
+                // These are configured MCP server connections, not universal plugin accounts.
+                connection: inspection?.mcpAuth?.length
+                  ? inspection.mcpAuth.some((server) => server.state === "pending-authorization")
+                    ? "connecting"
+                    : inspection.mcpAuth.some((server) => server.state !== "authorized")
+                      ? "sign-in"
+                      : "connected"
+                  : undefined,
               };
             }
             if (!agentId) {
@@ -223,11 +280,15 @@ export function ChatClawHubCardBody(
               official: detail.skill.isOfficial === true,
               installed,
               canInstall: detail.skill.isOfficial === true && !installed,
-              needsSignIn: false,
+              restricted: false,
+              disabled: false,
             };
           })();
           if (!current()) {
             return { status: "empty" };
+          }
+          if (result.installed) {
+            installations.reconcileInstalled(result.id, result.pluginId);
           }
           if (result.iconUrl && !state.iconUrls[result.iconUrl]) {
             catalogIcons.invalidate(result.iconUrl);
@@ -240,14 +301,28 @@ export function ChatClawHubCardBody(
       })(),
     );
   }
+  function onInstallProgress(event: { identity?: string; settled: boolean }) {
+    if (
+      !event.identity ||
+      event.identity === "install:" + state.presentation?.id ||
+      event.identity === "plugin:" + state.presentation?.pluginId
+    ) {
+      notify();
+      if (event.settled) {
+        load(true);
+      }
+    }
+  }
   onSettled(() => {
     // Connection edges retire request generations and icon URLs before later replies arrive.
     const stop = subscribeClawHubCardUpdates(context.gateway, document, load);
+    const stopInstallations = installations.subscribe(onInstallProgress);
     return () => {
       active = false;
       ++generation;
       controller?.abort();
       stop();
+      stopInstallations();
       connection.dispose();
       resetIcons();
     };
@@ -272,11 +347,169 @@ export function ChatClawHubCardBody(
           Boolean(current?.iconUrl && catalogIcons.isLoading(current.iconUrl)) ||
           (statusPending() && !current?.pluginId && !current?.iconUrl);
   };
+  const installProgress = () => {
+    read();
+    return (
+      installations.progress.get("install:" + props.recommendation?.id) ??
+      installations.progress.get("plugin:" + card()?.pluginId)
+    );
+  };
+  const installing = () =>
+    Boolean(installProgress() && installProgress()?.finishedAt === undefined);
+  const authState = () => mcpLogin.dialog.state();
+  const authorizing = () => authState().phase === "starting" || authState().phase === "step";
+  const authFailure = () =>
+    Boolean(card()?.inspection?.mcpAuth?.some((entry) => entry.state !== "authorized")) &&
+    (Boolean(mcpLogin.outcome()) || authState().phase === "error");
+  const authorizationUrl = () => {
+    const current = authState();
+    return current.phase === "step" && current.step.externalUrl
+      ? resolveSafeExternalUrl(current.step.externalUrl, window.location.href)
+      : undefined;
+  };
+  const interactiveAuth = () => {
+    const current = authState();
+    return current.phase === "step" && !(current.step.type === "note" && current.step.externalUrl);
+  };
+  const connect = () => {
+    const server = card()?.inspection?.mcpAuth?.find((entry) => entry.state !== "authorized");
+    if (server) {
+      void (authFailure() ? mcpLogin.retry(server.serverName) : mcpLogin.start(server.serverName));
+    }
+  };
+  let installAdmission = false;
+  async function install(request: PluginInstallRequest) {
+    const scope = connection.capture();
+    const id = props.recommendation?.id;
+    if (!scope || !id || installAdmission) {
+      return;
+    }
+    // The config queue admits the request later; a second click must not queue another.
+    // A click is the request: scrolling the card away does not withdraw it.
+    installAdmission = true;
+    const review = await installPluginFromChatCard(context, scope.client, request, id);
+    installAdmission = false;
+    if (review && connection.isCurrent(scope)) {
+      props.onOpenListing();
+    }
+  }
+  const statusLabel = () => {
+    if (installing()) {
+      return t("chat.clawhub.installing");
+    }
+    if (installProgress()?.failure) {
+      return installProgress()?.canRetry
+        ? t("chat.clawhub.installFailed")
+        : installProgress()?.failure?.title;
+    }
+    if (authorizing()) {
+      return t("chat.clawhub.connecting");
+    }
+    if (authFailure()) {
+      return t(
+        mcpLogin.outcome() === "cancelled"
+          ? "chat.clawhub.connectionCancelled"
+          : mcpLogin.outcome() === "expired"
+            ? "chat.clawhub.connectionExpired"
+            : "chat.clawhub.connectionFailed",
+      );
+    }
+    const result = readyStatus();
+    if (!result) {
+      return t("chat.clawhub.statusUnavailable");
+    }
+    if (!result.installed) {
+      return result.canInstall
+        ? t("chat.clawhub.readyToInstall")
+        : t(result.restricted ? "chat.clawhub.permissionRequired" : "chat.clawhub.unavailable");
+    }
+    return t(
+      result.disabled
+        ? "chat.clawhub.disabled"
+        : result.connection === "connecting"
+          ? "chat.clawhub.connecting"
+          : result.connection === "sign-in"
+            ? "chat.clawhub.signInNeeded"
+            : result.connection === "connected"
+              ? "chat.clawhub.connected"
+              : "pluginsPage.installed",
+    );
+  };
+  const primaryLabel = () => {
+    if (installing()) {
+      return t("chat.clawhub.installing");
+    }
+    if (authorizing()) {
+      return t("common.cancel");
+    }
+    if (authFailure()) {
+      return t("common.retry");
+    }
+    const progress = installProgress();
+    if (progress?.failure) {
+      return t(progress.canRetry ? "common.retry" : "chat.clawhub.manage");
+    }
+    if (readFailed() || !online()) {
+      return t("common.retry");
+    }
+    const result = readyStatus();
+    return result?.installed
+      ? t(
+          result.connection === "sign-in" && !result.disabled
+            ? "chat.clawhub.connect"
+            : "chat.clawhub.manage",
+        )
+      : result?.canInstall
+        ? t("pluginsPage.install")
+        : undefined;
+  };
+  const runPrimary = () => {
+    if (installing()) {
+      return;
+    }
+    if (authorizing()) {
+      mcpLogin.dialog.viewProps().onCancel?.();
+      return;
+    }
+    if (authFailure()) {
+      connect();
+      return;
+    }
+    const progress = installProgress();
+    const result = readyStatus();
+    // A finished attempt that cannot be retried, such as a policy review, continues on the page.
+    if (result?.install && !result.installed && online() && progress?.canRetry !== false) {
+      void install(result.install);
+      return;
+    }
+    if (progress?.failure) {
+      props.onOpenListing(progress.canRetry === true);
+      return;
+    }
+    if (readFailed() || !online()) {
+      if (!online()) {
+        context.gateway.connect();
+      }
+      load(true);
+      return;
+    }
+    if (result?.installed && result.connection === "sign-in" && !result.disabled) {
+      connect();
+    } else {
+      props.onOpenListing(!result?.installed && result?.canInstall === true);
+    }
+  };
+  const online = () => {
+    read();
+    return context.gateway.snapshot.phase === "connected";
+  };
   const statusSkeleton = (
-    <>
-      <span class="skeleton chat-clawhub-card__status-skeleton" aria-hidden="true" />
-      <span class="sr-only">{t("common.loading")}</span>
-    </>
+    <span class="chat-clawhub-card__status-skeleton">
+      <Show when={online()}>
+        <span class="btn__spinner" aria-hidden="true" />
+      </Show>
+      <span>{t(online() ? "chat.clawhub.checking" : "chat.clawhub.statusUnavailable")}</span>
+    </span>
   );
   return (
     <>
@@ -293,7 +526,9 @@ export function ChatClawHubCardBody(
           <div
             class="card chat-clawhub-card"
             data-clawhub-id={current().id}
-            aria-busy={statusPending() || iconPending() ? "true" : "false"}
+            aria-busy={
+              statusPending() || iconPending() || installing() || authorizing() ? "true" : "false"
+            }
           >
             <button
               class="chat-clawhub-card__listing"
@@ -301,7 +536,7 @@ export function ChatClawHubCardBody(
               onClick={() => props.onOpenListing()}
             >
               <span
-                class={["chat-clawhub-card__icon", { skeleton: iconPending() }]}
+                class={["chat-clawhub-card__icon muted", { skeleton: iconPending() }]}
                 aria-hidden="true"
               >
                 <Show
@@ -335,7 +570,7 @@ export function ChatClawHubCardBody(
                   <span>{current().name}</span>{" "}
                   <Show when={current().author}>
                     {(author) => (
-                      <span class="plugin-card-author">@{author().replace(/^@+/, "")}</span>
+                      <span class="plugin-card-author muted">@{author().replace(/^@+/, "")}</span>
                     )}
                   </Show>
                   <Show when={current().official}>
@@ -349,65 +584,122 @@ export function ChatClawHubCardBody(
                     </span>
                   </Show>
                 </span>
-                <Show when={current().description}>
-                  {(description) => <span class="card-sub">{description()}</span>}
-                </Show>
-              </span>
-            </button>
-            <div class="chat-clawhub-card__actions" aria-live="polite">
-              <Loading fallback={statusSkeleton}>
-                <Show when={statusPending()}>{statusSkeleton}</Show>
-                <Errored
-                  fallback={() => (
-                    <button
-                      type="button"
-                      class="btn chat-clawhub-card__dismiss"
-                      onClick={() => load(true)}
-                    >
-                      {t("chat.clawhub.retryStatus")}
-                    </button>
-                  )}
-                >
-                  {readFailure()}
-                </Errored>
-                <Show when={readyStatus()}>
-                  {(result) => (
+                <span class="chat-clawhub-card__status muted" aria-live="polite">
+                  <Loading fallback={statusSkeleton}>
                     <Show
-                      when={result().installed}
+                      when={
+                        statusPending() &&
+                        !installing() &&
+                        !authorizing() &&
+                        !authFailure() &&
+                        !installProgress()?.failure
+                      }
                       fallback={
-                        <button
-                          type="button"
-                          class="btn primary chat-clawhub-card__install"
-                          onClick={() => props.onOpenListing(readyStatus()?.canInstall === true)}
+                        <span
+                          class={[
+                            "chat-clawhub-card__status-content",
+                            { "chat-clawhub-card__installed": readyStatus()?.installed },
+                          ]}
                         >
-                          {t("pluginsPage.install")}
-                        </button>
+                          <Show
+                            when={
+                              (installing() ||
+                                authorizing() ||
+                                readyStatus()?.connection === "connecting") &&
+                              !readyStatus()?.disabled
+                            }
+                          >
+                            <span class="btn__spinner" aria-hidden="true" />
+                          </Show>
+                          <Show
+                            when={
+                              readyStatus()?.installed &&
+                              !installing() &&
+                              !authorizing() &&
+                              !authFailure() &&
+                              !installProgress()?.failure &&
+                              !readyStatus()?.disabled &&
+                              (!readyStatus()?.connection ||
+                                readyStatus()?.connection === "connected")
+                            }
+                          >
+                            <Icon name="check" style={{ width: "16px", height: "16px" }} />
+                          </Show>
+                          <span>{statusLabel()}</span>
+                        </span>
                       }
                     >
-                      <Show
-                        when={result().needsSignIn}
-                        fallback={
-                          <span class="chip chip-ok chat-clawhub-card__installed">
-                            <Icon name="check" />
-                            <span>{t("pluginsPage.installed")}</span>
-                          </span>
-                        }
-                      >
-                        <button
-                          type="button"
-                          class="btn primary chat-clawhub-card__sign-in"
-                          onClick={() => props.onOpenListing()}
-                        >
-                          {t("chat.clawhub.signIn")}
-                        </button>
-                      </Show>
+                      {statusSkeleton}
                     </Show>
+                  </Loading>
+                </span>
+              </span>
+            </button>
+            <div class="chat-clawhub-card__actions">
+              <Show when={!authorizing()}>
+                <button
+                  type="button"
+                  class="btn chat-clawhub-card__details"
+                  onClick={() => props.onOpenListing()}
+                >
+                  {t("chat.clawhub.details")}
+                </button>
+              </Show>
+              <Show when={authorizing() && authorizationUrl()}>
+                {(url) => (
+                  <a
+                    class="btn chat-clawhub-card__reopen"
+                    href={url()}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {t("chat.clawhub.reopenAuthorization")}
+                  </a>
+                )}
+              </Show>
+              <Loading>
+                <Show when={primaryLabel()}>
+                  {(label) => (
+                    <button
+                      type="button"
+                      class={[
+                        "btn primary",
+                        {
+                          "chat-clawhub-card__install":
+                            !installing() &&
+                            !installProgress()?.failure &&
+                            readyStatus()?.canInstall,
+                          "chat-clawhub-card__installing": installing(),
+                          "chat-clawhub-card__sign-in":
+                            readyStatus()?.connection === "sign-in" && !readyStatus()?.disabled,
+                          "chat-clawhub-card__retry":
+                            readFailed() ||
+                            !online() ||
+                            authFailure() ||
+                            Boolean(
+                              installProgress()?.failure?.title && installProgress()?.canRetry,
+                            ),
+                          "chat-clawhub-card__manage":
+                            readyStatus()?.installed && readyStatus()?.connection !== "sign-in",
+                        },
+                      ]}
+                      disabled={installing() || (authorizing() && mcpLogin.dialog.cancelling)}
+                      onClick={runPrimary}
+                    >
+                      {label()}
+                    </button>
                   )}
                 </Show>
               </Loading>
             </div>
           </div>
         )}
+      </Show>
+      <Show when={authorizing() && !interactiveAuth()}>
+        {mcpLogin.dialog.viewProps().cancellationFeedback}
+      </Show>
+      <Show when={interactiveAuth()}>
+        <WizardLogin controller={mcpLogin.dialog} />
       </Show>
     </>
   );

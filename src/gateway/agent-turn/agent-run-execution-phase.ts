@@ -1,11 +1,11 @@
 import {
   GATEWAY_CLIENT_CAPS,
+  isNativeAppUiClient,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
-import { isUserInitiatedAgentRunAbortReason } from "../../agents/run-termination.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import {
@@ -172,14 +172,16 @@ async function executeAgentRun(
       }
     };
     let mediaCleanup: Promise<void> | undefined;
-    const cleanupAdmittedRun = async () => {
+    let executionFailure: unknown;
+    const cleanupAdmittedRun = async (failure = executionFailure) => {
       const refsToDiscard = unpersistedOffloadedRefs;
       unpersistedOffloadedRefs = [];
       try {
         await releasePreparedAgentRunUserTurn(
           prepared.userTurn,
           "cancelled",
-          isUserInitiatedAgentRunAbortReason(abortController.signal.reason) ? true : undefined,
+          abortController.signal,
+          failure,
         );
       } catch (error) {
         diagnostics.warning("failed to settle pending agent input")(error);
@@ -372,7 +374,8 @@ async function executeAgentRun(
         const clientCaps = [...callerContext.GatewayClientCaps];
         const gatewayUiCommandTarget = captureGatewayUiCommandTarget(params.client);
         const supportsTaskSuggestions =
-          isOperatorUiClient(params.client?.connect.client) &&
+          (isOperatorUiClient(params.client?.connect.client) ||
+            isNativeAppUiClient(params.client?.connect.client)) &&
           params.client?.connect.scopes?.includes("operator.admin") === true &&
           hasGatewayClientCap(clientCaps, GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS);
         const gatewayContext = params.context.resolveGatewayContext?.();
@@ -553,6 +556,7 @@ async function executeAgentRun(
           ),
         );
       } catch (err) {
+        executionFailure = err;
         if (
           prepared.activeRunAbort.controller.signal.aborted &&
           (!dispatched || isAbortError(err))

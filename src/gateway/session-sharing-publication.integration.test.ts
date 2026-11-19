@@ -144,7 +144,7 @@ it.each([
                 mkdir: async (dir) => {
                   await mkdir(dir, { recursive: true });
                 },
-                readFile,
+                readFile: (file, signal) => readFile(file, { signal }),
                 statFile: (file) => readPersistedFileStat(file, isMissingPathError),
                 writeFile: async (file, content) => {
                   writes++;

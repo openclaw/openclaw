@@ -430,10 +430,6 @@ describe("Control UI build chunking", () => {
     const cronDomain = modulePath("../lib/cron/index.ts");
     const cronForm = modulePath("../lib/cron/form.ts");
     const cronSchedule = modulePath("../lib/cron/form-schedule.ts");
-    const cronModels = modulePath("../lib/cron/model-suggestions.ts");
-    const modelRefs = modulePath(
-      "../../../packages/model-catalog-core/src/configured-model-refs.ts",
-    );
     const cronStyle = modulePath("../styles/cron.css");
     const cronPagination = modulePath("../components/cron-jobs-pagination.tsx");
     const agents = modulePath("../pages/agents/agents-page.tsx");
@@ -601,7 +597,7 @@ describe("Control UI build chunking", () => {
       ],
       [
         cronView,
-        `import ${JSON.stringify(cronStyle)}; import { runLink } from ${JSON.stringify(cronRunLink)}; import { state } from ${JSON.stringify(cronDomain)}; import { models } from ${JSON.stringify(cronModels)}; import { pagination } from ${JSON.stringify(cronPagination)}; export function view() { return "overview" + runLink + state + models + pagination; } export const detail = () => import(${JSON.stringify(cronDetail)});`,
+        `import ${JSON.stringify(cronStyle)}; import { runLink } from ${JSON.stringify(cronRunLink)}; import { state } from ${JSON.stringify(cronDomain)}; import { pagination } from ${JSON.stringify(cronPagination)}; export function view() { return "overview" + runLink + state + pagination; } export const detail = () => import(${JSON.stringify(cronDetail)});`,
       ],
       [
         cronDomain,
@@ -612,11 +608,6 @@ describe("Control UI build chunking", () => {
         `import { validate } from ${JSON.stringify(validator)}; export const form = validate;`,
       ],
       [cronSchedule, 'export const schedule = "schedule";'],
-      [
-        cronModels,
-        `import { refs } from ${JSON.stringify(modelRefs)}; export const models = refs;`,
-      ],
-      [modelRefs, 'export const refs = "refs";'],
       [cronStyle, ".cron-fixture { color: maroon; }"],
       [cronPagination, 'export const pagination = "pagination";'],
       [validator, 'export const validate = "validate";'],
@@ -843,7 +834,6 @@ describe("Control UI build chunking", () => {
     const cronDetailChunk = chunkFor(cronDetail);
     expect(cronView in cronChunk.modules).toBe(true);
     expect(cronRunLink in cronChunk.modules).toBe(true);
-    expect([cronModels, modelRefs].every((id) => id in cronChunk.modules)).toBe(true);
     const domainChunk = chunkFor(cronDomain);
     expect(domainChunk.fileName).toContain("cron-domain");
     expect([cronForm, cronSchedule].every((id) => id in domainChunk.modules)).toBe(true);
@@ -981,6 +971,8 @@ describe("Control UI build chunking", () => {
     expect(bootGroup.test(`${repoRoot}/ui/src/components/app-sidebar-session-narration.ts`)).toBe(
       true,
     );
+    // Provider account labels belong to the opened picker, not either route's boot.
+    expect(bootGroup.test(`${repoRoot}/ui/src/lib/model-provider-auth-label.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-page.tsx`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/cron/cron-page.tsx`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/plugins/plugins-page.tsx`)).toBe(false);

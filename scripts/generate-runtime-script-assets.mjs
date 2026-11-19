@@ -15,9 +15,9 @@ import {
   REMOTE_WORKSPACE_MANIFEST_JS,
   WORKSPACE_MANIFEST_PROGRAM,
 } from "../src/gateway/worker-environments/workspace-sync-scripts.ts";
+import { runtimeProcessDependencyEntrypoints } from "../src/infra/runtime-process-dependency-manifest.ts";
 import { runtimeProcessEntrypoints } from "../src/infra/runtime-process-entrypoints.ts";
 import {
-  runtimeProcessDependencyEntrypoints,
   runtimeProcessExternalPackageEntrypoints,
   runtimeProcessScriptEntrypoints,
   runtimeProcessToolingEntrypoints,

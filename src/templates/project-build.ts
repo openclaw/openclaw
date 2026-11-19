@@ -1,7 +1,7 @@
 import { link, lstat, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolveFilesystemPath } from "../infra/home-dir.js";

@@ -591,6 +591,7 @@ export async function tryWriteCompletionCache(
   jsonMode: boolean,
   timeoutMs = COMPLETION_CACHE_WRITE_TIMEOUT_MS,
   nodeRunner = resolveNodeRunner(),
+  onFailure?: (reason: string) => void,
 ): Promise<"completed" | "failed" | "skipped"> {
   const binPath = fileURLToPath(resolveExternalPackageRuntimeEntrypointUrl("cliLauncher", root));
   const standalone = isStandaloneRuntimeExecutable(nodeRunner);
@@ -626,6 +627,7 @@ export async function tryWriteCompletionCache(
     }
     failure = String(error);
   }
+  onFailure?.(`Completion cache update failed${failure ? `: ${failure}` : ""}`);
   if (!jsonMode) {
     defaultRuntime.log(
       theme.warn(

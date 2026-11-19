@@ -159,9 +159,11 @@ suite.define(() => {
         await button("Refresh").click();
         await gateway.waitForRequest("x.allowlist.list", { after: retired });
         const pages = await openSidebarPages(page);
-        await pages.getByRole("link", { name: "Plugins", exact: true }).click();
+        await pages.getByRole("link", { name: "Customize", exact: true }).click();
         await surface.waitFor({ state: "detached" });
         await gateway.resolveDeferred("x.allowlist.list", added);
+        // Each choice closes the page menu; wait for that before reopening it.
+        await pages.waitFor({ state: "hidden" });
         await openSidebarPages(page);
         await pages.getByRole("link", { name: "X replies", exact: true }).click();
         await surface.getByText("@example_helper", { exact: true }).waitFor();

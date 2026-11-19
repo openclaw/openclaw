@@ -23,6 +23,7 @@ import {
   loadPendingFinalDeliveryPayload,
   markRequesterSettleWakePending,
   recordRequesterDelivery,
+  hasConsumedPrivateRequesterInput,
   resolveRequesterDeliveryOutcome,
 } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
@@ -153,10 +154,8 @@ function prepareBlockedSubagentCompletion(
   ) {
     return undefined;
   }
-  const consumed = resolveRequesterDeliveryOutcome([subagent], {
-    delivered: false,
-    path: "none",
-  })?.delivered;
+  // A block carries no turn outcome, so only the private rule can settle it as consumed.
+  const consumed = params.disposition !== "ambiguous" && hasConsumedPrivateRequesterInput(subagent);
   if (params.operatorAuthorityUnavailable) {
     subagent.suppressCompletionDelivery = true;
     subagent.requesterSettleWake = undefined;
@@ -195,14 +194,6 @@ function prepareBlockedSubagentCompletion(
     completion.capturedAt ??= retiredEndedAt;
   }
   const delivery = ensureDeliveryState(subagent);
-  if (
-    params.storeReplaced &&
-    (delivery.status === "delivered" ||
-      delivery.announcedAt !== undefined ||
-      delivery.deliveredAt !== undefined)
-  ) {
-    return undefined;
-  }
   delivery.payload ??= loadPendingFinalDeliveryPayload(subagent);
   if (typeof params.enqueuedAt === "number") {
     delivery.enqueuedAt ??= params.enqueuedAt;
@@ -211,10 +202,9 @@ function prepareBlockedSubagentCompletion(
     requesterDelivery:
       delivery.requesterDelivery?.state === "consumed" ? delivery.requesterDelivery : undefined,
     status: params.suspendedReason ? ("suspended" as const) : ("failed" as const),
-    disposition:
-      params.suspendedReason || params.storeReplaced
-        ? ("permanent_failure" as const)
-        : (params.disposition ?? delivery.disposition ?? "permanent_failure"),
+    disposition: params.suspendedReason
+      ? ("permanent_failure" as const)
+      : (params.disposition ?? delivery.disposition ?? "permanent_failure"),
     lastError: params.reason,
     deliveredAt: undefined,
     announcedAt: undefined,
@@ -225,9 +215,7 @@ function prepareBlockedSubagentCompletion(
     queueId: undefined,
   });
   Object.assign(subagent, { cleanupHandled: false, wakeOnDescendantSettle: undefined });
-  if (params.storeReplaced) {
-    subagent.requesterSettleWake = undefined;
-  } else if (params.suspendedReason) {
+  if (params.suspendedReason) {
     if (isCompletedRequesterDeliveryBlocked(subagent)) {
       // This requester already ran. An ordinary settle wake would replay it;
       // a separately owned yield batch still has genuine unfinished work.
@@ -276,14 +264,11 @@ function commitCompletionMutations(
 }
 
 function prepareRequesterBatch(
-  database: OpenClawStateDatabase,
   params: Extract<SubagentCompletionMutation, { kind: "requesterWake" | "requesterBatch" }>,
 ): Array<{ expected: SubagentRunRecord; subagent: SubagentRunRecord }> {
   const entries = params.entries;
-  const ids = new Set(entries.map(({ subagent }) => subagent.runId));
   const first = entries[0]?.subagent;
   const cohort = first?.requesterSettleWake?.batchRunIds?.toSorted().join("\0");
-  const checkedOmittedIds = new Set<string>();
   return entries.map(({ subagent: expected }) => {
     const changedOwner = () =>
       new Error("subagent completion owner changed before settlement: " + expected.runId);
@@ -299,25 +284,7 @@ function prepareRequesterBatch(
     ) {
       throw changedOwner();
     }
-    // Outcome settlement owns the whole frozen wave; quiet wake decisions may select
-    // current members without settling the remaining siblings' delivery outcomes.
-    for (const id of params.kind === "requesterBatch" &&
-    !(subagent.pauseReason === "sessions_yield" && subagent.requesterSettleWake.pauseNotice)
-      ? (subagent.requesterSettleWake?.batchRunIds ?? [])
-      : []) {
-      if (!ids.has(id) && !checkedOmittedIds.has(id)) {
-        const member = readSubagentRun(database, id);
-        if (
-          member?.requesterSettleWake &&
-          member.requesterSettleWake.rearmGeneration ===
-            subagent.requesterSettleWake?.rearmGeneration
-        ) {
-          throw changedOwner();
-        }
-        // Planning performs no writes, so this check holds for the remaining same-wave rows.
-        checkedOmittedIds.add(id);
-      }
-    }
+    // Admission owns the selected partition. Unselected siblings retain their outcomes.
     return { expected, subagent };
   });
 }
@@ -329,7 +296,7 @@ function mutateRequesterBatch(
   if (input.committed) {
     return reconcileRequesterWake(database, input);
   }
-  const batch = prepareRequesterBatch(database, input);
+  const batch = prepareRequesterBatch(input);
   const params =
     input.kind === "requesterBatch"
       ? {
@@ -372,7 +339,6 @@ function mutateRequesterBatch(
     if (consumeSubagentPauseNotice(subagent)) {
       // A notice is one paused member's input, not settlement of its frozen cohort.
       if (
-        params.outcome.storeReplaced ||
         params.outcome.disposition === "intentional_non_delivery" ||
         params.outcome.reason === "operator_authority_unavailable"
       ) {
@@ -404,8 +370,6 @@ function mutateRequesterBatch(
             subagent: expected,
             reason: params.outcome.error ?? params.outcome.reason ?? "requester settle wake failed",
             disposition: params.outcome.disposition,
-            storeReplaced: params.outcome.storeReplaced,
-            suspendedReason: params.outcome.storeReplaced ? "permanent_failure" : undefined,
           },
           now,
           subagent,

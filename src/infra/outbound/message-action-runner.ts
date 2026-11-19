@@ -61,6 +61,7 @@ import {
   waitForLocalMessageMedia,
   normalizeSandboxMediaParams,
   parseJsonMessageParam,
+  requirePresentationTableCaptions,
   resolveAttachmentMediaPolicy,
   resolveExtraActionMediaSourceParamKeysAsync,
 } from "./message-action-params.js";
@@ -536,6 +537,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
       ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: cfg })
       : undefined);
   parseJsonMessageParam(params, "presentation");
+  requirePresentationTableCaptions(params);
   parseJsonMessageParam(params, "delivery");
   parseJsonMessageParam(params, "interactive");
 

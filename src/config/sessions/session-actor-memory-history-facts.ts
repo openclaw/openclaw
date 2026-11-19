@@ -46,7 +46,10 @@ import {
   isIndexedSessionEntry,
 } from "./session-entry-codec.js";
 import { extractSessionBranchHeadline } from "./session-message-cut-content.js";
-import { readSessionTranscriptAccountingTail } from "./session-transcript-accounting-policy.js";
+import {
+  readSessionTranscriptAccountingTail,
+  selectSessionTranscriptAccountingTail,
+} from "./session-transcript-accounting-policy.js";
 import { SQLITE_USAGE_TAIL_MAX_EVENTS } from "./session-transcript-accounting.types.js";
 import type {
   SessionTranscriptMaintenanceFacts,
@@ -557,11 +560,13 @@ export function readSessionActorMemoryHistoryFacts(
             }
           : {}),
         ...(options.includeUsage || options.includeTurnTaint
-          ? readSessionTranscriptAccountingTail((visit) => {
-              for (let index = tail.length - 1; index >= 0; index -= 1) {
-                visit(tail[index]!.event);
-              }
-            }, options)
+          ? readSessionTranscriptAccountingTail(
+              selectSessionTranscriptAccountingTail(tail, (row) => row.event)
+                .toReversed()
+                .map((row) => row.event),
+              options,
+              tail.length,
+            )
           : {}),
       };
     }

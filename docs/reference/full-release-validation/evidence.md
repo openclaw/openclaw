@@ -101,6 +101,49 @@ and short reason; optional `targetSha` and `evidence: { runId, runAttempt }` res
 candidate/execution. Checked-in list is authoritative; retain release-specific
 authorization/diagnostics in PR or handoff.
 
+For a newly approved job waiver, default to the exact release version, child
+role, and job across all future FRV runs, attempts, and candidates for that
+release. Omit `evidence` and `targetSha` restrictions unless the operator
+explicitly limits the approval. Reserve attempt-specific waivers for
+exceptionally high-risk cases where only the reviewed execution is accepted;
+record the risk and the explicit limit in the PR or handoff. A diagnostic run
+ID is evidence of the original failure, not a reason to restrict an ordinary
+waiver to that attempt. This default does not broaden existing grants or waive
+other jobs, versions, required execution, or evidence-integrity checks.
+
+A `testFailures` entry additionally requires the sole failed step and the complete
+ordered set of exact test/error signatures from the native test-evidence parser.
+The verifier reads the original leaf log and requires completed invocation
+evidence before accepting it. Changed or additional errors, incomplete logs, and
+setup failures remain blocking; aggregate causes are also checked exactly. The historical
+2026.11.10-beta.1 signature grants cover only the MCP listener collision and cron
+pre-output assertion in CI 44290065577/1. Separate FRV16 job-level grants accept
+the ten observed CI failures in 44465881623/1 and the core QA runtime-pair failure
+in 44465878180/1, only for candidate
+`995f9059b6e6fe3ba0865a3354924fd2bcbfceea`. These retain unresolved runtime, worker,
+UI, and cron uncertainty, not a claim of fixes or passing tests. Their aggregates
+require the exact observed causes and failed steps; the silent QA status-check
+aggregate additionally requires the SHA-256 of its complete reviewed original
+log. The November 19, 10:12 UTC authorization extends these grants to the eight
+additional observed CI failures in FRV17: Node large shards 17, 19, 20, 21, and 43,
+Node small shard 12, Bun large shard 39, and UI shard 4/13. The focused
+chat-permissions test passed on the unchanged candidate under Bun, including
+private-message and access-revocation assertions; its original failure remains
+unexplained. The remaining new failures are a browser-download infrastructure
+timeout and suspected timing failures, not proven harmless flakes. These grants
+apply across runs and attempts for the same release, candidate, and named jobs.
+Different candidates and additional failed jobs are not granted. Cancelled,
+timed-out, or incomplete jobs remain coverage gaps, not accepted failures.
+
+Changing P alone does not invalidate retained evidence for unchanged C/Q, coverage,
+inputs, and source digests. With reuse enabled, admitted P reevaluates sealed child
+receipts, including failures covered by current exact waivers. Accepted receipts
+return before dispatching another child workflow; a required initial run is still
+necessary. Failed parents without final manifests are recovered through child
+receipts, not relabeled successful. The fresh parent still must complete admission,
+collection, and final verification. Missing, expired, or incompatible evidence
+requires fresh work.
+
 Land policy, pin P, run/revalidate FRV with unchanged C/Q. Candidate workflows must
 route state operations to admitted P; changing P cannot retrofit old workflows.
 State/manifest/summary retain raw failures/reasons. Grants neither skip tests nor
@@ -125,50 +168,25 @@ FRV must conclude **success** under pinned policy before publication; publishers
 waive failed FRV or change P only at publication. Beta confidence deferrals remain
 separate **not run** records.
 
-## Receipt-backed beta aggregate recovery
+<a id="receipt-backed-beta-aggregate-recovery" />
 
-If a full beta's original plan artifact is unavailable,
-`.github/workflows/full-release-receipt-recovery.yml` is an explicit trusted-main
-operation—not restoration/reinterpretation of historical plan, observations, or failure.
+## Receipt-backed aggregate recovery
 
-- Closed `openclaw.full-release-receipt-recovery/v1` input: new request UUID, repository,
-  original qualification-admission descriptor, parent run/attempt, complete sealed
-  candidate binding, all five original beta child selections, original publication
-  descriptors. Preserve the originally admitted C/Q tuple; original publication
-  selection, complete coverage, and frozen upgrade baselines remain authoritative.
-  No new test selection/current-registry baseline resolution.
-- Authenticate original admission/dispatches, current policy-passing child attempts and
-  complete composite receipts, sealed candidate/package bytes, all npm/SDK/plugin/Docker
-  producer receipts/payload digests. Only admission-authenticated version selects P-owned
-  waivers. Recheck exact aggregate causes, retain raw conclusions, seal matched waivers;
-  strict readers recompute and reject added/omitted grants. Reused children keep dispatch
-  origin; verify original parent's exact reuse-digest witness with ordinary aggregation
-  validator. Ordinary green-only child reuse is unchanged.
-- Missing payloads, incomplete history, changed attempts, or lost authority fail closed.
-  Per-child complete rerun-history budget: ten minutes; ordinary reuse: two. Job-inventory
-  timeouts/retry limits unchanged. No test/preparation dispatch; Actions/content read-only.
-  Install only trusted P dependencies with lifecycle scripts disabled; never build/execute C.
-- Existing publication-admission owner uses current trusted P to read committed candidate
-  metadata and collect newly timestamped registry observations. Successful aggregate
-  records separate source/admission and original receipt request. Strict readers verify
-  workflow, upload order, observation bytes, current operator authority, original evidence,
-  trusted-main lineage. Publishers use unchanged Q-owned artifacts; P owns aggregation
-  and current admission. Never relabel original parent successful; historical validation
-  and plan restoration are unchanged.
-- Producer hashes/inspects original payloads once and seals exact inventory. Readers
-  authenticate successful recovery job, ordered uploads, observations; reconstruct full
-  inventory from original descriptors, small manifests, live artifact metadata and require
-  exact match. No repeated bulk npm/SDK/Docker/candidate downloads per plugin publisher.
-  Fresh bounded plugin listing replaces per-package metadata requests only within that
-  authentication, not immutable replay. Selected consumers still download/verify original
-  bytes; current producer attempts, expiry, authority remain mandatory. Immutable replay
-  contains raw small evidence only, with unchanged limits.
-- Parsed payloads retain archive size/integrity limits. Opaque Docker and candidate
-  image/registry archives stream SHA-256 over every byte, without retaining/expanding;
-  authenticated metadata size is exact transfer bound. Recovery Docker transfers share
-  four minutes across at most three attempts, rather than sixty seconds each. Metadata
-  and other archive callers retain sixty-second caps. Binding, expiry, exact size, and
-  full digest remain mandatory; missing/mismatched bytes never permit omission/rebuilding.
+After a reviewed tooling-only repair, recover the original qualification receipts without
+rerunning tests or rebuilding publication artifacts:
+
+```bash
+pnpm frv recover --run <original-parent-run-id> --workflow-sha <exact-trusted-main-P> --request-file <private-request-path>
+pnpm frv recover --reconcile-request <private-request-path> --json
+```
+
+The new aggregate authenticates the original admission, C/Q, complete child receipts,
+and unchanged npm/SDK/plugin/Docker bytes under current P policy. It never changes the
+original parent result. Qualification retains attempt 1; the request separately pins
+the latest terminal parent attempt. Missing evidence, changed attempts, or lost authority
+fail closed. Keep the private request: reconciliation never redispatches an uncertain
+request. Recovery supports the originally admitted beta, stable, full, or extended-stable
+publication selection; ordinary qualification remains unchanged.
 
 ## Workflow files
 

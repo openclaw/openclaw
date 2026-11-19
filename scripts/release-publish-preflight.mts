@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { normalizePublicationIntent } from "./full-release-publication-contract.mjs";
+import { isFrv18Parent } from "./lib/frv18-publication-exception.mjs";
 import {
   fetchNpmRegistryPackumentWithRetry,
   resolveNpmPublishPlan,
@@ -47,6 +48,7 @@ import { validateRetiredLineReason } from "./lib/release-version.mjs";
 import { verifyReleasePreflightToolingIdentity } from "./npm-preflight-tooling-identity.mjs";
 import { validateNpmPublishBoundary } from "./openclaw-npm-extended-stable-release.mjs";
 import { verifyOpenClawNpmResumeRun } from "./openclaw-npm-resume-run.mts";
+import { loadPublicationParentEvidence } from "./release-ci-summary.mjs";
 import { authenticateFullReleaseValidationEvidence } from "./validate-full-release-validation-evidence.mjs";
 
 type PreflightContext = {
@@ -290,7 +292,7 @@ export async function runReleasePublishPreflight(
   if (evidenceRequired) {
     const run = await check(
       "validation.run",
-      "Exact successful validation attempt selected.",
+      "Exact qualification attempt selected; strict publication verification follows.",
       "Supply the successful Full Release Validation run and exact attempt; use pnpm frv status --run <id> to inspect.",
       () => {
         if (!POSITIVE_ID.test(options.fullReleaseValidationRunId)) {
@@ -301,8 +303,8 @@ export async function runReleasePublishPreflight(
           "validation run",
         );
         if (
-          selectedRun.status !== "completed" ||
-          selectedRun.conclusion !== "success" ||
+          (!isFrv18Parent(selectedRun, options.repo) &&
+            (selectedRun.status !== "completed" || selectedRun.conclusion !== "success")) ||
           !POSITIVE_ID.test(String(selectedRun.run_attempt))
         ) {
           throw new Error("Validation run is not completed/success with an exact attempt.");
@@ -319,9 +321,18 @@ export async function runReleasePublishPreflight(
     if (!manifest && run) {
       manifest = await check(
         "validation.manifest",
-        "Validation manifest downloaded once.",
+        "Authenticated qualification evidence acquired.",
         "Restore the exact unexpired full-release-validation-<run>-<attempt> artifact.",
-        () => {
+        async () => {
+          if (isFrv18Parent(run, options.repo)) {
+            const acquired = await loadPublicationParentEvidence({
+              client,
+              repository: options.repo,
+              runId: options.fullReleaseValidationRunId,
+              preloadedRun: run,
+            });
+            return requirePreflightRecord(acquired.manifestJson, "validation manifest");
+          }
           const loaded = client.loadManifest(options.fullReleaseValidationRunId, Number(attempt));
           if (!loaded) {
             throw new Error("Full Release Validation manifest artifact is missing.");
@@ -496,7 +507,7 @@ export async function runReleasePublishPreflight(
       warn(
         "plugin-npm.token-liveness",
         `${registry.bootstrapCandidates.length} package(s) are not visible in npm and may need the repository NPM_TOKEN bootstrap path; token liveness is unverified locally.`,
-        "Run the isolated npm whoami --registry=https://registry.npmjs.org probe documented in .agents/skills/release-openclaw-maintainer/references/publication-recovery.md#check-the-bootstrap-token using the exact repository secret. A local login or secret updated_at is not proof. Do not publish or rotate credentials during preflight.",
+        "Ask the release credential owner to confirm NPM_TOKEN readiness; see .agents/skills/release-openclaw-maintainer/references/publication-recovery.md#check-the-bootstrap-token. Do not publish or rotate credentials during preflight.",
       );
     }
   }
