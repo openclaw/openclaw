@@ -286,7 +286,8 @@ export async function compileNativeProject({
  * Emit declarations in one compiler command-line pass. The compiler reads the checkout
  * directly, which is several times faster than routing each read through the API
  * filesystem callbacks, and it may check and emit in parallel: repeated parallel emits
- * are byte-identical. Inputs come from --listFiles and must stay inside the checkout.
+ * are byte-identical. Inputs come from --listFiles and must stay inside the checkout;
+ * returns undefined when the compiler read a path outside it.
  * Failed resolution probes are not reported; callers key caches on the namespace
  * topology and every manifest and tsconfig instead.
  */
@@ -383,6 +384,18 @@ async function compileDeclarationsWithCompilerCli({
       : /\r?\n/u;
     const lines = compiled.output.replace(/\r?\n$/u, "").split(separator);
     const read = lines.filter((line) => path.isAbsolute(line) && fs.existsSync(line));
+    // Published SDK declarations probe `../`-relative node_modules paths several levels up.
+    // In a checkout nested inside another install (an updater's preflight worktree) they
+    // reach the outer install, which an isolated checkout would not see. Discard the pass;
+    // the bounded compile treats outside paths as absent. In-checkout links that escape
+    // still fail at admission there and below.
+    const outside = read.some((file) => {
+      const relative = path.relative(root, boundary.resolve(file));
+      return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+    });
+    if (outside) {
+      return undefined;
+    }
     const inputs = [...new Set(read.map((file) => admit(file)))].toSorted();
     if (compiled.failure) {
       const diagnostics = lines.filter((line) => !read.includes(line)).join("\n");
@@ -414,19 +427,22 @@ export async function emitNativeDeclarations(
   if (!options.roots.length) {
     return { inputs: [], declarations };
   }
+  const bounded = () =>
+    compileNativeProject({
+      ...options,
+      compilerOptions: {
+        ...options.compilerOptions,
+        rootDir: fs.realpathSync.native(options.cwd),
+        declarationMap: true,
+      },
+    });
   // API baselines check only declaration diagnostics, sometimes with a historical
   // compiler; the command line reports every diagnostic, so they keep the API path.
+  // A command-line pass that read outside the checkout is redone behind the API filesystem.
   const compilation =
     options.diagnostics === "declarations"
-      ? await compileNativeProject({
-          ...options,
-          compilerOptions: {
-            ...options.compilerOptions,
-            rootDir: fs.realpathSync.native(options.cwd),
-            declarationMap: true,
-          },
-        })
-      : await compileDeclarationsWithCompilerCli(options);
+      ? await bounded()
+      : ((await compileDeclarationsWithCompilerCli(options)) ?? (await bounded()));
   const inputs = new Set(compilation.inputs);
   for (const [file, output] of compilation.outputFiles) {
     if (!/\.d\.[cm]?ts$/u.test(file)) {
