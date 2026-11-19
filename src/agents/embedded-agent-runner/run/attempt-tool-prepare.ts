@@ -16,8 +16,10 @@ import {
   readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
+import { gateAgentToolExecution } from "../../agent-tool-availability.js";
 import { createOpenClawCodingToolsInternalAsync } from "../../agent-tools.async.js";
 import { assertMemoryFlushPersistenceToolAvailable } from "../../agent-tools.memory-flush.js";
+import { formatScheduledRunToolRefusal } from "../../agent-tools.turn-authority.js";
 import { getChannelAgentToolMeta } from "../../channel-tool-metadata.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
@@ -42,6 +44,7 @@ import {
 } from "../../tool-fs-policy.js";
 import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
 import { toolPolicyRestrictsTools } from "../../tool-policy.js";
+import { listsFixedToolSet } from "../../tool-search-config.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-protocol.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import type { ComputerContextEpoch } from "../../tools/computer-tool.js";
@@ -123,12 +126,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const toolsAllowWithForcedRuntimeTools = toolRunContext.runtimeToolAllowlist;
   const toolsEnabled = supportsModelTools(attempt.model);
   const isRawModelRun = attempt.modelRun === true || attempt.promptMode === "none";
-  const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
-    disableTools: attempt.disableTools,
-    isRawModelRun,
-    toolsEnabled,
-    toolsAllow: toolsAllowWithForcedRuntimeTools,
-  });
   const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntimeCore({
     config: attempt.config,
     trigger: attempt.trigger,
@@ -156,6 +153,17 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     toolSearchControlsEnabled: toolSearchControlsEnabledForRun,
     toolSearchRuntimeConfig,
   } = toolSurfaceRuntime.plan;
+  // A scheduled allowlist refuses the calls it does not name instead of narrowing the listing.
+  const scheduledToolsAllowGated =
+    attempt.trigger === "cron" &&
+    attempt.toolsAllow !== undefined &&
+    listsFixedToolSet(toolSearchConfig, toolSearchControlsEnabledForRun);
+  const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
+    disableTools: attempt.disableTools,
+    isRawModelRun,
+    toolsEnabled,
+    toolsAllow: scheduledToolsAllowGated ? undefined : toolsAllowWithForcedRuntimeTools,
+  });
   if (isCodeModeDiagnosticEnabled()) {
     logCodeModeDiagnostic(log, "activation", {
       runId: attempt.runId,
@@ -437,6 +445,14 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       constructedToolsRaw = applyEmbeddedAttemptToolsAllow(boundTools, effectiveToolsAllow, {
         toolMeta: (tool) => getPluginToolMeta(tool),
       });
+      if (scheduledToolsAllowGated) {
+        const allowed = new Set(constructedToolsRaw);
+        constructedToolsRaw = boundTools.map((tool) =>
+          allowed.has(tool)
+            ? tool
+            : gateAgentToolExecution(tool, formatScheduledRunToolRefusal(tool.name)),
+        );
+      }
       params.markCoreToolStage("attempt:tools-allow");
     }
     const toolsRaw = constructedToolsRaw;

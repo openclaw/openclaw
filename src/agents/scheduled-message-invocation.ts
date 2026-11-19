@@ -53,10 +53,13 @@ export function createEmbeddedMessageInvocationPolicy(params: {
   };
   isAvailable: () => boolean;
 }) {
-  const resolvePolicies = (capabilityProfile: ResolvedConversationCapabilityProfile) =>
+  const resolvePolicies = (
+    capabilityProfile: ResolvedConversationCapabilityProfile,
+    listingAlsoAllow: readonly string[] = [],
+  ) =>
     resolveConversationToolPolicies({
       capabilityProfile,
-      additionalProfileAllow: params.runtimeProfileAlsoAllow,
+      additionalProfileAllow: [...params.runtimeProfileAlsoAllow, ...listingAlsoAllow],
       additionalPolicyAllow: params.toolSearchControlAllowlist,
     });
   const policies = resolvePolicies(params.capabilityProfile);
@@ -65,9 +68,13 @@ export function createEmbeddedMessageInvocationPolicy(params: {
     onFilter?: (event: ToolPolicyFilterEvent) => void,
     // Listing retains the requester's own ceiling; completion replay only gates calls.
     scope: "turn" | "session" = "turn",
+    // A fixed listing also offers tools this turn's own facts withhold; the turn gates them.
+    listing?: { profileAlsoAllow: readonly string[]; includeRuntimeToolPolicy: boolean },
   ): AnyAgentTool[] => {
     const currentPolicies =
-      currentProfile === params.capabilityProfile ? policies : resolvePolicies(currentProfile);
+      currentProfile === params.capabilityProfile && !listing
+        ? policies
+        : resolvePolicies(currentProfile, listing?.profileAlsoAllow);
     const { tools, declaredToolAllowlist, unavailableCoreToolReason } = params.catalog();
     return applyToolPolicyPipeline({
       tools,
@@ -88,7 +95,7 @@ export function createEmbeddedMessageInvocationPolicy(params: {
               ? params.capabilityProfile.policy.sessionInheritedToolPolicy
               : policies.inheritedToolPolicy,
         },
-        includeRuntimeToolPolicy: true,
+        includeRuntimeToolPolicy: listing?.includeRuntimeToolPolicy ?? true,
         unavailableCoreToolReason,
       }),
       declaredToolAllowlist,

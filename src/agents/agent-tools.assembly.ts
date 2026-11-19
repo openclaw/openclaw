@@ -49,7 +49,11 @@ import {
   getActiveAgentRingZeroTools,
   mergeAgentRingZeroTools,
 } from "./agent-tools.ring-zero-context.js";
-import { isHostSystemTurn, resolveTurnToolSurface } from "./agent-tools.turn-authority.js";
+import {
+  formatScheduledRunToolRefusal,
+  isHostSystemTurn,
+  resolveTurnToolSurface,
+} from "./agent-tools.turn-authority.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { resolveAutomationsRunScope } from "./automations-run-scope.js";
 import { registerOneShotExecScopeCleanup } from "./bash-process-control.js";
@@ -81,6 +85,7 @@ import { applySwarmCollectorToolContract } from "./subagents/swarm/swarm-collect
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import type { ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
 import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
+import { listsFixedToolSet } from "./tool-search-config.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "./tool-search-protocol.js";
 import { createToolSearchTools, resolveToolSearchConfig } from "./tool-search.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
@@ -136,6 +141,10 @@ export function* assembleOpenClawCodingTools(
   const toolSearchControlAllowlist = toolSearchControlsEnabled
     ? [...TOOL_SEARCH_CONTROL_TOOL_NAMES]
     : [];
+  // One listing per session: `message` is always offered; a scheduled allowlist gates calls.
+  const fixedListing = listsFixedToolSet(toolSearchConfig, toolSearchControlsEnabled)
+    ? { profileAlsoAllow: ["message"], includeRuntimeToolPolicy: options?.trigger !== "cron" }
+    : undefined;
   const runtimeToolAllowlistIncludesMessage = expandToolGroups(
     options?.runtimeToolAllowlist ?? [],
   ).some((toolName) => {
@@ -379,7 +388,8 @@ export function* assembleOpenClawCodingTools(
     ...(runtimePluginToolGrant
       ? { runtimePluginToolOwnerId: runtimePluginToolGrant.pluginId }
       : {}),
-    disableMessageTool: options?.disableMessageTool || options?.swarmCollector,
+    disableMessageTool:
+      options?.swarmCollector || (options?.disableMessageTool === true && !fixedListing),
     requesterAgentIdOverride: executionAgentId,
   };
   const pluginToolsOnly = filterToolsByClientCaps(
@@ -578,17 +588,33 @@ export function* assembleOpenClawCodingTools(
       ),
       options?.config,
     );
+  const handoff = capabilityProfile.policy.requesterPolicySource === "completion-handoff";
   const {
     tools: authorizedTools,
     turnAuthorized,
     callableTools,
     exportedTools,
   } = resolveTurnToolSurface({
-    turnTools: completeTurnTools(messageInvocationPolicy.filter(capabilityProfile, onPolicyFilter)),
+    turnTools: completeTurnTools(
+      messageInvocationPolicy.filter(capabilityProfile, onPolicyFilter),
+    ).filter((tool) => tool.name !== "message" || options?.disableMessageTool !== true),
     sessionTools:
-      capabilityProfile.policy.requesterPolicySource === "completion-handoff"
-        ? completeTurnTools(messageInvocationPolicy.filter(capabilityProfile, undefined, "session"))
+      handoff || fixedListing
+        ? completeTurnTools(
+            messageInvocationPolicy.filter(
+              capabilityProfile,
+              undefined,
+              handoff ? "session" : "turn",
+              fixedListing,
+            ),
+          )
         : undefined,
+    outsideTurnReason: handoff
+      ? undefined
+      : (name) =>
+          name === "message"
+            ? "message cannot send on this turn: its reply delivery or tool policy does not allow the message tool. Do not retry message."
+            : formatScheduledRunToolRefusal(name),
     ownerOnlyDenied: new Set(ownerOnlyCoreToolDenylist),
     ownerToolCurrentAssertion: sessionToolAccess.ownerToolCurrentAssertion,
     hostSystemTurn: isHostSystemTurn(options ?? {}),

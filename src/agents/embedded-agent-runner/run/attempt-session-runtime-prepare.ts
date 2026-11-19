@@ -18,7 +18,6 @@ import {
   sessionManagerReadTranscriptBranch,
 } from "../../sessions/session-manager-view-types.js";
 import { resolveToolSearchConfig } from "../../tool-search-config.js";
-import { applyUsageRankedMcpToolSearchDirectory } from "../../tool-search.js";
 import {
   readToolUsageRankingSnapshot,
   type ToolUsageRankingSnapshot,
@@ -304,8 +303,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           const previousRanking = usageRanking;
           await prepareUsageRanking();
           if (usageRanking !== previousRanking) {
-            // A refreshed snapshot starts a new series: re-pin the tool definitions, including
-            // the ranked MCP directory, before the first request that uses it.
+            // A refreshed snapshot starts a new series: re-pin the tool definitions before
+            // the first request that uses it.
             sessionTools.refresh?.();
           }
           if (usageRanking !== previousRanking && systemPrompt.prepareToolPrompt) {
@@ -363,12 +362,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           toolPolicy: toolPolicyDigest,
           entries: sessionManager[sessionManagerReadTranscriptBranch](),
           historyBoundaryCount: sessionManager.getBoundaryCount(),
-          // The pin freezes this description with the series, like the ranking itself.
-          tools: applyUsageRankedMcpToolSearchDirectory(
-            tools,
-            toolSearchCatalogRef?.current,
-            usageRanking,
-          ),
+          tools,
         });
         if (sessionPromptState.pendingToolSurface !== pending) {
           declarePromptToolPin(attempt);

@@ -23,6 +23,11 @@ export function isHostSystemTurn(params: {
   return params.trigger === "event" && params.inputProvenance?.kind === "internal_system";
 }
 
+/** A scheduled run's allowlist refuses the listed tools it does not name. */
+export function formatScheduledRunToolRefusal(toolName: string): string {
+  return `${toolName} is outside the tools this scheduled run allows. Do not retry ${toolName}.`;
+}
+
 /**
  * Offers the session's tool surface on every turn, so the provider prompt prefix
  * stays cacheable, and gates the calls this turn's authority does not cover.
@@ -34,6 +39,8 @@ export function resolveTurnToolSurface(params: {
   turnTools: AnyAgentTool[];
   /** The session surface, when per-turn policy narrows it; defaults to `turnTools`. */
   sessionTools?: AnyAgentTool[];
+  /** Refusal for a listed tool the turn's policy omits; defaults to the completion-handoff text. */
+  outsideTurnReason?: (toolName: string) => string;
   ownerOnlyDenied: ReadonlySet<string>;
   ownerToolCurrentAssertion?: (toolName: string) => (() => void) | undefined;
   /**
@@ -71,7 +78,8 @@ export function resolveTurnToolSurface(params: {
     const gated = gateAgentToolExecution(
       tool,
       !turnTool
-        ? `${tool.name} is not available during a child-completion turn because it is outside the authority carried from its requester. Do not retry ${tool.name}.`
+        ? (params.outsideTurnReason?.(tool.name) ??
+            `${tool.name} is not available during a child-completion turn because it is outside the authority carried from its requester. Do not retry ${tool.name}.`)
         : scopedReads
           ? `On this system-started turn, ${tool.name} runs only the ${CRON_SCOPED_READ_ACTIONS.join(", ")} actions. Other actions need the owner's authority, and this turn was not started by the owner. Do not retry them.`
           : `${tool.name} needs the owner's authority, and this turn was not started by the owner. ${

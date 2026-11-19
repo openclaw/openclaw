@@ -5,6 +5,11 @@ import { MAX_TOOL_SEARCH_RESULTS, type ToolSearchConfig } from "./tool-search-pr
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 20;
 
+/** In `tools` mode without selectors, a session lists one tool set; turn facts only gate calls. */
+export function listsFixedToolSet(config: ToolSearchConfig, controlsEnabled: boolean): boolean {
+  return controlsEnabled && config.mode === "tools" && !config.include && !config.exclude;
+}
+
 export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConfig {
   const setting = config?.tools?.toolSearch;
   const raw: Exclude<AuthoredToolSearchConfig, boolean> =

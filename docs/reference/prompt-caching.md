@@ -59,6 +59,26 @@ restart recovery). A tool that a later turn builds but the series did not send
 waits for the next series; a pinned tool that a turn did not build stays listed
 and refuses its calls. A tool or plugin configuration change starts a new pin.
 
+With Tool Search on (`tools.toolSearch` enabled in `mode: "tools"` without
+`include` or `exclude` selections), every turn of a session builds the same list:
+
+- `message` is listed on every turn: user, cron, wake, subagent completion, and
+  child-session turns. A turn whose reply delivery or tool policy does not allow
+  the message tool refuses the call with a visible message. The turn's own
+  delivery rules still decide whether a send is allowed.
+- A scheduled run's `toolsAllow` keeps the session's tools listed and refuses
+  each call outside the allowlist with a visible message. It refuses the same
+  calls as when it removed those tools from the list.
+- The deferred MCP tool directory is part of the system prompt's deferred-tool
+  section, not the `tool_search` definition. An MCP server that connects,
+  disconnects, or changes its tools later reaches the model as an appended
+  prompt update.
+
+These exceptions keep the earlier behavior, where `message` and a scheduled
+`toolsAllow` filter the list: Tool Search off (`tools.toolSearch: false`) or
+disabled for a run (Code Mode, memory flush, and runs that disable Tool Search),
+`include` or `exclude` selections, and `mode: "directory"`.
+
 Within an embedded run, bounded transcript reloads retain the admitted history
 boundary even when its compaction summary falls outside the loaded window.
 Actual compaction or reset starts a new prompt series. Permission changes still
