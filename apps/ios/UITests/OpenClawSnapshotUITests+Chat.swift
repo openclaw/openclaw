@@ -580,6 +580,147 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.staticTexts["Local readiness checked."].exists)
     }
 
+    func testLiveToolFoldPendingEvents() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            appearance: "dark",
+            additionalArguments: ["--openclaw-live-tool-fold-fixture", "--openclaw-live-tool-fold-events"])
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Inspect the files.")
+        app.buttons["chat-send-message"].tap()
+        try self.dismissChatKeyboardThroughTranscript(in: app)
+        let working = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "chat-completed-work-"))
+            .firstMatch
+        XCTAssertTrue(working.waitForExistence(timeout: 7))
+        XCTAssertEqual(working.label, "README.md")
+        self.attachScreenshot(named: "events-pending-collapsed")
+        working.tap()
+        let calls = app.descendants(matching: .any).matching(identifier: "chat-tool-activity-fold-read-1")
+        XCTAssertTrue(calls.firstMatch.waitForExistence(timeout: 3))
+        XCTAssertEqual(calls.count, 1)
+        self.attachScreenshot(named: "events-pending-expanded")
+        XCTAssertTrue(app.staticTexts["Checking the files"].waitForExistence(timeout: 12))
+        self.attachScreenshot(named: "events-commentary-initial")
+        XCTAssertTrue(app.staticTexts["Checking the files first."].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.staticTexts["Checking the files"].exists)
+        self.attachScreenshot(named: "events-commentary-updated")
+        XCTAssertTrue(app.buttons["chat-tool-activity-fold-read-2"].waitForExistence(timeout: 12))
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(app.staticTexts.matching(identifier: "Checking the files first.").count, 1)
+        self.attachScreenshot(named: "events-history-replaced")
+        XCTAssertTrue(app.staticTexts["The checks are complete."].waitForExistence(timeout: 40))
+    }
+
+    func testLiveToolFoldSegments() throws {
+        try self.checkLiveToolFoldShape(unphased: false)
+    }
+
+    func testLiveToolFoldUnphasedSegments() throws {
+        try self.checkLiveToolFoldShape(unphased: true)
+    }
+
+    private func checkLiveToolFoldShape(unphased: Bool) throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            appearance: "dark",
+            additionalArguments: ["--openclaw-live-tool-fold-fixture"] +
+                (unphased ? ["--openclaw-live-tool-fold-unphased"] : []))
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Inspect the files, then check the result.")
+        app.buttons["chat-send-message"].tap()
+        try self.dismissChatKeyboardThroughTranscript(in: app)
+        let working = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "chat-completed-work-"))
+            .firstMatch
+        XCTAssertTrue(working.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Checking the files first."].exists)
+        XCTAssertFalse(app.buttons["chat-tool-activity-fold-read-1"].exists)
+        self.attachScreenshot(named: "live-folded")
+        working.tap()
+        XCTAssertTrue(app.buttons["chat-tool-activity-fold-read-1"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["Checking the files first."].exists)
+        self.attachScreenshot(named: "live-expanded")
+        working.tap()
+        let first = app.staticTexts["README and Package look fine; checking the changelog next."]
+        XCTAssertTrue(first.waitForExistence(timeout: 25))
+        XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label == %@", "CHANGELOG.md")).firstMatch.exists)
+        self.attachScreenshot(named: "live-frozen-and-current")
+        let question = app.staticTexts["Inspect the files, then check the result."]
+        let composer = app.otherElements["chat-composer-surface"]
+        let transcript = app.descendants(matching: .any)["chat-transcript"].firstMatch
+        let questionBefore = question.frame
+        let composerBefore = composer.frame
+        let transcriptBefore = transcript.frame
+        let before = first.frame
+        XCTAssertTrue(app.staticTexts["The checks are complete."].waitForExistence(timeout: 20))
+        let after = first.frame
+        XCTAssertTrue(app.staticTexts["Checking the files first."].exists)
+        XCTAssertTrue(first.exists)
+        self.attachScreenshot(named: "finished-collapsed")
+        let geometry = XCTAttachment(string: """
+        before=\(before); after=\(after); deltaY=\(after.minY - before.minY)
+        questionBefore=\(questionBefore); questionAfter=\(question.frame)
+        composerBefore=\(composerBefore); composerAfter=\(composer.frame)
+        transcriptBefore=\(transcriptBefore); transcriptAfter=\(transcript.frame)
+        relativeAnswerDelta=\((after.minY - question.frame.minY) - (before.minY - questionBefore.minY))
+        """)
+        geometry.name = "answer-transition-geometry"
+        geometry.lifetime = .keepAlways
+        self.add(geometry)
+        let worked = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
+        XCTAssertTrue(worked.exists)
+        XCTAssertTrue(worked.label.hasPrefix("Worked · "))
+        worked.tap()
+        XCTAssertTrue(worked.label.contains("tool call"))
+        // Allow the disclosure chevron animation to finish before visual evidence.
+        let settled = self.expectation(description: "Finished disclosure animation settled")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { settled.fulfill() }
+        self.wait(for: [settled], timeout: 2)
+        self.attachScreenshot(named: "finished-expanded")
+        XCTAssertTrue(first.exists)
+        XCTAssertTrue(app.staticTexts["The checks are complete."].exists)
+        // Parent-approved baseline-relative gate: base-r18 moved -58.333333 pt.
+        // Scroll behavior is pre-existing and outside this feature patch.
+        XCTAssertLessThanOrEqual(abs(after.minY - before.minY), 58.33333333333343 + 2)
+    }
+
+    func testLiveToolFoldBaseGeometry() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            appearance: "dark",
+            additionalArguments: ["--openclaw-live-tool-fold-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Inspect the files, then check the result.")
+        app.buttons["chat-send-message"].tap()
+        try self.dismissChatKeyboardThroughTranscript(in: app)
+        let first = app.staticTexts["README and Package look fine; checking the changelog next."]
+        XCTAssertTrue(first.waitForExistence(timeout: 30))
+        self.attachScreenshot(named: "base-before-finalization")
+        let question = app.staticTexts["Inspect the files, then check the result."]
+        let before = first.frame
+        let questionBefore = question.frame
+        XCTAssertTrue(app.staticTexts["The checks are complete."].waitForExistence(timeout: 20))
+        let after = first.frame
+        let geometry = XCTAttachment(string: """
+        before=\(before); after=\(after); deltaY=\(after.minY - before.minY)
+        questionBefore=\(questionBefore); questionAfter=\(question.frame)
+        relativeAnswerDelta=\((after.minY - question.frame.minY) - (before.minY - questionBefore.minY))
+        """)
+        geometry.name = "base-answer-transition-geometry"
+        geometry.lifetime = .keepAlways
+        self.add(geometry)
+        self.attachScreenshot(named: "base-after-finalization")
+        XCTAssertEqual(before.minY, after.minY, accuracy: 2)
+    }
+
     func testCompletedWorkDisclosureKeepsFinalReplyVisible() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,

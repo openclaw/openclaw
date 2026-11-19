@@ -14,7 +14,8 @@ struct ChatNarration {
     private var segments: [Segment] = []
 
     mutating func receive(_ event: OpenClawAgentEventPayload, history: [OpenClawChatMessage]) {
-        let text = (event.data["progressText"]?.value as? String ?? "")
+        let textKey = event.stream == "assistant" ? "text" : "progressText"
+        let text = (event.data[textKey]?.value as? String ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let phase = event.data["phase"]?.value as? String
         // Match the Gateway's completed-preamble contract: growing previews are
@@ -23,7 +24,7 @@ struct ChatNarration {
         let rawItemID = event.data["itemId"]?.value as? String ?? event.data["id"]?.value as? String
         let key = ChatPayloadDecoding.trimmedNonEmptyString(rawItemID)
         if let key, history.contains(where: {
-            $0.streamSegmentID == key && ($0.transcriptRunID ?? $0.streamFallback?.runId) == event.runId
+            $0.narrationItemID == key && ($0.transcriptRunID ?? $0.streamFallback?.runId) == event.runId
         }) { return }
         let index = self.segments.firstIndex {
             $0.runID == event.runId && (key != nil
@@ -32,7 +33,7 @@ struct ChatNarration {
         let previous = index.map { self.segments[$0] }
         if let sequence = event.seq, let previousSequence = previous?.sequence,
            sequence <= previousSequence { return }
-        let message = OpenClawChatMessage(
+        var message = OpenClawChatMessage(
             id: previous?.message.id ?? UUID(),
             role: "assistant",
             content: [.init(type: "text", text: text, mimeType: nil, fileName: nil, content: nil)],
@@ -40,6 +41,7 @@ struct ChatNarration {
             transcriptRunID: event.runId,
             phase: "commentary",
             streamFallback: key.map { .init(source: "segment", itemId: $0, runId: event.runId) })
+        message.liveEventSequence = previous?.message.liveEventSequence ?? event.seq
         let segment = Segment(
             runID: event.runId, itemID: key, eventID: event.id, sequence: event.seq, message: message)
         if let index {
@@ -56,7 +58,7 @@ struct ChatNarration {
         for segment in self.segments {
             if let itemID = segment.itemID,
                result.contains(where: {
-                   $0.streamSegmentID == itemID &&
+                   $0.narrationItemID == itemID &&
                        ($0.transcriptRunID ?? $0.streamFallback?.runId) == segment.runID
                })
             {
@@ -85,7 +87,7 @@ struct ChatNarration {
         self.segments.removeAll { segment in
             guard let itemID = segment.itemID,
                   let index = messages.firstIndex(where: {
-                      $0.streamSegmentID == itemID &&
+                      $0.narrationItemID == itemID &&
                           ($0.transcriptRunID ?? $0.streamFallback?.runId) == segment.runID
                   })
             else { return settled }
@@ -104,9 +106,9 @@ extension OpenClawChatViewModel {
     }
 
     func handleAgentNarration(_ event: OpenClawAgentEventPayload) {
-        guard event.stream == "item", event.data["kind"]?.value as? String == "preamble",
-              self.ownsLiveTelemetryRun(event.runId)
-        else { return }
+        let isPreamble = event.stream == "item" && event.data["kind"]?.stringValue == "preamble"
+        let isCommentary = event.stream == "assistant" && event.data["phase"]?.stringValue == "commentary"
+        guard isPreamble || isCommentary, self.ownsLiveTelemetryRun(event.runId) else { return }
         // Live commentary supersedes older idle snapshots; replay must not
         // invalidate the history response that owns its own adoption.
         if !self.isApplyingRunSnapshot { self.invalidateRunSnapshots() }
@@ -116,6 +118,24 @@ extension OpenClawChatViewModel {
 }
 
 extension OpenClawChatMessage {
+    /// Canonical text signatures and transient fallback rows share the same item key.
+    fileprivate var narrationItemID: String? {
+        if let streamSegmentID { return streamSegmentID }
+        struct Signature: Decodable {
+            let v: Int?
+            let id: String?
+        }
+        let keys = Set(self.content.compactMap { block -> String? in
+            guard ChatMessageVisibleText.isVisibleContentType(block.type, role: self.role),
+                  let text = block.textSignature,
+                  let signature = try? JSONDecoder().decode(Signature.self, from: Data(text.utf8)),
+                  signature.v == 1
+            else { return nil }
+            return ChatPayloadDecoding.trimmedNonEmptyString(signature.id)
+        })
+        return keys.count == 1 ? keys.first : nil
+    }
+
     /// Text blocks as sent, without Markdown parsing, for comparing transcript and streaming sources.
     var rawText: String {
         self.content.compactMap {

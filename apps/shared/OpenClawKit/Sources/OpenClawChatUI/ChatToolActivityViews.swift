@@ -27,7 +27,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
     let name: String?
     let arguments: AnyCodable?
     let details: AnyCodable?
-    let resultText: String?
+    var resultText: String?
     let state: State
     let liveDiffStat: ChatToolDiffStat?
     var activity: OpenClawAgentActivityItem?
@@ -293,6 +293,7 @@ private struct ChatToolActivityRowContent: View {
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(self.display.title)
                     .accessibilityValue(self.accessibilityValue)
+                    .accessibilityIdentifier("chat-tool-activity-\(self.item.id)")
             }
 
             if self.expanded, self.expandable {

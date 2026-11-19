@@ -805,7 +805,11 @@ extension OpenClawChatViewModel {
             if let text = evt.data["text"]?.value as? String {
                 self.liveRunStateByRunID[evt.runId, default: ChatLiveRunState()].hasAgentAssistantText = true
                 self.updateActiveSessionRunWithoutChatSnapshot(false)
-                self.updateStreamingAssistantText(text, runID: evt.runId)
+                if evt.data["phase"]?.stringValue == "commentary", self.ownsLiveTelemetryRun(evt.runId) {
+                    self.handleAgentNarration(evt)
+                } else {
+                    self.updateStreamingAssistantText(text, runID: evt.runId)
+                }
             }
         case "plan":
             // Released Gateways through v2026.8.x lack progressCard.get and only emit stream:"plan".
@@ -854,7 +858,8 @@ extension OpenClawChatViewModel {
                 isError: nil,
                 diffStat: nil,
                 activity: self.turnToolCallsById[toolCallId]?.activity,
-                runID: evt.runId)
+                runID: evt.runId,
+                startSequence: self.turnToolCallsById[toolCallId]?.startSequence ?? evt.seq)
         } else if phase == "input_delta",
                   var pending = self.turnToolCallsById[toolCallId],
                   let diff = evt.data["diff"]?.dictionaryValue,

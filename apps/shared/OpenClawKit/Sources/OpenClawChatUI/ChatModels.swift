@@ -498,6 +498,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     public let model: String?
 
     // Transient projection fields; deliberately absent from CodingKeys.
+    var liveEventSequence: Int?
     var presentationBlockIndex: Int?
     var presentationOwnsFooter = true
     var presentationCompletedReply: Bool?
@@ -1220,6 +1221,7 @@ public struct OpenClawChatPendingToolCall: Identifiable, Hashable, Sendable {
     var activity: OpenClawAgentActivityItem?
     var isComplete: Bool = false
     var runID: String?
+    var startSequence: Int?
 }
 
 public struct OpenClawGatewayHealthOK: Codable, Sendable {

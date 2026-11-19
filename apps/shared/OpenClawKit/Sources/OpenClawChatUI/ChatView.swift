@@ -620,7 +620,8 @@ extension OpenClawChatView {
         let liveRunIDs = Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs)
         return ChatAssistantRunGroup.build(
             transcript.rows,
-            tools: self.displayOptions.contains(.toolActivity) ? self.viewModel.toolActivities : [],
+            tools: ChatTranscriptRow.fallbackTools(self.viewModel.toolActivities)(
+                self.displayOptions, self.collapsesCompletedWork && !self.isSearchPresented),
             liveRunID: liveRunIDs.count == 1 ? liveRunIDs.first : nil,
             hasLiveContent: self.showsWorkingIndicator || self.hasVisibleStreamingAssistantText,
             searchActive: self.isSearchPresented)
@@ -1090,7 +1091,8 @@ extension OpenClawChatView {
         } else {
             base = messages
         }
-        var rows = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: base))
+        var rows = ChatTranscriptRow.workRows(base, self.viewModel.toolActivities)(
+            self.collapsesCompletedWork && !self.isSearchPresented, self.displayOptions)
         let runWorking = self.viewModel.hasBlockingRunActivity || self.viewModel.hasStreamingAssistantText
         let activeRunIDs = Set(self.viewModel.liveAdvertisedRunIDs).union(self.viewModel.liveLocalRunIDs)
         // Footers and visible rows share the merged, onboarding-trimmed input, before work moves into disclosures.
@@ -1104,16 +1106,16 @@ extension OpenClawChatView {
                 rows,
                 runWorking: runWorking,
                 activeRunIDs: activeRunIDs,
-                searchActive: self.isSearchPresented)
+                searchActive: self.isSearchPresented,
+                isMessageVisible: self.shouldDisplayMessage)
         }
         rows = rows.compactMap { row in
             switch row {
             case let .message(message):
                 return self.shouldDisplayMessage(message) ? row : nil
             case let .completedWork(work):
-                let visible = work.messages.filter(self.shouldDisplayMessage)
-                return visible.isEmpty ? nil : .completedWork(.init(
-                    anchorID: work.anchorID, messages: visible, durationMilliseconds: work.durationMilliseconds))
+                let filtered = work.filteringMessages(self.shouldDisplayMessage)
+                return filtered.map(ChatTranscriptRow.completedWork)
             default:
                 return row
             }
@@ -1460,10 +1462,7 @@ extension OpenClawChatView {
         }
 
         if !primaryText.isEmpty {
-            if message.role.lowercased() == "user" {
-                return true
-            }
-            if AssistantTextParser.hasVisibleContent(
+            if message.role.lowercased() == "user" || AssistantTextParser.hasVisibleContent(
                 in: primaryText,
                 includeThinking: self.displayOptions.contains(.reasoning))
             {

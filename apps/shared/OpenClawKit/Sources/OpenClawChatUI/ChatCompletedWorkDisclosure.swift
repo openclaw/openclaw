@@ -1,3 +1,4 @@
+import OpenClawKit
 import SwiftUI
 
 struct ChatCompletedWorkDisclosure<Content: View>: View {
@@ -7,23 +8,39 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
     @State private var isExpanded = false
 
     var body: some View {
-        DisclosureGroup(isExpanded: self.$isExpanded) {
+        self.segment
+    }
+
+    private var segment: some View {
+        self.disclosure(label: self.label, icon: self.segmentIcon, expanded: self.$isExpanded) {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(self.work.messages, id: \.presentationID) { message in
                     self.messageContent(message)
                 }
             }
             .padding(.top, 8)
-        } label: {
-            Text(self.label)
-                .font(OpenClawChatTypography.caption)
-                .fixedSize(horizontal: false, vertical: true)
-                #if os(iOS)
-                .foregroundStyle(Color.secondary)
-                .frame(minHeight: 44)
-                #else
-                .foregroundStyle(.secondary)
-                #endif
+        }
+    }
+
+    private func disclosure(
+        label: String,
+        icon: String? = nil,
+        expanded: Binding<Bool>,
+        @ViewBuilder content: @escaping () -> some View) -> some View
+    {
+        DisclosureGroup(isExpanded: expanded, content: content) {
+            HStack(spacing: 6) {
+                if let icon {
+                    Image(systemName: icon).accessibilityHidden(true)
+                }
+                Text(label)
+            }
+            .font(OpenClawChatTypography.caption)
+            .fixedSize(horizontal: false, vertical: true)
+            .foregroundStyle(.secondary)
+            #if os(iOS)
+            .frame(minHeight: 44)
+            #endif
         }
         #if os(iOS)
         .disclosureGroupStyle(ChatCompletedWorkDisclosureStyle())
@@ -32,8 +49,20 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private var segmentIcon: String {
+        guard self.work.isLive, let latest = ChatCompletedWorkSummary.latestItem(work: self.work) else {
+            return "list.bullet"
+        }
+        let call = ToolDisplayRegistry.displayCall(name: latest.name, args: latest.arguments)
+        let display = ToolDisplayRegistry.resolve(name: call.name, args: call.args)
+        return ChatToolIcon.symbol(for: display.name, icon: display.icon)
+    }
+
     private var label: String {
-        ChatCompletedWorkSummary.label(work: self.work, expanded: self.isExpanded)
+        guard self.work.isLive else {
+            return ChatCompletedWorkSummary.label(work: self.work, expanded: self.isExpanded)
+        }
+        return ChatCompletedWorkSummary.liveLabel(work: self.work)
     }
 }
 
@@ -56,6 +85,8 @@ private struct ChatCompletedWorkDisclosureStyle: DisclosureGroupStyle {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
             .accessibilityValue(configuration.isExpanded ? Text("Expanded") : Text("Collapsed"))
             if configuration.isExpanded {
                 configuration.content

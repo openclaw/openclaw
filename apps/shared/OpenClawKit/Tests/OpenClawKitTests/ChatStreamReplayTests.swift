@@ -317,6 +317,69 @@ struct ChatNarrationPreparedTextTests {
     }
 }
 
+// MARK: - Assistant stream phase contract
+
+struct ChatLiveAssistantPhaseTests {
+    @Test @MainActor func `assistant deltas preserve commentary phase and answer visibility`() async throws {
+        let harness = try await StreamReplayHarness.bootstrapped()
+        defer { harness.vm.detachTransport() }
+        let runID = try await harness.send("Check the files")
+        func event(
+            _ text: String,
+            seq: Int,
+            phase: String? = "commentary",
+            item: String = "comment",
+            run: String? = nil) -> OpenClawChatTransportEvent
+        {
+            var data: [String: AnyCodable] = [
+                "text": AnyCodable(text), "replace": AnyCodable(true), "itemId": AnyCodable(item),
+            ]
+            if let phase { data["phase"] = AnyCodable(phase) }
+            return .agent(OpenClawAgentEventPayload(
+                runId: run ?? runID, seq: seq, stream: "assistant", ts: 1000 + seq, data: data))
+        }
+        await harness.handleAndSettle(event("Checking", seq: 1))
+        let original = try #require(harness.vm.transcriptMessages.first { $0.rawText == "Checking" })
+        #expect(original.phase == "commentary")
+        #expect(original.streamSegmentID == "comment")
+        #expect(harness.vm.streamingAssistantText == nil)
+        await harness.handleAndSettle(event("Checking the files.", seq: 2))
+        let updated = try #require(harness.vm.transcriptMessages.first { $0.id == original.id })
+        #expect(updated.rawText == "Checking the files.")
+        await harness.handleAndSettle(event("Stale text", seq: 1))
+        await harness.handleAndSettle(event("Foreign text", seq: 3, run: "foreign"))
+        #expect(!harness.vm.transcriptMessages.contains { $0.rawText == "Stale text" || $0.rawText == "Foreign text" })
+        let rows = ChatTranscriptRow.collapseCompletedWork(
+            ChatTranscriptRow.build(from: harness.vm.transcriptMessages), runWorking: true)
+        #expect(rows.contains { row in
+            if case let .message(message) = row { return message.id == original.id }
+            return false
+        })
+        await harness.handleAndSettle(event("A visible intermediate answer.", seq: 4, phase: nil, item: "answer"))
+        #expect(harness.vm.streamingAssistantText == "A visible intermediate answer.")
+        await harness.handleAndSettle(event("The final answer.", seq: 5, phase: "final_answer", item: "final"))
+        #expect(harness.vm.streamingAssistantText == "The final answer.")
+        await harness.handleAndSettle(event("", seq: 6))
+        #expect(!harness.vm.transcriptMessages.contains { $0.id == original.id })
+        #expect(harness.vm.streamingAssistantText == "The final answer.")
+    }
+
+    @Test @MainActor func `legacy session commentary keeps streaming when no run is pending`() async throws {
+        let harness = try await StreamReplayHarness.bootstrapped()
+        defer { harness.vm.detachTransport() }
+        // Released gateways stream assistant text under the session id with no
+        // pending run; a commentary label must not drop that text.
+        let event = OpenClawChatTransportEvent.agent(OpenClawAgentEventPayload(
+            runId: "sess-replay",
+            seq: 1,
+            stream: "assistant",
+            ts: 1001,
+            data: ["text": AnyCodable("Checking the files."), "phase": AnyCodable("commentary")]))
+        await harness.handleAndSettle(event)
+        #expect(harness.vm.streamingAssistantText == "Checking the files.")
+    }
+}
+
 // MARK: - Harness
 
 private struct StreamReplayHarness {
@@ -728,9 +791,9 @@ struct ChatStreamReplayTests {
             harness.vm.transcriptMessages.contains { ChatMessageVisibleText.visibleText(in: $0) == narration }
         }
         func apply(_ payload: OpenClawChatHistoryPayload) async {
-            #expect(harness.vm.applyHistoryPayload(
+            #expect(await harness.vm.applyHistoryPayload(
                 payload, for: harness.vm.beginHistoryRequest(), preservingOptimisticLocalMessages: true,
-                decodedMessages: await OpenClawChatViewModel.decodeMessages(
+                decodedMessages: OpenClawChatViewModel.decodeMessages(
                     payload.messages ?? [], activity: payload.activity)))
         }
 
@@ -743,9 +806,9 @@ struct ChatStreamReplayTests {
         let beforeLiveEvent = harness.vm.beginHistoryRequest()
         harness.vm.handleTransportEvent(replayNarrationEvent(
             runId: runId, itemId: "unsaved", text: narration, seq: 2, timestamp: now + 200))
-        #expect(harness.vm.applyHistoryPayload(
+        #expect(await harness.vm.applyHistoryPayload(
             history([user], active: false), for: beforeLiveEvent, preservingOptimisticLocalMessages: true,
-            decodedMessages: await OpenClawChatViewModel.decodeMessages([user])))
+            decodedMessages: OpenClawChatViewModel.decodeMessages([user])))
         #expect(hasNarration())
 
         let beforeTerminal = harness.vm.beginHistoryRequest()
@@ -755,9 +818,9 @@ struct ChatStreamReplayTests {
         await harness.converge("terminal event releases the run") { $0.pendingRunCount == 0 }
         await apply(history([user], active: false))
         #expect(hasNarration())
-        _ = harness.vm.applyHistoryPayload(
+        _ = await harness.vm.applyHistoryPayload(
             history([user, final], active: false), for: beforeTerminal, preservingOptimisticLocalMessages: true,
-            decodedMessages: await OpenClawChatViewModel.decodeMessages([user, final]))
+            decodedMessages: OpenClawChatViewModel.decodeMessages([user, final]))
         #expect(hasNarration())
         await apply(history([user, final]))
         #expect(hasNarration())
@@ -937,11 +1000,11 @@ struct ChatStreamReplayTests {
         let stale = replayHistory(
             messages: history.messages ?? [],
             inFlightRun: .init(runId: "recovered-run", text: "The answer is streaming.", events: [older]))
-        #expect(harness.vm.applyHistoryPayload(
+        #expect(await harness.vm.applyHistoryPayload(
             stale,
             for: request,
             preservingOptimisticLocalMessages: true,
-            decodedMessages: await OpenClawChatViewModel.decodeMessages(
+            decodedMessages: OpenClawChatViewModel.decodeMessages(
                 stale.messages ?? [], activity: stale.activity)))
         #expect(!harness.vm.transcriptMessages.contains {
             ChatMessageVisibleText.visibleText(in: $0) == "Retracted before reconnect"

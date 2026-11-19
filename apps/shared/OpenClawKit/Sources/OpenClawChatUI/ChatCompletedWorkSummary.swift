@@ -2,6 +2,19 @@ import Foundation
 import OpenClawKit
 
 enum ChatCompletedWorkSummary {
+    static func latestItem(work: ChatTranscriptRow.CompletedWork) -> ChatToolActivityItem? {
+        work.messages.reversed().compactMap { message in
+            ChatToolActivity.items(message: message).last(where: \.isVisible)
+        }.first
+    }
+
+    static func liveLabel(work: ChatTranscriptRow.CompletedWork) -> String {
+        guard let latest = self.latestItem(work: work) else { return String(localized: "Working") }
+        let call = ToolDisplayRegistry.displayCall(name: latest.name, args: latest.arguments)
+        let display = ToolDisplayRegistry.resolve(name: call.name, args: call.args)
+        return display.detailLine ?? latest.activity?.preparedTitle ?? display.title
+    }
+
     static func label(work: ChatTranscriptRow.CompletedWork, expanded: Bool) -> String {
         var parts = [work.durationMilliseconds.map {
             String(format: String(localized: "Worked for %@"), ChatWorkingDurationFormatter.compact(milliseconds: $0))
