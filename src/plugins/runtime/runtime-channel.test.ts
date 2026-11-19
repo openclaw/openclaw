@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GetReplyOptions } from "../../auto-reply/get-reply-options.types.js";
 import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import { replyCallbackCustody } from "../../auto-reply/reply/reply-source-binding.types.js";
+import { replyCallbackCustody } from "../../auto-reply/reply/reply-callback-custody.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { LegacyPluginSdkResourceHost } from "../legacy-sdk-resource-host.js";

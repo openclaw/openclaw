@@ -11,7 +11,7 @@ import { combineGatewayLocalUserIngress } from "../../../gateway/local-user-ingr
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
-import { replyCallbackCustody } from "../reply-source-binding.types.js";
+import { replyCallbackCustody } from "../reply-callback-custody.js";
 import {
   resolveReplyOperatorAuthorityKey,
   resolveReplyPersonalToolTargets,

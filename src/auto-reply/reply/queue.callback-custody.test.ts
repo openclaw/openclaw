@@ -5,7 +5,7 @@ import {
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
-import { replyCallbackCustody } from "./reply-source-binding.types.js";
+import { replyCallbackCustody } from "./reply-callback-custody.js";
 
 installQueueRuntimeErrorSilencer();
 

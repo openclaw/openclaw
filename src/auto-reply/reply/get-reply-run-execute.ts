@@ -56,7 +56,7 @@ import { createReplyCronAuthorityFactory } from "./get-reply-run.cron-requester.
 import { hasInboundAudio } from "./inbound-media.js";
 import { normalizeMessageTimestampMs } from "./message-timestamp.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { replyCallbackCustody } from "./reply-source-binding.types.js";
+import { replyCallbackCustody } from "./reply-callback-custody.js";
 import { resolveReplySteeringIntent } from "./reply-steering-intent.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";

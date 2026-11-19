@@ -35,7 +35,7 @@ import type {
   VerboseLevel,
 } from "../../thinking.shared.js";
 import type { GoalContinuation } from "../goal-continuation.types.js";
-import type { ReplyCallbackCustodyBinding } from "../reply-source-binding.types.js";
+import type { ReplyCallbackCustodyBinding } from "../reply-callback-custody.js";
 import type {
   ScheduledSessionAutomation,
   SessionEventExecution,

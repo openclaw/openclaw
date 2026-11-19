@@ -48,7 +48,7 @@ import {
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import { resolveFollowupAbortSignal, type FollowupRun } from "./queue/types.js";
-import { replyCallbackCustody } from "./reply-source-binding.types.js";
+import { replyCallbackCustody } from "./reply-callback-custody.js";
 import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 installQueueRuntimeErrorSilencer();
 const keys = new Set<string>();
