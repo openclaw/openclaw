@@ -420,6 +420,7 @@ export async function runReleasePublishPreflight(
         rows.push(
           ...evaluateReleasePublishGates({
             manifest,
+            readWorkflowSource: (sha, path) => client.getWorkflowSource(sha, path),
             consumer: consumer as "publisher" | "core-npm" | "stable-closeout",
             releaseTag: options.tag,
             npmDistTag: options.npmDistTag,
