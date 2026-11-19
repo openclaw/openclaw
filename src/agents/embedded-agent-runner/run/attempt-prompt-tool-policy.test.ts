@@ -1,6 +1,7 @@
 import { vi, expect, it } from "vitest";
 import * as hostHookState from "../../../plugins/host-hook-state.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
+import { markAgentToolExecutionUnavailable } from "../../agent-tool-availability.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import type { ToolSearchCatalogEntry, ToolSearchCatalogRef } from "../../tool-search.js";
 import { resolvePromptBuildHookResult } from "./attempt-prompt-helpers.js";
@@ -129,6 +130,18 @@ it.each([
     );
   },
 );
+
+it("leaves a listed tool the turn refuses out of the callable guidance", () => {
+  // A cron whose delivery may not send still lists message, but is not told to use it.
+  const { session, policy } = createPolicyFixture(["message", "read"]);
+  const refused = markAgentToolExecutionUnavailable(createStubTool("message"));
+  session.getToolDefinition = (name: string) =>
+    name === "message" ? refused : createStubTool(name);
+  const result = policy.apply(undefined);
+  expect(result.activeToolNames).toEqual(["message", "read"]);
+  expect(result.callableToolNames).toEqual(["read"]);
+  expect(finalize(result.callableToolNames)).toBe("cron:false");
+});
 
 it("keeps cataloged plugin tools allowed through the plugin group", () => {
   const pluginTool = createStubTool("plugin_lookup");
