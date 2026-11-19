@@ -595,7 +595,7 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
 
   type QualificationCase = {
     tag?: string;
-    pin?: string;
+    pin?: string | null;
     expected?: "passed" | "warning";
     failedRegistry?: string;
     launch?: "fresh" | "reuse" | "saved-full" | "saved-npm" | "mismatch";
@@ -635,6 +635,7 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
       savedToolingTag: "release-publish/aaaaaaaaaaaa-100",
     },
     { workflowSha: "c".repeat(40) },
+    { pin: null },
     { pin: "2026.7.4", expected: "warning" },
     ...["normal", "prepared"].map<QualificationCase>((publicationRoute) => ({
       publicationRoute,
@@ -703,12 +704,21 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
     }) => {
       const { root: targetRoot, git } = candidateGitFixture({
         "package.json": JSON.stringify({ version: tag.slice(1) }),
-        "apps/android/version.json": JSON.stringify({ version: pin, versionCode: 2026070401 }),
+        ...(pin === null
+          ? {}
+          : {
+              "apps/android/version.json": JSON.stringify({
+                version: pin,
+                versionCode: 2026070401,
+              }),
+            }),
         "CHANGELOG.md": "# Fixture changelog\n\n## 2026.9.1\n\nFixture notes.\n",
       });
       const targetSha = git("rev-parse", "HEAD");
       // The target ref is authoritative even if another checkout has prepared a newer pin.
-      writeJson(join(targetRoot, "apps/android/version.json"), { version: "2099.1.1" });
+      if (pin !== null) {
+        writeJson(join(targetRoot, "apps/android/version.json"), { version: "2099.1.1" });
+      }
       const candidateArgv = candidateArgs({
         tag,
         "publication-route": publicationRoute,
@@ -1187,7 +1197,7 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
         return;
       }
       expect(updateState).toHaveBeenCalledWith(statePath, expect.anything(), "completed");
-      if (tag.includes("-beta.")) {
+      if (tag.includes("-beta.") || pin === null) {
         expect(evidence.androidVersionCheck).toBeUndefined();
         return;
       }

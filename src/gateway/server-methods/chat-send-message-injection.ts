@@ -312,6 +312,9 @@ export function createChatSendMessageInjectionStarter(params: {
           inboundAudio: hasInboundAudio(ctx),
           steeringMode: "all",
           isInboundUserMessage: true,
+          ...(ctx.ApprovalReviewerDeviceId
+            ? { inputRequesterDeviceId: ctx.ApprovalReviewerDeviceId }
+            : {}),
           allowPendingUserInputAnswer: preparedJoin?.allowPendingUserInputAnswer,
           allowCollaborativeSteering:
             cfg.messages?.queue?.allowCollaborativeSteering === true &&

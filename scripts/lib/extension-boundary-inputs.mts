@@ -139,8 +139,9 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
       if (typeof file !== "string" || !file || path.isAbsolute(file)) {
         throw new Error(`Invalid bounded compiler lookup path: ${receipt}`);
       }
-      const normalized = portableRelativePath(this.rootDir, this.boundary.assert(file)) || ".";
-      if (normalized !== file) {
+      // Replay admits filesystem operations; parsing only validates their recorded paths.
+      const normalized = portableRelativePath(this.rootDir, this.boundary.resolve(file)) || ".";
+      if (normalized !== file || normalized === ".." || normalized.startsWith("../")) {
         throw new Error(`Invalid bounded compiler lookup path: ${receipt}`);
       }
       return file;

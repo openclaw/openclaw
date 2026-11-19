@@ -47,9 +47,11 @@ import {
 import { withLegacyWorkerResourceReceipts } from "./openclaw-state-db-schema-v37-resource-receipts.js";
 import { withLegacyRepositoryDiskAuthority } from "./openclaw-state-db-schema-v38-repository-disk.js";
 import { withLegacyWorkerRetention } from "./openclaw-state-db-schema-v39-worker-retention.js";
+import { withLegacyWorkspaceBootstrapDeferred } from "./openclaw-state-db-schema-v40-lazy-additions.js";
 import { withLegacyWorkerProvisionSource } from "./openclaw-state-db-schema-v40-worker-provision-source.js";
 import {
   admitStateSchemaFacts,
+  parseStateSchemaContentVersion,
   PostgresSchemaAdmissionUnavailableError,
 } from "./openclaw-state-db-schema-version.js";
 import { withPostgresSchemaAdmissionRetry } from "./openclaw-state-postgres-admission.js";
@@ -128,12 +130,22 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
       "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
     )
     .get();
+  let contentVersion: number;
+  try {
+    const marker = content?.value_json;
+    if (marker !== undefined && marker !== null && typeof marker !== "string") {
+      throw new Error("Invalid PostgreSQL state content marker");
+    }
+    contentVersion = parseStateSchemaContentVersion(marker);
+  } catch {
+    throw new Error(`PostgreSQL state metadata mismatch. ${recovery}`);
+  }
   // SQLite may publish the current header without a redundant content-version row.
   if (
     meta?.schema_version !== facts.version ||
     meta.role !== "global" ||
     meta.agent_id !== null ||
-    (content !== undefined && content.value_json !== String(facts.version))
+    contentVersion > facts.version
   ) {
     throw new Error(`PostgreSQL state metadata mismatch. ${recovery}`);
   }
@@ -162,13 +174,21 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     postgres: stateEngineSchema.postgres,
     postgresFragments: stateEngineSchema.postgresFragments,
   };
+  const v39Postgres = withLegacyWorkerProvisionSource(statePostgresSchema.postgres);
+  const v39WithoutBootstrapDeferred = withLegacyWorkspaceBootstrapDeferred(v39Postgres);
   const statePostgresSchemaV39 = {
     ...statePostgresSchema,
-    postgres: withLegacyWorkerProvisionSource(statePostgresSchema.postgres),
+    postgres: v39Postgres,
+    // Main builds used both shapes while the numeric state version was 39.
+    postgresWithoutOptionalColumn: {
+      table: "workspace_setup_state",
+      column: "bootstrap_deferred",
+      sql: v39WithoutBootstrapDeferred,
+    },
   };
   const statePostgresSchemaV38 = {
-    ...statePostgresSchemaV39,
-    postgres: withLegacyWorkerRetention(statePostgresSchemaV39.postgres),
+    ...statePostgresSchema,
+    postgres: withLegacyWorkerRetention(v39WithoutBootstrapDeferred),
   };
   const statePostgresSchemaV37 = {
     postgres: withLegacyRepositoryDiskAuthority(statePostgresSchemaV38.postgres),
@@ -387,7 +407,8 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
       version: 40,
       fromSchema: statePostgresSchemaV39,
       schema: statePostgresSchema,
-      sql: `ALTER TABLE worker_environments ADD COLUMN provision_source_json text COLLATE "C";
+      sql: `ALTER TABLE workspace_setup_state ADD COLUMN IF NOT EXISTS bootstrap_deferred bigint;
+        ALTER TABLE worker_environments ADD COLUMN provision_source_json text COLLATE "C";
         UPDATE worker_environments
         SET provision_source_json = '{"kind":"unavailable"}'
         WHERE (state IN ('requested', 'provisioning') AND lease_id IS NULL

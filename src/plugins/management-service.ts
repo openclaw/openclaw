@@ -348,6 +348,14 @@ export const listManagedPlugins = withManagedPluginCache(
       if (catalog?.order !== undefined) {
         plugin.order = catalog.order;
       }
+      if (localCatalog?.sidebar) {
+        plugin.sidebar = true;
+      }
+      // Bundled plugins arrive with OpenClaw; only external install records carry a time.
+      const installedAt = Date.parse(installRecord?.installedAt ?? "");
+      if (record.origin !== "bundled" && Number.isSafeInteger(installedAt) && installedAt >= 0) {
+        plugin.installedAt = installedAt;
+      }
       const normalizedPluginId = metadata.normalizePluginId(record.pluginId);
       // Icon lookup uses the first normalized record, even when that record has no icon.
       if (!installedIconsById.has(normalizedPluginId)) {
@@ -611,6 +619,7 @@ export const inspectManagedPlugin = withManagedPluginCache(
         manifest: manifest ?? {},
         origin: record.origin,
         entryConfig: params.config.plugins?.entries?.[pluginId],
+        conversationAccessAccepted: manifest?.trust?.conversationAccessAccepted,
       });
       const declared = ownership.ok
         ? resolvePluginPackageDeclaredSurface(ownership.value, metadata.byPluginId)
@@ -681,6 +690,7 @@ export const inspectManagedPlugin = withManagedPluginCache(
       manifest: manifest ?? {},
       origin: "official",
       entryConfig: params.config.plugins?.entries?.[pluginId],
+      conversationAccessAccepted: "if-declared",
     });
     return {
       ok: true,

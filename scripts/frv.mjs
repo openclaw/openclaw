@@ -1054,7 +1054,17 @@ async function readChildAttemptEvidence(child, client, options) {
           throw new Error(`child changed during attempt materialization: ${child.key}`);
         }
       }
-      return { run, evidence };
+      // Progress is observational: never add mutable step data to the accepted jobs digest.
+      const activeJobs = (attempts.at(-1)?.jobs ?? [])
+        .filter((job) => job.status === "in_progress")
+        .map((job) => {
+          const step = job.steps?.find((entry) => entry.status === "in_progress");
+          return {
+            name: job.name,
+            step: step ? { name: step.name, startedAt: step.started_at } : null,
+          };
+        });
+      return { run, evidence, activeJobs };
     } catch (error) {
       // GitHub briefly returns overlapping job identities while a new attempt
       // materializes. Never normalize those rows into accepted evidence.
@@ -1097,7 +1107,7 @@ export async function inspectContinuation(plan, client, options = {}) {
           url: String(child.url ?? ""),
         };
       }
-      const { run, evidence } = await readChildAttemptEvidence(child, client, options);
+      const { run, evidence, activeJobs } = await readChildAttemptEvidence(child, client, options);
       const effectiveRunAttempt = Number(run.run_attempt);
       if (!evidence) {
         return {
@@ -1122,6 +1132,7 @@ export async function inspectContinuation(plan, client, options = {}) {
       };
       const passed = !active && terminalPolicyPass(policyChild, plan.targetVersion, plan.targetSha);
       return {
+        activeJobs,
         compositeJobsSha256: evidence.compositeJobsSha256,
         conclusion: String(run.conclusion ?? ""),
         dispatchActor: evidence.dispatchActor,
@@ -2314,6 +2325,17 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
     // idling until unrelated siblings settle. The budget is re-derived from attempts.
     const failedAgain = status.failed.find((child) => ownedAttempts.has(child.runId));
     if (failedAgain) {
+      if (target?.name !== undefined && failedAgain.key === target.childKey) {
+        const job = failedAgain.jobs.find((entry) => entry.name === target.name);
+        if (job?.acceptedRunAttempt === ownedAttempts.get(failedAgain.runId)) {
+          log(
+            `[frv] target ${target.childKey}:${target.name}: ${job.conclusion} (accepted attempt ${job.acceptedRunAttempt})`,
+          );
+          log(
+            `[frv] composite ${failedAgain.key}: failed (attempt ${failedAgain.effectiveRunAttempt})`,
+          );
+        }
+      }
       const used = failedAgain.effectiveRunAttempt - failedAgain.plannedRunAttempt + 1;
       throw new Error(
         `child ${failedAgain.key} failed again on attempt ${failedAgain.effectiveRunAttempt}; rerun budget remaining ${Math.max(0, DEFAULT_CHILD_MAX_ATTEMPTS - used)}; rerun pnpm frv continue --failed --run ${rootRunId}${repositoryOption} to retry a confirmed flake, otherwise start a fresh all-group FRV`,
@@ -3867,6 +3889,15 @@ function print(value, json) {
     console.log(
       `${child.key}: ${child.status}${child.conclusion && child.conclusion !== "success" ? ` (${child.conclusion})` : ""} attempt=${child.effectiveRunAttempt} planned=${child.plannedRunAttempt} run=${child.runId}`,
     );
+    for (const job of child.activeJobs ?? []) {
+      const startedAt = Date.parse(job.step?.startedAt);
+      const age = Number.isFinite(startedAt)
+        ? `${Math.max(0, Math.floor((Date.now() - startedAt) / 1000))}s`
+        : "unknown";
+      console.log(
+        `  ${JSON.stringify(job.name)}: step=${JSON.stringify(job.step?.name ?? "unavailable")} age=${age}`,
+      );
+    }
   }
   for (const run of value.rerun ?? []) {
     console.log(`${run.name} ${run.id} ${run.headBranch} ${run.url}`);

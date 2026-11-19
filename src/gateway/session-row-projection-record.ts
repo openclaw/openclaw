@@ -695,9 +695,12 @@ export function acquireSessionRowEntry(params: {
   const lineage = readSessionRowLineage(row, storedEntry, cfg, context, params.referenced);
   const entryChanged = lineage.entry !== row.entry;
   const { entry, parents } = lineage;
-  // Equal timestamps still need the full metadata comparison.
+  // Lineage projection preserves all other stored fields; compare only the keys it rewrites.
   const changed =
-    row.parents !== parents || !isDeepStrictEqual(storedEntry, row.storedEntry) || entryChanged;
+    entryChanged ||
+    row.parents !== parents ||
+    storedEntry.parentSessionKey !== row.storedEntry?.parentSessionKey ||
+    storedEntry.spawnedBy !== row.storedEntry?.spawnedBy;
   if (!changed && row.sharingEntry === row.storedEntry && !row.entryAcquisitionPending) {
     if (params.rows.get(identity(row)) !== row) {
       put(row);

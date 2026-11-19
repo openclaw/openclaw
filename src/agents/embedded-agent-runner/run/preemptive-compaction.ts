@@ -370,6 +370,7 @@ function resolveCompactionPressureDecision(
           messages: pressure.messages,
           contextWindowTokens: params.contextTokenBudget,
           maxCharsOverride: params.toolResultMaxChars,
+          preserveSentToolResults: true,
         }).maxReducibleChars)
       : 0;
   const overflowChars = overflowTokens * CHARS_PER_TOKEN_ESTIMATE;

@@ -95,23 +95,29 @@ export async function prepareOpenClawAgentDatabaseExecution(
   signal?: AbortSignal,
 ): Promise<void> {
   assertCurrent();
-  const execution = await captureOpenClawAgentDatabaseExecutionAsync(options);
+  let execution: OpenClawAgentDatabaseExecution | undefined;
   try {
     await runOpenClawAgentWorkerWrite(
       options,
-      () =>
-        execution.prepare(
+      async () => {
+        assertCurrent();
+        // Preparation joins the retained creator only after its writer turn begins.
+        // Ordinary borrowers cannot initialize that creator's unpublished target.
+        execution = await captureOpenClawAgentDatabaseExecutionAsync(options, {}, "inherit");
+        assertCurrent();
+        return execution.prepare(
           createSessionWorkerExecutionSource(
             assertCurrent,
             `Agent ${options.agentId} database preparation admission expired`,
           ),
           signal,
-        ),
+        );
+      },
       undefined,
       signal,
     );
   } finally {
-    await execution.release();
+    await execution?.release();
   }
 }
 

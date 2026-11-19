@@ -20,6 +20,7 @@
  * --workspace uses real event and reply admission plus workspace preparation, replacing only
  * model dispatch with immediate completion. Supply --handoff-baseline and optionally
  * --handoff-candidate; --workspace-ready measures already-ready sessions separately.
+ * --cold-stale measures two restarts over 30 obsolete cold cycles; no resume is expected.
  * This is owner proof, not model cancellation or a complete Gateway shutdown.
  * --yield-read-baseline compares retired child completion sources (requires --resume --markers
  * --baseline-resumes 1). Four roots include message waits, a nested wait, a completed child,
@@ -64,10 +65,12 @@ const { values } = parseArgs({
     "handoff-baseline": { type: "string" },
     "handoff-candidate": { type: "string" },
     "yield-read-baseline": { type: "string" },
+    "cold-stale": { type: "boolean" },
   },
 });
 assert(values.root && values.baseline && values.output && global.gc);
 assert(!existsSync(values.output), "Refusing to overwrite evidence");
+assert(!values["cold-stale"] || (values.resume && !values.markers && !values.workspace));
 assert(!values.markers || values.resume, "--markers requires --resume");
 assert(!values.workspace || (values.resume && values.markers && values["handoff-baseline"]));
 assert(!values.mark || !values.resume, "--mark and --resume are separate workloads");
@@ -370,7 +373,7 @@ const input = {
   assertCurrent() {},
   log: {
     warn(message: string) {
-      if (values.workspace || yieldReadSources.length) {
+      if (values.workspace || yieldReadSources.length || values["cold-stale"]) {
         warnings.push(message);
       } else {
         throw new Error(message);
@@ -383,13 +386,47 @@ const { writeSessionEntry, readExactSessionEntryRow } =
 const seededRows = agent
   .openOpenClawAgentDatabase({ agentId: "main" })
   .db.prepare(
-    `SELECT session_key, entry_json FROM session_nodes ORDER BY session_key LIMIT ${values.mark ? 60 : 12}`,
+    `SELECT session_key, entry_json FROM session_nodes ORDER BY session_key LIMIT ${values.mark ? 60 : values["cold-stale"] ? 30 : 12}`,
   )
   .all()
   .map((row) => ({
     sessionKey: String(row.session_key),
     entry: JSON.parse(String(row.entry_json)),
   }));
+// Historical cold rows retain identities and navigation while their bodies live only in archives.
+if (values["cold-stale"]) {
+  const { retainSessionColdNavigationInTransaction } =
+    await import("../../src/config/sessions/session-cold-storage-navigation.js");
+  agent.runOpenClawAgentWriteTransaction(
+    (database) => {
+      for (const { entry } of seededRows) {
+        const runId = `announce:requester-settle:${entry.sessionId}`;
+        database.db
+          .prepare(`UPDATE transcript_events SET event_json = json_set(event_json,
+          '$.message.idempotencyKey', ?, '$.message.provenance', json(?))
+          WHERE session_id = ? AND seq = 1 AND event_json IS NOT NULL`)
+          .run(
+            `${runId}:user`,
+            JSON.stringify({ kind: "inter_session", sourceTool: "subagent_settle" }),
+            entry.sessionId,
+          );
+        database.db
+          .prepare(`UPDATE transcript_event_identities SET message_idempotency_key = ?
+        WHERE session_id = ? AND seq = 1`)
+          .run(`${runId}:user`, entry.sessionId);
+        database.db
+          .prepare(`INSERT INTO session_transcript_cold_archives
+        (session_id, generation, archive_name, archive_sha256, event_count, raw_bytes,
+        archive_bytes, last_seq, archived_at, storage, archive_blob)
+        VALUES (?, 'synthetic', ?, ?, 1, 1, 1, 1, 1, 'file', NULL)
+        ON CONFLICT(session_id) DO NOTHING`)
+          .run(entry.sessionId, `${entry.sessionId}.zst`, "0".repeat(64));
+        retainSessionColdNavigationInTransaction(database, entry.sessionId, 0, 1);
+      }
+    },
+    { agentId: "main" },
+  );
+}
 const predecessor = { startedAt: Date.now() - 60_000, endedAt: Date.now() };
 const { subagentRuns } =
   await import("../../src/agents/subagents/registry/subagent-registry-memory.js");
@@ -478,6 +515,30 @@ const seedMarkers = () =>
 let workspaceBinding: import("../../src/config/sessions/types.js").SessionEntry["worktree"] =
   seededRows[0]?.entry.worktree;
 const seedResume = () => {
+  if (values["cold-stale"]) {
+    agent.runOpenClawAgentWriteTransaction(
+      (database) => {
+        for (const [index, { sessionKey, entry }] of seededRows.entries()) {
+          writeSessionEntry(database, sessionKey, {
+            ...entry,
+            updatedAt: 1,
+            mainRestartRecovery: undefined,
+            ...(index < 24 ? { archivedAt: 2 } : {}),
+            status:
+              index < 23 ? "done" : index < 26 ? "killed" : index === 26 ? "failed" : undefined,
+            lastRunId: `announce:requester-settle:${entry.sessionId}`,
+          });
+          // Only this obsolete field bypasses current writer policy in the offline fixture.
+          database.db
+            .prepare(`UPDATE session_nodes SET entry_json = json_set(entry_json,
+            '$.mainRestartRecovery', json('{"cycleId":"stale"}')) WHERE session_key = ?`)
+            .run(sessionKey);
+        }
+      },
+      { agentId: "main" },
+    );
+    return;
+  }
   // Include the candidate's durable acknowledgement; fixture writes stay outside timing.
   writeConfigMachineState("gateway.restartRecovery", { main: [predecessor] });
   agent.runOpenClawAgentWriteTransaction(
@@ -537,7 +598,35 @@ const shutdownTimings: Array<{
   releasedMs: number;
   failed: boolean;
 }> = [];
+const coldPasses: Array<{
+  arm: number;
+  pass: number;
+  wallMs: number;
+  warnings: number;
+  remaining: number;
+}> = [];
 const measureOwner = async (arm: number) => {
+  if (values["cold-stale"]) {
+    for (let pass = 0; pass < 2; pass++) {
+      const before = warnings.length;
+      const started = performance.now();
+      await owners[arm]!.resumeMarkedSessions({ ...input, context: makeContext() });
+      const wallMs = performance.now() - started;
+      const remaining = seededRows.filter(
+        ({ sessionKey }) =>
+          readExactSessionEntryRow(agent.openOpenClawAgentDatabase({ agentId: "main" }), sessionKey)
+            ?.entry.mainRestartRecovery !== undefined,
+      ).length;
+      const failed = arm === 0 || values.control;
+      assert.equal(remaining, failed ? 30 : 0);
+      assert.equal(warnings.length - before, failed ? 30 : 0);
+      assert(
+        warnings.slice(before).every((message) => message.includes("SessionTranscriptColdError")),
+      );
+      coldPasses.push({ arm, pass, wallMs, warnings: warnings.length - before, remaining });
+    }
+    return;
+  }
   if (values.mark) {
     const shutdown = shutdownOwners[arm];
     if (shutdown) {
@@ -694,7 +783,7 @@ try {
           );
         }
         retainWorkspaceBinding();
-        if (values.resume && arm === 1 && !values.control) {
+        if (values.resume && !values["cold-stale"] && arm === 1 && !values.control) {
           assert.equal(readConfigMachineState("gateway.restartRecovery"), undefined);
         }
         if (values.mark) {
@@ -711,16 +800,19 @@ try {
         }
       }
       const resumedPerCall = (admissions - admissionsBefore) / iterations;
-      const settledStaleRuns = values.resume
-        ? seededRows.slice(4).filter(({ sessionKey }) => {
-            const row = readExactSessionEntryRow(
-              agent.openOpenClawAgentDatabase({ agentId: "main" }),
-              sessionKey,
-            )?.entry;
-            return row?.status === "killed" && row.lifecycleRunId === undefined;
-          }).length
-        : undefined;
-      if (values.resume) {
+      const settledStaleRuns =
+        values.resume && !values["cold-stale"]
+          ? seededRows.slice(4).filter(({ sessionKey }) => {
+              const row = readExactSessionEntryRow(
+                agent.openOpenClawAgentDatabase({ agentId: "main" }),
+                sessionKey,
+              )?.entry;
+              return row?.status === "killed" && row.lifecycleRunId === undefined;
+            }).length
+          : undefined;
+      if (values["cold-stale"]) {
+        assert.equal(resumedPerCall, 0);
+      } else if (values.resume) {
         const expectedResumes = arm === 0 || values.control ? baselineResumes : 4;
         assert.equal(resumedPerCall, expectedResumes);
         assert.equal(
@@ -755,6 +847,8 @@ try {
     values.output,
     `${JSON.stringify(
       {
+        coldStale: values["cold-stale"] ?? false,
+        coldPasses,
         scope: values.mark
           ? "Exported shutdown marker persistence; 60 live run-registry owners; real SQLite writes; no model cancellation or complete Gateway shutdown"
           : values.workspace

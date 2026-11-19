@@ -592,7 +592,6 @@ export async function runExecProcess({
           const { startDurableExecProcess } = await import("./bash-process-durable.js");
           return await startDurableExecProcess(
             session,
-            opts.sessionId,
             {
               ...input,
               env: resolveExecLaunchEnv(input.env, false),

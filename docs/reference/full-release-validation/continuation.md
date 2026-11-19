@@ -34,6 +34,11 @@ pnpm frv prioritize --restore <record> [--dry-run]
 | `continue --failed`    | Retries each child once as it becomes terminal, while siblings/parent may run; adopts active attempts and leaves green children untouched. A repeated failure exits immediately with attempt/budget. Ghost duplicate attempts require fresh all-group FRV. After green child evidence and original parent completion, reruns parent once to restore the same plan and reseal; early Decision/Drain disagreement does not waive plan/attempt checks. |
 | `prioritize --restore` | Recovers former priority-gate deferrals; see [Release priority](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery). Active validation no longer pauses CI/supporting workflows.                                                                                                                                                                                                       |
 
+For active child jobs, `status` shows the running step and its elapsed seconds (or
+`unknown` when GitHub has not supplied a step start time). JSON exposes this
+read-only progress as `activeJobs`, separately from the accepted job evidence and
+its digest. Progress does not establish that a job is healthy or qualified.
+
 Retry selection for `rerun --child` and continuation:
 
 | Condition                                                                                                                                  | Mode / action                                                                                                                                                                                                            |

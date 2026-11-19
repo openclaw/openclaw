@@ -68,8 +68,7 @@ export function describeToolGroup(
     [
       "commands",
       "reads",
-      "edits",
-      "writes",
+      "changes",
       "searches",
       "fetches",
       "memory",
@@ -100,7 +99,7 @@ export function describeToolGroup(
           Object.entries(summarizeAgentActivity([item], options).counts).find(
             ([, count]) => count > 0,
           )![0]);
-    groups.get(kind)!.push(item);
+    groups.get(kind === "edits" || kind === "writes" ? "changes" : kind)!.push(item);
   }
   const isRunning = (item: AgentActivityItem) =>
     item.status === "running" || options.continuingExecutions?.has(item.toolCallId ?? item.itemId);
