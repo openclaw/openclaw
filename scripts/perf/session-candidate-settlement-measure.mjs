@@ -2,6 +2,8 @@
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-candidate-settlement-measure.mjs \
 //   --state /absolute/new-fixture --seed --output /absolute/result.json
 // Repeat without --seed, alternating --owner-file frozen-baseline.ts and current source.
+// Add --gateway for older chat.history pages over an isolated loopback WebSocket.
+// Stable page-only reads can skip discovery; report that boundary, not a transport win.
 // Timing acceptance: fewer cleanup requests/allocations, equal pages and admission charges,
 // no >=20% median/p95 CPU or latency regression; five pairs plus baseline A/A controls.
 import assert from "node:assert/strict";
@@ -22,6 +24,7 @@ const { values } = parseArgs({
     seed: { type: "boolean" },
     iterations: { type: "string", default: "100" },
     allocations: { type: "boolean" },
+    gateway: { type: "boolean" },
   },
 });
 assert(values.state && values.output, "--state and --output are required");
@@ -40,6 +43,26 @@ Object.assign(process.env, {
   OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
   OPENCLAW_HOME: root,
 });
+if (values.gateway) {
+  process.env = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) =>
+      [
+        "PATH",
+        "LANG",
+        "TMPDIR",
+        "OPENCLAW_STATE_DIR",
+        "OPENCLAW_CONFIG_PATH",
+        "OPENCLAW_HOME",
+      ].includes(name),
+    ),
+  );
+  Object.assign(process.env, {
+    HOME: root,
+    OPENCLAW_SKIP_CHANNELS: "1",
+    OPENCLAW_SKIP_CRON: "1",
+    OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+  });
+}
 const env = {
   OPENCLAW_STATE_DIR: root,
   OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
@@ -57,7 +80,8 @@ registerHooks({
     return nextLoad(url === owner.href ? source.href : url, context);
   },
 });
-const { setRuntimeConfigSnapshot } = await import("../../src/config/runtime-snapshot.ts");
+const { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } =
+  await import("../../src/config/runtime-snapshot.ts");
 const config = { agents: { list: ["main", "alpha", "beta", "gamma"].map((id) => ({ id })) } };
 setRuntimeConfigSnapshot(config);
 const { runOpenClawAgentWriteTransaction, closeOpenClawAgentDatabasesAsync } =
@@ -135,25 +159,37 @@ const inventory = prepareSessionStoreTargetInventory(
 );
 const discovery = prepareSessionStoreTargetInventoryRead(inventory, undefined, []);
 const charges = [];
+const chargeOperations = [];
 let closures = 0;
 let cleanupMs = 0;
-const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
-sessionStoreLane.pool.run = (prepare, options) => {
-  charges.push(options.inputBytes);
-  return run(prepare, options);
-};
-const close = sessionStoreLane.pool.closeResources.bind(sessionStoreLane.pool);
-sessionStoreLane.pool.closeResources = async (...args) => {
-  closures++;
-  const at = performance.now();
-  try {
-    return await close(...args);
-  } finally {
-    cleanupMs += performance.now() - at;
-  }
-};
+for (const lane of values.gateway ? [historyLane, sessionStoreLane] : [sessionStoreLane]) {
+  const run = lane.pool.run.bind(lane.pool);
+  lane.pool.run = (prepare, options) => {
+    charges.push(options.inputBytes);
+    if (values.gateway) {
+      const charge = { operation: options.diagnosticOperation, bytes: options.inputBytes };
+      chargeOperations.push(charge);
+      return run(() => {
+        const input = prepare();
+        charge.operation = input.kind;
+        return input;
+      }, options);
+    }
+    return run(prepare, options);
+  };
+  const close = lane.pool.closeResources.bind(lane.pool);
+  lane.pool.closeResources = async (...args) => {
+    closures++;
+    const at = performance.now();
+    try {
+      return await close(...args);
+    } finally {
+      cleanupMs += performance.now() - at;
+    }
+  };
+}
 let expected;
-const read = () =>
+let read = () =>
   discovery.withRead(async (sources) => {
     assert.equal(sources.agents.length, 4);
     for (const target of targets) {
@@ -178,16 +214,98 @@ const read = () =>
   });
 const keepAlive = setInterval(() => {}, 1000);
 const inspector = values.allocations ? new Session() : undefined;
+let gateway;
+let client;
 try {
+  if (values.gateway) {
+    const { getFreePort } = await import("../lib/gateway-bench-probes.ts");
+    const { createGatewayWsClient } = await import("../lib/gateway-ws-client.ts");
+    const { PROTOCOL_VERSION } = await import("../../packages/gateway-protocol/src/version.ts");
+    const port = await getFreePort();
+    fs.writeFileSync(
+      process.env.OPENCLAW_CONFIG_PATH,
+      JSON.stringify({
+        agents: {
+          ownership: "explicit",
+          entries: Object.fromEntries(
+            targets.map(({ agentId }) => [
+              agentId,
+              { workspace: path.join(root, "workspace", agentId) },
+            ]),
+          ),
+        },
+        gateway: {
+          mode: "local",
+          bind: "loopback",
+          auth: { mode: "none" },
+          tailscale: { mode: "off" },
+          controlUi: { enabled: false },
+        },
+        browser: { enabled: false },
+        plugins: { enabled: false },
+        cron: { enabled: false },
+        update: { checkOnStart: false },
+        discovery: { mdns: { mode: "off" } },
+        logging: { level: "error", consoleLevel: "silent", file: path.join(root, "gateway.log") },
+      }),
+    );
+    clearRuntimeConfigSnapshot();
+    const { ensureCanonicalGatewayOwnerProfile } =
+      await import("../../src/state/user-profile-writes.ts");
+    await ensureCanonicalGatewayOwnerProfile("Synthetic history operator", { env: process.env });
+    const { startGatewayServer } = await import("../../src/gateway/server.ts");
+    gateway = await startGatewayServer(port, { bind: "loopback", controlUiEnabled: false });
+    await gateway.startupSettled;
+    client = createGatewayWsClient({ url: `ws://127.0.0.1:${port}` });
+    await client.waitOpen();
+    const connected = await client.request("connect", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "1.0.0",
+        platform: process.platform,
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.read", "operator.admin"],
+      caps: [],
+    });
+    assert.equal(connected.ok, true, JSON.stringify(connected.error));
+    read = async () => {
+      const response = await client.request(
+        "chat.history",
+        {
+          sessionKey: scope(targets[0]).sessionKey,
+          limit: 20,
+          offset: 40,
+          maxBytes: 262144,
+        },
+        60000,
+      );
+      assert.equal(response.ok, true, JSON.stringify(response.error));
+      assert.equal(response.payload.messages.length, 20);
+      const hash = sha256(JSON.stringify(response.payload.messages));
+      expected ??= hash;
+      assert.equal(hash, expected);
+    };
+  }
   const cold = performance.now();
   await read();
   const coldMs = performance.now() - cold;
+  // Gateway readiness precedes optional post-ready work; measure warm traffic separately.
+  if (values.gateway) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10000);
+    });
+  }
   for (let i = 0; i < 10; i++) {
     await read();
   }
   closures = 0;
   cleanupMs = 0;
   charges.length = 0;
+  chargeOperations.length = 0;
   inspector?.connect();
   await inspector?.post("HeapProfiler.startSampling", {
     samplingInterval: 16384,
@@ -222,6 +340,7 @@ try {
     cleanupMs,
     chargesHash: sha256(JSON.stringify(charges)),
     charges: charges.slice(0, 5),
+    ...(values.gateway ? { chargeOperations: [...chargeOperations] } : {}),
   };
   await rotateDatabaseWorkers(sessionStoreLane);
   await rotateDatabaseWorkers(historyLane);
@@ -233,6 +352,8 @@ try {
         ownerHash,
         node: process.version,
         iterations,
+        transport: values.gateway ? "loopback WebSocket chat.history" : "worker owner",
+        settleMs: values.gateway ? 10000 : 0,
         fixture:
           "5000 sessions, four stores, 100 messages per hot transcript; no workspace scan or 35GiB I/O stress",
         pageHash: expected,
@@ -251,6 +372,8 @@ try {
   );
 } finally {
   inspector?.disconnect();
+  client?.close();
+  await gateway?.close({ reason: "Synthetic history benchmark complete", exitAfterClose: true });
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
   clearInterval(keepAlive);
