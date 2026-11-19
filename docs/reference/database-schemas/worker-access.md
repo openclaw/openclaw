@@ -13,6 +13,11 @@ awaits operations, retains owner-published facts, and checks current authority
 before effects. Moving a query to a worker is not enough: reuse those facts and
 batch related work so ordinary requests do not repeat database calls.
 
+Session discovery settlement compares prepared physical paths directly. Exact
+targets already retained by the lane need no worker cleanup request. Family
+discovery still closes unretained siblings; revocation, native-close qualification,
+worker retirement, and admission byte accounting keep their existing owners.
+
 Plugin model catalog publication uses the agent database writer queue. Credential
 cleanup joins those same queues before inspecting candidate catalogs, so an earlier
 publication settles before a clean-catalog decision. Later publications revalidate

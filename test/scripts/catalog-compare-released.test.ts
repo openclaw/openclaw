@@ -231,7 +231,7 @@ describe("catalog compare released --check", () => {
     fs.writeFileSync(
       path.join(bin, "npm"),
       `#!/bin/sh
-[ "$1" = install ] && mkdir -p node_modules/openclaw/dist && echo '"official-external-provider-catalog.json" function validateAndSanitizeRemoteModelCatalogBundleV2(' > node_modules/openclaw/dist/listing.mjs
+[ "$1" = install ] && mkdir -p node_modules/openclaw/dist && echo '"official-external-provider-catalog.json" function validateAndSanitizeRemoteModelCatalogBundleV2(' > node_modules/openclaw/dist/listing.mjs && echo '{"version":"2099.1.1"}' > node_modules/openclaw/package.json
 exit 0
 `,
       { mode: 0o755 },
@@ -263,5 +263,74 @@ exit 0
       "v3 on openclaw@2099.1.1: no v3 reader, skipped",
       "v3: no checked release reads v3 yet",
     ]);
+  });
+
+  // The 2026.10.33 provider plugins declare the peer `openclaw >=2026.11.4`; resolving
+  // it moved the 2026.10.33 install to 2026.11.5 and the publish gate checked 2026.11.5 twice.
+  it.each([
+    ["keeps the release when a plugin peer wants a newer openclaw", "", undefined],
+    ["fails setup when npm installs another openclaw anyway", "always", "openclaw@2099.2.0"],
+  ])("%s", (_name, swap, expectedError) => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "catalog-peer-test-")));
+    try {
+      const bin = path.join(root, "bin");
+      fs.mkdirSync(bin);
+      fs.mkdirSync(path.join(root, "tmp"));
+      // npm resolving the peer moves the root openclaw unless peers are ignored.
+      fs.writeFileSync(
+        path.join(bin, "npm"),
+        `#!/bin/sh
+[ "$1" = view ] && { echo 2099.1.1; exit 0; }
+manifest() { mkdir -p "node_modules/$1"; echo "{\\"version\\":\\"$2\\"}" > "node_modules/$1/package.json"; }
+case "$*" in
+*openclaw@2099.1.1*)
+  manifest openclaw 2099.1.1
+  mkdir -p node_modules/openclaw/dist
+  echo '"official-external-provider-catalog.json" "npmSpec": "@openclaw/foo-provider"' > node_modules/openclaw/dist/listing.mjs ;;
+*@openclaw/foo-provider@2099.1.1*)
+  manifest @openclaw/foo-provider 2099.1.1
+  case "$*" in *--legacy-peer-deps*) [ "${swap}" = always ] && manifest openclaw 2099.2.0 ;; *) manifest openclaw 2099.2.0 ;; esac ;;
+esac
+exit 0
+`,
+        { mode: 0o755 },
+      );
+      const bundle = path.join(root, "bundle.json");
+      fs.writeFileSync(bundle, JSON.stringify({ schemaVersion: 3, models: [{}] }));
+      const result = spawnSync(
+        process.execPath,
+        [
+          "scripts/catalog-compare-released.mts",
+          "--check",
+          "--candidate",
+          bundle,
+          "--releases",
+          "2099.1.1",
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            PATH: `${bin}:${process.env.PATH ?? ""}`,
+            HOME: root,
+            OPENCLAW_HOME: root,
+            OPENCLAW_STATE_DIR: path.join(root, "state"),
+            TMPDIR: path.join(root, "tmp"),
+          },
+        },
+      );
+      const installed = path.join(
+        root,
+        "tmp/openclaw-catalog-compare-released/2099.1.1/node_modules/openclaw/package.json",
+      );
+      if (expectedError) {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(`npm installed ${expectedError}`);
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(fs.readFileSync(installed, "utf8")).version).toBe("2099.1.1");
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

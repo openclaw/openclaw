@@ -87,7 +87,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       env: {
         [DSN_ENV]: connection,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_GATEWAY_RESTART_TRACE: "0",
+        OPENCLAW_GATEWAY_RESTART_TRACE: "1",
         OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         // Kill the Gateway owner itself, rather than a CLI respawn wrapper.
         OPENCLAW_NO_RESPAWN: "1",
@@ -477,24 +477,16 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       // SIGINT enters shutdown without a restart-intent read queued behind the held write.
       // Signal the command directly; the fixture adapter's kill cancels its whole tree.
       process.kill(firstChild.pid!, "SIGINT");
+      // Readiness shares the retiring HTTP transport, so its draining 503 can be missed.
+      // Deliberately cross transport retirement while the accepted finalizer is held:
+      // its database owner and original process must survive until the lock is released.
       await expect
-        .poll(
-          async () => {
-            const response = await fetch(`http://127.0.0.1:${instance.port}/readyz`, {
-              headers: { authorization: `Bearer ${instance.gatewayToken}` },
-              signal,
-            });
-            return { status: response.status, body: await response.json() };
-          },
-          { timeout: 15_000 },
-        )
-        .toMatchObject({
-          status: 503,
-          body: { ready: false, failing: expect.arrayContaining(["gateway-draining"]) },
-        });
+        .poll(() => instance.logs(), { timeout: 15_000 })
+        .toContain("restart trace: restart.close.http-server ");
       expect(await blockedBackends()).toEqual(blocked);
       expect(firstChild.exitCode).toBeNull();
       expect(firstChild.signalCode).toBeNull();
+      expect(() => process.kill(firstChild.pid!, 0)).not.toThrow();
       await lock.disposeAsync();
       expect(await withinTest(exited, signal)).toEqual([0, null]);
       await expect.poll(ownedBackends).toEqual([]);
