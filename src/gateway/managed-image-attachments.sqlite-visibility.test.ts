@@ -9,8 +9,13 @@ import {
   observeHostDataSql,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
+import { makeAssistantMessageFixture } from "../agents/test-helpers/assistant-message-fixtures.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
-import { ensureSessionEntrySync } from "../config/sessions/session-accessor.js";
+import {
+  deleteSessionEntryLifecycle,
+  ensureSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import {
   publishEncodedSessionTranscriptArchive,
   resolveSqliteTranscriptArchivePath,
@@ -18,6 +23,7 @@ import {
 import { rewriteSqliteTranscriptEventRowsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
@@ -26,8 +32,13 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { appendSessionTranscriptMessageByIdentity } from "../plugin-sdk/session-transcript-runtime.js";
+import {
+  ASSISTANT_DISPLAY_CONTENT_FIELD,
+  readAssistantDisplayContent,
+} from "../shared/assistant-display-content.js";
 import { withChannelReadAuthority } from "../shared/channel-read-authority.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
@@ -41,9 +52,11 @@ import {
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
+  attachManagedOutgoingMediaToMessage,
   cleanupManagedOutgoingMediaRecords,
   createManagedOutgoingMediaBlocks,
   MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
+  parseManagedOutgoingRoute,
   resolveManagedOutgoingMediaArtifactDownload,
 } from "./managed-image-attachments.js";
 import {
@@ -249,6 +262,208 @@ describe("managed attachment SQLite visibility", () => {
       expect(await f.download()).toBeNull();
       await cleanup({ sessionKey: f.scope.sessionKey });
       await expectRetained(f);
+    },
+  );
+
+  it.each(["main", "secondary"] as const)(
+    "retains committed image history across healthy custom session store switches for %s",
+    async (agentId) => {
+      const sessionKey = `agent:${agentId}:main`;
+      const storeA = path.join(stateDir, "custom-a", "sessions.sqlite");
+      const storeB = path.join(stateDir, "custom-b", "sessions.sqlite");
+      const configA: OpenClawConfig = {
+        agents: { entries: { main: {}, secondary: {} } },
+        session: { store: storeA },
+      };
+      const configB: OpenClawConfig = {
+        agents: { entries: { main: {}, secondary: {} } },
+        session: { store: storeB },
+      };
+      const countReferences = (messages: unknown[], artifactId: string, url: string) =>
+        messages.filter((transcriptMessage) =>
+          readAssistantDisplayContent(transcriptMessage).some(
+            (block) => block.artifactId === artifactId && block.url === url,
+          ),
+        ).length;
+      const commitImage = async (storePath: string, name: string, cfg: OpenClawConfig) => {
+        const sessionId = randomUUID();
+        // A fixed shared store's physical owner need not be the message's logical agent.
+        openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+        const scope = { agentId, sessionKey, sessionId, storePath };
+        expect(ensureSessionEntrySync(scope, { sessionId, updatedAt: Date.now() })).toBe(true);
+        const manager = await SessionManager.openAsync(scope, stateDir);
+        await manager.appendMessageAsync({
+          role: "user",
+          content: `Synthetic ${name} image history`,
+          timestamp: 1,
+        });
+        const originalBytes = createSolidPngBuffer(1, 1, {
+          r: name === "A" ? 17 : 51,
+          g: 34,
+          b: name === "A" ? 51 : 17,
+        });
+        const blocks = await createManagedOutgoingMediaBlocks({
+          sessionKey,
+          agentId,
+          stateDir,
+          items: [
+            {
+              url: `data:image/png;base64,${originalBytes.toString("base64")}`,
+              trustedLocal: false,
+            },
+          ],
+        });
+        expect(blocks).toHaveLength(1);
+        const block = blocks[0];
+        if (block?.type !== "image" || typeof block.url !== "string") {
+          throw new Error(`Expected a real managed image block for store ${name}`);
+        }
+        if (typeof block.artifactId !== "string") {
+          throw new Error(`Expected a managed artifact identity for store ${name}`);
+        }
+        const artifactId = block.artifactId;
+        const url = block.url;
+        const route = parseManagedOutgoingRoute(url);
+        if (!route || route.sessionKey !== sessionKey) {
+          throw new Error(`Expected a session-owned managed URL for store ${name}`);
+        }
+        const messageId = await manager.appendMessageAsync(
+          Object.assign(
+            makeAssistantMessageFixture({
+              content: [{ type: "text", text: `Committed synthetic image ${name}` }],
+              stopReason: "stop",
+              errorMessage: undefined,
+            }),
+            { [ASSISTANT_DISPLAY_CONTENT_FIELD]: blocks },
+          ),
+          { config: cfg },
+        );
+        if (!messageId) {
+          throw new Error(`Store ${name} did not commit a canonical assistant message`);
+        }
+        expect(await attachManagedOutgoingMediaToMessage({ messageId, blocks, stateDir })).toBe(
+          true,
+        );
+        const record = await readManagedImageRecord(route.attachmentId, stateDir);
+        expect(record).toMatchObject({ messageId, retentionClass: "history" });
+        if (!record) {
+          throw new Error(`Missing committed managed record for store ${name}`);
+        }
+        const originalPath = recordPath(record);
+        const messages = await readSessionMessagesAsync(scope, {
+          mode: "full",
+          reason: "healthy custom-store managed-media baseline",
+        });
+        const artifact = () =>
+          resolveManagedOutgoingMediaArtifactDownload({
+            sessionKey,
+            agentId,
+            artifactId,
+            stateDir,
+          });
+        expect(messages).toHaveLength(2);
+        expect(messages).toContainEqual(
+          expect.objectContaining({ __openclaw: expect.objectContaining({ id: messageId }) }),
+        );
+        const references = countReferences(messages, artifactId, url);
+        expect(references).toBe(1);
+        expect(await artifact()).not.toBeNull();
+        const committedBytes = await fsAsync.readFile(originalPath);
+        expect(committedBytes).toEqual(originalBytes);
+        expect((await fsAsync.stat(storePath)).isFile()).toBe(true);
+        return {
+          scope,
+          messageId,
+          attachmentId: route.attachmentId,
+          originalPath,
+          originalBytes,
+          messages,
+          artifact,
+        };
+      };
+
+      // Both locators are genuinely custom and healthy, not missing/invalid/ambiguous controls.
+      setRuntimeConfigSnapshot(configA);
+      const a = await commitImage(storeA, "A", configA);
+      await cleanup({ sessionKey });
+      const retainedA = await readManagedImageRecord(a.attachmentId, stateDir);
+      expect(retainedA).toMatchObject({
+        messageId: a.messageId,
+        retentionClass: "history",
+      });
+      const artifactA = await a.artifact();
+      const retainedBytesA = await fsAsync.readFile(a.originalPath);
+      expect(artifactA).not.toBeNull();
+      expect(retainedBytesA).toEqual(a.originalBytes);
+
+      setRuntimeConfigSnapshot(configB);
+      const b = await commitImage(storeB, "B", configB);
+      expect(a.scope.sessionId).not.toBe(b.scope.sessionId);
+      expect(a.messageId).not.toBe(b.messageId);
+      expect(a.attachmentId).not.toBe(b.attachmentId);
+      expect(await fsAsync.realpath(storeA)).not.toBe(await fsAsync.realpath(storeB));
+      // Retention must not make another physical store's media visible in the selected session.
+      expect(await readManagedImageRecord(a.attachmentId, stateDir)).not.toBeNull();
+      expect(await fsAsync.readFile(a.originalPath)).toEqual(a.originalBytes);
+      expect(await a.artifact()).toBeNull();
+      // Run the actual destructive owner with ordinary options while healthy B is selected.
+      await cleanup({ sessionKey });
+      for (const f of [a, b]) {
+        expect((await fsAsync.stat(f.scope.storePath)).isFile()).toBe(true);
+        expect(
+          await readSessionMessagesAsync(f.scope, {
+            mode: "full",
+            reason: "retained physical store managed-media reference",
+          }),
+        ).toEqual(f.messages);
+      }
+      expect(await readManagedImageRecord(b.attachmentId, stateDir)).not.toBeNull();
+      expect(await fsAsync.readFile(b.originalPath)).toEqual(b.originalBytes);
+      expect(await b.artifact()).not.toBeNull();
+      setRuntimeConfigSnapshot(configA);
+      expect(await readManagedImageRecord(a.attachmentId, stateDir)).not.toBeNull();
+      expect(await fsAsync.readFile(a.originalPath)).toEqual(a.originalBytes);
+      expect(await a.artifact()).not.toBeNull();
+
+      // A real source deletion must still release its unreferenced media; retaining every
+      // record whenever another store is registered would hide the bug but leak originals.
+      expect(
+        await deleteSessionEntryLifecycle({
+          agentId: a.scope.agentId,
+          storePath: storeA,
+          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+          expectedSessionId: a.scope.sessionId,
+          archiveTranscript: false,
+          deleteTranscriptWithoutArchive: true,
+        }),
+      ).toMatchObject({ deleted: true, archivedTranscripts: [] });
+      expect(
+        await readSessionMessagesAsync(a.scope, {
+          mode: "full",
+          reason: "deleted physical store A",
+        }),
+      ).toEqual([]);
+      setRuntimeConfigSnapshot(configB);
+      const unavailableStoreA = `${storeA}.temporarily-unavailable`;
+      await closeOpenClawAgentDatabaseByPathAsync(storeA, "main");
+      await fsAsync.rename(storeA, unavailableStoreA);
+      try {
+        // A registry row without a readable database is uncertainty, not proof of absence.
+        await cleanup({ sessionKey });
+        expect(await readManagedImageRecord(a.attachmentId, stateDir)).not.toBeNull();
+        expect(await fsAsync.readFile(a.originalPath)).toEqual(a.originalBytes);
+        await expect(fsAsync.stat(storeA)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(await b.artifact()).not.toBeNull();
+      } finally {
+        await closeOpenClawAgentDatabaseByPathAsync(storeA, "main");
+        await fsAsync.rename(unavailableStoreA, storeA);
+      }
+      await cleanup({ sessionKey });
+      expect(await readManagedImageRecord(a.attachmentId, stateDir)).toBeNull();
+      await expect(fsAsync.readFile(a.originalPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readManagedImageRecord(b.attachmentId, stateDir)).not.toBeNull();
+      expect(await fsAsync.readFile(b.originalPath)).toEqual(b.originalBytes);
+      expect(await b.artifact()).not.toBeNull();
     },
   );
 

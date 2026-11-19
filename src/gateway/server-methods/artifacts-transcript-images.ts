@@ -22,9 +22,14 @@ export async function findTranscriptImageArtifact(
     runId: params.runId,
     messageRole: params.messageRole,
   });
+  const pending = selected.prepareRead();
+  if (pending) {
+    await pending;
+  }
   selected.assertCurrent();
   return {
     sessionKey: selected.sessionKey,
+    prepareRead: selected.prepareRead,
     assertCurrent: selected.assertCurrent,
     artifact,
   };
