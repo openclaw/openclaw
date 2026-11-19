@@ -22,6 +22,7 @@ import { resolveCronOperatorExecutionRevision } from "../service/jobs-tool-polic
 import { getCronJobsStoreRevision, loadCronJobsStore, saveCronJobsStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { claimCronRunReceiptForTest } from "../store/run-receipt-store.test-support.js";
+import { makeCronStreamSandboxTarget } from "../stream-sandbox.test-support.js";
 import type { CronStoredJob } from "../types.js";
 
 function legacyJob(id: string): CronStoredJob {
@@ -53,12 +54,35 @@ it("migrates shared source owners without SQL on the host, stale inventories, or
       schedule: { kind: "stream", command: ["synthetic-stream-source"] },
       streamOperatorSource: legacyMemberSnapshot(),
     };
+    const sandbox: CronStoredJob = {
+      ...stream,
+      id: "sandbox",
+      operatorSource: legacyJob("sandbox").operatorSource,
+      streamOperatorSource: undefined,
+      streamSandbox: makeCronStreamSandboxTarget({
+        operator: {
+          profileId: memberRoleImport.profileId,
+          openclawIdPrincipal: legacyMemberSnapshot().openclawIdPrincipal,
+          assignedRole: null,
+          githubLogin: null,
+          scopes: ["operator.write"],
+          gatewayAccessGrant: { pluginId: "stream-access", grantId: "original-grant" },
+        },
+      }),
+    };
+    sandbox.operatorSource!.executionRevision = resolveCronOperatorExecutionRevision(sandbox);
+    const staleSandbox = structuredClone(sandbox);
+    staleSandbox.id = "sandbox-stale";
+    staleSandbox.operatorSource!.executionRevision = "retained-stale-execution";
     const restricted = legacyJob("restricted");
     restricted.operatorSource!.source.snapshot.rolePolicy = {
       ...memberRoleImport.policy,
       scopes: ["operator.read"],
     };
-    await saveCronJobsStore(storePath, { version: 1, jobs: [...jobs, stream, restricted] });
+    await saveCronJobsStore(storePath, {
+      version: 1,
+      jobs: [...jobs, stream, sandbox, staleSandbox, restricted],
+    });
     const database = openOpenClawStateDatabase();
     const handles = jobs.map((job) => claimCronRunReceiptForTest(storePath, job, 10));
     for (const job of jobs) {
@@ -136,6 +160,23 @@ it("migrates shared source owners without SQL on the host, stale inventories, or
       for (const job of after.jobs) {
         if (job.id === "restricted") {
           expect(job.operatorSource).toEqual(restricted.operatorSource);
+        } else if (job.id === "sandbox" || job.id === "sandbox-stale") {
+          expect(job.streamSandbox).toEqual({
+            ...sandbox.streamSandbox,
+            operator: { ...sandbox.streamSandbox!.operator, assignedRole: "operator" },
+          });
+          expect(job.streamOperatorSource).toBeUndefined();
+          expect(job.operatorSource).toEqual({
+            ...sandbox.operatorSource,
+            executionRevision:
+              job.id === "sandbox"
+                ? resolveCronOperatorExecutionRevision(job)
+                : "retained-stale-execution",
+            source: {
+              ...sandbox.operatorSource!.source,
+              snapshot: { ...legacyMemberSnapshot(), assignedRole: "operator" },
+            },
+          });
         } else if (job.id === "stream-only") {
           expect(job.streamOperatorSource).toEqual({
             ...stream.streamOperatorSource,

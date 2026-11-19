@@ -438,21 +438,24 @@ describe("operator role policy", () => {
       expect(() => fresh.authority.assertCurrent()).not.toThrow();
       expectCurrent(original.authority);
     }));
-  it("revokes admitted authority on profile reassignment and refuses new admin requests", () =>
+  it("keeps admitted authority on profile reassignment and refuses new admin requests", () =>
     inState(async () => {
-      const { profile, cfg, client: reader, capture } = roleFixture();
+      const { profile, cfg, client: reader, context } = roleFixture();
       setUserProfileRole(profile.id, "maintainer");
       const admin = identifiedClient(profile.id);
       admin.connect.scopes = ["operator.admin"];
-      using source = await capture();
+      using source = await captureSource({ client: admin, context });
       expect(authorizeCurrentOperatorRoleScopes(admin, cfg)).toBeUndefined();
 
       setUserProfileRole(profile.id, "guest");
       invalidateOperatorRolePolicy(profile.id);
       expect(authorizeCurrentOperatorRoleScopes(admin, cfg)).toMatchObject({ code: "FORBIDDEN" });
       expect(authorizeCurrentOperatorRoleScopes(reader, cfg)).toBeUndefined();
-      expect(source.authority.signal?.aborted).toBe(true);
-      expect(source.authority.assertCurrent).toThrow();
+      expectCurrent(source.authority);
+      expect(source.authority.reauthorize).toThrow("Your operator role changed");
+      await expect(captureSource({ client: admin, context })).rejects.toThrow(
+        "Your operator role changed",
+      );
       const reconnected = identifiedClient(profile.id);
       reconnected.connect.scopes = ["operator.write"];
       expect(authorizeCurrentOperatorRoleScopes(reconnected, cfg)).toBeUndefined();

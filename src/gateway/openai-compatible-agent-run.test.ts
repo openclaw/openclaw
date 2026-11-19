@@ -338,7 +338,7 @@ describe("OpenAI-compatible operator run authority", () => {
             committed = restricted;
           }
           settlement.resolve(completedResult);
-          if (changed === "grant" || changed === "role") {
+          if (changed === "grant") {
             expect(() => authority.assertCurrent()).toThrow();
             await expect(running).rejects.toThrow();
           } else {

@@ -13,5 +13,11 @@
 # Persisted pre-upgrade cron, stream, queued, restart, environment and standing-grant
 # sources retain only matching captured policy; mismatches and stale commits refuse.
 # Individual admitted requests finish while retained runs, queues and children stop.
-# Measured against the merged PR base: 2206 net test lines; 400 ordinary + 1806 allocated.
-1806
+# Sandbox stream migration survives database reopen without changing target or grant;
+# payload execution bindings migrate only when valid, and stale bindings remain stale.
+# Retained question producers cancel ordinary, secret and sessionless waiters, including
+# role loss during preparation and independent owner cleanup; admitted requests settle.
+# Explicit source revocation also cancels non-runtime producers and their native waiters.
+# Retained Goal role-loss coverage waits for actual provider cancellation before settlement.
+# Measured against the merged PR base: 2460 net test lines; 400 ordinary + 2060 allocated.
+2060

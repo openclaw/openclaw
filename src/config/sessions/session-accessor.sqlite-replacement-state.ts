@@ -26,7 +26,6 @@ import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-t
 import { commitSessionCreationReceipt } from "./session-creation-receipts.js";
 import type { SessionEntryWindowRow } from "./session-entry-window.types.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
-import { importPendingInputMemberRoleSources } from "./session-pending-input-member-role-import.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { SessionEntry } from "./types.js";
 
@@ -141,13 +140,6 @@ export function commitSessionEntryReplacementsInDatabase(
           : Math.max(canonical.entry.updatedAt, replacement.entry.updatedAt);
     }
     const canonicalFacts = canonical && captureSessionEntrySnapshot(canonical);
-    if (input.memberSourceRoleImport) {
-      importPendingInputMemberRoleSources(
-        database,
-        { sessionKey: replacement.sessionKey, sessionId: next.sessionId },
-        input.memberSourceRoleImport,
-      );
-    }
     const previousWindow = windows.get(next.sessionId);
     const written = writeSessionEntry(
       database,
