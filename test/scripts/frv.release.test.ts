@@ -717,7 +717,7 @@ else process.stdout.write(JSON.stringify(value));
 }
 
 describe("publication status real CLI", () => {
-  it.each(["current grant", "removed grant", "pre-ledger", "missing new ledger", "forbidden"])(
+  it.each(["current grant", "removed grant", "missing ledger", "forbidden"])(
     "joins publication status with authenticated Q policy: %s",
     async (mode) => {
       const fixture = publicationFixture();
@@ -790,13 +790,6 @@ describe("publication status real CLI", () => {
               failure:
                 mode === "forbidden" ? "gh: Forbidden (HTTP 403)" : "gh: Not Found (HTTP 404)",
             };
-        const oldPath = "scripts/lib/release-validation-waivers.mjs";
-        responses[prefix + "contents/" + oldPath + "?ref=" + SHA] = contents(
-          oldPath,
-          mode === "pre-ledger"
-            ? "const RELEASE_VALIDATION_WAIVERS = [];"
-            : 'import data from "./release-validation-waivers.json";',
-        );
         if (failed) {
           Object.assign(responses[prefix + "actions/runs/101"] as object, {
             conclusion: "failure",
@@ -808,7 +801,7 @@ describe("publication status real CLI", () => {
         }
       });
       const value = JSON.parse(result.stdout);
-      const accepted = mode === "current grant" || mode === "pre-ledger";
+      const accepted = mode === "current grant";
       expect(result.status, result.stderr + result.stdout).toBe(accepted ? 0 : 1);
       expect(value.publication.collection.complete).toBe(accepted);
       if (accepted) {

@@ -6,46 +6,12 @@ import { parseNodeFailureReport } from "./ci-node-test-evidence.mjs";
 import defaultWaiverPolicy from "./release-validation-waivers.json" with { type: "json" };
 
 export const RELEASE_VALIDATION_WAIVERS_PATH = "scripts/lib/release-validation-waivers.json";
-const LEGACY_EVALUATOR_PATH = "scripts/lib/release-validation-waivers.mjs";
-
-function requireMissingLedger(error) {
-  if (!/\bHTTP 404\b/u.test(String(error?.message) + " " + String(error?.stderr))) {
-    throw error;
-  }
-}
-
-function preLedgerWaivers(source) {
-  // Frozen pre-ledger Q retains its original P-owned policy contract. Authenticate
-  // the old evaluator as data; never execute Q or treat a broken new ledger as old.
-  if (
-    !source.includes("const RELEASE_VALIDATION_WAIVERS = [") ||
-    source.includes("release-validation-waivers.json")
-  ) {
-    throw new Error("Qualification Q requires its release waiver ledger");
-  }
-  return parseReleaseValidationWaivers(JSON.stringify(defaultWaiverPolicy));
-}
-
 export function readReleaseValidationWaivers(readSource) {
-  let source;
-  try {
-    source = readSource(RELEASE_VALIDATION_WAIVERS_PATH);
-  } catch (error) {
-    requireMissingLedger(error);
-    return preLedgerWaivers(readSource(LEGACY_EVALUATOR_PATH));
-  }
-  return parseReleaseValidationWaivers(source);
+  return parseReleaseValidationWaivers(readSource(RELEASE_VALIDATION_WAIVERS_PATH));
 }
 
 export async function readReleaseValidationWaiversAsync(readSource) {
-  let source;
-  try {
-    source = await readSource(RELEASE_VALIDATION_WAIVERS_PATH);
-  } catch (error) {
-    requireMissingLedger(error);
-    return preLedgerWaivers(await readSource(LEGACY_EVALUATOR_PATH));
-  }
-  return parseReleaseValidationWaivers(source);
+  return parseReleaseValidationWaivers(await readSource(RELEASE_VALIDATION_WAIVERS_PATH));
 }
 
 export function parseReleaseValidationWaivers(source) {

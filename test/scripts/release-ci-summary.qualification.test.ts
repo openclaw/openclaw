@@ -103,7 +103,7 @@ function npmProducer(f: ReturnType<typeof candidatePublicationFixture>) {
 }
 
 describe("candidate-owned publish consumer chain", () => {
-  it("verifies pre-ledger frozen Q evidence without requiring a new Q grant file", async () => {
+  it("rejects missing Q ledger evidence without using a fallback policy", async () => {
     const f = candidatePublicationFixture();
     const client = {
       ...f.client,
@@ -111,13 +111,10 @@ describe("candidate-owned publish consumer chain", () => {
         if (path === "scripts/lib/release-validation-waivers.json") {
           throw new Error("gh: Not Found (HTTP 404)");
         }
-        if (path === "scripts/lib/release-validation-waivers.mjs") {
-          return "const RELEASE_VALIDATION_WAIVERS = [];";
-        }
         return f.client.getWorkflowSource(sha, path);
       },
     };
-    await expect(validateReleaseRunEvidence(verifier(f), client)).resolves.toBeDefined();
+    await expect(validateReleaseRunEvidence(verifier(f), client)).rejects.toThrow("HTTP 404");
   });
   it("evaluates raw failed evidence against Q data rather than the verifier checkout", async () => {
     const f = candidatePublicationFixture({
@@ -230,14 +227,14 @@ describe("candidate-owned publish consumer chain", () => {
     "revoked P",
   ])("selects a direct admitted root across transport refs only for %s", async (scenario) => {
     const candidateBound = scenario.startsWith("candidate-bound");
-    const version = candidateBound ? "2026.11.4" : "2026.8.28-beta.1";
+    const version = "2099.1.1-beta.1";
     const changedPaths = [
       `CHANGELOG/${version.split("-")[0]}.md`,
       `CHANGELOG/records/${version.split("-")[0]}.md`,
     ];
     const root = candidatePublicationFixture({
       candidateVersion: version,
-      ...(candidateBound ? { candidateSha: "5eb2d8052ddc363245bea3ca4ec0833815ab6e93" } : {}),
+      ...(candidateBound ? { candidateSha: "a".repeat(40) } : {}),
     });
     let evidenceClient: Parameters<typeof validateReleaseRunEvidence>[1] = root.client;
     if (candidateBound) {
@@ -248,12 +245,7 @@ describe("candidate-owned publish consumer chain", () => {
       assert(gate);
       const jobs = [
         ...originalJobs.filter((job) => job !== gate),
-        ...[
-          "checks-node-agentic-control-plane-runtime-state",
-          "checks-ui-e2e-real-gateway (1/2)",
-          "macos-swift (tests)",
-          gate.name,
-        ].map((name, index) =>
+        ...["synthetic leaf", gate.name].map((name, index) =>
           Object.assign({}, gate, {
             id: 1501 + index,
             name,
@@ -261,6 +253,23 @@ describe("candidate-owned publish consumer chain", () => {
             steps: [{ name: "Verify selected CI lanes", conclusion: "failure" }],
           }),
         ),
+      ];
+      const grants = [
+        {
+          targetVersion: version,
+          targetSha: root.q,
+          childRole: "normalCi",
+          jobName: "synthetic leaf",
+          reason: "Synthetic candidate-bound approval",
+          aggregates: [
+            {
+              jobName: gate.name,
+              stepName: "Verify selected CI lanes",
+              causes: ["synthetic leaf failed"],
+              exactCauses: true,
+            },
+          ],
+        },
       ];
       const composite = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
         effectiveRunAttempt: 1,
@@ -276,6 +285,7 @@ describe("candidate-owned publish consumer chain", () => {
           child: { key: "normalCi", jobs },
           targetVersion: version,
           targetSha: root.q,
+          waiverPolicy: grants,
         }).waivers.map((waiver) =>
           Object.assign({}, waiver, { runId: child.runId, runAttempt: 1 }),
         ),
@@ -289,15 +299,12 @@ describe("candidate-owned publish consumer chain", () => {
           ...(await original.getRun(id)),
           ...(id === child.runId ? { conclusion: "failure" } : {}),
         }),
+        getWorkflowSource: (sha: string, path?: string) =>
+          path === "scripts/lib/release-validation-waivers.json"
+            ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: grants })
+            : original.getWorkflowSource(sha, path),
         getJobLog: async (id: number) =>
-          id === 1504
-            ? ["checks-ui-e2e-real-gateway", "checks-node-core-test-nondist-shard", "macos-swift"]
-                .map(
-                  (cause) =>
-                    `2026-11-15T04:00:00.0000000Z ##[error]${cause} finished with failure (selected=true)`,
-                )
-                .join("\n")
-            : original.getJobLog(id),
+          id === 1502 ? "##[error]synthetic leaf failed" : original.getJobLog(id),
       };
     }
     const descendant = scenario.endsWith("descendant");
@@ -400,7 +407,7 @@ describe("candidate-owned publish consumer chain", () => {
         current: { conclusion: "success" },
       });
       if (candidateBound) {
-        expect(evidence.waivers).toHaveLength(3);
+        expect(evidence.waivers).toHaveLength(1);
         expect(evidence.children.find((child) => child.role === "normalCi")).toMatchObject({
           conclusion: "failure",
         });
