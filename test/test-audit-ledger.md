@@ -1154,6 +1154,19 @@ pass all ten cases; temporary instrumentation is restored byte for byte.
 Scoped typecheck, lint, formatting and line-cap checks pass. Independent
 preservation and local reviews found no actionable defects.
 
+### Standalone declaration fixture cleanup
+
+At `cd2ae19272a3ee7be456385fa7efc56d6e2109a6`, the standalone declaration suite clears its
+temporary-root tracker before removal. A removal failure loses ownership of the
+failed root. Reuse the shared cleanup owner without changing the single
+declaration / case. Retain worker and WebSocket declaration identity, positive
+type compatibility and both expected type errors. Keep registration before
+fallible fixture setup and compiler disposal before teardown.
+
+The original registered-hook failure, candidate retry and clean baseline and
+candidate runs are pending qualification in the native PR workspace. Production
+and shared helpers remain unchanged.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
