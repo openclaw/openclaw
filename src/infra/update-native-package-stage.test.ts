@@ -55,9 +55,11 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         const grouped = layout === "pnpm11" || pnpm12;
         const bun = layout.startsWith("bun");
         const manager = bun ? "bun" : "pnpm";
+        // An apostrophe in the stage path makes pnpm spell it `'\''` inside quoted words.
         const project = join(
           base,
-          layout === "bun-launcher" ? "Bun ' install" : "",
+          { "bun-launcher": "Bun ' install", "pnpm12-quoted": "team's base" }[layout as string] ??
+            "",
           "install/global",
         );
         const globalRoot = join(
@@ -156,17 +158,25 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         } else {
           const target = relative(stage.binDir, candidateEntry);
           const basedir = pnpm12 ? "basedir_abs" : "basedir";
+          const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
           // Current pnpm (seen from 11.28 and 12.21) quotes the base and target separately:
           // exec node  "$basedir_abs"/'../global/v11/<group>/node_modules/openclaw/openclaw.mjs' "$@"
           const reference = (variable: string) =>
-            layout === "pnpm12-quoted" ? `"$${variable}"/'${target}'` : `"$${variable}/${target}"`;
+            layout === "pnpm12-quoted"
+              ? `"$${variable}"/${quote(target)}`
+              : `"$${variable}/${target}"`;
+          // Finalize refuses a launcher whose NODE_PATH still names the stage.
+          const nodePath =
+            layout === "pnpm12-quoted"
+              ? `export NODE_PATH=${quote(join(dirname(candidateRoot), ".pnpm", "node_modules"))}\n`
+              : "";
           const convertedBranch = pnpm12
             ? `basedir_win="$basedir_abs"\nif [ "$1" = win ]; then\n  exec node  ${reference("basedir_win")} "$@"\nfi\n`
             : "";
           const entry = reference(basedir);
           await writeLauncher(
             launcher,
-            `#!/bin/sh\n${basedir}=$(CDPATH= cd -P -- "$(dirname "$0")" && pwd -P)\n${convertedBranch}if [ -x "$${basedir}/node" ]; then\n  exec "$${basedir}/node" ${entry} "$@"\nelse\n  exec node  ${entry} "$@"\nfi\n# cmd-shim-target=${candidateEntry}\n`,
+            `#!/bin/sh\n${basedir}=$(CDPATH= cd -P -- "$(dirname "$0")" && pwd -P)\n${nodePath}${convertedBranch}if [ -x "$${basedir}/node" ]; then\n  exec "$${basedir}/node" ${entry} "$@"\nelse\n  exec node  ${entry} "$@"\nfi\n# cmd-shim-target=${candidateEntry}\n`,
           );
           const node = process.execPath.replaceAll("'", "'\\''");
           await writeLauncher(
@@ -226,51 +236,6 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
       );
       expect(await fs.readFile(manifest, "utf8")).toBe(concurrentManifest);
       expect(await fs.readdir(stage.binDir)).toEqual([]);
-    });
-  });
-
-  it("publishes a quoted pnpm launcher whose stage path itself contains an apostrophe", async () => {
-    await withTestDir({ prefix: "native-package-stage-quoted-" }, async (base) => {
-      // pnpm spells `'` inside its single-quoted words as `'\''`, including in the stage path.
-      const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-      const project = join(base, "team's base", "install", "global");
-      const globalRoot = join(project, "v11");
-      const packageRoot = join(globalRoot, "group", "node_modules", "openclaw");
-      const liveBinDir = join(base, "team's base", "bin");
-      await fs.mkdir(packageRoot, { recursive: true });
-      await fs.mkdir(liveBinDir, { recursive: true });
-      const stage = await prepareStage(
-        { manager: "pnpm", command: "pnpm", globalRoot, packageRoot },
-        liveBinDir,
-      );
-      const candidateRoot = join(stage.projectRoot, "v11", "group", "node_modules", "openclaw");
-      await fs.writeFile(join(candidateRoot, "openclaw.mjs"), "");
-      const launcher = join(stage.binDir, "openclaw");
-      await writeLauncher(
-        launcher,
-        [
-          "#!/bin/sh",
-          'basedir_abs=$(CDPATH= cd -P -- "$(dirname "$0")" && pwd -P)',
-          `export NODE_PATH=${quote(join(stage.projectRoot, "v11", "group", "node_modules"))}`,
-          `exec "$basedir_abs/node"  "$basedir_abs"/${quote(relative(stage.binDir, join(candidateRoot, "openclaw.mjs")))} "$@"`,
-          `# cmd-shim-target=${join(packageRoot, "openclaw.mjs")}`,
-          "",
-        ].join("\n"),
-      );
-
-      await finalizeNativePackageStage(stage, "openclaw");
-      // Activation: the stage becomes the live project and its launcher is published.
-      await fs.rename(project, `${project}.previous`);
-      await fs.rename(stage.projectRoot, project);
-      await fs.copyFile(launcher, join(liveBinDir, "openclaw"));
-      await writeLauncher(
-        join(liveBinDir, "node"),
-        `#!/bin/sh\nprintf '%s\\n%s\\n' "$1" "$NODE_PATH"\n`,
-      );
-
-      const [entry, nodePath] = (await output(join(liveBinDir, "openclaw"))).split("\n");
-      expect(resolve(entry ?? "")).toBe(join(await fs.realpath(packageRoot), "openclaw.mjs"));
-      expect(nodePath).toBe(join(await fs.realpath(project), "v11", "group", "node_modules"));
     });
   });
 
