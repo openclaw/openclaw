@@ -1,16 +1,15 @@
 import { expect, it } from "vitest";
 import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
+import { createDirectChatContext } from "../../../gateway/server-chat.agent-events.test-helpers.js";
+import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { createSubagentRegistryRestorer } from "./subagent-registry-restore.js";
 import { saveSubagentRegistryToSqlite } from "./subagent-registry-state.fixture.test-support.js";
-import {
-  markSubagentRunTerminated,
-  resetSubagentRegistryForTests,
-  testing,
-} from "./subagent-registry.test-helpers.js";
+import { terminateLiveSubagentsForShutdown } from "./subagent-registry.js";
+import { resetSubagentRegistryForTests, testing } from "./subagent-registry.test-helpers.js";
 
 it.each(["recorded failure", "shutdown"] as const)(
   "collects recorded child outcomes after %s",
@@ -66,14 +65,12 @@ it.each(["recorded failure", "shutdown"] as const)(
         saveSubagentRegistryToSqlite(new Map(entries.map((entry) => [entry.runId, entry])));
         await restore();
         if (restart === "shutdown") {
-          for (const entry of entries.slice(1)) {
-            await markSubagentRunTerminated({
-              runId: entry.runId,
-              reason: "Gateway stopped",
-              suppressTaskDelivery: true,
-              suppressSessionEffects: true,
-            });
+          const gateway = createDirectChatContext();
+          const resolveGatewayContext = () => gateway;
+          for (const entry of subagentRuns.values()) {
+            bindGatewayContextResolver(entry, resolveGatewayContext);
           }
+          await terminateLiveSubagentsForShutdown(resolveGatewayContext);
           await resetSubagentRegistryForTests({ persist: false });
           await restore();
         }
@@ -91,7 +88,7 @@ it.each(["recorded failure", "shutdown"] as const)(
             { runId: "captured", status: "done", result: "saved result" },
             ...entries.slice(1).map((entry) => ({
               runId: entry.runId,
-              status: restart === "shutdown" ? "killed" : "failed",
+              status: "failed",
               error: expect.stringMatching(/child execution failed|Gateway stopped/),
             })),
           ],
