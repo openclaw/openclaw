@@ -225,9 +225,22 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     state.utilityModelRef = undefined;
     state.consecutiveFailures = 0;
   };
+  // Automatic utility routing follows the session's effective provider and auth
+  // selection (multi-user linked accounts) like dashboard titles; explicit stays explicit.
+  const resolveUtilityModelRef = (agentId: string, state?: SessionObserverState) => {
+    const route = state?.sessionRoute;
+    return resolveUtilityModelRefForAgent({
+      cfg: deps.getConfig(),
+      agentId,
+      ...(route && {
+        primaryProvider: route.provider,
+        primaryModelRef: `${route.provider}/${route.model}${route.profile ? `@${route.profile}` : ""}`,
+      }),
+    });
+  };
   const modelSlots = createSessionObserverModelSlots({
     states,
-    resolve: (agentId) => resolveUtilityModelRefForAgent({ cfg: deps.getConfig(), agentId }),
+    resolve: resolveUtilityModelRef,
     demote: demoteUtilityModel,
   });
 
@@ -246,8 +259,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       !work.resetting.has(resolveSessionSubscriptionKey(state.sessionKey, state.agentId)) &&
       lifecycle.isTracked(state) &&
       deps.getConfig().gateway?.controlUi?.sessionObserver !== false,
-    resolveUtilityModelRef: (agentId) =>
-      resolveUtilityModelRefForAgent({ cfg: deps.getConfig(), agentId }),
+    resolveUtilityModelRef,
     suspend: suspendState,
     demote: demoteUtilityModel,
   });

@@ -2,9 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { isValidBase64 } from "@openclaw/media-core/base64";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import { resolveAgentWorkspaceDir, resolveNativeModelPrimary } from "../agents/agent-scope.js";
-import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
-import { resolveSessionModelRef } from "../agents/session-model-ref.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveSessionAuthProfile, resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import { createCrustaceanSlug } from "../agents/session-slug.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
@@ -145,19 +144,12 @@ function resolveDashboardTitleAuthProfile(params: {
   entry: DashboardSessionTitleModelEntry | undefined;
   regularProvider: string;
 }): string | undefined {
-  const sessionProfile = params.entry?.authProfileOverride?.trim();
-  if (sessionProfile) {
-    return sessionProfile;
-  }
-  const configuredRef = resolveNativeModelPrimary(params.cfg, params.agentId)?.trim();
-  const configuredProfile = configuredRef
-    ? splitTrailingAuthProfile(configuredRef).profile
-    : undefined;
-  if (!configuredProfile) {
-    return undefined;
-  }
-  const configuredModel = resolveSessionModelRef(params.cfg, undefined, params.agentId);
-  return configuredModel.provider === params.regularProvider ? configuredProfile : undefined;
+  return resolveSessionAuthProfile({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    entry: params.entry,
+    provider: params.regularProvider,
+  });
 }
 
 // Introductions models put before the requested title, e.g. "Session title:",

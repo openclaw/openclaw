@@ -73,3 +73,17 @@ it.each(["terminal", "final-pending"] as const)(
     expect(demote).not.toHaveBeenCalled();
   },
 );
+
+it("resolves the utility model scoped to the claiming session's route", () => {
+  const resolve = vi.fn((agentId: string, state?: SessionObserverState) =>
+    state?.sessionRoute ? `${agentId}/${state.sessionRoute.profile}` : `${agentId}/agent-route`,
+  );
+  const scoped = createSessionObserverModelSlots({ states, resolve, demote });
+  const routed = modelState(0);
+  routed.sessionRoute = { provider: "anthropic", model: "claude-opus-5-5", profile: "linked" };
+  states.set(routed.sessionKey, routed);
+
+  expect(scoped.claim("main", routed)).toBe("main/linked");
+  expect(scoped.claim("main")).toBe("main/agent-route");
+  expect(resolve).toHaveBeenLastCalledWith("main", undefined);
+});
