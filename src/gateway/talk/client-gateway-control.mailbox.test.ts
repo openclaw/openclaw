@@ -21,8 +21,9 @@ vi.mock("../../agents/admitted-run-context.js", () => ({
 vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: mocks.runEmbeddedAgentCore,
 }));
-// mock-isolation: Gateway consults enter the typed-turn command owner; the stand-in keeps the
+// Gateway consults enter the typed-turn command owner; the stand-in keeps the
 // gated backend in control of mailbox ordering.
+// mock-isolation: command-owner stand-in keeps the gated backend in control of mailbox ordering.
 vi.mock("../../agents/agent-command.js", async () => {
   const { createTalkCommandOwnerStandIn } =
     await import("./client-agent-runtime.command-owner.test-support.js");

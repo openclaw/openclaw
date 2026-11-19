@@ -232,7 +232,6 @@ export function createTalkClientAgentConsultRunner(params: {
               const operation = getCurrentSessionControllerOwner();
               if (
                 operation?.key === canonicalKey &&
-                operation.sessionId === identity.sessionId &&
                 (!registeredSource || registeredSource.input.claim?.operation === operation)
               ) {
                 owner.operation = operation;

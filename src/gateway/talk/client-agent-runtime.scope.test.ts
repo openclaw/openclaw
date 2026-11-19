@@ -19,9 +19,11 @@ import { createTalkClientAgentRuntime } from "./client-agent-runtime.js";
 import type { TalkClientRunAuthority } from "./client-run-authority.js";
 
 const model = vi.hoisted(() => ({ run: vi.fn(), embedded: vi.fn() }));
-// mock-isolation: Replace the typed-turn command owner while keeping registration, runtime
+// Replace the typed-turn command owner while keeping registration, runtime
 // admission and selector real. Talk must never reach the embedded runner directly.
+// mock-isolation: command-owner stand-in; registration, admission and selector stay real.
 vi.mock("../../agents/agent-command.js", () => ({ agentCommandFromGatewayIngress: model.run }));
+// mock-isolation: detects any direct embedded-runner call, which Talk must never make.
 vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: model.embedded }));
 afterEach(() => {
   testing.resetSessionControllerForTest();

@@ -4,8 +4,9 @@ const prepared = vi.hoisted(() => ({
   load: vi.fn(),
   acquire: vi.fn(),
 }));
-// mock-isolation: Model-runtime publication is Gateway-owned; this suite checks only how a Talk
+// Model-runtime publication is Gateway-owned; this suite checks only how a Talk
 // consult borrows it for the session's own model and releases both leases.
+// mock-isolation: Gateway owns model-runtime publication; this suite checks only Talk's lease borrowing.
 vi.mock("../../agents/prepared-model-runtime.js", () => ({
   loadPublishedGatewayReplyDispatchRuntime: prepared.load,
   acquireAgentRunPreparedModelRuntime: prepared.acquire,

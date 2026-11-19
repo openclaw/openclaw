@@ -166,7 +166,6 @@ export function createRelayAgentRunRegistration(
             session.context.resolveGatewayContext,
             controllerTarget,
           ) !== chat ||
-          getRpcSourceIdentity(chat).sessionId !== sessionId ||
           !isTalkConsultSourceCurrent({
             entry: chat,
             connectionId: params.connId,

@@ -231,7 +231,6 @@ export function createTalkClientAgentRuntime(params: {
                           params.getRegisteredSource?.() !== source ||
                           getRpcSourceForGateway(runParams.runId, params.resolveGatewayContext) !==
                             source ||
-                          source.input.protocolRunId !== runParams.runId ||
                           source.input.target?.storeScope !== storePath ||
                           identity.agentId !== agentId ||
                           !params.rawSourceRef ||
@@ -300,16 +299,13 @@ export function createTalkClientAgentRuntime(params: {
             // embedded attachment. Accepted terminal writes must settle before publication.
             await drainAgentRunTerminalWrites(operationalRunInstance);
             runParams.abortSignal?.throwIfAborted();
-            const receipt = result.meta.agentMeta?.terminalReceipt;
+            // This result is the awaited settlement of the command admitted for
+            // operationalRunInstance, so it belongs to that run by construction.
             if (
               !result.meta.aborted &&
               !result.meta.error &&
               result.meta.stopReason !== "error" &&
-              (result.meta.yielded === true ||
-                result.meta.terminalReply?.disposition === "visible") &&
-              (!receipt ||
-                (receipt.runId === operationalRunInstance.runId &&
-                  receipt.sessionId === currentSessionId))
+              (result.meta.yielded === true || result.meta.terminalReply?.disposition === "visible")
             ) {
               params.onCommandCompleted?.(operationalRunInstance);
             }

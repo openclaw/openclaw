@@ -31,6 +31,7 @@ const { coreParams, deferred, mocks } = await vi.hoisted(
   () => import("./client-gateway-control.agent-consult.test-support.js"),
 );
 
+// mock-isolation: controlled admission refs so Talk custody and claims are asserted deterministically.
 vi.mock("../../agents/admitted-run-context.js", () => ({
   closeAdmittedRunDelegatedAuthority: vi.fn(),
   createOperationalRunInstanceRef: mocks.createOperationalRunInstanceRef,
@@ -39,8 +40,9 @@ vi.mock("../../agents/admitted-run-context.js", () => ({
 vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: mocks.runEmbeddedAgentCore,
 }));
-// mock-isolation: Gateway consults enter the typed-turn command owner; model its admission
+// Gateway consults enter the typed-turn command owner; model its admission
 // and run contract so this suite keeps exercising Talk's own custody and completion claims.
+// mock-isolation: command-owner stand-in; the suite exercises Talk's own custody and completion claims.
 vi.mock("../../agents/agent-command.js", async () => {
   const { createTalkCommandOwnerStandIn } =
     await import("./client-agent-runtime.command-owner.test-support.js");

@@ -43,6 +43,7 @@ const mocks = vi.hoisted(() => ({
   runEmbeddedAgentCore: vi.fn(),
 }));
 
+// mock-isolation: controlled admission refs so requester-final claims are asserted deterministically.
 vi.mock("../../agents/admitted-run-context.js", () => ({
   closeAdmittedRunDelegatedAuthority: vi.fn(),
   createOperationalRunInstanceRef: mocks.createOperationalRunInstanceRef,
@@ -51,6 +52,7 @@ vi.mock("../../agents/admitted-run-context.js", () => ({
 vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: mocks.runEmbeddedAgentCore,
 }));
+// mock-isolation: command-owner stand-in; the suite exercises Talk's requester-final completion claims.
 vi.mock("../../agents/agent-command.js", async () => {
   const { createTalkCommandOwnerStandIn } =
     await import("../talk/client-agent-runtime.command-owner.test-support.js");
