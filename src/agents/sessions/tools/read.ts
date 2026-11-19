@@ -3,7 +3,6 @@ import * as os from "node:os";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import type { Component, Keybinding, Text } from "@earendil-works/pi-tui";
 import { classifyAttachmentBytes } from "@openclaw/media-core/attachment-classify";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
 import { shortenPathWithHome } from "../../../infra/home-display.js";
@@ -50,7 +49,7 @@ import {
   decodeReadTextBuffer,
   type ReadTextCapture,
 } from "./read-text-capture.js";
-import type { ReadToolDetails, ReadToolInput } from "./tool-contracts.js";
+import type { ReadToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { readToolInputSchema, readToolOutputSchema } from "./tool-schemas.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
@@ -437,17 +436,6 @@ export function createReadToolDefinition(
     promptSnippet: "Read file contents",
     promptGuidelines: ["Use read to examine files and its offset, limit, or cursor to continue."],
     parameters: readToolInputSchema,
-    // Models send optional: false for a required read; the schema accepts only true.
-    prepareArguments: (args) => {
-      let prepared = args;
-      if (isRecord(args) && args.optional === false) {
-        const required = { ...args };
-        delete required.optional;
-        prepared = required;
-      }
-      // SAFETY: agent-core validates prepared arguments against the schema before execution.
-      return prepared as ReadToolInput;
-    },
     outputSchema: readToolOutputSchema,
     async execute(
       _toolCallId,

@@ -7,7 +7,6 @@ import path from "node:path";
 import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import JSZip from "jszip";
-import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { runNodeScript } from "../../../../test/helpers/run-node-script.js";
@@ -208,22 +207,6 @@ console.log("headless-read-ok");`,
     const tool = createReadToolDefinition(tempDir);
     await expect(executeRead(tool, { path: ".", optional: true })).rejects.toThrow(
       "Read requires a file path, but . is a directory. List the directory, then read a specific file.",
-    );
-  });
-
-  it("accepts optional: false as a required read", async () => {
-    const { tool } = await fileFixture("notes.txt", "present");
-    // Same order as agent-core: prepare, then validate, then execute.
-    const call = (raw: { path: string; optional: boolean }) =>
-      validateToolArguments(tool, {
-        type: "toolCall",
-        id: "read-1",
-        name: "read",
-        arguments: tool.prepareArguments ? tool.prepareArguments(raw) : raw,
-      }) as Parameters<typeof tool.execute>[1];
-    await expectReadText(tool, call({ path: "notes.txt", optional: false }), "present");
-    await expect(executeRead(tool, call({ path: "missing.txt", optional: false }))).rejects.toThrow(
-      "File not found",
     );
   });
 
