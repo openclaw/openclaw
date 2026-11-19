@@ -3,9 +3,11 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../test-helpers/agent-session-token-mock.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 
+let resolveProjectedRequestPressure: typeof import("./preemptive-compaction.js").resolveProjectedRequestPressure;
 let estimateLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateLlmBoundaryTokenPressure;
 let buildPrePromptContextBudgetStatus: typeof import("./preemptive-compaction.js").buildPrePromptContextBudgetStatus;
 let estimateToolSchemaTokenPressure: typeof import("./preemptive-compaction.js").estimateToolSchemaTokenPressure;
@@ -18,6 +20,7 @@ beforeAll(async () => {
   // the runtime environment these helpers protect.
   vi.resetModules();
   ({
+    resolveProjectedRequestPressure,
     estimateLlmBoundaryTokenPressure,
     buildPrePromptContextBudgetStatus,
     estimateRenderedLlmBoundaryTokenPressure,
@@ -130,6 +133,30 @@ function makeAssistantToolCall(args: unknown): AgentMessage {
 }
 
 describe("preemptive-compaction", () => {
+  it("routes predicted overflow from already-sent tool results to compaction", () => {
+    const sentOutput = "alpha beta gamma delta epsilon ".repeat(500);
+    const messages = [
+      makeAgentAssistantMessage({ content: [{ type: "text", text: "read previous reports" }] }),
+      ...Array.from({ length: 8 }, () => makeToolResultMessage(sentOutput)),
+      makeAgentAssistantMessage({ content: [{ type: "text", text: "reports received" }] }),
+    ];
+    const decision = resolveProjectedRequestPressure({
+      context: { messages },
+      previousRequest: { requestIndex: 1, messageCount: messages.length, contextTokens: 41_000 },
+      contextTokenBudget: 40_000,
+      reserveTokens: 0,
+    });
+
+    expect(decision).toMatchObject({
+      pressureSource: "provider_context_usage",
+      promptBudgetBeforeReserve: 40_000,
+      route: "compact_only",
+      toolResultReducibleChars: 0,
+    });
+    // The baseline estimator adds ceil(12 framing tokens * 1.2 safety margin) = 15 tokens.
+    expect([decision.estimatedPromptTokens, decision.overflowTokens]).toEqual([41_015, 1_015]);
+  });
+
   const verboseHistory =
     "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu ".repeat(40);
   const verboseSystem =

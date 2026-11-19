@@ -454,6 +454,7 @@ export function installEmbeddedAttemptContextGuards(input: {
             }).messages,
             contextWindowTokens: contextTokenBudget,
             maxCharsOverride: toolResultMaxChars,
+            preserveSentToolResults: true,
           }).maxReducibleChars,
         contextTokenBudget,
         reserveTokens: settingsManager.getCompactionReserveTokens(),

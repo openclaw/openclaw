@@ -200,7 +200,9 @@ export async function recoverEmbeddedRunOverflow(
         maxCharsOverride: resolveLiveToolResultMaxChars({
           contextWindowTokens: contextTokenBudget,
         }),
-        protectTrailingToolResults: preflightRecovery?.route === "compact_then_truncate",
+        protectTrailingToolResults:
+          !isPreflightRecovery && preflightRecovery?.route === "compact_then_truncate",
+        preserveSentToolResults: isPreflightRecovery,
         projectionState,
         ...target,
       });
@@ -410,6 +412,7 @@ export async function recoverEmbeddedRunOverflow(
       messages: input.attempt.messagesSnapshot,
       contextWindowTokens: input.contextTokenBudget,
       maxCharsOverride: toolResultMaxChars,
+      preserveSentToolResults: isPreflightRecovery,
     });
     if (hasOversized) {
       input.state.toolResultTruncationAttempted = true;

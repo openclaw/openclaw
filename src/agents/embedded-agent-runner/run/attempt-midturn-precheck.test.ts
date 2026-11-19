@@ -21,6 +21,7 @@ import { createToolResultPromptProjectionState } from "../session-prompt-state.j
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { createBaseInput } from "./attempt-prompt-submit.test-support.js";
 import { installEmbeddedAttemptContextGuards } from "./attempt-setup.js";
+import { MidTurnPrecheckSignal } from "./midturn-precheck.js";
 
 const { createFixture } = await vi.hoisted(
   async () => await import("./attempt-execution-phase.test-support.js"),
@@ -47,6 +48,74 @@ type AdmissionOptions = Partial<{
 }>;
 
 describe("provider request admission", () => {
+  it("compacts instead of trimming already-sent results at the request guard", async () => {
+    const fixture = await createFixture({ exerciseTerminalMerges: false });
+    const model = { ...testModel, contextWindow: 40_000 };
+    const settingsManager = SettingsManager.inMemory({ compaction: { reserveTokens: 0 } });
+    const { session, sessionManager } = await createTestSession({ model, settingsManager });
+    const call = { type: "toolCall" as const, id: "read-history", name: "read", arguments: {} };
+    await sessionManager.appendMessageAsync(createAssistant(model, [call], "toolUse", 0));
+    await sessionManager.appendMessageAsync({
+      role: "toolResult",
+      toolCallId: call.id,
+      toolName: call.name,
+      content: [{ type: "text", text: "alpha beta gamma delta epsilon ".repeat(4_000) }],
+      isError: false,
+      timestamp: 1,
+    });
+    await sessionManager.appendMessageAsync(
+      createAssistant(model, [{ type: "text", text: "Report received." }], "stop", 0),
+    );
+    Object.assign(fixture.input.attempt, {
+      config: { agents: { defaults: { compaction: { midTurnPrecheck: { enabled: true } } } } },
+      contextTokenBudget: model.contextWindow,
+      model,
+      modelId: model.id,
+      provider: model.provider,
+      sessionId: session.sessionId,
+    });
+    const guards = installEmbeddedAttemptContextGuards({
+      activeContextEngine: undefined,
+      activeSession: session,
+      agentDir: "/fixture/agent",
+      attempt: fixture.input.attempt,
+      computerContextEpoch: { value: 0 },
+      dropThinkingBlocksForEstimate: false,
+      effectiveCwd: "/fixture",
+      effectiveFsWorkspaceOnly: true,
+      effectiveWorkspace: "/fixture",
+      getPrePromptMessageCount: () => 0,
+      getPromptCache: () => undefined,
+      getPromptCacheRetention: () => "none",
+      getCompactionReplayEnabled: () => false,
+      getServerToolClearingEnabled: () => false,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
+      getSystemPrompt: () => session.agent.state.systemPrompt,
+      isOpenAIResponsesApi: false,
+      repairToolUseResultPairing: false,
+      sessionAgentId: "main",
+      sessionManager,
+      settingsManager,
+    });
+    onTestFinished(() => guards.remove());
+    const messages = await session.agent.convertToLlm(
+      sessionManager.buildSessionContext().messages,
+    );
+    expect(messages.map(({ role }) => role)).toEqual(["assistant", "toolResult", "assistant"]);
+    expect(() =>
+      guards.checkMidTurnPrecheck({
+        context: { messages },
+        previousRequest: { requestIndex: 1, messageCount: messages.length, contextTokens: 41_000 },
+      }),
+    ).toThrow(MidTurnPrecheckSignal);
+    const request = guards.takePendingMidTurnPrecheckRequest();
+    expect(request?.overflowTokens).toBeGreaterThan(0);
+    expect(request).toMatchObject({
+      route: "compact_only",
+      toolResultReducibleChars: 0,
+    });
+  });
+
   const visible = { completionTokens: 5_000, assistantChars: 20_000 };
   const largerVisible = { completionTokens: 6_000, assistantChars: 24_000 };
   type AdmissionCase = {
