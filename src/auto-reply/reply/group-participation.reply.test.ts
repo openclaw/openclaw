@@ -1,5 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { MISSING_REPLY_NOTICE_TEXT } from "../../agents/reply-completion.js";
 import { TOOL_CALL_RAW_TOOL_NAME } from "../../agents/tool-catalog.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { isIndexedSessionEntry } from "../../config/sessions/session-entry-codec.js";
@@ -24,6 +24,13 @@ vi.mock("../../decisions/runtime.js", async (importOriginal) => ({
 
 const answer = (content: string) => ({ delta: { role: "assistant", content } });
 const unavailable: DecisionOutcome = { status: "unavailable", reason: "overloaded" };
+function systemMessages(request: unknown) {
+  if (!isRecord(request) || !Array.isArray(request.messages)) {
+    throw new Error("The provider request has no messages");
+  }
+  const messages: unknown[] = request.messages;
+  return messages.filter((message) => isRecord(message) && message.role === "system");
+}
 function texts(reply: ReplyPayload | ReplyPayload[] | undefined) {
   return (Array.isArray(reply) ? reply : reply ? [reply] : []).flatMap((payload) =>
     payload.text ? [payload.text] : [],
@@ -44,13 +51,15 @@ it.each([
   ["engagement", "message_tool_only", 1],
   ["engagement", "message_tool_only", 2],
 ] as const)(
-  "settles %s participation with NO_REPLY in %s delivery (%s model calls)",
+  "settles %s participation in %s mode (%s model calls)",
   async (attention, sourceReplyDeliveryMode, primaryCalls) => {
     const previousRequests = fixture.requests.length;
     const previousTyping = fixture.typing();
     const previousPartials = fixture.partials.length;
+    const runState: ReplyOperationRunState = {};
     decision.mockImplementation(async (batch) => judgment(batch, { attention }));
     const deliveredText = "The approved reply was delivered.";
+    const textReply = primaryCalls === 1 && sourceReplyDeliveryMode === "automatic";
     if (primaryCalls === 2) {
       fixture.respond({
         delta: {
@@ -73,25 +82,29 @@ it.each([
         stop: "tool_calls",
       });
     }
-    fixture.respond(answer("NO_REPLY"));
+    fixture.respond(answer(textReply ? deliveredText : "NO_REPLY"));
     await fixture.dispatch(
       "Bob, see you at lunch.",
       `source-${attention}-${sourceReplyDeliveryMode}-${primaryCalls}`,
       "-10001",
-      { sourceReplyDeliveryMode },
+      { sourceReplyDeliveryMode, [REPLY_OPERATION_RUN_STATE]: runState },
     );
     expect(decision).toHaveBeenCalledOnce();
     expect(fixture.requests).toHaveLength(previousRequests + primaryCalls);
-    expect(fixture.sent).toEqual(
-      primaryCalls === 2 ? [deliveredText] : primaryCalls ? [MISSING_REPLY_NOTICE_TEXT] : [],
-    );
+    expect(fixture.sent).toEqual(textReply || primaryCalls === 2 ? [deliveredText] : []);
     if (primaryCalls) {
       expect(JSON.stringify(fixture.requests.at(-1))).toContain(
-        "Group participation was approved for this turn.",
+        "Its participation assessment is authoritative",
       );
     }
     expect(fixture.typing() > previousTyping).toBe(primaryCalls > 0);
-    expect(fixture.partials).toHaveLength(previousPartials);
+    if (!textReply) {
+      expect(fixture.partials).toHaveLength(previousPartials);
+    }
+    if (primaryCalls === 1 && !textReply) {
+      // A provider violating the reply instruction must not get a synthetic error as its answer.
+      expect(runState.replyCompletion).toMatchObject({ outcome: "silent" });
+    }
     const sessionKey = "agent:main:telegram:group:-10001";
     const entry = await readSessionEntryInWorker({ storePath: fixture.storePath, sessionKey });
     if (!entry) {
@@ -160,6 +173,14 @@ it.each(["engagement", "opportunity", "unavailable"] as const)(
     expect(fixture.sent.slice(previousSent)).toEqual([final]);
     expect(decision).toHaveBeenCalledOnce();
     expect(fixture.requests).toHaveLength(previousRequests + 2);
+    const initialSystemMessages = systemMessages(fixture.requests[previousRequests]);
+    expect(initialSystemMessages).toHaveLength(1);
+    expect(JSON.stringify(fixture.requests[previousRequests])).toContain(
+      "Without participation approval for the current turn, if addressed to someone else",
+    );
+    expect(JSON.stringify(fixture.requests[previousRequests])).toContain(
+      "For turns without participation approval: If no text reply is needed",
+    );
     expect(fixture.requests[previousRequests]).toMatchObject({
       tools: expect.arrayContaining([
         expect.objectContaining({ function: expect.objectContaining({ name: "exec" }) }),
@@ -180,5 +201,11 @@ it.each(["engagement", "opportunity", "unavailable"] as const)(
     );
     expect(decision).toHaveBeenCalledOnce();
     expect(JSON.stringify(fixture.requests.at(-1))).toContain(final);
+    expect(systemMessages(fixture.requests.at(-1))).toEqual(initialSystemMessages);
+    if (attention !== "unavailable") {
+      expect(JSON.stringify(initialSystemMessages)).not.toContain(
+        "Its participation assessment is authoritative",
+      );
+    }
   },
 );

@@ -80,6 +80,7 @@ it.each([
 ] as const)("keeps %s on the ordinary reply path", async (entry) => {
   const cli = entry === "generic-cli";
   const roomEvent = entry === "room-event";
+  const silent = roomEvent || entry === "assistance-off";
   fixture.config.agents!.defaults!.model = {
     primary: cli ? "fixture-cli/test-model" : "test-provider/test-model",
   };
@@ -90,10 +91,10 @@ it.each([
   }
   models.decision.mockImplementation(async (batch) => judgment(batch, { attention: "none" }));
   models.embedded.mockResolvedValue({
-    payloads: roomEvent ? [] : [{ text: "Ordinary reply." }],
+    payloads: silent ? [] : [{ text: "Ordinary reply." }],
     meta: {
       durationMs: 1,
-      ...(roomEvent ? { terminalReply: { disposition: "silent" as const } } : {}),
+      ...(silent ? { terminalReply: { disposition: "silent" as const } } : {}),
     },
   });
   models.cli.mockResolvedValue({
@@ -113,7 +114,7 @@ it.each([
     (Array.isArray(reply) ? reply : [reply]).flatMap((payload) =>
       payload?.text ? [payload.text] : [],
     ),
-  ).toEqual(roomEvent ? [] : ["Ordinary reply."]);
+  ).toEqual(silent ? [] : ["Ordinary reply."]);
   expect(models.decision).not.toHaveBeenCalled();
   expect(models.embedded).toHaveBeenCalledTimes(cli ? 0 : 1);
   expect(models.cli).toHaveBeenCalledTimes(cli ? 1 : 0);
@@ -124,6 +125,9 @@ it.each([
     const params = models.embedded.mock.calls[0]?.[0];
     expect(params?.disableMessageTool).not.toBe(true);
     expect(params?.permissionMode).not.toBe("read-only");
+    expect(params?.currentInboundContext?.text ?? "").not.toContain(
+      "Its participation assessment is authoritative",
+    );
     if (roomEvent) {
       expect(params?.sourceReplyDeliveryMode).toBe("message_tool_only");
     }
@@ -146,16 +150,11 @@ it("keeps the approved reply commitment through CLI fallback", async () => {
     }),
   );
   models.cli.mockResolvedValue({
-    payloads: [],
-    meta: { durationMs: 1, terminalReply: { disposition: "silent" } },
+    payloads: [{ text: "The port is 443." }],
+    meta: { durationMs: 1 },
   });
   const reply = await fixture.reply("Bob, do you know the port?", "cli-fallback-source", "-10102");
-  expect(reply).toMatchObject({
-    isError: true,
-    text: expect.stringContaining(
-      "Fallback used fixture-cli/test-model, but it produced no visible reply",
-    ),
-  });
+  expect([reply].flat()).toContainEqual(expect.objectContaining({ text: "The port is 443." }));
   expect(fixture.typing()).toBeGreaterThan(0);
   expect(models.embedded).toHaveBeenCalledTimes(1);
   expect(models.embedded.mock.calls[0]?.[0]).toMatchObject({
@@ -166,5 +165,8 @@ it("keeps the approved reply commitment through CLI fallback", async () => {
   expect(models.cli.mock.calls[0]?.[0]).toMatchObject({
     terminalReplyExpectation: "required",
     sourceReplyDeliveryMode: "automatic",
+    currentInboundContext: {
+      text: expect.stringContaining("Its participation assessment is authoritative"),
+    },
   });
 });
