@@ -161,11 +161,8 @@ export function createTemplateClawHubSignIn(dependencies = defaultDependencies) 
       if (attempt.result) {
         return attempt.result;
       }
-      if (attempt.inFlight) {
-        const shared = await attempt.inFlight;
-        target.assertCurrent();
-        return shared;
-      }
+      // Join an active exchange after start has settled; concurrent polls can
+      // arrive during that await. Only the first continuation starts the exchange.
       const device = await attempt.start;
       target.assertCurrent();
       const now = dependencies.now();

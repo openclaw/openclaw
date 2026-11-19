@@ -28,9 +28,9 @@ export class TemplateCreatorSignIn {
     private readonly connected: () => void,
   ) {}
 
-  private request<T extends TemplatesDraftsSignInParams["action"]>(
+  private request(
     target: Target,
-    action: T,
+    action: TemplatesDraftsSignInParams["action"],
     requestId?: string,
   ) {
     return target.client.request<TemplatesDraftsSignInResult>(METHOD, {
@@ -160,12 +160,11 @@ export class TemplateCreatorSignIn {
     if (result.status === "pending") {
       this.schedule(target, result);
       // Keep the verified URL obtained by start for this request.
-      result = {
+      this.state = {
         ...result,
         verificationUrl:
           this.state?.status === "pending" ? this.state.verificationUrl : result.verificationUrl,
       };
-      this.state = result;
     } else {
       this.state = { status: result.status === "finishing" ? "failed" : result.status };
     }
@@ -178,25 +177,29 @@ export class TemplateCreatorSignIn {
       return;
     }
     const version = this.version;
-    this.timer = setTimeout(async () => {
-      try {
-        const result = await this.request(target, "poll", pending.requestId);
-        if (version === this.version) {
-          this.apply(target, result);
-        }
-      } catch {
-        if (version === this.version) {
-          // A lost reply may follow a committed connection. Keep observing the same request.
-          if (Date.now() <= pending.expiresAt + 10_000) {
-            this.schedule(target, {
-              ...pending,
-              pollAfterMs: Math.max(2_500, pending.pollAfterMs),
-            });
-          } else {
-            this.apply(target, { status: "failed" });
-          }
+    this.timer = setTimeout(() => {
+      void this.poll(target, pending, version);
+    }, pending.pollAfterMs);
+  }
+
+  private async poll(target: Target, pending: Pending, version: number) {
+    try {
+      const result = await this.request(target, "poll", pending.requestId);
+      if (version === this.version) {
+        this.apply(target, result);
+      }
+    } catch {
+      if (version === this.version) {
+        // A lost reply may follow a committed connection. Keep observing the same request.
+        if (Date.now() <= pending.expiresAt + 10_000) {
+          this.schedule(target, {
+            ...pending,
+            pollAfterMs: Math.max(2_500, pending.pollAfterMs),
+          });
+        } else {
+          this.apply(target, { status: "failed" });
         }
       }
-    }, pending.pollAfterMs);
+    }
   }
 }

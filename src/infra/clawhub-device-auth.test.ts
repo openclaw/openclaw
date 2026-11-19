@@ -38,7 +38,7 @@ describe("ClawHub browser sign-in", () => {
     expect(request.url().href).toBe(baseUrl + "/api/cli/device/code");
     expect(request.init()?.method).toBe("POST");
     expect(new Headers(request.init()?.headers).has("Authorization")).toBe(false);
-    expect(JSON.parse(String(request.init()?.body))).toEqual({
+    expect(request.body()).toEqual({
       label: "OpenClaw Template publishing",
       site_url: baseUrl,
     });
@@ -69,7 +69,7 @@ describe("ClawHub browser sign-in", () => {
       token: "synthetic-publisher-token",
     });
     expect(request.url().href).toBe(baseUrl + "/api/cli/device/token");
-    expect(JSON.parse(String(request.init()?.body))).toEqual({
+    expect(request.body()).toEqual({
       device_code: fakeDeviceCode,
       grant_type: "urn:ietf:params:oauth:grant-type:device_code",
     });
