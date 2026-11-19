@@ -7,6 +7,7 @@
 // Run allocation separately. --cold evicts the Linux file cache before each poll;
 // retained SQLite pages can remain warm. readers.readBytes is kernel storage I/O,
 // unavailable on macOS; it is neither returned payload bytes nor logical pager I/O.
+// After priming rollups, --stale-cache-stats models growth since a sparse ANALYZE.
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -36,6 +37,7 @@ const { values } = parseArgs({
     "reset-usage": { type: "boolean", default: false },
     "seed-usage": { type: "boolean", default: false },
     "seed-months": { type: "string", default: "1" },
+    "stale-cache-stats": { type: "boolean", default: false },
     cold: { type: "boolean", default: false },
     "cpu-profile-dir": { type: "string" },
     "owner-dir": { type: "string" },
@@ -77,6 +79,27 @@ config.session = {
   maintenance: { ...config.session?.maintenance, mode: "warn", coldStorage: { enabled: false } },
 };
 writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
+if (values["stale-cache-stats"]) {
+  const { openOpenClawAgentDatabase, closeOpenClawAgentDatabasesAsync } =
+    await import("../../src/state/openclaw-agent-db.js");
+  const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+  db.exec("ANALYZE cache_entries");
+  for (const row of db
+    .prepare("SELECT idx, stat FROM sqlite_stat1 WHERE tbl = 'cache_entries'")
+    .all()) {
+    db.prepare("UPDATE sqlite_stat1 SET stat = ? WHERE tbl = 'cache_entries' AND idx = ?").run(
+      String(row.stat)
+        .split(" ")
+        .map(() => "1")
+        .join(" "),
+      String(row.idx),
+    );
+  }
+  await closeOpenClawAgentDatabasesAsync();
+  rmSync(temporaryRoot, { recursive: true });
+  console.log("Seeded sparse usage-cache statistics");
+  process.exit(0);
+}
 if (values["reset-usage"]) {
   assert(!values["seed-usage"], "choose one offline fixture operation");
   const { openOpenClawAgentDatabase, closeOpenClawAgentDatabasesAsync } =
