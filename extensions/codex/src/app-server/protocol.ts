@@ -352,6 +352,9 @@ export type CodexThread = {
   turns?: CodexTurn[];
 };
 
+/** Opaque to OpenClaw; the generated validator owns the display instruction shape. */
+export type CodexAgentMessageDisplay = JsonObject;
+
 export type CodexThreadItem = {
   id: string;
   type: string;

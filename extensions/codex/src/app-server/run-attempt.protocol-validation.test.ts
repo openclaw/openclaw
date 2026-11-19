@@ -302,3 +302,42 @@ it.each<{ label: string; turn: JsonObject }>([
     expect.objectContaining({ terminal: { kind: "ok" }, assistantTexts: [text] }),
   );
 });
+
+it("settles a Codex 0.170 terminal snapshot without changing answer presentation", async () => {
+  const harness = createStartedThreadHarness();
+  const abortController = new AbortController();
+  const run = runCodexAppServerAttempt({
+    ...createTestParams(),
+    abortSignal: abortController.signal,
+  });
+  const text = "Answer in the terminal snapshot.";
+  try {
+    await harness.waitForMethod("turn/start");
+    await harness.notify(
+      turnCompleted({
+        id: "turn-1",
+        status: "completed",
+        items: [
+          {
+            id: "answer-1",
+            type: "agentMessage",
+            phase: "final_answer",
+            text,
+            moderation: {
+              moderated: true,
+              display: {
+                version: 1,
+                mode: "hide",
+                replacement: { kind: "wellbeingPromptHelpline" },
+              },
+            },
+          },
+        ],
+      }),
+    );
+    expect(await run).toMatchObject({ terminal: { kind: "ok" }, assistantTexts: [text] });
+  } finally {
+    abortController.abort();
+    await run.catch(() => undefined);
+  }
+});

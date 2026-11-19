@@ -526,6 +526,47 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
     expect(settled.mock.calls).toEqual([[true]]);
   });
 
+  it.each<{ label: string; fields: JsonObject; restricted?: boolean }>([
+    { label: "plain", fields: { moderation: null } },
+    { label: "0.149-era", fields: { phase: "final_answer", delivery: null, memoryCitation: null } },
+    {
+      label: "legacy display action",
+      fields: { moderation: { moderated: false, display: { action: "allow" } } },
+      restricted: true,
+    },
+    {
+      label: "unknown display version",
+      fields: {
+        moderation: {
+          moderated: false,
+          display: { version: 2, mode: "show", trustedContacts: "skip" },
+        },
+      },
+      restricted: true,
+    },
+    {
+      label: "unknown display mode",
+      fields: { moderation: { moderated: false, display: { version: 1, mode: "future" } } },
+      restricted: true,
+    },
+  ])("settles a $label receipt", async ({ fields, restricted }) => {
+    const harness = createHarness();
+    const onNotification = vi.fn();
+    const route = await bindRoute(harness, "turn-1", { onNotification });
+    const watch = harness.watch("turn-1");
+    const item = { type: "agentMessage", id: "answer", text: "Display fixture", ...fields };
+    harness.notify("turn/completed", {
+      threadId: route.threadId,
+      turn: { id: "turn-1", status: "completed", items: [item] },
+    });
+    await settleInput();
+    expect(watch.state).toBe("confirmed");
+    await route.drain();
+    expect(onNotification.mock.lastCall?.[0]?.completedTurn?.items).toEqual([
+      restricted ? { ...item, moderation: { moderated: true, display: null } } : item,
+    ]);
+  });
+
   it.each<[boolean, JsonObject]>([
     [
       true,
