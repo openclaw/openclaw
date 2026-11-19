@@ -205,10 +205,16 @@ describe("Gateway start upgrades prior-release state in place", () => {
       // The start migrated in place, then put every pre-image and the config back.
       expect(sha256(instance.configPath)).toBe(config);
       expect(files.map(contents)).toEqual(before);
+      // No image or work directory is left. Doctor's own credential-cutover image, which
+      // its migration takes inside the cutover transaction, is retained by its owner.
       expect(
         listDirectoryTreeStrictSync(instance.stateDir)
           .map(({ relativePath }) => relativePath)
-          .filter((name) => name.includes(".pre-") || name.startsWith(".upgrade-")),
+          .filter(
+            (name) =>
+              (name.includes(".pre-") && !name.includes(".pre-startup-migration-")) ||
+              name.startsWith(".upgrade-"),
+          ),
       ).toEqual([]);
     } finally {
       await instance.cleanup();

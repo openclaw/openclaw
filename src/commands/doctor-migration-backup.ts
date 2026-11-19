@@ -186,10 +186,21 @@ export async function backupDoctorMigrationDatabases(params: {
   if (params.preImageOwner === "state-upgrade") {
     // Gateway start already took (or, without room, skipped) the one pre-migration
     // image of each outdated database; a second full set protects nothing more.
+    // The version phase runs only where a bounded migration exists, as with backups.
+    const bounded =
+      params.versionMigrationsOnly &&
+      !isStatePostgres() &&
+      !isUpdateDoctorLintPass(params.env) &&
+      [...pending].every((pathname) => {
+        const migration = params.pendingMigrations?.find((entry) => entry.path === pathname);
+        return (
+          migration !== undefined && resolveSchemaMigrationBackupTables(migration) !== undefined
+        );
+      });
     return {
       changes: [],
       warnings: [],
-      ...(params.versionMigrationsOnly
+      ...(bounded
         ? {
             versionMigrations: params.pendingMigrations?.filter((migration) =>
               migration.kind === "state"
