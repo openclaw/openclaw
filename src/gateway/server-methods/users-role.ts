@@ -12,6 +12,7 @@ import {
 } from "../operator-role-policy.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { respondError } from "./response.js";
+import { recordRoleAssignmentChange } from "./system-changes.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import {
   prepareUserProfileAdministration,
@@ -41,7 +42,8 @@ export async function handleUsersSetRole(
   }
   const assertCurrent = await prepareUserProfileAdministration(options);
   holdGatewayPolicyResponse(respond);
-  const profile = await setCanonicalUserProfileRole(profileId, role, {
+  let recorded: Promise<void> | undefined;
+  const write = setCanonicalUserProfileRole(profileId, role, {
     assertCurrent: () => {
       assertCurrent();
       if (isMemberProfile?.()) {
@@ -56,8 +58,16 @@ export async function handleUsersSetRole(
       invalidateOperatorRolePolicy(canonicalProfileId, { roleOnly: true });
       context.disconnectClientsForUserProfile?.(canonicalProfileId, { roleOnly: true });
     },
+    onRoleChanged: (change) => {
+      recorded = recordRoleAssignmentChange(change, options.client, context.logGateway);
+    },
   });
-  respond(true, { profile });
+  // Committed history lands before the reply or a result-delivery error.
+  await write.then(
+    () => recorded,
+    () => recorded,
+  );
+  respond(true, { profile: await write });
 }
 
 export async function listUserProfiles({

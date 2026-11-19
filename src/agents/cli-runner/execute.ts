@@ -24,6 +24,7 @@ import {
   detectImageReferences,
   hasHydratableMediaImages,
 } from "../embedded-agent-runner/run/images.js";
+import { prepareAgentExecScratch } from "../exec-scratch.js";
 import { resolveFastModeForElapsed } from "../fast-mode.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
@@ -354,10 +355,16 @@ export async function executePreparedCliRun(
           });
       cleanupMcpCaptureAttempt = mcpCaptureAttempt.cleanup;
       const preparedBackendEnv = context.preparedBackend.env ?? {};
-      const { env, selectedClaudeClearEnv } = resolveCliChildEnv(context.preparedBackend, params, {
-        ...mcpCaptureAttempt.env,
-        ...localProcessEnv,
-      });
+      const { env, selectedClaudeClearEnv } = resolveCliChildEnv(
+        context.preparedBackend,
+        params,
+        { ...mcpCaptureAttempt.env, ...localProcessEnv },
+        !nodePlacement
+          ? await prepareAgentExecScratch(
+              params.sessionEntry?.sessionRoot ?? context.cwd ?? context.workspaceDir,
+            )
+          : undefined,
+      );
       const nodeEnvEntries = Object.entries(preparedBackendEnv).filter(([key]) =>
         NODE_CLAUDE_FORWARD_ENV_KEYS.has(key),
       );
