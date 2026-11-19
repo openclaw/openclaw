@@ -701,8 +701,9 @@ export class WorkerTaskPoolCore<Input, Output> {
       if (!error) {
         // SAFETY: A validated successful reply supplies Output; custody remains held separately.
         task.resolve(value as Output);
-      } else if (!resolveFailure) {
-        task.reject(error);
+      } else if (!resolveFailure || task.preparation) {
+        // Owned cleanup must join preparation before retirement, but the caller need not wait.
+        task.reject(resolveFailure?.() ?? error);
       }
       if (error || retire) {
         // Keep the first failed stop until an explicit close observes it and permits retry.

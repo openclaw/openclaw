@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { once } from "node:events";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -100,7 +101,7 @@ it("preserves workerData through retained task startup", async () => {
   expect(reply.startupOptions?.data).toEqual(workerData);
 });
 
-it("rejects task-channel loss after retirement without waiting for pending preparation", async () => {
+async function createChannelLossPool() {
   const workerPath = path.join(tempDirs.make("worker-preparation-loss-"), "worker.mjs");
   await writeFile(
     workerPath,
@@ -110,7 +111,10 @@ it("rejects task-channel loss after retirement without waiting for pending prepa
       port.on("message", ({ input, taskId }) => {
         port.postMessage({ status: "ok", taskId, value: input });
       });
-      workerData.control.on("message", () => port.close());
+      workerData.control.on("message", () => {
+        port.close();
+        workerData.control.postMessage("closed");
+      });
       port.postMessage({ status: "ready" });
     });
   `,
@@ -120,6 +124,81 @@ it("rejects task-channel loss after retirement without waiting for pending prepa
     maxPendingBytes: 8,
     workerOptions: { workerData: { control: control.port2 }, transferList: [control.port2] },
   });
+  return { pool, control };
+}
+
+it.each(["runTask", "startTask"] as const)(
+  "rejects owned task-channel loss during pending preparation (%s)",
+  async (method) => {
+    const { pool, control } = await createChannelLossPool();
+    const preparation = Promise.withResolvers<void>();
+    const captured = ["retained input"];
+    let preparedInput: string[] | undefined;
+    const consumed = vi.fn(() => {
+      captured.length = 0;
+    });
+    const settled = vi.fn();
+    const prepare = async () => {
+      await preparation.promise;
+      preparedInput = [...captured];
+      return "late input";
+    };
+    const options = { inputBytes: 8, onInputConsumed: consumed, onExecutionSettled: settled };
+    let outcome: unknown = "pending";
+    let observed: Promise<void> | undefined;
+    try {
+      const warm = pool.startTask("warm", {});
+      await expect(warm.result).resolves.toBe("warm");
+      await warm.release().result;
+      const task =
+        method === "runTask" ? pool.runTask(prepare, options) : pool.startTask(prepare, options);
+      observed = task.result.then(
+        (value) => {
+          outcome = value;
+        },
+        (error: unknown) => {
+          outcome = error;
+        },
+      );
+      const closed = once(control.port1, "message");
+      control.port1.postMessage("close task channel");
+      await closed;
+      // Service the real closed endpoint without letting preparation settle.
+      warm.service();
+      await Promise.resolve();
+      expect(outcome).toMatchObject({
+        code: "unavailable",
+        message: expect.stringContaining("Native worker task channel closed"),
+      });
+      let cleanupDone = false;
+      const cleanup = pool.close().then(() => {
+        cleanupDone = true;
+      });
+      await Promise.resolve();
+      expect(cleanupDone).toBe(false);
+      expect(consumed).not.toHaveBeenCalled();
+      expect(settled).not.toHaveBeenCalled();
+      expect(captured).toEqual(["retained input"]);
+      expect(pool.getSnapshot().pendingTasks).toBe(1);
+      preparation.resolve();
+      await cleanup;
+      expect(preparedInput).toEqual(["retained input"]);
+      expect(consumed).toHaveBeenCalledOnce();
+      expect(settled).toHaveBeenCalledExactlyOnceWith({ retired: true });
+      expect(captured).toEqual([]);
+      expect(pool.getSnapshot().pendingTasks).toBe(0);
+    } finally {
+      preparation.resolve();
+      await observed;
+      await pool.close();
+      control.port1.close();
+      control.port2.close();
+    }
+  },
+);
+
+it("rejects task-channel loss after retirement without waiting for pending preparation", async () => {
+  const { pool, control } = await createChannelLossPool();
   const preparation = Promise.withResolvers<void>();
   const execution = Promise.withResolvers<{ retired: boolean }>();
   const captured = ["retained input"];
