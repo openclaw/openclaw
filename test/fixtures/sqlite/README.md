@@ -23,11 +23,12 @@ Golden source contracts:
 
 Historical fixtures read these sources without deriving old tables from current DDL.
 
-`openclaw-agent-schema-v39.sql`, `openclaw-agent-schema-v40.sql` and
-`openclaw-agent-schema-v41.sql` are the exact agent DDL of upstream's schemas 39, 40
-and 41: Git blobs `2e1c9fa973` (commit `b8b054c13a`), `94ea951a61` (commit
-`480d503053`) and `99031ffc21` (commit `401a1de38b`) of `src/state/openclaw-agent-schema.sql`.
-They are the pre-42 inputs to the recipient-authority migration tests.
+`openclaw-agent-schema-v39.sql` through `openclaw-agent-schema-v43.sql` are the exact agent
+DDL of upstream's schemas 39 to 43: Git blobs `2e1c9fa973` (commit `b8b054c13a`),
+`94ea951a61` (commit `480d503053`), `99031ffc21` (commit `401a1de38b`), `43b1886c29`
+(commit `6691acaed5`, the last schema-42 commit) and `2a6bb4587c` (commit `703c82d20c`) of
+`src/state/openclaw-agent-schema.sql`. They are the pre-44 inputs to the recipient-authority
+migration tests.
 
 `openclaw-state-v2026.7.1-2.sqlite.gz` is a deterministic fixture for the
 shared state database created by OpenClaw tag `v2026.7.1-2` at commit

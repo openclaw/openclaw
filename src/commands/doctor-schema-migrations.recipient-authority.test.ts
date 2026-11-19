@@ -1,6 +1,8 @@
-// Continuation (karmaterminal): agent schema 42 is recipient authority on top of upstream's 41.
-// Doctor's version phase must take upstream's 37-41 stores to 42 inside the declared backup scope,
-// re-run as a no-op, and restore the exact predecessor.
+// Continuation (karmaterminal): agent schema 44 is recipient authority on top of upstream's 43.
+// Doctor's version phase must take upstream's 37-43 stores to 44 inside the declared backup scope,
+// re-run as a no-op, and restore the exact predecessor. Stores below 43 are staged before optional
+// pending-input first use: upstream's 43 scope names that AUTOINCREMENT table, so a present one
+// takes a full image instead (#200533).
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -13,8 +15,10 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contra
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../state/openclaw-agent-db-schema.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import { withoutAgentPendingInputEndings } from "../state/openclaw-agent-pending-input-endings-schema.js";
 import { withoutSessionRecipientAuthoritySchema } from "../state/openclaw-agent-recipient-authority-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
+import { withoutAgentToolUsage } from "../state/openclaw-agent-tool-usage-schema.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-backup-scope.js";
@@ -27,9 +31,11 @@ import { withMaintenance } from "./doctor-schema-migrations.test-support.js";
 function stageAgentDatabase(pathname: string, version: number) {
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
   const database = new DatabaseSync(pathname);
-  // Upstream's 37 and 38 predate its 39 transcript payload constraint, 40 receipt table and 41
-  // active-event-facts companion.
-  const upstream41 = withoutSessionRecipientAuthoritySchema(OPENCLAW_AGENT_SCHEMA_SQL);
+  // Upstream's 37 and 38 predate its 39 transcript payload constraint, 40 receipt table, 41
+  // active-event-facts companion, 42 tool usage and 43 pending-input endings.
+  const upstream43 = withoutSessionRecipientAuthoritySchema(OPENCLAW_AGENT_SCHEMA_SQL);
+  const upstream42 = withoutAgentPendingInputEndings(upstream43);
+  const upstream41 = withoutAgentToolUsage(upstream42);
   const upstream40 = withoutAgentActiveEventFacts(upstream41);
   const upstream39 = withoutAgentCreationOperations(upstream40);
   database.exec(
@@ -39,8 +45,15 @@ function stageAgentDatabase(pathname: string, version: number) {
         ? upstream39
         : version < 41
           ? upstream40
-          : upstream41,
+          : version < 42
+            ? upstream41
+            : version < 43
+              ? upstream42
+              : upstream43,
   );
+  if (version < 43) {
+    database.exec("DROP TABLE session_pending_inputs");
+  }
   database.exec(`
     PRAGMA user_version = ${version};
     INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
@@ -73,8 +86,8 @@ function readStore(database: DatabaseSync) {
   };
 }
 
-it.each([37, 38, 39, 40, 41])(
-  "takes upstream's schema-%i agent store to 42 through Doctor, re-runs as a no-op, and restores it",
+it.each([37, 38, 39, 40, 41, 42, 43])(
+  "takes upstream's schema-%i agent store to 44 through Doctor, re-runs as a no-op, and restores it",
   async (version) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const stateDatabase = openOpenClawStateDatabase({ env: state.env });
