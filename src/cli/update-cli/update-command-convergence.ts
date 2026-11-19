@@ -196,10 +196,18 @@ export async function convergeUpdatePlugins(params: {
         let retiredWarnings: ReadonlySet<string> = new Set();
         let targetRuntimeConverged = false;
         let maintenanceDeferred = false;
-        if (shouldResumePostCoreInFreshProcess) {
-          // The fresh process always runs Doctor repair and cannot capture itself.
+        // Known state changes ahead: a fresh process always runs Doctor repair and cannot
+        // copy itself, and a changed channel is written to config. Copy the originals first.
+        if (
+          shouldResumePostCoreInFreshProcess ||
+          (params.requestedChannel &&
+            params.configSnapshot.valid &&
+            params.requestedChannel !== params.storedChannel)
+        ) {
           await params.opts.run?.captureOriginal?.();
           assertCurrent?.();
+        }
+        if (shouldResumePostCoreInFreshProcess) {
           if (retainedDifferentRuntime && params.opts.run?.completionOwner === "gateway-restart") {
             await params.beforeDoctor?.();
             assertCurrent?.();

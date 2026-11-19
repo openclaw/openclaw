@@ -171,11 +171,22 @@ describe("mutable update execution", () => {
             return { ...successfulUpdate, mode: "git" };
           },
         );
+        // The run copies its originals at activation, after the last pre-stop refusal.
+        const captureOriginal = vi.fn(async () => {});
+        const env = { OPENCLAW_STATE_DIR: path.join(dir, "state") };
         const execution = await execute({
           ...executionParams("git"),
           root: targetRoot,
           shouldRestart: warn,
-          opts: { json: true, restart: warn },
+          opts: {
+            json: true,
+            restart: warn,
+            run: {
+              runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+              env,
+              captureOriginal,
+            },
+          },
         });
         expect(await fs.readFile(artifact, "utf8")).toBe(
           warn ? "candidate runtime" : "retained serving runtime",
@@ -184,6 +195,8 @@ describe("mutable update execution", () => {
         expect(execution?.mutationStarted).toBe(!blocked);
         expect(execution?.result.status).toBe(blocked ? "error" : "ok");
         expect(execution?.result.reason).toBe(blocked ? "runtime-artifact-publication" : undefined);
+        // A refused update changed nothing, so it copied nothing.
+        expect(captureOriginal).toHaveBeenCalledTimes(blocked ? 0 : 1);
         const diagnostics = (execution?.result.steps ?? [])
           .map((step) => step.advisory?.message ?? step.stderrTail ?? "")
           .join("");

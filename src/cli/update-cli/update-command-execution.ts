@@ -426,10 +426,6 @@ export async function executeMutableUpdate(
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
     await waitForCurrent();
     familyAdmission.assertAdmitted();
-    // Activation is this run's first state change. Copy the originals while the Gateway
-    // still serves; an already-current or refused run never reaches this point.
-    await originalRun?.captureOriginal?.();
-    assertExecutionCurrent();
     if (params.switchToGit && !opts.run?.sourceArtifactLock) {
       await admitSourceUpdateArtifacts(resolveGitInstallDir(), opts.run);
       assertExecutionCurrent();
@@ -500,6 +496,10 @@ export async function executeMutableUpdate(
       selected: preManagedServiceStop,
       phase: "before-stop",
     });
+    // Activation is this run's first state change. Copy the originals after the last
+    // pre-stop refusal and while the Gateway still serves; a refused run copies nothing.
+    await originalRun?.captureOriginal?.();
+    assertExecutionCurrent();
     if (!servicePrepared) {
       await waitForCurrent();
       await stopManagedServiceBeforeMutableUpdate(roots);

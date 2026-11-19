@@ -174,11 +174,13 @@ Gateway, retry the update, or bypass safety checks. See
 
 At a fresh direct CLI update's first state change, the installed updater attempts to
 retain the original config, its includes, local databases, and declared plugin
-migration resources. That point is activation, a handoff of the update to the running
-Gateway, or, on an already-current core, the fresh Doctor that follows a changed plugin.
-An already-current update without that Doctor, and an update refused before it changes
-anything, copy nothing. A profile without a state database yet records that absence
-before its first update writes history. The capture stays beside the selected state directory in
+migration resources. For a real update that point is activation, or a handoff of the
+update to the running Gateway. An already-current core copies only when it repairs
+something: before a legacy config repair, before writing a changed update channel,
+before handing post-core work to a fresh process, or before the fresh Doctor that follows
+a changed plugin. An already-current update that changes none of these, and an update
+refused before it changes anything, copy nothing. A profile without a state database yet
+records that absence before its first update writes history. The capture stays beside the selected state directory in
 `<state-directory>.update-captures/<run-id>`. Doctor continuations keep the same
 capture; they do not replace it with already migrated state. State-directory
 relocation leaves its original location and recorded paths intact.
