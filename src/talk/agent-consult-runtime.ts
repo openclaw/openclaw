@@ -401,7 +401,7 @@ async function consultRealtimeVoiceAgentInternal(
     throw new Error("Session-runtime consults use the session's own model selection");
   }
   const modelLockParams = {
-    skip: dispatchesInSessionRuntime === true,
+    skip: dispatchesInSessionRuntime,
     cfg: params.cfg,
     agentRuntime: params.agentRuntime,
     agentId,

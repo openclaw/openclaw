@@ -15,6 +15,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { controlTalkAgentRun } from "../talk/agent-run-control.js";
 import { createOrResumeClientVoiceSession } from "../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../talk/client-voice-session.test-support.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
@@ -328,11 +329,16 @@ it("routes a locked native Codex chat's consult to its pinned harness instead of
   expect(runCliAgent).not.toHaveBeenCalled();
 });
 
-it.each([false, true])(
-  "settles CLI steering without an embedded registration (injection=%s)",
-  async (injectable) => {
+it.each([
+  { injectable: false, foreign: false },
+  { injectable: true, foreign: false },
+  { injectable: true, foreign: true },
+])(
+  "settles CLI steering without an embedded registration (%j)",
+  async ({ injectable, foreign }) => {
     await prepare({});
     let nativeWrites = 0;
+    let activeRunId: string | undefined;
     const started = createDeferredCore();
     const finish = createDeferredCore();
     runCliAgent.mockImplementation(async (input) =>
@@ -355,7 +361,7 @@ it.each([false, true])(
                 messageInjectionV2: createSteeredCliMessageInjection({
                   signal: params.abortSignal ?? new AbortController().signal,
                   assertCurrent: () => params.abortSignal?.throwIfAborted(),
-                  cwd: process.cwd(),
+                  context: { params },
                   getInjection: () => ({
                     isAvailable: () => true,
                     queueMessage: async (_text, admitInput) => {
@@ -368,6 +374,7 @@ it.each([false, true])(
               }
             : undefined,
         );
+        activeRunId = params.runId;
         started.resolve();
         try {
           await finish.promise;
@@ -396,6 +403,23 @@ it.each([false, true])(
     try {
       // A plain CLI backend cannot inject. It must reject promptly, not deadlock
       // the provider's steeringPromise and prevent delivery of the first answer.
+      if (foreign) {
+        // The real CLI turn is signal-owned. An unrelated caller cannot borrow
+        // its public run ID, even while a guarded injectable backend is active.
+        const result = await controlTalkAgentRun({
+          sessionKey,
+          text: "Foreign spoken request",
+          mode: "steer",
+          runTarget: {
+            runId: expectDefined(activeRunId),
+            signal: new AbortController().signal,
+            isCurrent: () => true,
+          },
+        });
+        expect(result.ok).toBe(false);
+        expect(nativeWrites).toBe(0);
+        return;
+      }
       const steering = Promise.race([
         runner.runPrompt.steer!({ prompt: "Second spoken request" }),
         new Promise((_, reject) => {

@@ -25,6 +25,7 @@ import {
   type RpcSourceRef,
 } from "../../sessions/session-controller.rpc-sources.js";
 import {
+  getAttachedBackend,
   isCurrentSessionControllerOperation,
   waitForReplyOperationBackend,
 } from "../../sessions/session-controller.state.js";
@@ -549,10 +550,13 @@ export function createTalkClientAgentConsultRunner(params: {
     if (!operation || !identity || !ownerSignal || !isOwnerCurrent(owner, identity.sessionId)) {
       throw new Error("The active Talk consult is no longer current");
     }
-    if (
-      !(await waitForReplyOperationBackend(operation, signal)) ||
-      !isOwnerCurrent(owner, identity.sessionId)
-    ) {
+    // Embedded retries may share a turn and run ID, but not a command admission.
+    // CLI backends retain source/operation ownership, not an embedded claim.
+    const isBackendCurrent = () =>
+      isOwnerCurrent(owner, identity.sessionId) &&
+      (getAttachedBackend(operation)?.kind !== "embedded" ||
+        owner.completionClaim?.resolveCurrentRegistration() !== undefined);
+    if (!(await waitForReplyOperationBackend(operation, signal)) || !isBackendCurrent()) {
       throw new Error("The active Talk consult backend is no longer current");
     }
     const result = await controlTalkAgentRun({
@@ -562,6 +566,7 @@ export function createTalkClientAgentConsultRunner(params: {
         signal: ownerSignal,
         isCurrent: (sessionId) =>
           isOwnerCurrent(owner, sessionId) &&
+          isBackendCurrent() &&
           owner.operation === operation &&
           isCurrentSessionControllerOperation(operation) &&
           !operation.result,
