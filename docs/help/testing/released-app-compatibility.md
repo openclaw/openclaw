@@ -61,6 +61,23 @@ its exact run and terminal result. The selection artifact and per-platform proof
 retain the client tag/SHA and candidate identity. Missing, skipped, or failed
 platforms do not qualify compatibility.
 
+## Candidate execution boundary
+
+Candidate dependency installation, builds, Gateway runtime, and CLI calls execute
+inside the platform isolation owner; qualification evidence and provider fixtures
+remain outside it. Linux uses a nonroot Docker container with a private volume
+and restricted network. Its host-loopback published port forwards through a
+fixed-destination relay to the Gateway’s container-loopback socket. This preserves
+local backend authentication semantics without broadening Gateway authorization.
+The relay shares the candidate container’s lifecycle and cannot select arbitrary
+upstream destinations.
+
+macOS uses a separate unprivileged user with a default-deny Seatbelt profile and
+a public-only build dependency proxy. Runtime does not inherit build proxy
+access. Seatbelt is supplemental isolation, not a claim that Apple supports
+`sandbox-exec` as a general-purpose sandbox API. Both platforms must pass the
+production hostile-source probe and the actual native flows.
+
 ## What this does not prove
 
 A repository release tag does not establish which mobile build is currently

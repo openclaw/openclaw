@@ -33,6 +33,29 @@ SPECIAL = ("0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8",
            "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24",
            "192.88.99.0/24", "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24",
            "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4")
+# Docker DNAT presents a bridge peer to the Gateway. Keep the published port
+# outside the Gateway socket so local Q backend calls retain loopback identity.
+# The private Docker bridge is the container's only non-loopback interface.
+# This relay has one fixed destination and shares C's existing private boundary.
+RUNTIME_INGRESS = r"""
+const net = require("node:net");
+const os = require("node:os");
+const port = Number(process.argv[1]);
+if (!port) {
+  setInterval(() => {}, 2147483647);
+} else {
+  const address = Object.values(os.networkInterfaces()).flat()
+    .find(item => item.family === "IPv4" && !item.internal).address;
+  net.createServer(client => {
+    const upstream = net.connect(port, "127.0.0.1");
+    client.on("error", () => upstream.destroy());
+    upstream.on("error", () => client.destroy());
+    client.on("close", () => upstream.destroy());
+    upstream.on("close", () => client.destroy());
+    client.pipe(upstream).pipe(client);
+  }).listen(port, address);
+}
+"""
 FLAGS = ("VITEST", "OPENCLAW_TEST_MINIMAL_GATEWAY", "OPENCLAW_SKIP_CHANNELS",
          "OPENCLAW_SKIP_PROVIDERS", "OPENCLAW_SKIP_GMAIL_WATCHER", "OPENCLAW_SKIP_CRON",
          "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER", "OPENCLAW_SKIP_CANVAS_HOST",
@@ -402,19 +425,19 @@ def runtime(args):
                     relay_rule(data, relay.port, True)
                     relay.start()
                     provider["baseUrl"] = urlunsplit((endpoint.scheme, f"{data['gateway']}:{relay.port}", endpoint.path, endpoint.query, endpoint.fragment))
-                config.setdefault("gateway", {})["bind"] = "lan"
-                create_container(data, container, ["node", "-e", "setInterval(() => {}, 2147483647)"], env, port)
+                config.setdefault("gateway", {})["bind"] = "loopback"
+                create_container(data, container, ["node", "-e", RUNTIME_INGRESS, str(port or 0)], env, port)
                 owner = True
                 docker("start", container)
                 docker("exec", "-i", container, "node", "-e", WRITE_CONFIG, home,
                        input=json.dumps(config).encode())
-        # Docker publishing targets eth0, not the container's loopback.
+        # Only the fixed ingress relay binds eth0; Gateway/CLI share loopback.
         cli = list(cli)
         for index, value in enumerate(cli):
             if value == "--bind" and index + 1 < len(cli):
-                cli[index + 1] = "lan"
+                cli[index + 1] = "loopback"
             elif value.startswith("--bind="):
-                cli[index] = "--bind=lan"
+                cli[index] = "--bind=loopback"
         exec_args = ["exec"]
         for key, value in env.items():
             exec_args += ["--env", key + "=" + value]

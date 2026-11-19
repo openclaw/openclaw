@@ -10,6 +10,8 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
+import urllib.request
 
 
 def main():
@@ -90,7 +92,16 @@ async function request(port, host = "127.0.0.1") {
   });
 }
 (async () => {
-  if (phase === "probe") {
+  if (phase === "serve") {
+    const config = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8"));
+    assert.equal(config.gateway.bind, "loopback");
+    const server = http.createServer((request, response) => {
+      assert.equal(request.socket.remoteAddress, "127.0.0.1");
+      response.end("loopback-preserved");
+      server.close();
+    });
+    server.listen(config.gateway.port, "127.0.0.1");
+  } else if (phase === "probe") {
     assert.equal(process.env.NODE_USE_ENV_PROXY, undefined);
     const config = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8"));
     const endpoint = new URL(config.models.providers.fixture.baseUrl);
@@ -157,6 +168,29 @@ async function request(port, host = "127.0.0.1") {
             assert facts["count"] == expected and facts["provider"] == "ok", facts
             assert facts["protected"] == facts["unrelated"] == "denied", facts
             assert canary.read_text() == "trusted Q evidence"
+        # Exercise actual published ingress, not only container-side reachability.
+        # A LAN-bound Gateway would lose device-less backend scopes after Docker DNAT.
+        if sys.platform == "linux":
+            serving = subprocess.Popen([sys.executable, str(helper), "run", "--root", str(boundary),
+                "--config", str(config_path), "--", "serve"], env=env, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                deadline = time.monotonic() + 30
+                while True:
+                    try:
+                        with urllib.request.urlopen(f"http://127.0.0.1:{gateway_port}", timeout=2) as response:
+                            assert response.read() == b"loopback-preserved"
+                        break
+                    except OSError:
+                        if serving.poll() is not None or time.monotonic() >= deadline:
+                            raise RuntimeError("published ingress did not preserve loopback")
+                        time.sleep(0.1)
+                serving.communicate(timeout=30)
+                assert serving.returncode == 0
+            finally:
+                if serving.poll() is None:
+                    serving.terminate()
+                    serving.communicate(timeout=30)
         cleanup = subprocess.run([sys.executable, str(helper), "cleanup", "--root", str(boundary)], text=True, capture_output=True, timeout=60)
         if cleanup.returncode:
             raise RuntimeError("production boundary cleanup failed: " + cleanup.stderr[-8000:])
