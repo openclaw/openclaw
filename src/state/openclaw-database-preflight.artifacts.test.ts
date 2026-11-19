@@ -230,14 +230,17 @@ const agentOwner = `
   const database = new DatabaseSync(file);
   database.exec("PRAGMA busy_timeout = 30000; PRAGMA journal_mode = WAL");
   let running = true;
-  process.on("message", () => { running = false; });
+  let commits = 0;
+  process.on("message", (message) => {
+    if (message === "commits") process.send({ commits });
+    else running = false;
+  });
   if (mode === "idle") {
     database.exec("PRAGMA wal_autocheckpoint = 0; PRAGMA user_version = " + version);
     process.send("ready");
   }
   const insert = database.prepare("INSERT INTO churn (value) VALUES (randomblob(16384))");
   const trim = database.prepare("DELETE FROM churn WHERE rowid < (SELECT max(rowid) - 512 FROM churn)");
-  let commits = 0;
   (function batch() {
     if (!running) { database.close(); process.disconnect(); return; }
     if (mode === "idle") { setTimeout(batch, 20); return; }
@@ -255,7 +258,7 @@ async function withAgentOwner(
   file: string,
   mode: "churn" | "idle",
   version: number,
-  run: (owner: ReturnType<typeof spawn>) => Promise<void>,
+  run: (commits: () => Promise<number>) => Promise<void>,
 ) {
   const owner = spawn(
     process.execPath,
@@ -270,7 +273,13 @@ async function withAgentOwner(
       owner.once("message", resolve);
       owner.once("close", reject);
     });
-    await run(owner);
+    await run(
+      () =>
+        new Promise((resolve) => {
+          owner.once("message", (reply: { commits: number }) => resolve(reply.commits));
+          owner.send("commits");
+        }),
+    );
   } finally {
     if (owner.connected) {
       owner.send("stop");
@@ -292,11 +301,11 @@ async function admitPreservingArtifacts(env: NodeJS.ProcessEnv, livePath: string
   return result;
 }
 
-function payloadFixture(version: number) {
+function agentFixture(version: number, payloadMiB = 0) {
   const fixture = createFixture();
   fixture.main.db.exec(`
         CREATE TABLE payloads (value BLOB NOT NULL) STRICT;
-        WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM rows WHERE n < 512)
+        WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM rows WHERE n < ${payloadMiB * 16})
         INSERT INTO payloads SELECT zeroblob(65536) FROM rows;
         CREATE TABLE churn (value BLOB NOT NULL);
         PRAGMA user_version = ${version};
@@ -307,23 +316,25 @@ function payloadFixture(version: number) {
 
 it("admits a live agent store's schema without a stable copy while it keeps checkpointing", async () => {
   const foundVersion = supportedVersions.agent + 1;
-  const fixture = payloadFixture(foundVersion);
+  const fixture = agentFixture(foundVersion, 32);
   const stateBefore = sourceArtifacts([fixture.state.path]);
-  await withAgentOwner(fixture.main.path, "churn", foundVersion, async (owner) => {
+  await withAgentOwner(fixture.main.path, "churn", foundVersion, async (commits) => {
+    const before = await commits();
     expect(await admitPreservingArtifacts(fixture.env, fixture.main.path)).toEqual({
       incompatible: [
         expect.objectContaining({ kind: "agent", path: fixture.main.path, foundVersion }),
       ],
       indeterminate: [],
     });
-    expect(owner.exitCode).toBeNull();
+    // The owner kept committing (and checkpointing) across the check.
+    expect(await commits()).toBeGreaterThan(before);
   });
   expect(sourceArtifacts([fixture.state.path])).toEqual(stateBefore);
 }, 60_000);
 
 it("refuses a newer schema committed only to an open WAL without changing a source byte", async () => {
   const foundVersion = supportedVersions.agent + 1;
-  const fixture = payloadFixture(supportedVersions.agent);
+  const fixture = agentFixture(supportedVersions.agent);
   await withAgentOwner(fixture.main.path, "idle", foundVersion, async () => {
     const before = sourceArtifacts(fixture.paths);
     expect(await admitPreservingArtifacts(fixture.env, fixture.main.path)).toEqual({
