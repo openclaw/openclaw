@@ -435,13 +435,11 @@ it(
       setUserProfileRole(aliceId, "none");
       releaseAbort.resolve();
       await expect(denied).rejects.toThrow("gateway closed (4001): gateway policy changed");
-      expect(await wait(terminal(revokeRun.runId))).toBe("aborted");
-      const revocationEffects = cancellation.mock.calls
-        .filter(([, params]) => params.runId === revokeRun.runId)
-        .map(([, params]) => params.diagnosticReason);
-      expect(revocationEffects.length).toBeGreaterThan(0);
-      // Automatic revocation cleanup owns this effect; the denied Stop never reaches it.
-      expect(revocationEffects.every((reason) => reason === "authority-revoked")).toBe(true);
+      revokeHold.release.resolve();
+      expect(await wait(terminal(revokeRun.runId))).toBe("final");
+      expect(
+        cancellation.mock.calls.filter(([, params]) => params.runId === revokeRun.runId),
+      ).toHaveLength(0);
       expect(errors).toEqual([]);
     } finally {
       releasePreparation.resolve();
