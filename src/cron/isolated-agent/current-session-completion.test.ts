@@ -69,7 +69,8 @@ it.each(["current", "isolated"] as const)(
       expect(result).toMatchObject({
         delivered: false,
         deliveryState: { status: "not-delivered" },
-        deliveryError: "cron delivery payload has no visible conversation content",
+        deliveryError:
+          "cron delivery payload has no visible conversation content; include text or configure an external delivery target",
         disposition: { kind: "error", errorKind: "delivery-target" },
         diagnostics: {
           entries: expect.arrayContaining([
