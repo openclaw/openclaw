@@ -30,6 +30,13 @@ const SENDER = "agent:main:prefix-stability-sender";
 // An unrelated chat on a small context window: its tool results overflow, then it compacts
 // while the target runs.
 const OTHER = "agent:other:prefix-stability-other";
+// A chat whose first turn is a scheduled job; its next owner turn must list the same tools.
+const CRON_FIRST = "agent:main:prefix-stability-cron-first";
+// Tools main adds on that owner turn. Remove when the owner lands; the journey then fails.
+const CRON_FIRST_GROWTH = {
+  tools: [] as string[],
+  owner: "https://github.com/openclaw/openclaw/pull/201710",
+};
 const OVERFLOW_CHUNKS = 24;
 const OVERFLOW_CHUNK_CHARS = 8_000;
 
@@ -202,6 +209,7 @@ export function usePrefixStabilityJourney() {
     let step = "first turn";
     const slowSteps = new Set<string>();
     const otherRequests: WireRequest[] = [];
+    const cronFirstRequests: WireRequest[] = [];
     let childKey: string | undefined;
     const seen: string[] = [];
     let ordinal = 0;
@@ -223,6 +231,10 @@ export function usePrefixStabilityJourney() {
           };
         }
         return { text: `other ${otherRequests.length}` };
+      }
+      if (request.text.includes(`session=${CRON_FIRST}`)) {
+        cronFirstRequests.push(request);
+        return { text: "ok" };
       }
       if (request.text.includes(`session=${SENDER}`)) {
         return hasToolResult || !latest.includes("forward a ping")
@@ -474,6 +486,23 @@ export function usePrefixStabilityJourney() {
           }
           await settle();
           await client.request("cron.remove", { id: job.id });
+          step = "cron-first chat";
+          const first = await client.request<{ id: string }>("cron.add", {
+            ...cronJob,
+            sessionTarget: `session:${CRON_FIRST}`,
+            schedule: { kind: "at", at: new Date(Date.now() + 3_000).toISOString() },
+          });
+          await reached(() => cronFirstRequests.length > 0);
+          await settle();
+          await client.request("cron.remove", { id: first.id });
+          await send(CRON_FIRST, "OWNER turn after a scheduled first turn");
+          const [cronTools, ownerTools] = [cronFirstRequests[0]!, cronFirstRequests.at(-1)!].map(
+            (request) => toolNames(request.tools),
+          );
+          expect(
+            ownerTools.filter((name) => !CRON_FIRST_GROWTH.tools.includes(name)),
+            `owner turn tools: ${ownerTools.join(",")}`,
+          ).toEqual(cronTools);
         }
         // An unrelated chat on a small window: its tool results fill the window inside one run,
         // and the pressure check before the next request acts.
