@@ -6,6 +6,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import { registerSerializedJsonArray } from "./serialized-json.js";
 import { SessionListViewCache, shareSessionRowFacts } from "./session-list-view-cache.js";
+import { sessionRowsRevision } from "./session-row-identity.js";
 import { serializeSessionRow } from "./session-row-serialization.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
@@ -105,7 +106,7 @@ it("charges shared current encodings once and replaces their cost with identity 
   const view = cache.get("encoded");
   const emptyBytes = view.bytes;
   cache.setRows(view, rows, true);
-  expect(view.bytes - emptyBytes).toBe(16 + encoded.length * 2 + Buffer.byteLength(`[${encoded}]`));
+  expect(view.bytes - emptyBytes).toBe(48 + encoded.length * 2 + Buffer.byteLength(`[${encoded}]`));
   const shared = cache.get("shared");
   cache.setRows(shared, [encodedRow], true);
   await flushReports();
@@ -127,11 +128,11 @@ it("coalesces a turn of retention updates into one report with the final counter
   cache.clear();
   cache.setRows(cache.get("final"), [row, row], false);
   await flushReports();
-  expect(reports).toEqual([{ views: 1, refs: 2, estimatedBytes: 1_050 }]);
+  expect(reports).toEqual([{ views: 1, refs: 2, estimatedBytes: 1_082 }]);
   cache.clear();
   await flushReports();
   expect(reports).toEqual([
-    { views: 1, refs: 2, estimatedBytes: 1_050 },
+    { views: 1, refs: 2, estimatedBytes: 1_082 },
     { views: 0, refs: 0, estimatedBytes: 0 },
   ]);
 });
@@ -179,4 +180,40 @@ it("evicts least recently used views under byte pressure and releases all accoun
   expect(cache.get("hot").rows).toBe(rows);
   await flushReports();
   expect(retirements).toEqual(["view-evicted", "view-evicted"]);
+  cache.clear();
+  setRows("small", [row]);
+  const growing = cache.get("growing");
+  cache.setRows(growing, rows, true, 18 * 1024 * 1024);
+  cache.setRows(growing, rows.slice(), true, 18 * 1024 * 1024);
+  expect(cache.get("growing").rows).toBeUndefined();
+  expect(cache.get("small").rows).toEqual([row]);
+  await flushReports();
+});
+
+it("keeps readers' latest baselines when older generations fill the byte budget", async () => {
+  const rows: GatewaySessionRow[] = Array.from({ length: 2_048 }, (_, index) => ({
+    ...row,
+    key: `row-${index}`,
+  }));
+  const readers = Array.from({ length: 64 }, (_, index) => ({
+    key: `reader-${index}`,
+    revision: "",
+  }));
+  let misses = 0;
+  for (let generation = 0; generation < 40; generation++) {
+    const current = [...rows.slice(1), { ...rows[0]!, updatedAt: generation }];
+    for (const reader of readers) {
+      const view = cache.get(reader.key);
+      cache.setRows(view, current, true);
+      if (reader.revision && !view.rowHistory?.some((base) => base.revision === reader.revision)) {
+        misses++;
+      }
+      reader.revision = sessionRowsRevision(current);
+    }
+  }
+  await flushReports();
+  expect(misses).toBe(0);
+  expect(retirements).toContain("history-evicted");
+  expect(retirements).not.toContain("view-evicted");
+  expect(reports.at(-1)?.estimatedBytes).toBeLessThanOrEqual(32 * 1024 * 1024);
 });

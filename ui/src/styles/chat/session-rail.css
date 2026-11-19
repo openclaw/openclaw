@@ -39,7 +39,7 @@ openclaw-chat-session-rail {
   border: 1px solid var(--border);
   border-radius: 999px;
   color: var(--text);
-  font-size: calc(10.5px * var(--control-ui-text-scale));
+  font-size: 10.5px;
   line-height: 1;
 }
 

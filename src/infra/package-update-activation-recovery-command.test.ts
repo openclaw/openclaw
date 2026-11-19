@@ -22,6 +22,7 @@ import {
   settlePendingPackageActivation,
 } from "./package-update-activation.js";
 import { createPublicationOwner } from "./package-update-publication-owner.js";
+import { publishWithoutPathExchange } from "./package-update-swap.assertions.test-support.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 const fixture = createPackageActivationLifetimeFixture();
@@ -100,6 +101,8 @@ it.skipIf(process.platform === "win32").each([false, true])(
         packageModes(path.join(root, "stage/lib/node_modules/openclaw"), false);
       });
       const journal = openPackageActivationJournal(prepared.anchor);
+      // The interruption leaves the installation displaced, which only the two moves do.
+      publishWithoutPathExchange();
       const originalRename = fsp.rename;
       const interrupted = vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
         if (from === path.join(prepared.anchor, "candidate")) {
@@ -141,7 +144,7 @@ it.skipIf(process.platform === "win32").each([false, true])(
       }
       expect(fs.readFileSync(prepared.launcher, "utf8")).toBe("candidate launcher\n");
       expect(fs.statSync(path.join(prepared.packageRoot, "dist/index.js")).mode & 0o777).toBe(
-        0o600,
+        0o650,
       );
       expect(
         JSON.parse(fs.readFileSync(path.join(prepared.packageRoot, "package.json"), "utf8")),

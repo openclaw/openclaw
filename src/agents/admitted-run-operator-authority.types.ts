@@ -9,6 +9,8 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   openclawIdPrincipal?: import("../gateway/openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
   /** Host-captured original input; claim/occurrence owners revalidate it for continuations. */
   recoverySnapshot?: import("../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot;
+  /** Diagnostic only; never participates in authority checks. */
+  recoverySnapshotUnavailableReason?: import("../gateway/operator-run-recovery-source.codec.js").OperatorRecoveryUnavailableReason;
   /** Existing immutable policy and link; accepted-input owners may retain them for recovery. */
   channelRecoverySource?: Readonly<{
     reference: import("../state/user-profiles.types.js").UserChannelAuthorizationReference;
@@ -18,6 +20,8 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
   assertCurrent: SessionSourceAssertion;
+  /** Check current admission once when queued/replayed work starts; never revokes other holders. */
+  reauthorize?: () => void;
   signal?: AbortSignal;
   /** Opaque authenticated source identity, independent of per-invocation restrictions. */
   source?: object;

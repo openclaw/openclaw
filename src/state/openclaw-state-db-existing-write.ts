@@ -24,7 +24,7 @@ import {
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
-import { runUpdateSqliteMigration } from "../infra/update-doctor-migration-attribution.js";
+import { runUpdateSqliteMigration } from "../infra/update-doctor-migration-context.js";
 import {
   adoptPeerPublishedStateSchemaVersion,
   createStateSchemaAdmission,

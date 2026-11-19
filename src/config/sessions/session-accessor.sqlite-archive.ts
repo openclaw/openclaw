@@ -15,6 +15,7 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import { trackSqliteDatabaseAdmissionWorker } from "../../infra/sqlite-database-admission.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
 import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "../../infra/worker-cpu.js";
@@ -30,7 +31,7 @@ import {
 } from "./session-accessor.sqlite-archive-session.js";
 import type {
   MaterializedSessionStateDeletePlan,
-  SessionColdBatchInput,
+  SqliteArchiveOperation,
   SessionHistoryEvictionArchivePlan,
   SessionStateDeletePlan,
   SqliteArchiveOneShotWorkerData,
@@ -74,10 +75,13 @@ export function createSqliteTranscriptArchiveWorker(
   const releaseService = retainSqliteWriteAdmissionService(nativeLocations, () =>
     admission.service(),
   );
-  const finish = () => {
+  const finish = async () => {
     active = false;
-    admission.finish();
-    releaseService();
+    try {
+      await admission.finish();
+    } finally {
+      releaseService();
+    }
   };
   let worker: Worker;
   const postgresPool = createPostgresPoolEndpoints();
@@ -94,13 +98,25 @@ export function createSqliteTranscriptArchiveWorker(
       execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
     });
   } catch (error) {
-    finish();
+    active = false;
+    try {
+      try {
+        admission.abortConstruction();
+      } finally {
+        releaseService();
+      }
+    } catch (cleanupError) {
+      throw createSqliteLifecycleAggregateError(
+        [error, cleanupError],
+        "SQLite archive worker construction cleanup failed",
+        error,
+      );
+    }
     throw error;
   }
-  trackSqliteArchiveWorkerCleanup(worker);
+  trackSqliteArchiveWorkerCleanup(worker, finish);
   trackSqliteDatabaseAdmissionWorker(worker);
   worker.on("message", (message: unknown) => receiveWorkerMemoryPort(worker, message));
-  worker.once("exit", finish);
   return worker;
 }
 
@@ -362,7 +378,7 @@ export function runSqliteTranscriptArchiveWorkerOperation<Result>(
 }
 
 export function prepareSqliteColdArchiveBatch(
-  input: SessionColdBatchInput,
+  input: Extract<SqliteArchiveOperation, { operation: "cold-prepare" }>["input"],
   assertCurrent: () => void,
   signal: AbortSignal,
 ) {

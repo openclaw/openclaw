@@ -13,7 +13,7 @@ import {
   conversationRef,
 } from "../config/sessions/conversation-delivery-store.test-support.js";
 import { seedClaim } from "../config/sessions/legacy-main-session-migration.test-support.js";
-import { readExactSessionEntryRowForCanonicalRepair } from "../config/sessions/session-accessor.sqlite-canonical-repair.js";
+import { readExactSessionEntryRowForCanonicalRepair } from "../config/sessions/session-accessor.sqlite-canonical-read.js";
 import { readSessionDeliveryRepairInventory } from "../config/sessions/session-accessor.sqlite-delivery-repair.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.sqlite-lifecycle.js";
 import { readTranscriptEventRows } from "../config/sessions/session-accessor.sqlite-read.js";

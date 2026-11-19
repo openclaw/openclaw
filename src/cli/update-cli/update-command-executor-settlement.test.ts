@@ -51,7 +51,8 @@ vi.mock("../../infra/update-managed-service-handoff-database.js", () => ({
     parentIdentity: "directory",
   }),
 }));
-vi.mock("../../infra/update-install-root.js", () => ({
+vi.mock("../../infra/update-install-root.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-install-root.js")>()),
   resolveUpdateInstallRoot: (root: string) => root,
 }));
 vi.mock("./update-command-identity-warning.js", () => ({

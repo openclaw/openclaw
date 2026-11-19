@@ -1,2 +1,0 @@
-# CLI boundary regressions for bounded stdin input alongside prompt files.
-56

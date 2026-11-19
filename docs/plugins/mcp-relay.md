@@ -66,7 +66,7 @@ new conversations when the client does not choose one.
 Add `https://mcp.openclaw.ai/mcp` as a plugin in ChatGPT or a custom connector
 in Claude. On the relay's connection page, choose **Sign in with your Gateway**
 and enter your Gateway's Control UI URL. Your browser opens the Gateway's
-**Connected apps** page, using its normal sign-in. The relay does not fetch your
+**Settings → Connected apps** page, using its normal sign-in. The relay does not fetch your
 Gateway URL or receive your Gateway credentials.
 
 Codex shares its MCP servers between the CLI and the desktop app. Add the relay
@@ -90,7 +90,7 @@ can never exceed your current Gateway permissions.
 
 ### Pair with a code
 
-1. Open **Connected apps** in your Gateway's Control UI and choose **Pair with
+1. Open **Settings → Connected apps** in your Gateway's Control UI and choose **Pair with
    code**. Select the access and create a code. On a single-user Gateway, you can
    also run `openclaw mcp-relay pair` on the Gateway host.
 2. On the relay's connection page, verify the app name and return host, enter the
@@ -104,7 +104,7 @@ signed in as yourself; the CLI refuses to create a person-less grant.
 
 ## Connected apps
 
-The **Connected apps** tab lists your grants and their access limits. You can
+The **Settings → Connected apps** page lists your grants and their access limits. You can
 revoke your own grants; administrators can see and revoke all grants. On
 single-user Gateways, operators with administrator access can create owner
 grants. On Gateways with verified profiles, each grant belongs to the person
@@ -271,8 +271,9 @@ own person grants require write access. Creating owner grants or revoking
 another person's grant requires administrator access. Grant listings include
 the principal and scope ceiling.
 
-Revocation is persisted locally before the Gateway notifies the relay. If the
-relay is offline, the Gateway still refuses further requests using that grant;
+Revocation is persisted locally before the Gateway notifies the relay. It also
+cancels runs under that grant, including work resumed after a Gateway restart. If
+the relay is offline, the Gateway still refuses further requests using that grant;
 the command reports whether the relay was notified. A revoked client must pair
 again to regain access.
 

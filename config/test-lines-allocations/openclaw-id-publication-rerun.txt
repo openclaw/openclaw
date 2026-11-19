@@ -1,2 +1,0 @@
-45
-# OpenClaw ID publication retry: request arriving while a successful attempt clears pending is republished.

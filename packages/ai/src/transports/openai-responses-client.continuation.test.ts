@@ -867,11 +867,37 @@ describe("native OpenAI Responses SSE continuation", () => {
       { onPayload: stateful },
     );
 
-    expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
-    expect(JSON.stringify(sseState.requests[1]?.input)).toContain('"compaction"');
+    expect(sseState.requests).toHaveLength(4);
+    expect(sseState.requests[1]).toMatchObject({
+      store: false,
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "first question" }] },
+        { role: "assistant", content: [{ type: "output_text", text: "first answer" }] },
+        { role: "user", content: [{ type: "input_text", text: "second question" }] },
+        { type: "compaction", encrypted_content: "opaque" },
+      ],
+    });
+    expect(sseState.requests[1]).not.toHaveProperty("previous_response_id");
     expect(sseState.requests[2]).not.toHaveProperty("previous_response_id");
+    expect(sseState.requests[2]).toMatchObject({
+      store: false,
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "first question" }] },
+        { role: "assistant", content: [{ type: "output_text", text: "first answer" }] },
+        { role: "user", content: [{ type: "input_text", text: "second question" }] },
+      ],
+    });
     expect(JSON.stringify(sseState.requests[2]?.input)).not.toContain('"compaction"');
-    expect(sseState.requests[3]).toMatchObject({ previous_response_id: "resp_2" });
+    // The unstored recovery cannot advance the stored prefix past the first response.
+    expect(sseState.requests[3]).toMatchObject({
+      store: true,
+      previous_response_id: "resp_1",
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "second question" }] },
+        { role: "assistant", content: [{ type: "output_text", text: "second answer" }] },
+        { role: "user", content: [{ type: "input_text", text: "third question" }] },
+      ],
+    });
   });
 
   it.each([

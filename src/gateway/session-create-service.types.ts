@@ -208,6 +208,10 @@ export type CreateGatewaySessionParams = {
   initialAssistantMessage?: { message: SessionTranscriptAssistantMessage; idempotencyKey?: string };
   /** Keep a new ordinary session unusable until afterCreate succeeds, or roll it back. */
   atomicInitialization?: true;
+  /** Trusted ordinary creation owner retains this pending row for later exact-incarnation completion. */
+  deferInitialization?: true;
+  /** Internal ordinary Template admission; never accepted from sessions.create params. */
+  templateInitialization?: SessionEntry["templateInitialization"];
   /** Public callers need admin before reconfiguring an adopted keyed session. */
   allowExistingModelSelection?: boolean;
   /** Admitted operator scopes; omitted only by trusted in-process callers. */
@@ -228,6 +232,7 @@ export type CreateGatewaySessionParams = {
     /** Trusted owner status of the spawning invocation, never synthetic child launch authority. */
     requesterSenderIsOwner?: boolean;
     sandbox?: "required";
+    openclawIdPrincipal?: import("./openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
     skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
     /** Trusted config-resolved spawn model provenance for the `model` field. */
     spawnModelAutoSelection?: AgentRuntimeSpawnModelAutoSelection;
@@ -274,7 +279,11 @@ export type GatewaySessionResetParams = {
   reason: "new" | "reset";
   commandSource: string;
   /** Trusted provenance for a reset that materializes a previously missing row. */
-  creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
+  creation?: {
+    via: SessionCreatedVia;
+    actor?: SessionCreatedActor;
+    openclawIdPrincipal?: import("./openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
+  };
   /** Authenticated durable operator identity for missing-session materialization. */
   requestingOperatorProfileId?: string;
   operatorAuthority?: AdmittedRunOperatorAuthority;

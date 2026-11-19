@@ -109,7 +109,6 @@ function formatAgentTab(source: BrowserTab): Record<string, unknown> {
     ...(source.crashed ? { crashed: true } : {}),
     type: source.type,
     ...(targetId ? { targetId } : {}),
-    ...(source.wsUrl ? { wsUrl: source.wsUrl } : {}),
   };
 }
 
@@ -524,7 +523,13 @@ export async function executeBrowserTabAction(context: {
         readStringValue(opened.targetId),
         readStringValue(opened.resolvedProfile),
       );
-      const { ownership: _ownership, resolvedProfile: _resolvedProfile, ...agentVisible } = opened;
+      const {
+        ownership: _ownership,
+        resolvedProfile: _resolvedProfile,
+        wsUrl: _wsUrl,
+        wsLookup: _wsLookup,
+        ...agentVisible
+      } = opened;
       return formatBrowserExternalToolResult({
         kind: "tabs",
         payload: agentVisible,

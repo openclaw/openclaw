@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -595,11 +594,8 @@ function resolveAggregateElisionMarkers(
   ) {
     return undefined;
   }
-  // Avoid pointing recovery at already-deleted spill files.
-  if (!existsSync(spill.path)) {
-    return undefined;
-  }
-  // The original footer already disclosed this path, so preserving it adds no disclosure.
+  // Publication owns this path. Preserve the disclosed pointer without probing the
+  // filesystem during prompt projection; a later read can report an expired artifact.
   const kind = spill.truncated ? "partial" : "full";
   const count = spill.truncated
     ? ` (${spill.chars === undefined ? "capped content" : `first ${spill.chars} chars`})`
@@ -886,6 +882,7 @@ function buildToolResultReplacementPlan(params: {
   maxChars: number;
   aggregateBudgetChars: number;
   protectTrailingToolResults?: boolean;
+  preserveSentToolResults?: boolean;
 }) {
   // Plan on message positions; transcript entry IDs belong only to the rewrite boundary.
   const { textLengths, totalChars, largestChars } = getToolResultHistoryTextBudget(params.messages);
@@ -900,12 +897,23 @@ function buildToolResultReplacementPlan(params: {
       aggregateReducibleChars: 0,
     };
   }
+  const lastAssistant =
+    params.protectTrailingToolResults || params.preserveSentToolResults
+      ? params.messages.findLastIndex((message) => message.role === "assistant")
+      : -1;
   const trailingStart = params.protectTrailingToolResults
-    ? params.messages.findLastIndex((message) => message.role === "assistant") + 1
+    ? lastAssistant + 1
     : params.messages.length;
+  // The latest assistant separates consumed results from the current tool batch.
+  // With no assistant boundary, do not assume orphan results are unsent.
+  const eligibleStart = params.preserveSentToolResults
+    ? lastAssistant < 0
+      ? params.messages.length
+      : lastAssistant + 1
+    : 0;
   const candidates = params.messages.flatMap((message, index) => {
     const textLength = textLengths[index]!;
-    return message.role === "toolResult" && textLength > 0
+    return index >= eligibleStart && message.role === "toolResult" && textLength > 0
       ? [{ index, source: message, message, textLength, aggregateTextLength: textLength }]
       : [];
   });
@@ -1035,10 +1043,11 @@ export function estimateToolResultReductionPotential(params: {
   contextWindowTokens: number;
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
+  preserveSentToolResults?: boolean;
 }) {
   const { maxChars, aggregateBudgetChars } = resolveToolResultBudgets(params);
   const plan = buildToolResultReplacementPlan({
-    messages: params.messages,
+    ...params,
     maxChars,
     aggregateBudgetChars,
   });
@@ -1057,6 +1066,7 @@ export async function truncateOversizedToolResultsInSessionManager(params: {
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
   protectTrailingToolResults?: boolean;
+  preserveSentToolResults?: boolean;
   projectionState?: ToolResultPromptProjectionState;
   sessionFile?: string;
   sessionId?: string;
@@ -1092,6 +1102,10 @@ export async function truncateOversizedToolResultsInSessionManager(params: {
       aggregateBudgetChars,
     });
     const replacements = branch.flatMap((entry, index) => {
+      // Replaying an existing projection is not an authorized history edit.
+      if (params.preserveSentToolResults && !plan.changedIndices.has(index)) {
+        return [];
+      }
       const message = plan.messages[index]!;
       return entry.message === message || JSON.stringify(entry.message) === JSON.stringify(message)
         ? []
@@ -1171,6 +1185,7 @@ export function sessionLikelyHasOversizedToolResults(params: {
   messages: AgentMessage[];
   contextWindowTokens: number;
   maxCharsOverride?: number;
+  preserveSentToolResults?: boolean;
 }): boolean {
   const estimate = estimateToolResultReductionPotential(params);
   return estimate.oversizedCount > 0 || estimate.aggregateReducibleChars > 0;

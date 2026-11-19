@@ -3,26 +3,32 @@ import type { DecisionBatch, DecisionBatchResult } from "openclaw/plugin-sdk/dec
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 
-const MODEL = manifest.decisionModels[0]!.id;
-const LIMITS = manifest.decisionModels[0]!.capabilities;
+// The model id is the operator's Decision selection; catalog rows advertise ids. Retired ids
+// never reach the vendor, which silently reroutes them to another model.
+const RETIRED = new Set(manifest.modelCatalog.suppressions.map((rule) => rule.model));
+// Decisions API wire bounds (docs.subq.ai/endpoints/decisions-api, 2026-11-12).
+const MAX_QUESTIONS = 128;
+const MAX_CHOICE_OPTIONS = 255;
+const MAX_SCORE_LEVELS = 10;
 
 export function supportsSubQDecisionBatch(batch: DecisionBatch, model: string): boolean {
   const questions = Object.entries(batch.questions);
   return (
-    model === MODEL &&
+    model.length > 0 &&
+    !RETIRED.has(model) &&
     batch.state !== null &&
     questions.length > 0 &&
-    questions.length <= LIMITS.maxQuestions &&
+    questions.length <= MAX_QUESTIONS &&
     questions.every(([id, question]) => {
       if (id.length > 100) {
         return false;
       }
       if (question.type === "choice") {
         const count = Object.keys(question.criteria).length;
-        return count >= 2 && count <= LIMITS.maxChoiceAlternatives;
+        return count >= 2 && count <= MAX_CHOICE_OPTIONS;
       }
       if (question.type === "score") {
-        return question.criteria.length >= 2 && question.criteria.length <= LIMITS.maxScoreLevels;
+        return question.criteria.length >= 2 && question.criteria.length <= MAX_SCORE_LEVELS;
       }
       return true;
     })
@@ -51,7 +57,8 @@ export function decodeSubQDecisionResult(
   const result = record(payload);
   const wireAnswers = record(result.answers);
   if (
-    result.model !== MODEL ||
+    typeof result.model !== "string" ||
+    !result.model ||
     Object.keys(wireAnswers).length !== Object.keys(batch.questions).length
   ) {
     throw new Error("Invalid SubQ result.");
@@ -123,7 +130,7 @@ export function decodeSubQDecisionResult(
   if (usage.output_tokens !== 0) {
     throw new Error("Invalid SubQ output usage.");
   }
-  return { model: MODEL, answers, usage: { inputTokens, outputTokens: 0 } };
+  return { model: result.model, answers, usage: { inputTokens, outputTokens: 0 } };
 }
 
 export function encodeSubQDecisionRequest(batch: DecisionBatch, modelId: string): string {

@@ -234,7 +234,15 @@ describe("presence projection without resident session facts", () => {
       replaceSessionEntrySync({ agentId: "main", sessionKey: key }, entry);
       await projection.prepareMembership();
       expect(project(readers[1]!)).toEqual(presence);
-      cfg = { ...cfg, gateway: { roles: { definitions: {} } } };
+      cfg = {
+        ...cfg,
+        gateway: {
+          roles: {
+            default: "denied",
+            definitions: { denied: { agents: [], scopes: [], sessions: { others: "none" } } },
+          },
+        },
+      };
       expect(project(readers[1]!)).toEqual([person]);
       cfg = { agents: { entries: { main: {} } } };
       expect(project(readers[1]!)).toEqual(presence);

@@ -378,6 +378,7 @@ interface AgentRunOptions {
   label?: string;
   model?: string;
   thinking?: string;
+  cyberAccessProgram?: "standard" | "daybreak_blue" | "daybreak_red";
   fastMode?: boolean | "auto" | "ultrafast";
   agentId?: string;
   schema?: AgentJsonSchema;

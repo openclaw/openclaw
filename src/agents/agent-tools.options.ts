@@ -119,8 +119,6 @@ export type OpenClawCodingToolsOptions = {
   systemAgentTool?: import("./tools/system-agent-tool.js").SystemAgentToolOptions;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
-  /** Reads the sticky untrusted-content flag for the current user turn. */
-  isTurnTainted?: () => boolean;
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   /** Original identities for sandbox-materialized skill instruction paths. */
@@ -139,18 +137,30 @@ export type OpenClawCodingToolsOptions = {
   AgentRunChannelContext;
 
 export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
+  /** Internal listing owner pins discovery changes or renders a read-only inventory. */
+  githubPublicationConfigurationAware?: true;
   /** Describe prospective GitHub actions before policy filtering; never executable. */
   githubPublicationPreview?: true;
   assertInvocationCurrent?: () => void;
   /** Live harness-owned local execution, independent of the Gateway tool catalog. */
   nativeHarnessExecution?: true;
+  /** Host-recorded handoff to a caller whose additional execution policy is unknown. */
+  unverifiedExecutionPolicy?: true;
   pluginExecutionAuthority?: import("./admitted-run-context.js").AdmittedRunOperatorAuthority;
   pluginExecutionSkillsSnapshot?: SkillSnapshot;
   awaitSessionDiffBaseline?: () => Promise<void>;
+  /** Execution owner's current deadline, without lane cleanup grace. */
+  getRunAbortDeadlineAtMs?: () => number | undefined;
   /** Policy-approved tool names unavailable here but usable in a child's own workspace. */
   additionalInheritedToolNamesRef?: string[];
   /** The host owns continuation policy when this factory builds only part of its tool surface. */
   sessionEventSourcePolicy?: SessionEventSourcePolicy;
+  /**
+   * Host-resolved lifetime of this turn's tool policy, supplied only by host tool construction.
+   * "conversation" means the turn adds no narrowing the session would not re-derive on its next
+   * turn. Omitted or "turn" keeps every background follow-up capped at this turn's tool list.
+   */
+  toolPolicyScope?: "conversation" | "turn";
 };
 
 export type PluginCodingToolsOptions = Omit<

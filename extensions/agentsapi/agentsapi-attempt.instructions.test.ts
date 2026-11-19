@@ -71,7 +71,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async () => {
     resolveAgentHarnessBeforePromptBuildResult: resolvePromptMock,
     prepareAgentWorkspaceContext: prepareAgentWorkspaceContextMock,
     prepareWatchedSessionsHarnessContext: watchedSessionsContextMock,
-    embeddedAgentLog: { warn: vi.fn(), debug: vi.fn() },
+    embeddedAgentLog: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     formatErrorMessage: String,
     setActiveEmbeddedRun: vi.fn(),
     clearActiveEmbeddedRun: vi.fn(),

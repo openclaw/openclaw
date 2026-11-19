@@ -126,7 +126,7 @@ export default defineControlUiPlugin({
         id: "workboard",
         label: "Workboard",
         page: workboardPageTarget(),
-        icon: "kanban",
+        icon: "workboard",
         order: 10,
       }),
       host.ui.registerAccessory({

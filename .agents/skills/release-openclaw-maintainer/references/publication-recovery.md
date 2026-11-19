@@ -87,9 +87,12 @@ Classify a failure before changing Git state:
   downstream evidence; after npm publication use a new beta/version.
 - Changelog-only defect: replace Release SHA and reuse Code SHA evidence only
   after proving the exact changelog delta.
-- Qualification harness/contract defect: repair the frozen candidate closure,
-  freeze a new C/Q, and rebind evidence. Missing contracts require deliberate
-  backports, not a newer-main harness.
+- Qualification harness/contract defect: a tooling-only repair can preserve C
+  and select an explicit reviewed main-ancestor Q through a new admission and
+  successful parent. Missing contracts need a deliberate Q repair or candidate
+  backport, not a moving-main fallback. Follow the
+  [frozen-C recovery procedure](../../../../docs/reference/full-release-validation/dispatch.md#recover-qualification-tooling-without-changing-the-candidate);
+  never edit the old request or relabel a failed FRV.
 - P-only admission/verifier/publisher, credential, infrastructure, monitor,
   approval, or selector failure: keep C/Q and recover the smallest failed surface.
   Change independent P only when needed; preserve original producer identities.
@@ -133,10 +136,10 @@ beta verifier. Restore the draft, dependency evidence asset, proof section and
 finalization from that evidence. Never rerun publication for bytes already
 published. A failed postpublish confidence lane does not authorize unpublishing.
 Keep the selected publisher's finalization checks intact while recovering.
-The normal direct route verifies npm and Docker before activation; the prepared
-button also verifies ClawHub downloads. Do not manually un-draft a release to
-bypass a failed gate. The direct publisher's explicit `finalize_release_before_docker=true`
-option changes that ordering, not the validation requirements.
+The normal direct and prepared routes verify their required npm and Docker
+evidence before activation; neither waits for ClawHub downloads. Do not manually
+un-draft a release to bypass a failed gate. The direct publisher's explicit
+`finalize_release_before_docker=true` option changes that ordering, not the validation requirements.
 
 Repair a stale beta floor through the dist-tag owner and inspect the failed
 parent's exact children before rejecting stale gates or canceling them. Resume
@@ -277,14 +280,49 @@ rerun only failed verification jobs when the publisher succeeded; otherwise
 inspect its children and follow the recovery route above. Never repeat an
 uncertain dispatch or rerun all publication jobs to fix a download failure.
 
-ClawHub v2 publishes stage immutable bytes before the parent succeeds. With
-`wait_for_clawhub=true`, one plugin failure fails the child and parent, stranding
-staged siblings. Recover their attempts before resuming the parent. The release
-plan checks the public version publication-state endpoint: pending and failed
-versions are excluded from republishing, while only absent versions become
-candidates. Pending attempts wait for their original parent; failed attempts
-appear in the workflow summary with a recovery command when eligible, or an
-operator-action notice otherwise. Edit the pinned-checkout and reason placeholders
+### ClawHub finalization status
+
+Check public state before diagnosing or recovering ClawHub:
+
+```bash
+pnpm release:clawhub-status -- --version <published-version>
+```
+
+Run it from the clean, exact `v<published-version>` tag. Use `--plugins`
+for a retained selected-scope roster. The report separates `published`,
+`absent`, and `failed` packages from pending `staging`, `checks`, and
+`finalization` work.
+
+For stall detection, pass the last observed movement with
+`--last-progress-at <ISO-8601>`; the default threshold is 60 minutes and can
+be changed with `--stall-threshold-minutes`. A threshold crossing signals
+inactivity, not failure or recovery authority.
+
+- Wait while any package is `pending`; do not dispatch new bytes, inspect
+  credentials, or recover it.
+- Recover only `failed` attempts, with explicit recovery authority and the
+  approved credential workflow below.
+- Treat a package as `absent` only when the publication-state endpoint says
+  so. A version-route 404 is not sufficient.
+
+If the parent fails after staging, retain the original parent, child, and public
+attempt IDs. A resumed parent may unblock finalization, but does not adopt or
+prove the original ClawHub publication; verify it separately with this command.
+Escalate sustained lack of movement to the ClawHub owner. Elapsed time alone is
+not failure; see the pending-versus-failed history in PR #168153.
+
+ClawHub publication and recovery run independently from the existing dispatch
+point. A ClawHub failure must not fail or stall core publication, GitHub
+finalization, main closeout, or the retrospective PR; a core-parent failure
+must not cancel already-authorized ClawHub work. Retain the original authorization
+and revalidate the ClawHub lane's own authority before effects. Historical
+`wait_for_clawhub=true` parents could fail on one plugin and strand staged
+siblings; recover those ClawHub attempts separately, without holding core recovery.
+The release plan checks the public version publication-state endpoint: pending
+and failed versions are excluded from republishing, while only absent versions become
+candidates. Reconcile pending attempts with their original publication owner;
+failed attempts appear in the workflow summary with a recovery command when
+eligible, or an operator-action notice otherwise. Edit the pinned-checkout and reason placeholders
 before running recovery with a human publisher token. Recovery eligibility is
 advisory and is revalidated by ClawHub. A version 404 alone does not prove absence;
 older servers fall back to that probe until the publication endpoint is deployed.
@@ -317,10 +355,7 @@ JSON uploads currently run only after successful publish steps. Review commands
 before executing; never automatically override scan failures. Verify recovered
 versions publicly before final release verification.
 
-With `wait_for_clawhub=false` the parent authorizes the ClawHub child and
-does not wait for it. The child publishes on its own and needs no approval.
-It revalidates that the parent is still active or succeeded, so a parent that
-fails first strands it. Watch the child until every package's
+Watch the independent ClawHub child until every package's
 `versions/<version>` returns 200. Seen in 2026.9.6: Convex 512 MB out-of-memory
 errors, runner ENOSPC, and curl timeouts. Recover only the failed packages,
 with `publish_scope=selected` and `plugins=<failed subset>`, from the original
@@ -454,11 +489,7 @@ verify packaging after publish; it does not authorize republishing.
 
 ## Check the bootstrap token
 
-Before publishing a never-published npm package, check the repository's actual
-`NPM_TOKEN` in an approved GitHub Actions job. Disable shell tracing, write the
-token to a private temporary npmrc, and run `npm whoami` against
-`https://registry.npmjs.org` with that file and an otherwise clean environment.
-Suppress account output, remove the temporary file, and retain the run URL.
-Never print or upload the token. A local login or secret update time is not a
-substitute for this check. Successful authentication does not establish package
-permissions or approve publication; failures go to the credential owner.
+Ask the release credential owner to confirm the repository `NPM_TOKEN` is ready
+with scope/package-creation access before bootstrap dispatch. No standalone token
+probe exists: keep liveness unverified without evidence for that token, and do
+not publish or rotate credentials to test it.

@@ -8,16 +8,17 @@ import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/working-phrase-solid.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { themeBrandingProjection } from "../../../lib/reactive/theme-branding.ts";
 import type { ChatSubagentWait, HandoffSessionLinks } from "../chat-subagent-wait.ts";
-import { ChatSubagentWaitLine } from "./chat-handoff-sessions.tsx";
 import { ChatRetryStatus } from "./chat-retry-status.tsx";
 import { outputTokensLabel, WorkingBrandGlyph } from "./chat-working-indicator-branding.tsx";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 type ReadingIndicator = Extract<ChatItem, { kind: "reading-indicator" }>;
 type ChatWorkingIndicatorOptions = {
@@ -51,7 +52,7 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
     clawRetiredAt = performance.now();
   });
   const waitingApproval = () => props.options.waitingApproval === true;
-  const waitingSubagents = () => (props.options.waitingSubagents?.sessions.length ?? 0) > 0;
+  const waitingSubagents = () => Boolean(props.options.waitingSubagents);
   const working = () => !waitingApproval() && !waitingSubagents() && !props.options.startupLabel;
   const continuation = () => props.options.presentation === "continuation";
   const indicator = () =>
@@ -119,13 +120,7 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
       </Show>
       {/* A handoff's wait names what it waits on instead of the working text. */}
       <Show when={!waitingApproval() && waitingSubagents() && props.options.waitingSubagents}>
-        {(wait) => (
-          <ChatSubagentWaitLine
-            wait={wait()}
-            startMs={wait().startedAt}
-            links={props.options.sessionLinks}
-          />
-        )}
+        <span class="chat-working-indicator__status">{t("chat.toolCards.waitingForAgents")}</span>
       </Show>
       <Show when={waitingApproval() || !waitingSubagents()}>
         <span class="chat-working-indicator__status">
@@ -206,7 +201,6 @@ export function ChatWorkingIndicator(props: WorkingProps) {
                 ? t("chat.waitingForApproval")
                 : t("chat.view.workingDetails")
             }
-            title={t("chat.view.activityDetails")}
           >
             <Show when={!attention()}>
               <span class="chat-bubble-dots chat-bubble-dots--working" aria-hidden="true">

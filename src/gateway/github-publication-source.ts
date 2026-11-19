@@ -4,11 +4,13 @@ import {
   captureSessionActorStorageOwner,
   type CapturedSessionActorStorageOwner,
 } from "../config/sessions/session-actor-storage-binding.js";
+import { getPostgresPhysicalFactsForPath } from "../infra/database-engine/physical-facts.js";
 import {
   createSqliteSourceFenceAdmission,
   type SqliteSourceFenceOwner,
 } from "../infra/sqlite-source-fence-admission.js";
 import type { SqliteSourceFenceIdentity } from "../infra/sqlite-source-fence-contract.js";
+import { readSqliteWorkerMonotonicNs } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -118,7 +120,7 @@ export function bindGitHubPublicationSource(
         },
         sources: [binding.source],
         signal: binding.signal,
-        deadlineNs: process.hrtime.bigint() + 120_000_000_000n,
+        deadlineNs: readSqliteWorkerMonotonicNs() + 120_000_000_000n,
       })(operation);
     }) satisfies SqliteWorkerAdmissionFactory,
   };
@@ -288,7 +290,11 @@ export async function prepareGitHubPublicationSource(params: {
       incarnation = randomUUID();
       destinationIncarnations.set(context.admission, incarnation);
     }
-    const sourceRead = {
+    const sourceRead: {
+      source: SqliteSourceFenceIdentity;
+      destination: SqliteSourceFenceIdentity;
+      selector: GitHubPublicationSourceSelector;
+    } = {
       source: sourceIdentity,
       destination: { physical: context.admission.identity, incarnation },
       selector: structuredClone(params.selector),
@@ -300,6 +306,12 @@ export async function prepareGitHubPublicationSource(params: {
       { signal, assertCurrent },
     );
     sourceRead.destination.physical = context.admission.identity;
+    for (const identity of [sourceRead.source, sourceRead.destination]) {
+      const facts = getPostgresPhysicalFactsForPath(identity.physical.canonicalPath);
+      if (facts) {
+        identity.postgres = { namespace: facts.namespace, storeId: facts.storeId };
+      }
+    }
     // Policy callbacks may write SQLite. Such a write revokes this captured basis.
     params.assertCurrent();
     assertCurrent();

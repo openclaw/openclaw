@@ -14,6 +14,7 @@ import {
   getProfileContext,
   jsonBrowserError,
   jsonError,
+  operatorPagesOption,
   runProfileRouteOperation,
 } from "./utils.js";
 
@@ -143,10 +144,12 @@ export async function withRouteTabContext<T>(
       assertCurrent: params.req.assertCurrent,
       run: async (signal) => {
         // Agent routes can address local-managed tabs through Playwright when per-tab WS discovery lags.
+        const operatorPages = operatorPagesOption(params.req);
         const tab = await profileCtx.ensureTabAvailable(params.targetId, {
           allowPlaywrightFallback: true,
           signal,
           timeoutMs: params.ctx.state().resolved.actionTimeoutMs,
+          ...operatorPages,
         });
         if (params.enforceCurrentUrlAllowed) {
           await assertBrowserNavigationResultAllowed({
@@ -172,6 +175,7 @@ export async function withRouteTabContext<T>(
               fallbackUrl,
               signal,
               timeoutMs: params.ctx.state().resolved.actionTimeoutMs,
+              ...operatorPages,
             }),
         });
       },
@@ -193,10 +197,15 @@ export async function resolveSafeRouteTabUrl(params: {
   fallbackUrl?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+  includeOperatorPages?: boolean;
 }): Promise<string | undefined> {
   let tabs: Array<{ targetId: string; url: string }>;
   try {
-    tabs = await params.profileCtx.listTabs({ signal: params.signal, timeoutMs: params.timeoutMs });
+    tabs = await params.profileCtx.listTabs({
+      signal: params.signal,
+      timeoutMs: params.timeoutMs,
+      includeOperatorPages: params.includeOperatorPages,
+    });
   } catch {
     params.signal?.throwIfAborted();
     tabs = [];

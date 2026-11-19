@@ -1,2 +1,0 @@
-# Prove slow MCP failures receive the full recovery cooldown.
-90

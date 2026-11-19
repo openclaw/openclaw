@@ -31,6 +31,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { withoutMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   createOpenClawTestState,
@@ -211,7 +212,19 @@ describe("usage archive identity", () => {
       sessionEntry: { sessionFile: marker, sessionId, updatedAt: 1 },
       sessionFile: artifact,
     };
-    expect(await resolve(historicalInput)).toBe(artifact);
+    {
+      using observation = observeMainThreadFs();
+      expect(await resolve(historicalInput)).toBe(artifact);
+      const archived = `${artifact}.reset.2026-10-01T00-00-00.000Z`;
+      await fs.rename(artifact, archived);
+      expect(await resolve(historicalInput)).toBe(archived);
+      expect(await loadSessionLogs({ agentId: "main", sessionId, sessionFile: artifact })).toEqual(
+        [],
+      );
+      expect(observation.calls().existsSync ?? 0).toBe(0);
+      expect(observation.calls().readdirSync ?? 0).toBe(0);
+      await fs.rename(archived, artifact);
+    }
     expect(await resolve({ ...historicalInput, sessionFile: foreign })).toBeUndefined();
     expect(await resolve({ sessionFile: stale })).toBeUndefined();
     expect(await resolve({ sessionFile: marker })).toBe(marker);

@@ -137,6 +137,9 @@ export function applyPromptBuildToolsAllow<
   catalogRef?: ToolSearchCatalogRef;
   codeModeControlsEnabled: boolean;
   forceToolNames?: readonly string[];
+  diagnosticIdentity?: Parameters<
+    typeof createAgentHarnessPromptToolPolicy
+  >[0]["diagnosticIdentity"];
 }) {
   const policyInput = {
     toolsAllow: params.toolsAllow,
@@ -149,6 +152,7 @@ export function applyPromptBuildToolsAllow<
     return definition ? [getToolDefinitionSource(definition) ?? definition] : [];
   });
   const promptPolicy = createAgentHarnessPromptToolPolicy({
+    diagnosticIdentity: params.diagnosticIdentity,
     tools: registeredTools,
     catalogRef: params.catalogRef,
     catalogEntries: params.baseline.catalogEntries,

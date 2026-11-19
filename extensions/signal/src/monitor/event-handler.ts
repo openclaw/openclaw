@@ -795,18 +795,17 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       });
     const accessDecision = await resolveChannelIngress();
     const { senderAccess, commandAccess } = accessDecision;
-    const quoteText = normalizeOptionalString(dataMessage?.quote?.text) ?? "";
-    const { contextVisibilityMode, quoteSenderAllowed, visibleQuoteText, visibleQuoteSender } =
-      resolveSignalQuoteContext({
-        cfg,
-        accountId: deps.accountId,
-        isGroup,
-        dataMessage,
-        effectiveGroupAllow: senderAccess.effectiveGroupAllowFrom,
-      });
-    if (quoteText && !visibleQuoteText && isGroup) {
+    const quoteContext = resolveSignalQuoteContext({
+      cfg,
+      accountId: deps.accountId,
+      isGroup,
+      dataMessage,
+      effectiveGroupAllow: senderAccess.effectiveGroupAllowFrom,
+    });
+    const { visibleQuoteText, visibleQuoteSender } = quoteContext;
+    if (quoteContext.quoteText && !visibleQuoteText && isGroup) {
       logVerbose(
-        `signal: drop quote context (mode=${contextVisibilityMode}, sender_allowed=${quoteSenderAllowed ? "yes" : "no"})`,
+        `signal: drop quote context (mode=${quoteContext.contextVisibilityMode}, sender_allowed=${quoteContext.quoteSenderAllowed ? "yes" : "no"})`,
       );
     }
     const hasBodyContent =

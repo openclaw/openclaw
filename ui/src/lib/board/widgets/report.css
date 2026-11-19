@@ -8,7 +8,7 @@ openclaw-report-widget {
   gap: 20px;
   padding: 18px;
   color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.5;
 
   h3,
@@ -16,7 +16,7 @@ openclaw-report-widget {
   caption {
     margin: 0 0 10px;
     color: var(--text-strong);
-    font-size: var(--control-ui-text-md);
+    font-size: 14px;
     font-weight: 600;
     text-align: left;
   }
@@ -55,7 +55,7 @@ openclaw-report-widget {
   dd {
     margin: 4px 0;
     color: var(--text-strong);
-    font-size: calc(24px * var(--control-ui-text-scale));
+    font-size: 24px;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
     overflow-wrap: anywhere;
@@ -63,7 +63,7 @@ openclaw-report-widget {
 
   .board-report__metric-detail {
     color: var(--muted);
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     font-weight: normal;
   }
 }

@@ -26,7 +26,7 @@ openclaw-tooltip-provider {
   box-shadow: var(--openclaw-tooltip-shadow, var(--menu-shadow));
   backdrop-filter: var(--menu-backdrop);
   font-family: var(--font-body);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   font-weight: 500;
   line-height: 1.25;
   overflow-wrap: anywhere;

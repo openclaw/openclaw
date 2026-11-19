@@ -51,23 +51,26 @@ it("external changes invalidate; events contain no data; authorized reads reconc
   f.service = createKnowledgeService(f.context.api, { emit: (...args) => f.emitted.push(args) });
   f.services[1].start();
   f.emitted.length = 0;
-  const original = (await f.service.record({ id: r.id, view: "raw" }, f.context)).record!.raw;
+  const original = (await f.service.record_detail({ id: r.id, view: "raw" }, f.context)).record!
+    .raw;
   const file = f.root + "/private/" + r.path;
   await writeFile(file, original!.replace("Original", "External edit"));
   await until(() => f.emitted.length);
   expect(f.emitted[0]).toStrictEqual(["changed", {}]);
-  expect((await f.service.record({ id: r.id }, f.context)).record!.body).toBe("External edit");
+  expect((await f.service.record_detail({ id: r.id }, f.context)).record!.body).toBe(
+    "External edit",
+  );
   await delay(200);
   f.emitted.length = 0;
   await rename(file, file + "-renamed.md");
   await until(() => f.emitted.length);
-  expect((await f.service.record({ id: r.id }, f.context)).record!.path).toBe(
+  expect((await f.service.record_detail({ id: r.id }, f.context)).record!.path).toBe(
     r.path + "-renamed.md",
   );
   await delay(200);
   f.emitted.length = 0;
   await rm(file + "-renamed.md"); // Native watchers can coalesce rapid rename/delete; periodic UI reads cover this.
-  expect((await f.service.record({ id: r.id }, f.context)).record).toBe(null);
+  expect((await f.service.record_detail({ id: r.id }, f.context)).record).toBe(null);
   expect((await f.service.status({}, f.context)).live).toBe("watching");
   expect(watch).not.toHaveBeenCalled();
 });
@@ -160,7 +163,10 @@ it("status snapshot is stable for unchanged reads and detects equal-count edits 
   const after = await f.service.status({}, f.context);
   expect(after.records).toBe(before.records);
   expect(after.snapshot).not.toBe(before.snapshot);
-  const detail = await f.service.record({ id: changed.id, includeMetadata: true }, f.context);
+  const detail = await f.service.record_detail(
+    { id: changed.id, includeMetadata: true },
+    f.context,
+  );
   await writeFile(
     f.root + "/private/" + detail.record!.metadata!.evidence![0]!.path,
     "Corrupted source",
@@ -175,24 +181,24 @@ it("agent bylines follow exact journaled revisions, never scope ownership or sou
     { requestId: randomUUID(), title: "Authored page", type: "note", body: "Agent text" },
     agent,
   );
-  const record = (await f.service.record({ id: saved.id, view: "raw" }, f.context)).record;
+  const record = (await f.service.record_detail({ id: saved.id, view: "raw" }, f.context)).record;
   expect(record!.writtenByAgentId).toBe("main");
   expect(
-    (await f.service.records({}, f.context)).records.find((r) => r.id === saved.id)!
+    (await f.service.records_detail({}, f.context)).records.find((r) => r.id === saved.id)!
       .writtenByAgentId,
   ).toBe("main");
   const operator = await f.service.save_page(
     { requestId: randomUUID(), title: "Operator page", type: "note", body: "Operator text" },
     f.context,
   );
-  expect((await f.service.record({ id: operator.id }, f.context)).record!.writtenByAgentId).toBe(
-    undefined,
-  );
+  expect(
+    (await f.service.record_detail({ id: operator.id }, f.context)).record!.writtenByAgentId,
+  ).toBe(undefined);
   await writeFile(
     f.root + "/private/" + saved.path,
     record!.raw!.replace("Agent text", "External text"),
   );
-  expect((await f.service.record({ id: saved.id }, f.context)).record!.writtenByAgentId).toBe(
-    undefined,
-  );
+  expect(
+    (await f.service.record_detail({ id: saved.id }, f.context)).record!.writtenByAgentId,
+  ).toBe(undefined);
 });

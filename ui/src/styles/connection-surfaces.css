@@ -29,7 +29,7 @@
   align-items: center;
   gap: 8px;
   margin-bottom: 24px;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1;
 }
 
@@ -83,7 +83,7 @@
 .login-gate__heading,
 .login-gate__failure-title {
   margin: 0;
-  font-size: calc(22px * var(--control-ui-text-scale));
+  font-size: 22px;
   font-weight: 700;
   line-height: 1.2;
   letter-spacing: -0.02em;
@@ -94,7 +94,7 @@
 .login-gate__failure-summary {
   margin: 0;
   overflow-wrap: anywhere;
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
   line-height: 1.5;
   color: var(--muted);
 }
@@ -107,7 +107,7 @@
 .login-gate__failure-steps {
   margin: 0;
   padding-left: 20px;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.55;
   color: var(--text);
 }
@@ -126,7 +126,7 @@
   margin: 1px 2px;
   padding: 1px 4px 1px 8px;
   vertical-align: middle;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .login-gate__failure-steps .login-gate__command code {
@@ -166,7 +166,7 @@
   margin-top: 2px;
   justify-content: center;
   padding: 10px 16px;
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
   font-weight: 600;
 }
 
@@ -184,7 +184,7 @@
   align-items: center;
   gap: 6px;
   list-style: none;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   color: var(--muted);
   cursor: var(--cursor-action);
 }
@@ -237,7 +237,7 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .login-gate__failure-detail {
@@ -272,14 +272,14 @@
 
 .login-gate__help-title {
   font-weight: 600;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   color: var(--text);
 }
 
 .login-gate__steps {
   margin: 10px 0 0;
   padding-left: 20px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.6;
   color: var(--muted);
 }
@@ -294,7 +294,7 @@
 
 .login-gate__docs {
   margin-top: 10px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 /* The outer app owns safe areas for the login gate as well as the shell. */
@@ -314,7 +314,7 @@
 
   .login-gate__heading,
   .login-gate__failure-title {
-    font-size: calc(20px * var(--control-ui-text-scale));
+    font-size: 20px;
   }
 
   /* 44px touch targets per platform guidelines. */
@@ -369,7 +369,7 @@
 
 .login-gate__hero-label,
 .gateway-switch__label {
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -378,7 +378,7 @@
 
 .gateway-switch__host code {
   font-family: var(--mono);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.45;
   color: var(--text-strong);
   overflow-wrap: anywhere;
@@ -386,7 +386,7 @@
 
 .gateway-switch__note {
   margin: 0;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.5;
   color: var(--text);
 }

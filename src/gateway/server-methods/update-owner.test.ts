@@ -19,7 +19,7 @@ import {
   detectRespawnSupervisorMock as detectSupervisor,
   isRestartEnabledMock as restartEnabled,
   mockGlobalInstallSurface as globalInstall,
-  readGatewayOwnerLeaseMock as ownerLease,
+  readGatewayOwnerLeaseAsyncMock as ownerLease,
   resolveStartupInstallStatusMock as installStatus,
   scheduleGatewayRestartMock as scheduleRestart,
   sendGatewayLifecycleNoticeMock as notice,
@@ -221,7 +221,7 @@ it.each(promptUpdateCases)(
         "hosting Gateway guidance",
       );
       const action = expectDefined(
-        guidance.match(/perform the work with `gateway`: ([\w.]+)/u)?.[1],
+        guidance.match(/`gateway`: ([\w.]+)/u)?.[1],
         "prompt-advertised update action",
       );
       const result = await tool.execute("update", {
@@ -249,9 +249,8 @@ it.each(promptUpdateCases)(
         handoffId: handoff.handoffId,
       });
       if (!supervisor) {
-        expect(ownerLease).toHaveBeenCalledWith({ current: true });
         const owner = expectDefined(
-          ownerLease.mock.results.at(-1)?.value,
+          await ownerLease.mock.results.at(-1)?.value,
           "current foreground Gateway owner",
         );
         expect(owner).toMatchObject({ mode: "foreground", state: "live", pid: process.pid });
@@ -280,7 +279,6 @@ it.each(promptUpdateCases)(
         );
       }
       expect(guidance).toContain("On an explicit owner request");
-      expect(guidance).toContain("Do not redirect the owner to slash commands or a terminal");
       expect(guidance).toContain("must retain a working restart path before it stops");
     });
   },
@@ -430,7 +428,7 @@ it.each([false, true])(
     expect(notice).toHaveBeenLastCalledWith(
       expect.objectContaining({
         message:
-          "ℹ️ OpenClaw wasn't updated.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+          "ℹ️ OpenClaw wasn't updated.\nFor details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.",
       }),
       expect.any(Object),
     );

@@ -540,6 +540,7 @@ export function renderFilePanelPresentation(context: {
 }
 
 export const chatDetailPanelProperties = {
+  registerPanelHost: { default: undefined, attribute: false },
   attachmentChat: { default: undefined, attribute: false },
   onScrollPortRef: { default: undefined, attribute: false },
   panelPresentation: { default: undefined, attribute: false },

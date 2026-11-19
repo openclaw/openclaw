@@ -1,25 +1,19 @@
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { getCliSessionBinding } from "../../agents/cli-session.js";
-import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
-import { isCliProvider } from "../../agents/model-selection.js";
+import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import {
-  resolveSessionWorkStartError,
-  type InternalSessionEntry,
-  type SessionEntry,
-} from "../../config/sessions.js";
+  resolveSessionWorkStartBlock,
+  type SessionWorkStartError,
+} from "../../config/sessions/session-work-start.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE,
   resolveAgentHarnessSessionContextError,
   resolveAgentHarnessSessionIdMismatchError,
 } from "../../sessions/agent-harness-session-key.js";
-import { setSafeTimeout } from "../../utils/timer-delay.js";
 import { respondError } from "../server-methods/response.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import type { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { prepareDeletedAgentSessionCheck } from "../session-utils.js";
-
-export const CRON_CONTINUATION_RELEASE_RECOVERY_DELAYS_MS = [250, 1_000, 4_000, 15_000] as const;
 
 export function canPrepareAgentSessionWorktree(
   sessionKey: string | undefined,
@@ -28,32 +22,16 @@ export function canPrepareAgentSessionWorktree(
   return Boolean(sessionKey && entry?.pendingWorktree) && entry?.pendingProjectGitUrl === undefined;
 }
 
-export function resolveAgentSessionWorkStartError(
+export function resolveAgentSessionWorkStartBlock(
   sessionKey: string,
   entry: SessionEntry | undefined,
-): string | undefined {
-  return resolveSessionWorkStartError(
+): SessionWorkStartError | undefined {
+  return resolveSessionWorkStartBlock(
     sessionKey,
     entry,
     canPrepareAgentSessionWorktree(sessionKey, entry) ? { allowPendingWorkspace: true } : undefined,
   );
 }
-
-export type RestoredCronContinuation = Pick<
-  NonNullable<SessionEntry["cronRunContinuation"]>,
-  | "lifecycleRevision"
-  | "toolsAllow"
-  | "toolsAllowIsDefault"
-  | "scheduledToolPolicy"
-  | "scheduledToolCallerOrigin"
-  | "toolsAllowExecTarget"
-  | "cliSessionBindingFacts"
-> & {
-  sessionId: string;
-  provider: string;
-  model: string;
-  thinking?: string;
-};
 
 export function respondDeletedAgentSession(params: {
   cfg: OpenClawConfig;
@@ -114,12 +92,19 @@ export function respondUnavailableAgentSession(params: {
       resolveAgentHarnessSessionIdMismatchError(entry, params.requestedSessionId) ||
       (params.isRawModelRun && entry?.modelSelectionLocked === true
         ? AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE
-        : undefined) ||
-      resolveAgentSessionWorkStartError(canonicalKey, entry);
-    if (!sessionError) {
+        : undefined);
+    if (sessionError) {
+      respondError(params.respond, ErrorCodes.INVALID_REQUEST, sessionError);
+      return true;
+    }
+    const workStartBlock = resolveAgentSessionWorkStartBlock(canonicalKey, entry);
+    if (!workStartBlock) {
       return false;
     }
-    respondError(params.respond, ErrorCodes.INVALID_REQUEST, sessionError);
+    // Transient blocks stay retryable so internal callers can tell them from refusals.
+    respondError(params.respond, ErrorCodes.INVALID_REQUEST, workStartBlock.message, {
+      retryable: workStartBlock.retryable,
+    });
     return true;
   };
   return deleted instanceof Promise
@@ -130,39 +115,8 @@ export function respondUnavailableAgentSession(params: {
     : respondUnavailable(deleted);
 }
 
-export function cronContinuationHasReusableRuntime(params: {
-  cfg: OpenClawConfig;
-  entry: SessionEntry;
-  agentId: string;
-  provider: string;
-  model: string;
-}): boolean {
-  const executionProvider =
-    resolveCliRuntimeExecutionProvider({
-      provider: params.provider,
-      cfg: params.cfg,
-      agentId: params.agentId,
-      modelId: params.model,
-    }) ?? params.provider;
-  return (
-    !isCliProvider(executionProvider, params.cfg) ||
-    Boolean(getCliSessionBinding(params.entry, executionProvider)?.sessionId)
-  );
-}
-
-export function withoutCronRunContinuation(entry: SessionEntry): SessionEntry {
-  const { cronRunContinuation: _cronRunContinuation, ...baseEntry } = entry;
-  return baseEntry;
-}
-
 export function yieldAfterAgentAcceptedAck(): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, 10);
-  });
-}
-
-export function waitForCronContinuationReleaseRecovery(delayMs: number): Promise<void> {
-  return new Promise((resolve) => {
-    setSafeTimeout(resolve, delayMs).unref();
   });
 }

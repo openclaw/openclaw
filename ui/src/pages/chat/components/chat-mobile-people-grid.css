@@ -86,7 +86,7 @@
     > .chat-mobile-people-grid__more {
       background: color-mix(in srgb, var(--muted) 28%, var(--panel-strong));
       color: var(--text);
-      font: 400 calc(8.5px * var(--control-ui-text-scale))/1 var(--font-body);
+      font: 400 8.5px/1 var(--font-body);
       font-variant-numeric: tabular-nums;
       letter-spacing: -0.35px;
     }

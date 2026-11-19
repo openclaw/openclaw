@@ -7,7 +7,7 @@
  * recognize its own cached raw ids after this same reshaping and restore
  * them on a replayed wire request -- see openai-responses-continuation.ts.
  */
-import { sha256Hex } from "./transport-utils.js";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 
 export const OPENAI_RESPONSES_ID_MAX_LENGTH = 64;
 export const OPENAI_RESPONSES_CALL_ID_RE = /^call_[A-Za-z0-9_-]{1,59}$/;

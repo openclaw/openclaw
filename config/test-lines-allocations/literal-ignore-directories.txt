@@ -1,2 +1,0 @@
-21
-# Regression for literal parent paths in explicit session skill loading.

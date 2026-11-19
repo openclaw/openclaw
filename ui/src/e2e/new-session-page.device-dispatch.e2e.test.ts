@@ -1,6 +1,7 @@
 import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { Page } from "playwright";
+import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
 import { deferRecoveryScopeHydration } from "./new-session-page.scenario.test-support.ts";
@@ -319,9 +320,7 @@ suite.define(() => {
             profiles: [],
           });
           await pollDisabled(start).toBe(true);
-          await pollAttribute(start.locator("xpath=.."), "content").toContain(
-            "No session slots are available",
-          );
+          await expectBrowser(start).toHaveAccessibleDescription(/No session slots are available/);
           expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
           await page.clock.resume();
           await gateway.emitGatewayEvent("node.runnerInventory.changed", {
@@ -383,9 +382,7 @@ suite.define(() => {
         await page.locator(".new-session-page__message").fill("keep my chosen remote destination");
         const start = page.getByRole("button", { name: "Start session" });
         await pollDisabled(start).toBe(true);
-        await pollAttribute(start.locator("xpath=.."), "content").toContain(
-          "Restoring your last session setup",
-        );
+        await expectBrowser(start).toHaveAccessibleDescription(/Restoring your last session setup/);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
         await gateway.resolveDeferred("environments.list");
         const where = page.locator("#new-session-where-trigger");
@@ -408,14 +405,14 @@ suite.define(() => {
       ...rememberedTarget("device", "paired-runner"),
       status: "unavailable",
       availableSlots: 1,
-      reason: "Device unavailable",
+      reason: /Device unavailable/,
     },
     {
       name: "automatic device without worker capacity",
       ...rememberedTarget("auto-device"),
       status: "available",
       availableSlots: 0,
-      reason: "No session slots are available",
+      reason: /No session slots are available/,
     },
   ])(
     "keeps a remembered $name blocked until the user explicitly switches to Local",
@@ -438,7 +435,7 @@ suite.define(() => {
         await page.locator(".new-session-page__message").fill("run only where I choose");
         const start = page.getByRole("button", { name: "Start session" });
         await pollDisabled(start).toBe(true);
-        await pollAttribute(start.locator("xpath=.."), "content").toContain(reason);
+        await expectBrowser(start).toHaveAccessibleDescription(reason);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
         await where.click();
         const local = page.locator('[data-value="gateway"]');

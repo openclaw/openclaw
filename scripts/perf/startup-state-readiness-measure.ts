@@ -4,12 +4,15 @@
  *   --state-dir /absolute/fresh-directory --baseline-source /absolute/prior-state-schema-preflight.ts
  * Defaults: 1 and 14 GiB state fixtures, five counterbalanced pairs and A/A controls.
  * The 14 GiB fixture also has a 35 GiB agent and 3,000 sessions (--agent-gib changes size).
- * Every sample is a fresh process; filesystem caches are warm. SQL timing and sampled V8
+ * Every sample is a fresh process; filesystem caches are not reset. SQL timing and sampled V8
  * allocation come from the actual inspection child. Native allocations are not measured.
  * This measures database-readiness, not whole Gateway/model readiness or cold btrfs I/O.
  * Acceptance: valid seals cause zero full/FK scans; lower median owner wall/CPU, with no
  * material allocation regression. A/A controls expose host noise. Unsealed safety is tested
  * separately by the owning regression suite. Existing directories are never overwritten.
+ * --prior-schema-source seeds and seals with an earlier canonical state SQL definition.
+ * Both arms must then scan once; after a real current-runtime open/close, A/A controls
+ * must reuse the new seal. --baseline-checks 0 compares diagnostic-only changes on hits.
  */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -24,6 +27,8 @@ const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
     "baseline-source": { type: "string" },
+    "prior-schema-source": { type: "string" },
+    "baseline-checks": { type: "string" },
     sizes: { type: "string", default: "1,14" },
     samples: { type: "string", default: "5" },
     "agent-gib": { type: "string", default: "35" },
@@ -48,6 +53,15 @@ if (values.mode === "run") {
   assert(!existsSync(root), "Use a fresh directory; existing data is never replaced");
   mkdirSync(root, { recursive: true });
   const baseline = path.resolve(values["baseline-source"]);
+  const priorSchema = values["prior-schema-source"]
+    ? readFileSync(path.resolve(values["prior-schema-source"]), "utf8")
+    : undefined;
+  const baselineChecks = parseStrictIntegerOption({
+    raw: values["baseline-checks"],
+    label: "baseline-checks",
+    min: 0,
+    fallback: 1,
+  });
   const preload = path.join(root, "observe.cjs");
   // Observe only the selected owner, so imports and unrelated worker allocations stay separate.
   writeFileSync(
@@ -123,6 +137,9 @@ globalThis.__measureStateReadiness = function(operation) {
   }
 };
 registerHooks({ load(url, context, nextLoad) {
+  if (process.env.READINESS_SEED_SCHEMA === '1' && url === ${JSON.stringify(new URL("../../src/state/openclaw-state-schema.ts", import.meta.url).href)}) {
+    return { format: 'module', shortCircuit: true, source: 'export const OPENCLAW_STATE_SCHEMA_SQL = ' + ${JSON.stringify(JSON.stringify(priorSchema))} + ';' };
+  }
   if (!url.startsWith('file:') || fileURLToPath(url) !== ${JSON.stringify(owner)}) return nextLoad(url, context);
   let source = fs.readFileSync(process.env.READINESS_ARM === 'baseline' ? ${JSON.stringify(baseline)} : ${JSON.stringify(owner)}, 'utf8');
   const signature = 'export function inspectStateDatabaseSchema(';
@@ -167,7 +184,7 @@ registerHooks({ load(url, context, nextLoad) {
         maxBuffer: 8 * 1024 * 1024,
         env: {
           ...process.env,
-          ...(mode === "sample"
+          ...(mode === "sample" || (mode === "seed" && priorSchema)
             ? {
                 NODE_OPTIONS: [process.env.NODE_OPTIONS, `--require=${JSON.stringify(preload)}`]
                   .filter(Boolean)
@@ -175,6 +192,7 @@ registerHooks({ load(url, context, nextLoad) {
               }
             : {}),
           READINESS_ARM: arm,
+          READINESS_SEED_SCHEMA: mode === "seed" && priorSchema ? "1" : "0",
           READINESS_METRICS: metrics,
           READINESS_ALLOCATION: allocation ? "1" : "0",
           READINESS_PROFILE: profile ? "1" : "0",
@@ -207,8 +225,13 @@ registerHooks({ load(url, context, nextLoad) {
     });
     if (mode === "sample") {
       assert.equal(row.owners.length, 1, "Expected one shared-state inspection");
-      assert.equal(row.owners[0].sql.integrity_check?.count ?? 0, arm === "baseline" ? 1 : 0);
-      assert.equal(row.owners[0].sql.foreign_key_check?.count ?? 0, arm === "baseline" ? 1 : 0);
+      const checks =
+        arm === "reopened" ? 0 : priorSchema ? 1 : arm === "baseline" ? baselineChecks : 0;
+      assert.equal(row.owners[0].sql.integrity_check?.count ?? 0, checks);
+      assert.equal(row.owners[0].sql.foreign_key_check?.count ?? 0, checks);
+      if (priorSchema && arm !== "baseline") {
+        assert.equal(row.counters.stateIntegrityReason, checks ? "schema-mismatch" : undefined);
+      }
     }
     outputs.push(row);
     writeFileSync(path.join(root, "measurements.json"), JSON.stringify(outputs, null, 2) + "\n");
@@ -216,9 +239,13 @@ registerHooks({ load(url, context, nextLoad) {
   };
   writeFileSync(
     path.join(root, "acceptance.txt"),
-    "Fresh processes; warm filesystem cache. Sizes " +
+    "Fresh processes; filesystem cache is not reset. Report first touch and cache pressure separately. Sizes " +
       values.sizes +
-      " GiB. Five counterbalanced pairs by default, plus two candidate A/A controls. Candidate must remove full integrity/FK scans with valid production seal; lower median owner wall and CPU, no material sampled V8 allocation regression. Report p95/spread, process CPU and host load. No whole Gateway/btrfs claim.\n",
+      " GiB. Five counterbalanced pairs by default, plus two candidate A/A controls. " +
+      (priorSchema || baselineChecks === 0
+        ? "Diagnostic-only comparison: preserve integrity/FK scan counts with no material owner timing/CPU/allocation regression. Prior-schema seals require one scan; a current-runtime clean close restores zero-scan admission. "
+        : "Candidate must remove full integrity/FK scans with valid production seal; lower median owner wall and CPU, no material sampled V8 allocation regression. ") +
+      "Report p95/spread, process CPU and host load. No whole Gateway/btrfs claim.\n",
   );
   for (const gib of values.sizes.split(",")) {
     count(gib, "sizes");
@@ -239,6 +266,14 @@ registerHooks({ load(url, context, nextLoad) {
     }
     for (const arm of ["baseline", "candidate"]) {
       child(directory, "sample", gib, arm, false, true);
+    }
+    if (priorSchema) {
+      child(directory, "reseal", gib);
+      for (const allocation of [false, true]) {
+        for (let i = 0; i < 2; i++) {
+          child(directory, "sample", gib, "reopened", allocation);
+        }
+      }
     }
   }
 } else {
@@ -338,6 +373,11 @@ registerHooks({ load(url, context, nextLoad) {
       seedMs: performance.now() - started,
       node: process.version,
     });
+  } else if (values.mode === "reseal") {
+    const state = openOpenClawStateDatabase({ env });
+    await closeOpenClawStateDatabaseAsync();
+    assert(existsSync(`${state.path}.seal`), "Current runtime must publish a clean-close seal");
+    record({ phase: "reseal" });
   } else {
     const { assertOpenClawDatabasesReady } =
       await import("../../src/state/openclaw-database-preflight.js");

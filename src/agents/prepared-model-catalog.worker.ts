@@ -13,7 +13,6 @@ import {
   captureRemoteModelCatalogStartupSnapshot,
   withRemoteModelCatalogSnapshot,
 } from "../model-catalog/remote-overlay.js";
-import { withHandedOffCodexClientVersion } from "../plugin-sdk/codex-client-version-handoff.internal.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -448,8 +447,16 @@ async function runCatalogRequest(
       models.push(model);
       runtimeModels.set(provider, models);
     }
-    for (const outcome of facts.modelCatalog.providerOutcomes ?? []) {
-      const provider = normalizeProviderId(outcome.provider);
+    // Saved catalogs seed the template registry. Every provider this plan saves publishes its
+    // live rows, so an accepted empty listing withdraws the saved ones.
+    const plannedProviders = source.pluginCatalogs.flatMap(({ contents }) =>
+      // SAFETY: the models.json plan serializes each generated catalog with a providers record.
+      Object.keys((JSON.parse(contents) as { providers?: object }).providers ?? {}),
+    );
+    for (const provider of [
+      ...(facts.modelCatalog.providerOutcomes ?? []).map((outcome) => outcome.provider),
+      ...plannedProviders,
+    ].map(normalizeProviderId)) {
       if (!runtimeModels.has(provider)) {
         runtimeModels.set(provider, []);
       }
@@ -469,6 +476,7 @@ async function runCatalogRequest(
       snapshot: facts.modelCatalog,
       runtimeModels,
       providerExpiries: source.providerExpiries ?? new Map(),
+      pluginCatalogs: source.pluginCatalogs,
       configuredRuntimeModels: facts.configuredRuntimeModels,
       credentials: catalogCredentials,
       providerAuthLabels:
@@ -620,39 +628,36 @@ if (parentPort) {
                     withTemplateInstallSchemaVersionFacts(
                       request.templateInstallSchemaVersions,
                       () =>
-                        // Never select a Codex binary here; report the parent's decision.
-                        withHandedOffCodexClientVersion(request.codexClientVersion, () =>
-                          work.run(() =>
-                            runCatalogRequest(
-                              value,
-                              config,
-                              request,
-                              work,
-                              async () => {
-                                if (previous?.fingerprint === fingerprint) {
-                                  return previous.prepared;
-                                }
-                                replacing =
-                                  previous?.registrationFingerprint !== registrationFingerprint;
-                                return (attempted = await prepareWorkerGeneration(
-                                  value,
-                                  config,
-                                  replacing ? undefined : previous?.prepared,
-                                ));
-                              },
-                              async () => {
-                                // Admission can outlast a refresh on slow filesystems; only completed
-                                // generation preparation starts the provider-discovery deadline.
-                                stopProgress();
-                                const response = await channel?.request(null);
-                                response?.consumed();
-                                if (response && response.input !== true) {
-                                  throw new Error(
-                                    "prepared model catalog request retired before discovery",
-                                  );
-                                }
-                              },
-                            ),
+                        work.run(() =>
+                          runCatalogRequest(
+                            value,
+                            config,
+                            request,
+                            work,
+                            async () => {
+                              if (previous?.fingerprint === fingerprint) {
+                                return previous.prepared;
+                              }
+                              replacing =
+                                previous?.registrationFingerprint !== registrationFingerprint;
+                              return (attempted = await prepareWorkerGeneration(
+                                value,
+                                config,
+                                replacing ? undefined : previous?.prepared,
+                              ));
+                            },
+                            async () => {
+                              // Admission can outlast a refresh on slow filesystems; only completed
+                              // generation preparation starts the provider-discovery deadline.
+                              stopProgress();
+                              const response = await channel?.request(null);
+                              response?.consumed();
+                              if (response && response.input !== true) {
+                                throw new Error(
+                                  "prepared model catalog request retired before discovery",
+                                );
+                              }
+                            },
                           ),
                         ),
                     ),

@@ -24,6 +24,7 @@ import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { searchClawHub } from "../../lib/skills/clawhub-search.ts";
 import {
   closeClawHubDetail,
@@ -43,7 +44,7 @@ import {
   type SkillsState,
 } from "../../lib/skills/index.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "../plugins/plugin-icon-owner.ts";
-import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
+import { pluginsHubPanel } from "../plugins/plugins-hub.ts";
 import { createSkillLibrary } from "./library-state.ts";
 import { SkillLibraryNavigation, SkillLibraryPageMenu } from "./library-toolbar.tsx";
 import { SkillLibrary, SkillLibraryDialogs, SkillLibraryFeedback } from "./library-view.tsx";
@@ -102,6 +103,7 @@ export function SkillsPage(props: SkillsPageProps) {
     },
   });
   const data = skills.state;
+  const runtimeConfig = projectOwner(context.runtimeConfig, (owner) => owner.state);
   const verdictCompletion = createMemo(() => skills.read().clawhubVerdictsRead);
   const acceptedVerdicts = createMemo(() => skills.read().clawhubVerdicts);
   // Optional verdict enrichment must not hold independent inventory or detail selection.
@@ -523,6 +525,10 @@ export function SkillsPage(props: SkillsPageProps) {
   }
 
   function selectSkill(key: string | null) {
+    if (key) {
+      // The dialog needs the stored API key's source; read config only once one opens.
+      void context.runtimeConfig.ensureDisplayLoaded();
+    }
     setLocal((state) => {
       state.skillsDetailKey = key;
       state.skillsDetailTab = "overview";
@@ -597,9 +603,7 @@ export function SkillsPage(props: SkillsPageProps) {
         <div
           // Bound layout work for the large installed inventory without containing discovery.
           style={{ contain: surface() === "settings" ? "layout" : undefined }}
-          id={surface() === "discovery" ? PLUGINS_HUB_PANEL_ID : undefined}
-          role={surface() === "discovery" ? "tabpanel" : undefined}
-          aria-labelledby={surface() === "discovery" ? "plugins-tab-skills" : undefined}
+          {...(surface() === "discovery" ? pluginsHubPanel("skills") : {})}
         >
           <Skills
             state={viewState()}
@@ -617,7 +621,7 @@ export function SkillsPage(props: SkillsPageProps) {
             readClawHubSearch={readClawHubSearch}
             clawhubSearchEpoch={gateway.epoch}
             surface={surface()}
-            libraryEntries={library.entries()}
+            libraryEntries={library.state.list ? library.entries() : undefined}
             onLibraryOpen={(skillId) => void library.open(skillId)}
             library={
               surface() === "discovery" ? (
@@ -665,9 +669,16 @@ export function SkillsPage(props: SkillsPageProps) {
                 updateSkillEdit(data, key, value);
               }
             }}
-            onSaveKey={(key) => {
+            apiKeyConfig={{
+              snapshot: () => runtimeConfig.read().configSnapshot,
+              error: () => runtimeConfig.read().lastError,
+              retry: () => void context.runtimeConfig.refreshDisplay(),
+            }}
+            onSaveKey={(key, replaceable) => {
               if (canUpdateSkills()) {
-                void mutations.run(() => saveSkillApiKey(data, key, canUpdateSkills));
+                // Read at save and again at dispatch, from the owner's current snapshot.
+                const current = () => replaceable(context.runtimeConfig.state.configSnapshot, key);
+                void mutations.run(() => saveSkillApiKey(data, key, current, canUpdateSkills));
               }
             }}
             onInstall={(skillKey, name, installId) => {

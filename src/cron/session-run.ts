@@ -1,10 +1,10 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import { classifyAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { resolveCronStyleNow } from "../agents/current-time.js";
 import {
   captureSessionEventTargetForHost as captureSessionEventTarget,
   enqueueSessionEventForHost as enqueueSessionEvent,
 } from "../auto-reply/reply/session-event-handoff.js";
+import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 /** Scheduled shared-session turns use the ordinary reply admission and delivery owners. */
@@ -23,6 +23,7 @@ import {
 } from "./isolated-agent/run-delivery-trace.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import { CronOperatorSourceError } from "./operator-source-error.js";
+import { resolveCronAgentErrorClassification } from "./run-error-reason.js";
 import { appendCronJobScratchPrompt, buildCronCommandBody } from "./run-prompt.js";
 import { isCronScratchEffectivelyEmpty } from "./scratch-contract.js";
 import { readCronScratchSnapshot } from "./scratch-read.js";
@@ -32,6 +33,28 @@ import { resolveCronJobsStorePathFromConfigAsync } from "./store.js";
 import type { CronResolvedDeliveryState } from "./types.js";
 
 type SessionRun = NonNullable<CronServiceDeps["runSessionEvent"]>;
+
+function sameDeliveryThread(
+  current: { channel: string; to: string; threadId?: string | number },
+  admittedThreadId: string | number | undefined,
+): boolean {
+  if (current.threadId === admittedThreadId) {
+    return true;
+  }
+  if (current.threadId !== undefined && admittedThreadId !== undefined) {
+    return false;
+  }
+  // A missing thread is not a wildcard. Only the transport can prove that
+  // the unchanged address already names this exact thread.
+  const threadId = current.threadId ?? admittedThreadId;
+  return (
+    threadId !== undefined &&
+    getLoadedChannelPluginForRead(current.channel)?.threading?.isThreadAddressedByTarget?.({
+      to: current.to,
+      threadId,
+    }) === true
+  );
+}
 
 export async function runCronSessionTurn(
   params: Parameters<SessionRun>[0] & {
@@ -60,7 +83,7 @@ export async function runCronSessionTurn(
     (await prepareAutomationSystemEvents(queueKey, job.id, job.state.runningAtMs));
   let noticesStarted = false;
   let operatorAuthority: AdmittedRunOperatorAuthority | undefined;
-  let controlUiAdmin: true | undefined;
+  let automationAdmin: true | undefined;
   using operatorLease = new DisposableStack();
   const assertCurrent = () => {
     params.assertCurrent();
@@ -83,7 +106,7 @@ export async function runCronSessionTurn(
       try {
         operator = await restoreCronOperatorSource({
           job,
-          target: { agentId: params.agentId, sessionKey: params.sessionKey, entry: expectedTarget },
+          target: { agentId: params.agentId, sessionKey: params.sessionKey },
           signal: params.abortSignal,
           deliveryAttemptFence: params.deliveryAttemptFence,
         });
@@ -103,7 +126,7 @@ export async function runCronSessionTurn(
       if (operator) {
         operatorLease.defer(operator.release);
         operatorAuthority = operator.authority;
-        controlUiAdmin = operator.controlUiAdmin ? true : undefined;
+        automationAdmin = operator.automationAdmin ? true : undefined;
       }
       assertCurrent();
     }
@@ -168,7 +191,7 @@ export async function runCronSessionTurn(
             current.resolvedDelivery.channel === route.channel &&
             current.resolvedDelivery.to === route.to &&
             current.resolvedDelivery.accountId === route.accountId &&
-            current.resolvedDelivery.threadId === route.threadId;
+            sameDeliveryThread(current.resolvedDelivery, route.threadId);
         if (!current.deliveryRequested || !sameRoute) {
           throw new Error(
             "Automation delivery policy or route changed while queued; inspect the run and retry with the current destination",
@@ -224,7 +247,7 @@ export async function runCronSessionTurn(
         job,
         occurrence: params.occurrence,
         operatorAuthority,
-        controlUiAdmin,
+        automationAdmin,
         admissionSource: params.admissionSource,
         prepare: params.prepare,
         preparePrompt: async (cfg) => {
@@ -326,9 +349,6 @@ export async function runCronSessionTurn(
     });
     // Source, notice, and Cron custody remain live until the controller settles.
     const result = await receipt.settled;
-    const classification = result.terminalOutcome
-      ? classifyAgentRunTerminalOutcome(result.terminalOutcome)
-      : undefined;
     const conversationDelivered =
       conversationDelivery && result.conversationResultCommitted === true;
     const delivered = result.deliveryAmbiguous
@@ -340,12 +360,9 @@ export async function runCronSessionTurn(
       admissionDeferred: result.admissionDeferred,
       admissionDeferredReason: result.admissionDeferredReason,
       interruptedByRestart: result.interruptedByRestart,
-      errorClassification:
-        classification === "cancellation"
-          ? { kind: "aborted" }
-          : classification === "timeout"
-            ? { kind: "reason", reason: "timeout" }
-            : undefined,
+      errorClassification: result.terminalOutcome
+        ? resolveCronAgentErrorClassification(result.terminalOutcome, result.errorReason)
+        : undefined,
       error:
         result.error ??
         (result.status === "cancelled" ? "Automation session turn was cancelled" : undefined),

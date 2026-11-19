@@ -46,6 +46,12 @@ export type ScheduledToolTargets = Readonly<{
   placement?: ScheduledExecutionFacts["placement"];
   /** The job's exec target pin, from the context's tool policy. */
   execTarget?: ScheduledExecutionFacts["toolPolicy"]["execTarget"];
+  /**
+   * The owner bit sessions this run spawns record in their lineage receipt: a
+   * child-placement occurrence's admitted owner bit, rechecked through
+   * `assertOwnerCurrent` when a requester holds it.
+   */
+  spawnSenderIsOwner?: boolean;
 }>;
 
 /**
@@ -64,12 +70,17 @@ export function readScheduledToolTargets(
   // ingress runs keep their existing owner checks.
   const ownerRecheck = senderBitOf(context) ? context.assertOwnerCurrent : undefined;
   const { execTarget } = context.toolPolicy;
+  const { memory } = context.resources;
   return {
     boardSessionKey: context.resources.boardSessionKey,
     assertCurrent: context.assertCurrent,
     ...(ownerRecheck ? { assertOwnerCurrent: ownerRecheck } : {}),
     ...(context.principal.kind === "ingress" ? {} : { placement: context.placement }),
     ...(execTarget ? { execTarget } : {}),
+    // Only a child-placement run row carries the receipt its spawned sessions follow.
+    ...(context.placement === "child" && memory.source === "parent"
+      ? { spawnSenderIsOwner: memory.owner }
+      : {}),
   };
 }
 
@@ -127,11 +138,9 @@ export function readScheduledIngressAutomationsScope(
   return context?.principal.kind === "ingress" ? context.toolPolicy.automations : undefined;
 }
 
-/** The parent whose memory audience a child run inherits, or undefined to resolve from the run row. */
-export function readScheduledMemoryParent(
-  run: OperationalRunInstanceRef | undefined,
+function memoryParentOf(
+  memory: ScheduledExecutionFacts["resources"]["memory"] | undefined,
 ): ScheduledMemoryParent | undefined {
-  const memory = run ? contextsByRun.get(run)?.resources.memory : undefined;
   if (memory?.source !== "parent") {
     return undefined;
   }
@@ -142,6 +151,26 @@ export function readScheduledMemoryParent(
     ...(parent.lifecycleRevision ? { lifecycleRevision: parent.lifecycleRevision } : {}),
     senderIsOwner: owner,
   };
+}
+
+/** The parent whose memory audience a child run inherits, or undefined to resolve from the run row. */
+export function readScheduledMemoryParent(
+  run: OperationalRunInstanceRef | undefined,
+): ScheduledMemoryParent | undefined {
+  return memoryParentOf(run ? contextsByRun.get(run)?.resources.memory : undefined);
+}
+
+/**
+ * The receipt a child-placement occurrence stamps on its own `:run:` row, so
+ * sessions it spawns reach the same parent. In-session runs execute on their
+ * parent's row and detached runs have no parent, so neither records one.
+ */
+export function resolveScheduledRunMemoryReceipt(
+  result: ScheduledExecutionContextResult,
+): ScheduledMemoryParent | undefined {
+  return result.status === "ready" && result.facts.placement === "child"
+    ? memoryParentOf(result.facts.resources.memory)
+    : undefined;
 }
 
 // In-session runs keep their session turn's own command-owner check, and ingress

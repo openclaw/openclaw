@@ -18,6 +18,8 @@ operator steering. Do not preserve superseded scope.
 - version decision: `<explicit version | approved resolved version>`
 - preparation/backport authority: `<instruction and approved set or selection scope>`
 - publication authority: `<held | beta management default | explicit approval; source and scope>`
+- channel/contact restrictions: `<none | exact operator restriction and affected operations>`
+- approved gate exceptions: `<none | pinned P policy grant, version/job/attempt scope; failed or not-run disposition>`
 - intake: `<open | frozen; pending approved changes or next-release queue>`
 - handoff: `<predecessor stopped writing; successor acknowledgement or pending>`
 - next checkpoint: `<candidate approval | publication | recovery | closeout>`
@@ -31,7 +33,7 @@ operator steering. Do not preserve superseded scope.
 - Code SHA: `<regular release full sha | not applicable>`
 - integrated prepush: `<passing Code SHA + pinned comparison base | pending>`
 - Candidate C: `<exact qualification target sha>`
-- Qualification Q: `<C for candidate-owned | original workflow SHA for historical route>`
+- Qualification Q: `<C by default | explicit reviewed main-ancestor Q | original historical Q>`
 - Admission/verifier/publisher P: `<independent trusted full sha and ref>`
 - Qualification admission: `<P run/attempt and immutable descriptor | historical route>`
 - Retained request: `<private request path; original semantics preserved>`
@@ -99,7 +101,10 @@ ClawHub or native apps.
 | Post-docs release body    | `<approved bundle, release ID, fresh body read and verified update>`     | `<action>`             |
 
 A successful publish parent does not complete detached ClawHub verification or
-macOS. Preserve their exact identities and advance ready independent work while
+macOS. ClawHub starts at its existing dispatch point and never blocks core,
+GitHub finalization, main closeout, or the retrospective PR. Give pending or
+failed ClawHub work an owner and next action, without calling it complete.
+Preserve their exact identities and advance ready independent work while
 another surface waits. Staging is not public ClawHub byte verification; npm
 `latest` is not GitHub Latest verification. Use the owning platform/recovery
 reference for commands rather than redispatching the release parent.
@@ -137,8 +142,10 @@ reference for commands rather than redispatching the release parent.
   follow [backports and new fixes](../SKILL.md#backports-and-new-fixes), with
   urgent release-first forward-ports owned in the handoff. Record the
   source/invariant and replace all exact-head evidence
-- qualification harness/contract failure: deliberately repair the candidate, freeze
-  a new C/Q, and replace affected evidence; never substitute newer main checks
+- qualification harness/contract failure: preserve C for a tooling-only repair,
+  select an exact reviewed main-ancestor Q through a new admitted request and
+  successful parent, and replace affected evidence; never retarget the old
+  request, relabel the failed FRV, or silently substitute moving-main checks
 - P-only admission/verifier/publisher failure: keep C/Q and original artifacts,
   repair independent trusted P only when needed, and record invalidated evidence
 - infrastructure/credential failure: keep C/Q/P and repair the external

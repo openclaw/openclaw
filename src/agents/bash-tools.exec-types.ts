@@ -58,6 +58,8 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
   allowBackground?: boolean;
   /** Final run-local availability of the process continuation tool. */
   processToolAvailabilityRef?: { value?: boolean };
+  /** Final run-local availability of sessions_yield, the only way a one-shot run awaits an exit. */
+  sessionsYieldAvailabilityRef?: { value?: boolean };
   scopeKey?: string;
   sessionKey?: string;
   /** Executing session when tool policy is borrowed from a different session. */

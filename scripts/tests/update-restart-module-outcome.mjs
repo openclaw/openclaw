@@ -183,6 +183,8 @@ async function fixture({
       return { verification: { ...observed.verification, recovery: observed.recovery } };
     },
     recordUpdateRunStep: () => {},
+    // No earlier run owes a step. Recording or settling one would be an unexpected call.
+    readOwedUpdateSteps: () => [],
     async runUpdatedInstallGatewayCommand(activation, command) {
       commandCalls++;
       events.push("command:" + command);
@@ -216,6 +218,8 @@ async function fixture({
       return verification;
     },
     withOwnedManagedUpdateEnv: async (_env, action) => action(),
+    // No shared-state handles exist in this fixture; the restart runs unchanged.
+    withUpdateStateReleasedAcrossRestart: async (_run, restart) => restart(),
     acquireWithWait: ({ acquire }) => acquire(),
     readConfigFileSnapshot: async () => ({}),
     prepareUpdateRestart: async () => restartContext,
@@ -317,6 +321,8 @@ async function fixture({
     "../daemon-cli/restart-health-probe",
     "../../utils/absolute-deadline",
     "update-command-post-update-maintenance",
+    "update-command-owed",
+    "../../infra/update-run-owed-step",
     "../../infra/update-candidate-predecessor-stop",
     // Recovery and reporting stay real; only their I/O uses finite fixture facts.
     "update-command-failure-recovery",

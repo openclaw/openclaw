@@ -111,6 +111,8 @@ export type RunCliAgentParams = Pick<
   requesterModel?: ProviderModelRef;
   /** Native context window resolved by the run owner from its prepared model catalog. */
   modelContextWindow?: number;
+  /** Catalog model a CLI-native alias selects, taken from the CLI's own model menu. */
+  nativeModelId?: string;
   /** Effective context cap resolved by the run owner from its prepared model catalog. */
   modelContextTokens?: number;
   provider: string;
@@ -248,7 +250,11 @@ export type PreparedCliRunContext = {
   contextEngine?: ContextEngine;
   deferContextEngineDisposalUntil?: (promise: Promise<void>) => void;
   contextEngineTurnPrompt?: string;
+  /** Set after bootstrap; sent as current-turn context so the system prompt stays cacheable. */
+  contextEngineSystemPromptAddition?: string;
   promptContext?: CliBackendPromptContext;
+  /** This run's before_model_request gate; absent on isolated and control runs. */
+  beforeModelRequest?: import("./model-request-hook.js").CliModelRequestGate;
   /** Logical model input retained for policy/observation hooks when transport context is separate. */
   promptForHooks?: string;
   modelId: string;

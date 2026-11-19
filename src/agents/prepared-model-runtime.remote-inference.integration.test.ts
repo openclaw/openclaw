@@ -5,7 +5,7 @@ import { runPublishModelCatalog } from "../../scripts/publish-model-catalog.mts"
 import { writeJsonFile } from "../../test/helpers/temp-repo.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveModelPricing, resolveModelPricingContext } from "../model-catalog/pricing.js";
+import { prepareModelPricingContext, resolveModelPricing } from "../model-catalog/pricing.js";
 import {
   captureRemoteModelCatalogStartupSnapshot,
   prepareRemoteModelCatalogStartupSnapshot,
@@ -155,7 +155,7 @@ it("carries published task facts through HTTP, SQLite and prepared role selectio
         expect(captureRemoteModelCatalogStartupSnapshot()).toBeNull();
         expect(await applyRemoteModelCatalogUpdate(() => config)).toBe("published");
         await using lease = await acquireAgentRunPreparedModelRuntime(input);
-        lease.run(() => {
+        await lease.run(async () => {
           const rows = lease.snapshot.modelCatalog.entries;
           expect(rows.find((row) => row.id === "native")?.inference).toEqual(inference);
           expect(rows.find((row) => row.id === "dual")?.inference).toEqual({
@@ -174,7 +174,7 @@ it("carries published task facts through HTTP, SQLite and prepared role selectio
             provider: PROVIDER_ID,
             model: "native",
           });
-          const pricing = resolveModelPricingContext(config);
+          const pricing = await prepareModelPricingContext(config);
           expect(resolveModelPricing(pricing, `${PROVIDER_ID}/free`)).toMatchObject({
             input: 0,
             output: 0,

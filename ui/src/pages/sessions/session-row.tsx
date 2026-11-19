@@ -217,8 +217,6 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; row
   const detailsId = () => `session-details-${encodeURIComponent(row().key)}`;
   const displayName = () => normalizeOptionalString(row().displayName) ?? null;
   const trimmedLabel = () => normalizeOptionalString(row().label) ?? "";
-  const showDisplayName = () =>
-    Boolean(displayName() && displayName() !== row().key && displayName() !== trimmedLabel());
   const keyParts = createMemo(() => parseSessionKeyParts(row().key));
   const agentIdentity = createMemo(() =>
     keyParts() ? getAgentIdentity(props.agentIdentityById, keyParts()!.agentId) : null,
@@ -245,6 +243,12 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; row
   );
   const displayKind = createMemo(() => resolveSessionDisplayKind(row()));
   const listTitle = createMemo(() => resolveSessionDisplayName(row().key, row()));
+  const primaryTitle = () =>
+    displayName() || trimmedLabel() ? listTitle() : (friendlyKeyLabel() ?? listTitle());
+  const secondaryTitle = () => {
+    const context = friendlyKeyLabel() ?? row().key;
+    return context !== primaryTitle() ? context : null;
+  };
   const kindClass = () => ["session-kind", `session-kind--${displayKind()}`];
   const rowClass = () => [
     "session-data-row session-data-row--expandable",
@@ -356,21 +360,16 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; row
             </div>
           ) : (
             <div
-              class={["session-key-cell", { mono: !friendlyKeyLabel() }]}
+              class={["session-key-cell", { mono: primaryTitle() === row().key }]}
               data-tooltip={keyCellTitle()}
             >
               <div class="session-key-cell__text">
                 <span class="session-key-cell__primary">
                   {unreadDot()}
-                  <RowLink text={friendlyKeyLabel() ?? row().key} />
-                  {trimmedLabel() ? (
-                    <span class="session-label-chip" title={trimmedLabel()}>
-                      {trimmedLabel()}
-                    </span>
-                  ) : undefined}
+                  <RowLink text={primaryTitle()} />
                 </span>
-                {showDisplayName() ? (
-                  <span class="muted session-key-display-name">{displayName()}</span>
+                {secondaryTitle() ? (
+                  <span class="muted session-key-display-name">{secondaryTitle()}</span>
                 ) : undefined}
               </div>
             </div>
@@ -592,9 +591,9 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; row
             <div class="session-details-panel__hero">
               <div>
                 <div class="session-details-panel__eyebrow">{t("sessionsView.sessionDetails")}</div>
-                <div class="session-details-panel__title">{friendlyKeyLabel() ?? row().key}</div>
-                {showDisplayName() ? (
-                  <div class="muted session-details-panel__subtitle">{displayName()}</div>
+                <div class="session-details-panel__title">{primaryTitle()}</div>
+                {secondaryTitle() ? (
+                  <div class="muted session-details-panel__subtitle">{secondaryTitle()}</div>
                 ) : undefined}
               </div>
               <div class="session-details-panel__badges">

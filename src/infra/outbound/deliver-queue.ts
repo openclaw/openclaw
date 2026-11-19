@@ -437,10 +437,10 @@ async function runOutboundDeliveryWithQueue(
       (params.requireUnknownSendReconciliation === true ||
         support.automaticUnknownSendReconciliation);
   }
+  // The caller marks an agent final; recovery may resend its ordinary text once when unconfirmed.
+  // The channel only classifies its inert text metadata.
   const isTextOnlyChannelData =
-    params.retryAmbiguousFinalText === true &&
-    preparedPayloads.length === 1 &&
-    preparedPayloads[0]?.channelData !== undefined
+    params.retryAmbiguousFinalText === true
       ? (
           await resolveOutboundChannelMessageAdapter({
             cfg: params.cfg,

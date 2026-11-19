@@ -1,6 +1,6 @@
 import path from "node:path";
 import {
-  readDatabasePathIdentitySync,
+  readDatabasePathIdentity,
   type DatabaseFileIdentity,
   type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
@@ -8,28 +8,30 @@ import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-ke
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
+import { resolveSqliteDatabaseScopeIdentity } from "./session-accessor.sqlite-read-scope.js";
 import {
-  prepareSqliteTranscriptReadScope,
   toDatabaseOptions,
   type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import {
-  assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
+  type SessionStoreReadCustody,
 } from "./session-store-read-candidates.js";
-import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
+import { withSessionStoreTarget } from "./session-store-target-runtime.js";
 import {
   createPreparedSessionTranscriptReads,
   type PreparedSessionTranscriptReads,
 } from "./session-transcript-execution-read.js";
 import {
-  withSessionHistoryWorkerReadCandidates,
+  historyLane,
+  prepareSessionStoreCandidatesInWorker,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import {
   withSessionHistoryWorkerDatabase,
   type SessionHistoryWorkerDatabase,
 } from "./session-transcript-worker-runtime.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import { getOwnedSessionTranscriptReader } from "./transcript-write-context.js";
 
@@ -75,12 +77,18 @@ export async function withSessionTranscriptReadSource<T>(
     identity: DatabasePathIdentity,
     assertSource: () => void,
     requestedPaths: readonly string[],
+    readCustody?: readonly SessionStoreReadCustody[],
   ) => {
     const expectedIdentity = identity.key.startsWith("file:") ? identity : undefined;
     const readPath = expectedIdentity ? (throughStorePath ?? resolved.path) : resolved.path;
     const options = toDatabaseOptions({ ...resolved, path: readPath });
     return withSessionHistoryWorkerDatabase(
-      { ...options, requestedPaths },
+      {
+        ...options,
+        requestedPaths,
+        // Missing stores keep their ordered first-creation path; existing reads retain their source.
+        ...(expectedIdentity ? { readIdentity: expectedIdentity, readCustody } : {}),
+      },
       async (owner) => {
         const assertCurrent = () => {
           assertSource();
@@ -90,6 +98,7 @@ export async function withSessionTranscriptReadSource<T>(
         const preparedReads = expectedIdentity
           ? createPreparedSessionTranscriptReads({
               expectedIdentity,
+              readCustody,
               assertCurrent,
               reader: owner,
             })
@@ -114,10 +123,7 @@ export async function withSessionTranscriptReadSource<T>(
       selected.assertCurrent();
     };
     assertSource();
-    const identity = readDatabasePathIdentitySync(selected.database.path);
-    if (!identity.key.startsWith("file:")) {
-      throw new Error("Admitted transcript database is no longer available");
-    }
+    const identity = selected.identity;
     return await readResolved(
       {
         agentId: selected.logicalAgentId,
@@ -133,33 +139,68 @@ export async function withSessionTranscriptReadSource<T>(
       selected.storePaths,
     );
   }
-  const candidates = captureSessionStoreReadCandidates(storePath);
+  const assertCaptured = () => {
+    signal?.throwIfAborted();
+    context.maintenanceScope?.assertAdmission();
+    context.admission.assertCurrent();
+  };
+  assertCaptured();
+  const { candidates } = await prepareSessionStoreCandidatesInWorker({ storePath });
+  assertCaptured();
   const identities = captureSessionStoreCandidateIdentities(candidates);
-  return await withSessionHistoryWorkerReadCandidates(
-    candidates,
-    async (discovery) => {
-      const resolved = await prepareSqliteTranscriptReadScope(captured, signal);
-      const options = toDatabaseOptions(resolved);
-      const databasePath = resolveOpenClawAgentSqlitePath(options);
-      const identity = identities.get(assertSessionStoreReadCandidate(databasePath, candidates));
-      const selectedIdentity = identity ?? readDatabasePathIdentitySync(databasePath);
-      if (!identity && selectedIdentity.key.startsWith("file:")) {
+  // Absence is a first-creation fact, not a ban on an exact path's queued creator.
+  const locatorCandidates = candidates.map((candidate) =>
+    candidate.identity && !candidate.identity.key.startsWith("file:")
+      ? { ...candidate, identity: undefined }
+      : candidate,
+  );
+  const { effectiveAgentId, effectiveStorePath, effectiveEnv } =
+    resolveSqliteDatabaseScopeIdentity(captured);
+  return await withSessionStoreTarget(
+    {
+      agentId: effectiveAgentId,
+      defaultAgentId: captured.defaultAgentId,
+      storePath: effectiveStorePath ?? storePath,
+      env: effectiveEnv ?? captured.env,
+      candidates: locatorCandidates,
+    },
+    async (target, discovery) => {
+      const original = identities.get(target.database.path);
+      const identity = original ?? (await readDatabasePathIdentity(target.sourcePath));
+      if (
+        !original &&
+        (identity.key.startsWith("file:") || identity.canonicalPath !== target.database.path)
+      ) {
         throw new Error("Transcript read changed its captured database owner");
       }
       const assertSource = () => {
-        signal?.throwIfAborted();
-        context.maintenanceScope?.assertAdmission();
-        context.admission.assertCurrent();
+        assertCaptured();
         discovery.assertCurrent();
       };
       assertSource();
       return await readResolved(
-        { ...resolved, path: selectedIdentity.canonicalPath },
-        selectedIdentity,
+        {
+          agentId: target.logicalAgentId,
+          databaseAgentId: target.database.agentId,
+          path: identity.canonicalPath,
+          ownerStorePath: effectiveStorePath,
+          env: effectiveEnv,
+          sessionKey: captured.sessionKey
+            ? normalizeStoreSessionKey(captured.sessionKey)
+            : undefined,
+          sessionId: captured.sessionId,
+        },
+        identity,
         assertSource,
         [storePath],
+        identity.key.startsWith("file:")
+          ? [{ sourcePath: target.sourcePath, candidates }]
+          : undefined,
       );
     },
-    lane,
+    assertCaptured,
+    undefined,
+    signal,
+    lane ?? historyLane,
   );
 }

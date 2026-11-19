@@ -8,11 +8,11 @@ import {
   SESSION_ICON_GLYPH_IDS,
   SESSION_ICON_SVG_DATA_URL_PREFIX,
 } from "../../../../packages/gateway-protocol/src/session-agent-status.js";
-import { registerChatToolLabelsEnglish } from "../../i18n/locales/en-chat-tool-labels.ts";
 import { resolveToolDisplayIcon } from "../../lib/chat/tool-display-icon.ts";
-import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "../../lib/session-owner.ts";
 import {
+  childShowsParentWorking,
   summarizeSidebarSessionAttention,
   type SidebarRecentSession,
   type SidebarSessionAttention,
@@ -32,8 +32,6 @@ import { ChannelAvatar } from "./channel-avatar.tsx";
 import "../tooltip.ts";
 import { Icon, sessionIcon, sessionIconMask } from "./icon.tsx";
 import { SessionOwnerAvatar, SessionOwnerChip } from "./session-owner-chip.tsx";
-
-registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 type SessionRunVisibility = typeof sessionRunVisibility;
 export { sessionRunVisibility };
@@ -339,9 +337,7 @@ export function summarizeTeamSessionSlots(
   for (const row of rows) {
     const children = includeChildren ? row : row.subagentSummary;
     const visuallyActive = row.isRunVisuallyActive ?? row.hasActiveRun;
-    active +=
-      Number(visuallyActive || (row.backgroundProcessCount ?? 0) > 0) +
-      (children?.runningChildCount ?? 0);
+    active += Number(childShowsParentWorking(row)) + (children?.runningChildCount ?? 0);
     queued += Number(visuallyActive && row.status === "queued") + (children?.queuedChildCount ?? 0);
     unread += Number(row.unread) + (children?.unreadChildCount ?? 0);
     failed ||= row.status === "failed" || row.status === "timeout";

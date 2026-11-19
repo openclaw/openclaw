@@ -4,8 +4,8 @@
 .session-worker-stop {
   padding: var(--overlay-modal-padding);
   color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: calc(18px * var(--control-ui-text-scale));
+  font-size: 13px;
+  line-height: 18px;
 }
 .session-worker-stop__heading {
   display: flex;
@@ -17,7 +17,7 @@
 .session-worker-stop__heading h2 {
   margin: 0;
   font-size: var(--overlay-modal-title-size);
-  line-height: calc(22px * var(--control-ui-text-scale));
+  line-height: 22px;
   font-weight: 600;
   letter-spacing: -0.2px;
 }
