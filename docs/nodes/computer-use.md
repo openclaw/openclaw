@@ -311,7 +311,12 @@ If you intended to control a paired desktop, select `target: "node"` and its `no
 - its agent run ends or its delegated authority is revoked, or
 - it goes idle: five minutes after the last action on an open execution, one minute when only discovery has run.
 
-If the host helper's physical cleanup fails, the Gateway keeps that execution's ownership instead of releasing a desktop whose custody is unproven, and the idle lifetime does not apply in that state. Cleanup is retried when the same owner closes the execution again; until that succeeds, every other owner keeps receiving `COMPUTER_HOST_BUSY`. The underlying failure is in the Gateway logs under `gateway/computer`.
+If the host helper's physical cleanup fails, the Gateway keeps that execution's ownership instead of releasing a desktop whose custody is unproven, and the idle lifetime does not apply in that state. Two calls retry that cleanup:
+
+- the same owner closing the execution again (`__close_execution`), and
+- any authenticated discovery that probes: `computer.status` prepares the computer, and preparation retries the pending cleanup before it starts a generation. `probe` defaults to true, so an ordinary status call is enough. This is the way out when the owning run has already ended or disconnected and cannot close its execution again.
+
+Once either retry succeeds, the desktop is released and the next discovery prepares a fresh generation. A passive status read (`probe: false`) reports the state without retrying it, and retrying the input action does not retry cleanup either — it fails with `COMPUTER_STALE_OBSERVATION`. Until a retry succeeds, every other owner keeps receiving `COMPUTER_HOST_BUSY`. The underlying failure is in the Gateway logs under `gateway/computer`.
 
 ### CUA Driver error codes
 
