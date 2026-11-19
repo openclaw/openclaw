@@ -24,7 +24,8 @@ provider plugin hooks, and diagnostics logging) can be injected with
 `configureAiTransportHost`; the defaults are inert. Node callers that need
 runtime-local policy can use `createNodeLlmRuntime`; it preserves that host across
 provider work without replacing the process default. `createLlmRuntime` continues
-to use the process-default host.
+to use the process-default host. The default host and its asynchronous scope are
+shared across duplicate package module instances, including native plugins.
 
 Embedding hosts can implement optional `isLogEnabled(subsystem, level)` to skip
 diagnostic preparation for disabled sinks. Hosts without it retain emission-time
