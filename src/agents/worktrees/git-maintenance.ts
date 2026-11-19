@@ -5,17 +5,8 @@ import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import { enqueueGitRefMutation, requireGitCommandOutput } from "../../infra/git-exec.js";
 import type { GitOperationStarter } from "../../infra/git-network-retry.js";
 import { lstatIfExists } from "../../infra/path-existence.js";
-import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "../../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runCommandBuffersWithTimeout } from "../../process/exec-runner.js";
-import {
-  withChildProcessOperation,
-  type GitProcessOperation,
-} from "../../process/spawn-diagnostics.js";
+import type { GitProcessOperation } from "../../process/spawn-diagnostics.js";
 import { withProjectCheckoutLifecycle } from "../../projects/project-checkout.js";
 import {
   readConfigMachineStateAsync,
@@ -29,6 +20,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
+import { cleanTemporaryPacks } from "./git-pack-cleanup.js";
 import * as git from "./git.js";
 import { readRegistryWorktrees } from "./registry-read.js";
 import type { ManagedWorktreeGcResult } from "./types.js";
@@ -42,7 +34,6 @@ const PACK_BATCH_INDEX_BYTES = 128 * 1024 * 1024;
 const PACK_BATCH_COUNT = 1024;
 const PACK_BATCH_TIMEOUT_MS = WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS;
 const PACK_RETIREMENT_BUDGET_MS = 250;
-const TEMP_PACK_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const OBJECT_REPAIR_TIMEOUT_MS = 5 * 60 * 1000;
 const OBJECT_REPAIR_BATCH_SIZE = 256;
 const OBJECT_REPAIR_MAX_OBJECTS = 4096;
@@ -249,66 +240,13 @@ async function maintainWorktreePacks(
       onlyIfBacklogged,
     );
     await report(before, after?.remaining ?? before);
-    if (after && after.remaining !== before) {
-      log.info(`worktree Git packs in ${repoRoot}: ${before} -> ${after.remaining}`);
+    if (after && (after.remaining !== before || after.bytesWritten || after.bytesFreed)) {
+      log.info(
+        `worktree Git packs in ${repoRoot}: ${before} -> ${after.remaining}; bytes written=${after.bytesWritten}, freed=${after.bytesFreed} (single-link packs)`,
+      );
     }
     return after?.retirementPending ?? false;
   }, params.signal);
-}
-
-async function cleanTemporaryPacks(
-  directory: string,
-  names: string[],
-  signal: AbortSignal | undefined,
-  assertCurrent: () => void,
-) {
-  const files = names
-    // index-pack also leaves tmp_idx_/tmp_rev_ files when interrupted; Git prune owns
-    // every tmp_ prefix, but gc.auto is disabled for managed clones.
-    .filter((name) => /^tmp_[a-z]+_[a-zA-Z0-9_-]+$/.test(name))
-    .map((name) => path.join(directory, name));
-  if (process.platform !== "linux" || files.length === 0) {
-    return;
-  }
-  assertCurrent();
-  const result = await withChildProcessOperation("worktree.maintenance", () =>
-    runCommandBuffersWithTimeout(
-      [
-        process.execPath,
-        ...resolveRuntimeWorkerArgv(
-          resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.gitPackCleanup),
-        ),
-      ],
-      {
-        input: JSON.stringify({ files, olderThan: Date.now() - TEMP_PACK_MAX_AGE_MS }),
-        beforeInput: assertCurrent,
-        executionIntent: "agent-tool",
-        signal,
-        timeoutMs: 30_000,
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
-        maxOutputBytes: 4096,
-      },
-    ),
-  );
-  assertCurrent();
-  if (result.termination !== "exit" || result.code !== 0) {
-    log.warn(`Temporary Git pack cleanup deferred in ${directory}: ${result.termination}`);
-    return;
-  }
-  // SAFETY: The private native helper returns only its completed cleanup counts.
-  const counts = JSON.parse(result.stdout.toString("utf8")) as {
-    removed: number;
-    retained: number;
-  };
-  if (counts.retained > 0) {
-    log.warn(
-      `Retained ${counts.retained} temporary Git packs in ${directory}: active, changed, or unavailable file lease.`,
-    );
-  }
-  if (counts.removed > 0) {
-    log.info(`Removed ${counts.removed} stale temporary Git packs from ${directory}.`);
-  }
 }
 
 async function consolidatePacks(
@@ -321,6 +259,8 @@ async function consolidatePacks(
   options: NonNullable<Parameters<typeof git.requireGit>[2]> & { startRun: GitOperationStarter },
   onlyIfBacklogged: boolean,
 ) {
+  let bytesWritten = 0;
+  let bytesFreed = 0;
   const remove = async (pathname: string, lease: OpenClawStateAsyncLeaseContext) => {
     await lease.assertOwned();
     await options.startRun(() => {
@@ -391,8 +331,12 @@ async function consolidatePacks(
               ) {
                 continue;
               }
+              const stat = await lstatIfExists(`${stem}.pack`);
               for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
                 await remove(`${stem}.${extension}`, lease);
+                if (extension === "pack" && stat?.nlink === 1) {
+                  bytesFreed += stat.size;
+                }
               }
             }
           },
@@ -436,6 +380,10 @@ async function consolidatePacks(
       }
       options.beforeRun?.();
       const stat = await fs.stat(path.join(directory, name));
+      // Unlinking a shared inode frees no pack bytes; never rewrite it into private storage.
+      if (stat.nlink > 1) {
+        continue;
+      }
       const index = await fs.stat(path.join(directory, `${stem}.idx`));
       packs.push({
         name,
@@ -484,7 +432,7 @@ async function consolidatePacks(
       const candidates = packs.filter(
         (pack) => pack.promisor === promisor && pack.indexBytes <= PACK_BATCH_INDEX_BYTES,
       );
-      // Find the largest affordable progression break; overlapping bytes cannot predict the union.
+      // Only reclaimable, single-link bytes participate in the geometric write bound.
       const end = candidates.findLastIndex(
         (pack, i) =>
           i > 0 &&
@@ -533,6 +481,9 @@ async function consolidatePacks(
       if (!hash) {
         throw new Error("Git pack consolidation returned an invalid pack identity");
       }
+      if (!present.has(`pack-${hash}.pack`)) {
+        bytesWritten += (await fs.stat(path.join(directory, `pack-${hash}.pack`))).size;
+      }
       // Record the verified replacement before retirement can yield, defer, or restart.
       options.beforeRun?.();
       await writeConfigMachineStateAsync(retirementKey, { hash, selected }, { env });
@@ -546,6 +497,8 @@ async function consolidatePacks(
   return {
     remaining: remainingNames.filter((name) => name.endsWith(".pack")).length,
     retirementPending,
+    bytesWritten,
+    bytesFreed,
   };
 }
 
