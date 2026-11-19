@@ -301,6 +301,7 @@ export function backendGatewayClient(): NonNullable<AgentHandlerArgs["client"]> 
       },
       scopes: ["operator.write"],
     },
+    internal: { localBackendClient: true },
   };
 }
 
