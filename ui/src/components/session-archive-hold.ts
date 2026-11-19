@@ -6,6 +6,7 @@ type HeldArchive = { readonly keys: readonly string[]; settle(commit: boolean): 
 // conversation can offer the same Undo synchronously.
 const heldArchives = new Set<HeldArchive>();
 const listeners = new Set<() => void>();
+const startListeners = new Set<(keys: readonly string[]) => void>();
 let commitsOnPageHide = false;
 
 const notify = () => {
@@ -17,6 +18,9 @@ const notify = () => {
 export function holdArchive(archive: HeldArchive): () => void {
   heldArchives.add(archive);
   notify();
+  for (const listener of startListeners) {
+    listener(archive.keys);
+  }
   if (!commitsOnPageHide) {
     commitsOnPageHide = true;
     listen(globalThis, "pagehide", () => {
@@ -36,6 +40,12 @@ export function holdArchive(archive: HeldArchive): () => void {
 export function subscribeHeldArchives(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+/** Runs once for each archive as its Undo window opens; its rows are already hidden. */
+export function subscribeArchiveStarts(listener: (keys: readonly string[]) => void): () => void {
+  startListeners.add(listener);
+  return () => startListeners.delete(listener);
 }
 
 const heldArchiveFor = (key: string) =>

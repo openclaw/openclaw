@@ -28,6 +28,7 @@ import {
   projectSidebarAgentSessionRows,
   type SidebarHomeSession,
 } from "./app-sidebar-agent-session-rows.ts";
+import { createSidebarArchiveAdvanceFor } from "./app-sidebar-archive-advance.ts";
 import { AppSidebarBase } from "./app-sidebar-base.ts";
 import { resolveSidebarDisplayAgent } from "./app-sidebar-display-agent.ts";
 import {
@@ -341,7 +342,10 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     super.willUpdate();
   }
 
+  private readonly archiveAdvance = createSidebarArchiveAdvanceFor(this);
+
   override disconnectedCallback() {
+    this.archiveAdvance.disconnect();
     // The same host moves between desktop and drawer synchronously.
     queueMicrotask(() => {
       if (!this.isConnected) {
@@ -355,6 +359,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   override updated() {
     super.updated();
+    this.archiveAdvance.sync();
     if (this.sessionSortMode === "people" && !this.sessionPeopleSortAvailable()) {
       this.setSessionSortMode("created");
     }
@@ -554,7 +559,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   protected visibleSessionRowsInOrder = (): SidebarRecentSession[] =>
     distinctSidebarSessionRows(this.visibleSessionAppearancesInOrder());
 
-  protected visibleSessionTreeInOrder(): SidebarRecentSession[] {
+  visibleSessionTreeInOrder(): SidebarRecentSession[] {
     return this.sessionProjection.visibleTree(this.visibleSessionRowsInOrder(), this);
   }
 
