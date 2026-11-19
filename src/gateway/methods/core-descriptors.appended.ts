@@ -12,4 +12,12 @@ export const CORE_GATEWAY_METHOD_SPECS_APPENDED = [
   ["toolUsage.status", "tool-usage", "operator.admin", "2026.11"],
   ["toolUsage.import", "tool-usage", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
   ["toolUsage.reset", "tool-usage", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
+  [
+    "projects.moveSessionOptions",
+    "projects-session-move",
+    "operator.write",
+    "2026.11",
+    OWN_SESSION_WRITE,
+  ],
+  ["projects.moveSession", "projects-session-move", "operator.write", "2026.11", OWN_SESSION_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

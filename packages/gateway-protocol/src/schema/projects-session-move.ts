@@ -9,11 +9,6 @@ const CommitShaSchema = Type.String({ pattern: "^[a-f0-9]{40}(?:[a-f0-9]{24})?$"
 export const MoveSessionCheckoutSchema = closedObject({
   /** Relative to the conversation's workspace. */
   path: Type.String({ minLength: 1, maxLength: 1024 }),
-  head: closedObject({
-    sha: CommitShaSchema,
-    subject: Type.String({ maxLength: 1024 }),
-  }),
-  unsavedFiles: Type.Integer({ minimum: 0 }),
 });
 
 export const MoveSessionProjectSchema = closedObject({
@@ -42,9 +37,9 @@ export const ProjectsMoveSessionParamsSchema = closedObject({
   checkout: Type.Optional(Type.String({ minLength: 1, maxLength: 1024 })),
 });
 export const ProjectsMoveSessionResultSchema = closedObject({
-  status: Type.Literal("moved"),
+  /** The project opens, on its own branch, with the conversation's next message. */
+  status: Type.Literal("pending"),
   projectId: NonEmptyString,
-  branch: Type.Optional(NonEmptyString),
   carried: Type.Optional(
     closedObject({
       commit: CommitShaSchema,
@@ -53,7 +48,6 @@ export const ProjectsMoveSessionResultSchema = closedObject({
   ),
 });
 
-export type MoveSessionCheckout = Static<typeof MoveSessionCheckoutSchema>;
 export type MoveSessionProject = Static<typeof MoveSessionProjectSchema>;
 export type ProjectsMoveSessionOptionsParams = Static<
   typeof ProjectsMoveSessionOptionsParamsSchema

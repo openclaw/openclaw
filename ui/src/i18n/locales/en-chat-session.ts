@@ -126,18 +126,11 @@ const enChatSession = {
       moveToProject: {
         action: "Move to project…",
         title: "Move to a project",
-        description: "The conversation continues on its own branch of the project you choose.",
-        projects: "Project",
-        checkouts: "Folder to bring along",
-        carryOne: "Your work in {folder} comes along: last commit “{subject}” and 1 unsaved file.",
-        carryMany:
-          "Your work in {folder} comes along: last commit “{subject}” and {count} unsaved files.",
-        carryCommitted: "Your work in {folder} comes along: last commit “{subject}”.",
-        fresh: "It starts from the project’s latest version.",
         move: "Move",
         moving: "Moving… this can take a minute",
-        moved: "Moved into {project} on branch {branch}",
-        movedNoBranch: "Moved into {project}",
+        moved: "Moved into {project}. It opens on its own branch with your next message.",
+        movedWithWork:
+          "Moved into {project} with your work from {folder}. It opens on its own branch with your next message.",
         failed: "Couldn’t move this conversation. Try again.",
       },
       continueInTerminal: {

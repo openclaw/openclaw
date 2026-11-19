@@ -1,6 +1,5 @@
 import { createMemo, createSignal, Errored, For, Loading, Show } from "solid-js";
 import type {
-  MoveSessionCheckout,
   ProjectsMoveSessionOptionsResult,
   ProjectsMoveSessionResult,
 } from "../../../../../packages/gateway-protocol/src/index.js";
@@ -38,21 +37,6 @@ export function showMoveToProjectDialog(request: MoveToProjectRequest): Promise<
   });
 }
 
-function carryText(checkout: MoveSessionCheckout): string {
-  const params = {
-    folder: checkout.path,
-    subject: checkout.head.subject,
-    count: String(checkout.unsavedFiles),
-  };
-  const key =
-    checkout.unsavedFiles === 0
-      ? "carryCommitted"
-      : checkout.unsavedFiles === 1
-        ? "carryOne"
-        : "carryMany";
-  return t(`chat.sessionHeader.moveToProject.${key}`, params);
-}
-
 function renderMoveToProjectDialog(
   request: MoveToProjectRequest,
   finish: (moved: boolean) => void,
@@ -63,16 +47,11 @@ function renderMoveToProjectDialog(
     client.request<ProjectsMoveSessionOptionsResult>("projects.moveSessionOptions", scope),
   );
   const [projectChoice, setProjectChoice] = createSignal<string>();
-  const [checkoutChoice, setCheckoutChoice] = createSignal<string>();
   const [moving, setMoving] = createSignal(false);
   const [error, setError] = createSignal<string>();
   const project = createMemo(() => {
     const projects = options().projects;
     return projects.find((entry) => entry.id === projectChoice()) ?? projects[0];
-  });
-  const checkout = createMemo(() => {
-    const checkouts = project()?.checkouts ?? [];
-    return checkouts.find((entry) => entry.path === checkoutChoice()) ?? checkouts[0];
   });
   const close = () => {
     if (!moving()) {
@@ -85,11 +64,13 @@ function renderMoveToProjectDialog(
     if (moving() || !target) {
       return;
     }
-    const folder = checkout()?.path;
+    // The conversation's own clone of the project, when it has one, comes along.
+    // Accepted edge case: with several clones of one project, the first listed one comes.
+    const folder = target.checkouts[0]?.path;
     setMoving(true);
     setError(undefined);
     try {
-      const result = await client.request<ProjectsMoveSessionResult>("projects.moveSession", {
+      await client.request<ProjectsMoveSessionResult>("projects.moveSession", {
         ...scope,
         projectId: target.id,
         ...(folder ? { checkout: folder } : {}),
@@ -97,12 +78,9 @@ function renderMoveToProjectDialog(
       finish(true);
       showToast({
         severity: "success",
-        message: result.branch
-          ? t("chat.sessionHeader.moveToProject.moved", {
-              project: target.name,
-              branch: result.branch,
-            })
-          : t("chat.sessionHeader.moveToProject.movedNoBranch", { project: target.name }),
+        message: folder
+          ? t("chat.sessionHeader.moveToProject.movedWithWork", { project: target.name, folder })
+          : t("chat.sessionHeader.moveToProject.moved", { project: target.name }),
       });
     } catch (failure) {
       setError(formatUiError(failure, t("chat.sessionHeader.moveToProject.failed")));
@@ -110,12 +88,10 @@ function renderMoveToProjectDialog(
     }
   }
   const title = t("chat.sessionHeader.moveToProject.title");
-  const description = t("chat.sessionHeader.moveToProject.description");
   return (
     <openclaw-modal-dialog
       class="move-to-project-dialog"
       label={title}
-      description={description}
       onModal-cancel={(event: Event) => {
         if (moving()) {
           event.preventDefault();
@@ -125,12 +101,7 @@ function renderMoveToProjectDialog(
       }}
     >
       <form class="oc-dialog" onSubmit={(event) => void move(event)}>
-        <DialogHeader
-          title={title}
-          description={description}
-          closeDisabled={moving()}
-          onClose={close}
-        />
+        <DialogHeader title={title} closeDisabled={moving()} onClose={close} />
         <Errored
           fallback={(failure) => (
             <>
@@ -170,18 +141,14 @@ function renderMoveToProjectDialog(
               }
             >
               <div class="oc-dialog__body">
-                <fieldset disabled={moving()}>
-                  <legend>{t("chat.sessionHeader.moveToProject.projects")}</legend>
+                <fieldset disabled={moving()} aria-label={title}>
                   <For each={options().projects} keyed={(entry) => entry.id}>
                     {(entry) => (
                       <Radio
                         name="project"
                         value={entry().id}
                         checked={project()?.id === entry().id}
-                        onChange={() => {
-                          setProjectChoice(entry().id);
-                          setCheckoutChoice(undefined);
-                        }}
+                        onChange={() => setProjectChoice(entry().id)}
                       >
                         <span>
                           {entry().name}
@@ -193,29 +160,6 @@ function renderMoveToProjectDialog(
                     )}
                   </For>
                 </fieldset>
-                <Show when={(project()?.checkouts.length ?? 0) > 1}>
-                  <fieldset disabled={moving()}>
-                    <legend>{t("chat.sessionHeader.moveToProject.checkouts")}</legend>
-                    <For each={project()?.checkouts ?? []} keyed={(entry) => entry.path}>
-                      {(entry) => (
-                        <Radio
-                          name="checkout"
-                          value={entry().path}
-                          checked={checkout()?.path === entry().path}
-                          onChange={() => setCheckoutChoice(entry().path)}
-                        >
-                          <span>{entry().path}</span>
-                        </Radio>
-                      )}
-                    </For>
-                  </fieldset>
-                </Show>
-                <Show
-                  when={checkout()}
-                  fallback={<p>{t("chat.sessionHeader.moveToProject.fresh")}</p>}
-                >
-                  {(detected) => <p>{carryText(detected())}</p>}
-                </Show>
                 <Show when={moving()}>
                   <p role="status">{t("chat.sessionHeader.moveToProject.moving")}</p>
                 </Show>
@@ -226,9 +170,6 @@ function renderMoveToProjectDialog(
                 </Show>
               </div>
               <openclaw-modal-actions class="oc-dialog__footer">
-                <button type="button" class="btn" disabled={moving()} onClick={close}>
-                  {t("common.cancel")}
-                </button>
                 <button type="submit" class="btn primary" disabled={moving()}>
                   {t("chat.sessionHeader.moveToProject.move")}
                 </button>

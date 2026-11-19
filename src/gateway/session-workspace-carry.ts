@@ -281,3 +281,123 @@ export async function applyUnsavedWork(work: string, worktreePath: string) {
     git.require(worktreePath, ["restore", `--source=${work}`, "--worktree", "--", "."]),
   );
 }
+
+// Lists Git checkouts one or two folders deep, as NUL-separated records:
+// path, HEAD, origin URL, HEAD subject, unsaved path count.
+const SANDBOX_LIST = String.raw`set -u
+export GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1 GIT_TERMINAL_PROMPT=0
+git() { command git -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }
+cd "$1" || exit 0
+for marker in */.git */*/.git; do
+  dir=$(dirname "$marker")
+  test "$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" = "$(cd "$dir" && pwd -P)" || continue
+  head=$(git -C "$dir" rev-parse --verify -q 'HEAD^{commit}') || continue
+  origin=$(git -C "$dir" config --get remote.origin.url || true)
+  subject=$(git -C "$dir" log -1 --format=%s HEAD)
+  count=$(git -C "$dir" status --porcelain=v1 -z --untracked-files=all --no-renames | tr -cd '\000' | wc -c)
+  printf '%s\0%s\0%s\0%s\0%s\0' "$dir" "$head" "$origin" "$subject" $count
+done
+`;
+
+export type CarryCheckout = {
+  path: string;
+  head: { sha: string; subject: string };
+  originUrl: string;
+  unsavedFiles: number;
+};
+
+const MAX_LISTED_CHECKOUTS = 32;
+
+async function listOnHost(workspaceDir: string, signal?: AbortSignal): Promise<CarryCheckout[]> {
+  const root = await fs.realpath(workspaceDir);
+  // Real folders only: a symlinked folder could name host files outside the workspace.
+  const folders = async (relative: string) =>
+    (await fs.readdir(path.join(root, relative), { withFileTypes: true }).catch(() => []))
+      .filter((child) => child.isDirectory() && !child.name.startsWith("."))
+      .map((child) => path.join(relative, child.name));
+  const candidates: string[] = [];
+  for (const first of await folders("")) {
+    candidates.push(first, ...(await folders(first)));
+  }
+  const checkouts: CarryCheckout[] = [];
+  for (const relative of candidates) {
+    if (checkouts.length >= MAX_LISTED_CHECKOUTS) {
+      break;
+    }
+    const directory = path.join(root, relative);
+    const marker = await fs.lstat(path.join(directory, ".git")).catch(() => undefined);
+    const topLevel =
+      marker && (await runGit(directory, ["rev-parse", "--show-toplevel"], { signal }));
+    if (!topLevel || topLevel.code !== 0 || topLevel.stdout.trim() !== directory) {
+      continue;
+    }
+    const gitDir = await requireGit(directory, ["rev-parse", "--absolute-git-dir"], { signal });
+    // Reading one config file as data runs nothing from it.
+    const origin = await runGit(
+      directory,
+      ["config", "--file", path.join(gitDir, "config"), "--get", "remote.origin.url"],
+      { signal },
+    );
+    const facts = await withWorktreeGitConfig(directory, true, { signal }, async (git) => {
+      const head = await git.run(directory, ["rev-parse", "--verify", "-q", "HEAD^{commit}"]);
+      if (head.code !== 0) {
+        return undefined;
+      }
+      const subject = await git.require(directory, ["log", "-1", "--format=%s", "HEAD"]);
+      const status = await git.require(directory, [
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--no-renames",
+      ]);
+      return {
+        sha: head.stdout.trim(),
+        subject,
+        unsavedFiles: status.split("\0").filter(Boolean).length,
+      };
+    });
+    if (facts && COMMIT_PATTERN.test(facts.sha)) {
+      checkouts.push({
+        path: relative.split(path.sep).join("/"),
+        head: { sha: facts.sha, subject: facts.subject.slice(0, 1024) },
+        originUrl: origin.code === 0 ? origin.stdout.trim() : "",
+        unsavedFiles: facts.unsavedFiles,
+      });
+    }
+  }
+  return checkouts;
+}
+
+/** Checkouts in the conversation's workspace, read where its files live. */
+export async function listCarryCheckouts(
+  source: CarrySource,
+  signal?: AbortSignal,
+): Promise<CarryCheckout[]> {
+  if (source.kind === "host") {
+    return await listOnHost(source.workspaceDir, signal);
+  }
+  const listed = await source.sandbox.backend!.runShellCommand({
+    script: SANDBOX_LIST,
+    args: [source.sandbox.containerWorkdir],
+    allowFailure: true,
+    signal,
+  });
+  const fields = listed.code === 0 ? listed.stdout.toString().split("\0") : [];
+  const checkouts: CarryCheckout[] = [];
+  for (let index = 0; index + 4 < fields.length; index += 5) {
+    const [dir = "", sha = "", originUrl = "", subject = "", count = ""] = fields.slice(
+      index,
+      index + 5,
+    );
+    if (COMMIT_PATTERN.test(sha) && /^\d+$/u.test(count)) {
+      checkouts.push({
+        path: dir,
+        head: { sha, subject: subject.slice(0, 1024) },
+        originUrl,
+        unsavedFiles: Number(count),
+      });
+    }
+  }
+  return checkouts.slice(0, MAX_LISTED_CHECKOUTS);
+}
