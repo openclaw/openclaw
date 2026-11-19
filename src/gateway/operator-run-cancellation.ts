@@ -36,25 +36,12 @@ type OperatorRunCancellationContext = Pick<
   keyof Parameters<typeof createChatAbortOps>[0] | "logGateway" | "trackExecution"
 >;
 
-/** Retain authority before its execution or queue owner can arm cancellation. */
-export async function retainGatewayOperatorRun(
-  params: Parameters<typeof captureGatewayOperatorRunAuthority>[0] & {
-    context: OperatorRunCancellationContext;
-    runId: string;
-    entry?: RpcSourceRef;
-    abortSession?: Extract<ChatAbortSessionSnapshot, { ok: true }>["value"];
-    /** Present only for a trusted host-originated input with no explicit human requester. */
-    systemTurn?: Parameters<typeof prepareSessionSystemTurnAuthority>[0];
-  },
+/** Own policy cancellation for a retained producer without revoking its admitted request. */
+export function retainGatewayOperatorRunAuthority(
+  captured: NonNullable<Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>>,
 ) {
-  const captured = params.systemTurn
-    ? await prepareSessionSystemTurnAuthority(params.systemTurn)
-    : // The requester's turn ending or chat edit does not revoke accepted work; policy does.
-      await captureGatewayOperatorContinuation(params);
-  let releaseSource =
-    captured?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
-  let authority = captured?.authority;
-  if (authority?.reauthorize) {
+  let { authority, release: releaseSource } = captured;
+  if (authority.reauthorize) {
     // Long-lived turns own immediate policy cancellation; an individual admitted request
     // may finish. Each queued, recovered or child turn acquires this lifetime separately.
     const source = authority;
@@ -108,11 +95,38 @@ export async function retainGatewayOperatorRun(
     authority = retained;
     releaseSource = releaseHold(releaseSource);
   }
+  try {
+    // Capture can yield; admit against current policy after installing this producer's listener.
+    authority.reauthorize?.();
+    return { authority, release: releaseSource };
+  } catch (error) {
+    releaseSource();
+    throw error;
+  }
+}
+
+/** Retain authority before its execution or queue owner can arm cancellation. */
+export async function retainGatewayOperatorRun(
+  params: Parameters<typeof captureGatewayOperatorRunAuthority>[0] & {
+    context: OperatorRunCancellationContext;
+    runId: string;
+    entry?: RpcSourceRef;
+    abortSession?: Extract<ChatAbortSessionSnapshot, { ok: true }>["value"];
+    /** Present only for a trusted host-originated input with no explicit human requester. */
+    systemTurn?: Parameters<typeof prepareSessionSystemTurnAuthority>[0];
+  },
+) {
+  const captured = params.systemTurn
+    ? await prepareSessionSystemTurnAuthority(params.systemTurn)
+    : // The requester's turn ending or chat edit does not revoke accepted work; policy does.
+      await captureGatewayOperatorContinuation(params);
+  const retained = captured && retainGatewayOperatorRunAuthority(captured);
+  const releaseSource =
+    retained?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
+  const authority = retained?.authority;
   const signal = authority?.signal;
   let partialSession: ReturnType<typeof retainChatAbortSessionSnapshot> | undefined;
   try {
-    // Capture can yield; admit against current policy after installing this run's listener.
-    authority?.reauthorize?.();
     if (
       !params.systemTurn &&
       authority &&

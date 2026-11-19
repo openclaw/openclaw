@@ -20,7 +20,7 @@ import {
   type OpenClawIdTunnelPrincipal,
 } from "../openclaw-id/tunnel-principal.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { dispatchProfile } from "../server/client-fixtures.test-support.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
@@ -107,37 +107,40 @@ it("keeps a linked owner's accepted work when the person's stored role changes",
       getRuntimeConfig: () => runConfig,
       getCommittedRuntimeConfig: () => runConfig,
     });
-    const capture = async (principal?: OpenClawIdTunnelPrincipal) =>
-      expectDefined(
-        await captureGatewayOperatorRunAuthority({
-          client: {
-            connId: `run-${principal?.kind ?? "person"}`,
-            connectionSignal: new AbortController().signal,
-            connect: {
-              minProtocol: 1,
-              maxProtocol: 1,
-              client: {
-                id: "openclaw-control-ui",
-                version: "dev",
-                platform: "test",
-                mode: "webchat",
-              },
-              role: "operator",
-              scopes: ["operator.admin"],
+    const capture = async (principal?: OpenClawIdTunnelPrincipal) => {
+      const retained = await retainGatewayOperatorRun({
+        runId: `retained-${principal?.kind ?? "person"}`,
+        client: {
+          connId: `run-${principal?.kind ?? "person"}`,
+          connectionSignal: new AbortController().signal,
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            client: {
+              id: "openclaw-control-ui",
+              version: "dev",
+              platform: "test",
+              mode: "webchat",
             },
-            authenticatedUserProfile: dispatchProfile(person.id),
-            internal: {
-              authenticatedOperator: true,
-              operatorRoleActor: principal
-                ? { kind: "system" }
-                : { kind: "operator", profileId: person.id },
-              ...(principal ? { openclawIdPrincipal: principal } : {}),
-            },
-          } as unknown as GatewayWsClient,
-          context,
-        }),
-        "captured run authority",
-      );
+            role: "operator",
+            scopes: ["operator.admin"],
+          },
+          authenticatedUserProfile: dispatchProfile(person.id),
+          internal: {
+            authenticatedOperator: true,
+            operatorRoleActor: principal
+              ? { kind: "system" }
+              : { kind: "operator", profileId: person.id },
+            ...(principal ? { openclawIdPrincipal: principal } : {}),
+          },
+        } as unknown as GatewayWsClient,
+        context,
+      });
+      return {
+        ...retained,
+        authority: expectDefined(retained.authority, "retained run authority"),
+      };
+    };
     const owner = await capture(OWNER);
     const personal = await capture();
     // users.setRole persists the role, then publishes a role-only change.

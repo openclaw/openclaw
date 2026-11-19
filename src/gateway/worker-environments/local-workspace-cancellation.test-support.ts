@@ -212,7 +212,7 @@ export async function proveStoppedSandboxAuthority(
     | "prepare-cancel",
   testSignal?: AbortSignal,
 ) {
-  const [state, lease, paths, users, roles, auth, server, cfg, workspaces, backends] =
+  const [state, lease, paths, users, roles, auth, cancellation, server, cfg, workspaces, backends] =
     await Promise.all([
       import("../../test-utils/openclaw-test-state.js"),
       import("../../infra/gateway-state-owner.js"),
@@ -220,6 +220,7 @@ export async function proveStoppedSandboxAuthority(
       import("../../state/user-profile-writes.js"),
       import("../operator-role-policy.js"),
       import("../operator-run-authority.js"),
+      import("../operator-run-cancellation.js"),
       import("../server-plugin-in-process-dispatch.test-support.js"),
       import("../../config/runtime-snapshot.js"),
       import("../../agents/workspace-sandbox.js"),
@@ -292,7 +293,7 @@ export async function proveStoppedSandboxAuthority(
       const context = server.createContext();
       context.getRuntimeConfig = () => config;
       const source = new AbortController();
-      const captured = await auth.captureGatewayOperatorRunAuthority({
+      const request = await auth.captureGatewayOperatorRunAuthority({
         client: server.createOperatorClient({
           profileId: profile.id,
           scopes: guestInvolvement ? guestScopes : ["operator.write"],
@@ -303,7 +304,11 @@ export async function proveStoppedSandboxAuthority(
           signal: source.signal,
         },
       });
-      assert(captured?.authority.retain, "Expected retained operator authority");
+      assert(request, "Expected admitted operator request");
+      const captured = guestInvolvement
+        ? cancellation.retainGatewayOperatorRunAuthority(request)
+        : request;
+      assert(captured.authority.retain, "Expected retained operator authority");
       const releaseOperator = captured.authority.retain();
       const admission = prepareSystemAgentRunAdmission(
         config,
@@ -479,9 +484,7 @@ export async function proveStoppedSandboxAuthority(
                 onCommitted: roles.invalidateOperatorRolePolicy,
               });
               expect(captured.authority.assertCurrent).toThrow(/operator role changed/);
-              expect(captured.authority.reauthorize).toThrow(
-                "operator execution authority is no longer active",
-              );
+              expect(captured.authority.reauthorize).toThrow(/operator role changed/);
             } else {
               source.abort(new Error("operator source execution authority cancelled"));
             }
@@ -541,21 +544,17 @@ export async function proveStoppedSandboxAuthority(
           await users.setCanonicalUserProfileRole(profile.id, "denied", {
             onCommitted: roles.invalidateOperatorRolePolicy,
           });
-          expect(captured.authority.assertCurrent).toThrow(/operator role changed/);
-          expect(captured.authority.reauthorize).toThrow(
-            "operator execution authority is no longer active",
-          );
-          await expect(finish(backend, pending.finalizeToken)).rejects.toThrow(
-            /operator role changed/,
-          );
-          await expectSource(owner.worktree.path, "accepted guest edit\n");
+          expect(captured.authority.assertCurrent).not.toThrow();
+          expect(captured.authority.reauthorize).toThrow(/operator role changed/);
+          await finish(backend, pending.finalizeToken);
+          await expectSource(owner.worktree.path, "revoked guest edit\n");
           await writeSource(sandbox.workspaceDir, "cancelled guest edit\n");
           source.abort(new Error("operator source execution authority cancelled"));
           expect(captured.authority.assertCurrent).toThrow();
           await expect(finish(backend, cancelled!.finalizeToken)).rejects.toThrow(
             /operator|source execution authority/,
           );
-          await expectSource(owner.worktree.path, "accepted guest edit\n");
+          await expectSource(owner.worktree.path, "revoked guest edit\n");
         } else {
           gateway.release();
           await expect(finish(backend, pending.finalizeToken)).rejects.toMatchObject({
