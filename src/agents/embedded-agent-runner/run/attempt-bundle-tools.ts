@@ -138,49 +138,62 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     },
   });
   phases.mark("attempt.bundle-tools.mcp-acquire");
-  const bundleMcpAcquisition = bundleMcpEnabled
-    ? await acquireSessionMcpRuntime({
-        ...mcpConfig,
-        sessionId: params.attempt.sessionId,
-        sessionKey: params.attempt.sessionKey,
-        agentId: params.setup.sessionAgentId,
-        agentDir: params.agentDir,
-        // senderId is only set from the verified inbound sender (sessionCtx.SenderId
-        // or the triggering run's sender on follow-ups). Cron/subagent runs
-        // leave it unset, so requester-scoped MCP stays fail-closed for those paths.
-        requesterSenderId: params.attempt.senderId,
-        agentAccountId: params.attempt.agentAccountId,
-        messageChannel: params.attempt.messageChannel ?? params.attempt.messageProvider,
-      })
-    : undefined;
-  phases.mark("attempt.bundle-tools.mcp-materialize");
-  const bundleMcpRuntime = bundleMcpAcquisition
-    ? await materializeBundleMcpToolsForRun({
-        ...bundleMcpAcquisition,
-        agentId: params.setup.sessionAgentId,
-        operatorConnect: params.attempt.config
-          ? {
-              cfg: params.attempt.config,
-              metadata: bundleMetadataSnapshot,
-              senderIsOwner: params.attempt.senderIsOwner,
-              chatType: params.attempt.chatType,
-              isTurnTainted: params.attempt.isTurnTainted,
-              toolOverrides: params.attempt.toolOverrides,
-              toolDenylist: mcpConfig.toolDenylist,
-            }
-          : undefined,
-        reservedToolNames: [
-          ...tools.map((tool) => tool.name),
-          ...(clientTools?.map((tool) => tool.function.name) ?? []),
-        ],
-      })
-    : undefined;
+  let bundleMcpAcquisition: Awaited<ReturnType<typeof acquireSessionMcpRuntime>> | undefined;
+  let bundleMcpRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
+  // An MCP failure leaves this run without MCP tools; it never fails the run.
+  try {
+    bundleMcpAcquisition = bundleMcpEnabled
+      ? await acquireSessionMcpRuntime({
+          ...mcpConfig,
+          sessionId: params.attempt.sessionId,
+          sessionKey: params.attempt.sessionKey,
+          agentId: params.setup.sessionAgentId,
+          agentDir: params.agentDir,
+          // senderId is only set from the verified inbound sender (sessionCtx.SenderId
+          // or the triggering run's sender on follow-ups). Cron/subagent runs
+          // leave it unset, so requester-scoped MCP stays fail-closed for those paths.
+          requesterSenderId: params.attempt.senderId,
+          agentAccountId: params.attempt.agentAccountId,
+          messageChannel: params.attempt.messageChannel ?? params.attempt.messageProvider,
+        })
+      : undefined;
+    phases.mark("attempt.bundle-tools.mcp-materialize");
+    bundleMcpRuntime = bundleMcpAcquisition
+      ? await materializeBundleMcpToolsForRun({
+          ...bundleMcpAcquisition,
+          agentId: params.setup.sessionAgentId,
+          operatorConnect: params.attempt.config
+            ? {
+                cfg: params.attempt.config,
+                metadata: bundleMetadataSnapshot,
+                senderIsOwner: params.attempt.senderIsOwner,
+                chatType: params.attempt.chatType,
+                isTurnTainted: params.attempt.isTurnTainted,
+                toolOverrides: params.attempt.toolOverrides,
+                toolDenylist: mcpConfig.toolDenylist,
+              }
+            : undefined,
+          reservedToolNames: [
+            ...tools.map((tool) => tool.name),
+            ...(clientTools?.map((tool) => tool.function.name) ?? []),
+          ],
+        })
+      : undefined;
+  } catch (error) {
+    if (params.attempt.abortSignal?.aborted) {
+      throw error;
+    }
+    bundleMcpAcquisition?.releaseLease?.();
+    bundleMcpRuntime = undefined;
+    log.warn(`bundle MCP unavailable for this run: ${String(error)}`);
+  }
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   try {
     phases.mark("attempt.bundle-tools.lsp");
+    // LSP servers start only for runs whose allowlist can call them, as before.
     const bundleLspEnabled = shouldCreateBundleLspRuntimeForAttempt({
       toolsEnabled: auxiliaryToolsEnabled,
-      toolsAllow: listingToolsAllow,
+      toolsAllow: params.attempt.toolsAllow,
     });
     bundleLspRuntime = bundleLspEnabled
       ? await createBundleLspToolRuntime({
