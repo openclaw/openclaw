@@ -66,7 +66,10 @@ export async function updateGitRelease(params: {
   const selected = readPackageReleaseSlotSync(slot);
   const converting = !selected;
   let placement = selected ? await readGitReleasePlacement(selected) : null;
-  const unserved = placement?.unserved;
+  // Repair moves the link, which a launcher-backed Gateway follows by restarting, so an
+  // update with --no-restart leaves a placed release to the next update that restarts.
+  const deferredLeftover = opts.deferReleaseActivation ? placement?.unserved : undefined;
+  const unserved = opts.deferReleaseActivation ? undefined : placement?.unserved;
   let stepIndex = 0;
   const forRunner =
     (deadline: number | undefined) =>
@@ -286,6 +289,12 @@ export async function updateGitRelease(params: {
             : "A process started from it during this update, so release collection keeps it for now.",
     );
   };
+  if (deferredLeftover) {
+    await reportPlacement(
+      `Release ${gitReleaseId(deferredLeftover.root)} was placed by an earlier update and never started. With --no-restart this update leaves it and the link as they are; the next update that restarts the Gateway repairs them.`,
+      false,
+    );
+  }
   // No safe fallback: the trial's fallback is gone or incomplete. A release rebuilt from
   // the commit it was built from, which is what serves, becomes the fallback. Without one,
   // nothing is switched: restarting would start the placed release with nothing to back out to.
@@ -356,8 +365,13 @@ export async function updateGitRelease(params: {
     rebuiltFallback = true;
   }
   // F: only a placed release whose build verifies is reused.
+  // Only a placed release whose build verifies and whose tracked files are unchanged is reused.
+  const placedClean =
+    unserved &&
+    (await git(unserved.root, "status", "--porcelain", "--untracked-files=no")).stdout.trim() ===
+      "";
   placedSha =
-    unserved && (await verifiesAsGitRelease(unserved.root))
+    unserved && placedClean && (await verifiesAsGitRelease(unserved.root))
       ? (await git(unserved.root, "rev-parse", "HEAD")).stdout.trim()
       : "";
   placedTree = placedSha ? await treeOf(placedSha) : null;
@@ -429,7 +443,9 @@ export async function updateGitRelease(params: {
     !previousRelease &&
     unserved !== undefined
   ) {
-    // The caller's mutation check runs before the link, trial or placed release change.
+    // The serving release about to be selected passes the candidate checks, then the
+    // caller's mutation check, before the link, trial or placed release change.
+    steps.push(...((await opts.validateCandidate(placement!.serving)) ?? []));
     await prepareGitMutation({
       runCommand,
       root: gitRoot,

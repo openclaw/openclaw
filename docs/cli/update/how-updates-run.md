@@ -1611,13 +1611,16 @@ trial's previous release, the one that last served:
 - If the target is newer, the link goes back to the serving release. The new release
   goes on trial with the serving release as its fallback, and the superseded release is
   removed.
-- If the serving release is the target, the update runs the caller's mutation check, puts
-  the link back on the serving release, and reports that the installation is current.
+- If the serving release is the target, the update runs the candidate checks on it and the
+  caller's mutation check, puts the link back on the serving release, and reports that the
+  installation is current.
 
 Only a release the launcher never started and no process holds counts as never started.
 A trial that started stays under the launcher, which owns its state rollback. If the
-release starts, or its trial ends, while the update builds, the update leaves the link
-and trial alone. A trial never falls back to its own target, and arming a trial for the
+release starts, or its trial ends, while the update builds, the update does not reconcile
+them: it publishes the target with the release the link names as its fallback. An update
+with `--no-restart` leaves a placed release and the link as they are, because moving the
+link would restart a launcher-backed Gateway; the next update that restarts repairs them. A trial never falls back to its own target, and arming a trial for the
 release the link already names keeps that release's existing trial.
 
 A fallback must be present, and its build must verify against the commit it was built
