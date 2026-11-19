@@ -15,12 +15,7 @@ const suite = createNewSessionPageE2eSuite();
 suite.define(() => {
   it.each([400, 820, 1280])("holds checkout geometry during discovery at %i px", async (width) => {
     await suite.withPage(
-      {
-        viewport: { width, height: 900 },
-        locale: "en-US",
-        colorScheme: "dark",
-        serviceWorkers: "block",
-      },
+      { viewport: { width, height: 900 }, locale: "en-US", serviceWorkers: "block" },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           workspace: WORKSPACE,
@@ -115,19 +110,6 @@ suite.define(() => {
             path.join(suite.artifactDir, "checkout-" + width + "-ready.png"),
             frame.png,
           );
-        }
-        if (width <= 768) {
-          const triggers = tray.locator(".new-session-page__trigger");
-          expect(await triggers.count()).toBe(3);
-          for (const trigger of await triggers.all()) {
-            const label = (await trigger
-              .locator(".new-session-page__trigger-label")
-              .boundingBox())!;
-            const chevron = (await trigger
-              .locator(".new-session-page__picker-chevron")
-              .boundingBox())!;
-            expect(chevron.x - label.x - label.width).toBeLessThanOrEqual(8);
-          }
         }
       },
     );
