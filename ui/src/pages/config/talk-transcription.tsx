@@ -27,15 +27,6 @@ const AUTOMATIC = "";
 
 type TalkTranscriptionCatalog = TalkCatalogResult["transcription"];
 
-/**
- * The picked model drives Talk only on the media-understanding path; on every
- * other path Talk's provider comes from elsewhere and the model serves voice
- * notes alone.
- */
-function talkUsesPickedModel(source: TalkTranscriptionCatalog["source"]) {
-  return source === "media-understanding";
-}
-
 type AudioModelEntry = { provider: string; model: string };
 
 /** Audio-tagged `tools.media.models` entries plus the preferred pick, from the config draft. */
@@ -259,9 +250,8 @@ function preferredProviderEntry(catalog: CatalogState, preferredModel: string | 
   if (!loaded || !preferredModel) {
     return undefined;
   }
-  const providers = talkUsesPickedModel(loaded.source)
-    ? loaded.providers
-    : (loaded.mediaProviders ?? []);
+  const providers =
+    loaded.source === "media-understanding" ? loaded.providers : (loaded.mediaProviders ?? []);
   const id = splitModelRef(preferredModel)?.provider;
   return id ? providers.find((entry) => entry.id === id || entry.aliases?.includes(id)) : undefined;
 }

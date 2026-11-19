@@ -886,7 +886,6 @@ const enSettings = {
       retention: "Snapshot retention",
       machineImages: "Machine images",
       change: "Change",
-      setUp: "Set up",
       built: "Built {age}",
       actions: "Environment actions",
       pinPrevious: "Pin previous",
