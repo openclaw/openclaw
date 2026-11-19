@@ -3,7 +3,6 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import v8 from "node:v8";
 import type { API, EmitOutputFile } from "typescript/async";
 import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.ts";
 import { createDeclarationInputBoundary, resolveRepoToolBinPath } from "./local-check-runtime.mts";
@@ -284,20 +283,27 @@ export async function compileNativeProject({
 }
 
 /**
- * The parallel pass's Go memory is outside --max-old-space-size: the unified graph peaked
- * 4.3 GiB above the single-threaded pass (8.4 vs 6.1 GiB in its cgroup) and was OOM-killed in
- * an 8 GiB container that the single-threaded pass completes in. The build's memory owner
- * (tsdown-build) sizes this process's heap from the memory it can use and grants its uncapped
- * default heap only when that memory is ample, so that heap limit is the admission fact here,
- * the same one it uses to run two runtime builds at once. Its Windows default and any run
- * outside it (a bare tsdown, a non-V8 runtime) stay below the limit and emit single-threaded;
+ * The parallel pass's Go memory is outside --max-old-space-size: its cgroup peaked at 8.4 GiB
+ * against 6.1 GiB for the single-threaded pass, and it was OOM-killed in an 8 GiB container
+ * that the single-threaded pass completes in. The build's memory owner (tsdown-build) writes
+ * this process's --max-old-space-size from the memory it can use and grants its uncapped
+ * default only when that memory is ample, the same fact it uses to run two runtime builds at
+ * once. Its Windows default and a run without that flag (a bare tsdown) emit single-threaded;
  * an explicit OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB at or above it asserts ample memory.
- * heap_size_limit adds V8's young generation, about 96 MiB at this size.
  */
-const PARALLEL_EMIT_MIN_HEAP_LIMIT_BYTES = 12_288 * 1024 * 1024;
+const PARALLEL_EMIT_MIN_OLD_SPACE_MB = 12_288;
 
 function hostAdmitsParallelEmit() {
-  return v8.getHeapStatistics().heap_size_limit >= PARALLEL_EMIT_MIN_HEAP_LIMIT_BYTES;
+  // Node applies NODE_OPTIONS before its command line; the last occurrence wins.
+  const flags = [...(process.env.NODE_OPTIONS?.trim().split(/\s+/u) ?? []), ...process.execArgv];
+  let oldSpaceMb: number | undefined;
+  for (const [index, flag] of flags.entries()) {
+    const match = /^--max[-_]old[-_]space[-_]size(?:=(\d+))?$/u.exec(flag);
+    if (match) {
+      oldSpaceMb = Number(match[1] ?? flags[index + 1]);
+    }
+  }
+  return oldSpaceMb !== undefined && oldSpaceMb >= PARALLEL_EMIT_MIN_OLD_SPACE_MB;
 }
 
 /**

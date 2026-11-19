@@ -213,14 +213,13 @@ it("emits identical declarations in fresh processes and goes parallel only on th
   const root = tempRoot("determinism");
   const fixture = createNativeFixture(root);
   const observeThreading = process.platform !== "win32";
-  const configs = path.join(root, "compiler-configs.log");
+  const configs = `${fixture.native}.configs.log`;
   if (observeThreading) {
     // Record each config the compiler is given, then run the real compiler.
-    const real = `${fixture.native}.real`;
-    fs.renameSync(fixture.native, real);
+    fs.renameSync(fixture.native, `${fixture.native}.real`);
     fs.writeFileSync(
       fixture.native,
-      `#!/bin/sh\nprev=\nfor arg; do [ "$prev" = -p ] && { cat "$arg"; echo; } >> '${configs}'; prev=$arg; done\nexec '${real}' "$@"\n`,
+      `#!/bin/sh\nprev=\nfor arg; do [ "$prev" = -p ] && { cat "$arg"; echo; } >> "$0.configs.log"; prev=$arg; done\nexec "$0.real" "$@"\n`,
       { mode: 0o755 },
     );
   }
@@ -257,7 +256,8 @@ it("emits identical declarations in fresh processes and goes parallel only on th
           { imports: [import.meta.resolve("tsx")] },
         ),
       ],
-      { encoding: "utf8", timeout: 60_000 },
+      // The heap flag on the command line is the only budget this child sees.
+      { encoding: "utf8", timeout: 60_000, env: { ...process.env, NODE_OPTIONS: "" } },
     );
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
@@ -281,6 +281,8 @@ it("emits identical declarations in fresh processes and goes parallel only on th
   const capped = compile(true, 7_424);
   expect(capped).toMatchObject(threaded(true));
   expect(compile(true, 7_424)).toEqual(capped);
+  // V8's total heap limit adds its young generation; one MB below the uncapped budget is capped.
+  expect(compile(true, 12_287)).toMatchObject({ emitted: capped.emitted, ...threaded(true) });
   const uncapped = compile(true, 12_288);
   expect(uncapped).toMatchObject(threaded(false));
   expect(compile(true, 12_288)).toEqual(uncapped);
