@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ConfigSnapshot } from "../../api/types.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { configRawForDisplay } from "./config-draft-model.ts";
 import {
@@ -138,15 +137,7 @@ describe("config patch recovery", () => {
       ).resolves.toBe(true);
       expectFeedback(state, "restart-required");
       // Recovery restarts can be pending after the hot-applied revision catches up.
-      const read = store.request.getMockImplementation()!;
-      store.request.mockImplementation(async (readMethod, params) => {
-        const result = await read(readMethod, params);
-        if (readMethod === "config.get") {
-          const snapshot = result as ConfigSnapshot;
-          return { ...snapshot, appliedConfigHash: snapshot.configRevisionHash };
-        }
-        return result;
-      });
+      store.applyCurrentRevision();
       await runtimeConfig.refresh();
       expectFeedback(state, "restart-required");
       publish(false);
