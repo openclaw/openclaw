@@ -144,7 +144,12 @@ function createGroupParticipationRun(params: {
   };
   const applyExpectation = () => {
     const current = params.run();
-    current.run.terminalReplyExpectation = mode === "observe" ? "optional" : originalExpectation;
+    current.run.terminalReplyExpectation =
+      mode === "observe"
+        ? "optional"
+        : mode === "ordinary" || originalExpectation === "result-required"
+          ? originalExpectation
+          : "required";
     for (const state of current.replyOperationRunStates ?? []) {
       state.replyCompletion = resolveReplyCompletion(
         current.run.terminalReplyExpectation ?? "required",
@@ -241,8 +246,10 @@ function createGroupParticipationRun(params: {
     get isObserving() {
       return mode === "observe";
     },
+    get requiresVisibleReply() {
+      return mode === "engagement" || mode === "opportunity";
+    },
     refresh,
-    useOrdinaryBehavior,
     isCurrent,
   };
 }

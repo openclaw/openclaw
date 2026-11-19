@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { MISSING_REPLY_NOTICE_TEXT } from "../../agents/reply-completion.js";
+import { TOOL_CALL_RAW_TOOL_NAME } from "../../agents/tool-catalog.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { isIndexedSessionEntry } from "../../config/sessions/session-entry-codec.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
@@ -37,20 +39,58 @@ beforeEach(async () => {
 });
 
 it.each([
-  ["none", 0],
-  ["engagement", 1],
+  ["none", "automatic", 0],
+  ["engagement", "automatic", 1],
+  ["engagement", "message_tool_only", 1],
+  ["engagement", "message_tool_only", 2],
 ] as const)(
-  "keeps the turn silent after %s participation (primary calls: %s)",
-  async (attention, primaryCalls) => {
+  "settles %s participation with NO_REPLY in %s delivery (%s model calls)",
+  async (attention, sourceReplyDeliveryMode, primaryCalls) => {
     const previousRequests = fixture.requests.length;
     const previousTyping = fixture.typing();
     const previousPartials = fixture.partials.length;
     decision.mockImplementation(async (batch) => judgment(batch, { attention }));
+    const deliveredText = "The approved reply was delivered.";
+    if (primaryCalls === 2) {
+      fixture.respond({
+        delta: {
+          role: "assistant",
+          tool_calls: [
+            {
+              index: 0,
+              id: "send-reply",
+              type: "function",
+              function: {
+                name: TOOL_CALL_RAW_TOOL_NAME,
+                arguments: JSON.stringify({
+                  id: "message",
+                  args: { action: "send", message: deliveredText, final: true },
+                }),
+              },
+            },
+          ],
+        },
+        stop: "tool_calls",
+      });
+    }
     fixture.respond(answer("NO_REPLY"));
-    expect(texts(await fixture.reply("Bob, see you at lunch.", "observed-source"))).toEqual([]);
+    await fixture.dispatch(
+      "Bob, see you at lunch.",
+      `source-${attention}-${sourceReplyDeliveryMode}-${primaryCalls}`,
+      "-10001",
+      { sourceReplyDeliveryMode },
+    );
     expect(decision).toHaveBeenCalledOnce();
     expect(fixture.requests).toHaveLength(previousRequests + primaryCalls);
-    expect(fixture.typing()).toBe(previousTyping);
+    expect(fixture.sent).toEqual(
+      primaryCalls === 2 ? [deliveredText] : primaryCalls ? [MISSING_REPLY_NOTICE_TEXT] : [],
+    );
+    if (primaryCalls) {
+      expect(JSON.stringify(fixture.requests.at(-1))).toContain(
+        "Group participation was approved for this turn.",
+      );
+    }
+    expect(fixture.typing() > previousTyping).toBe(primaryCalls > 0);
     expect(fixture.partials).toHaveLength(previousPartials);
     const sessionKey = "agent:main:telegram:group:-10001";
     const entry = await readSessionEntryInWorker({ storePath: fixture.storePath, sessionKey });

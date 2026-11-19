@@ -537,6 +537,8 @@ export async function prepareReplyAgentTurn<TConfigured>(
         if (!participation?.isObserving) {
           if (!participation || participation.mode === "ordinary") {
             await params.signalRunStart?.();
+          } else if (turn.sendPolicy === "allow" && params.defaults.typingMode !== "never") {
+            await params.defaults.typing.startTypingLoop();
           }
           const resolvedVerboseLevel =
             normalizeVerboseLevel(

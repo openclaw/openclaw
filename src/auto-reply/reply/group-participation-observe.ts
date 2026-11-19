@@ -7,7 +7,9 @@ export async function prepareGroupParticipationObservation(params: AgentTurnPara
   if (!participation || participation.mode === "ordinary") {
     return undefined;
   }
-  // Positive decisions also expire when the accepted conversation or config changes.
+  if (!participation.isObserving) {
+    return participation;
+  }
   const assessedRevision = participation.snapshot?.revision;
   if (assessedRevision === undefined || !participation.isCurrent(assessedRevision)) {
     await participation.refresh();

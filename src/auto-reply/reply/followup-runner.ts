@@ -358,6 +358,13 @@ export function createFollowupRunner(
           },
         ),
       );
+      const operationResult = turn.operation.result;
+      if (completion.kind === "completed" && operationResult?.kind === "failed") {
+        completion = {
+          kind: "failed",
+          error: formatErrorMessage(operationResult.cause ?? operationResult.code),
+        };
+      }
       if (decision.kind === "deliver") {
         for (const payload of decision.payloads) {
           progressContinuation = getReplyPayloadMetadata(payload)?.progressContinuation;
@@ -603,8 +610,10 @@ export function createFollowupRunner(
         await admittedTurn?.releaseSourceAdmission?.();
       } finally {
         operation?.complete();
-        defaults.typing.markRunComplete();
-        defaults.typing.markDispatchIdle();
+        if (disposition.kind === "consumed") {
+          defaults.typing.markRunComplete();
+          defaults.typing.markDispatchIdle();
+        }
       }
     }
 

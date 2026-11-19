@@ -524,8 +524,6 @@ export async function runReplyAgent(
         ) {
           await typingSignals.signalToolStart();
         }
-      } else {
-        typing.cleanup();
       }
       return undefined;
     }

@@ -102,7 +102,9 @@ export async function executeFollowupTurn(params: {
   const progressAllowed = () =>
     deliveryAllowed() &&
     (sourceOpts?.progressRequiresReply !== true ||
-      isRequiredReplyExpectation(terminalReplyExpectation));
+      isRequiredReplyExpectation(
+        turn.queued.run.terminalReplyExpectation ?? terminalReplyExpectation,
+      ));
   const currentVerboseLevel = (): VerboseLevel => {
     const level =
       turn.queued.run.verboseLevelOverride ??
@@ -196,20 +198,23 @@ export async function executeFollowupTurn(params: {
       : undefined;
   const baseTypingSignals = createTypingSignaler({
     typing: defaults.typing,
-    mode: progressAllowed() ? defaults.typingMode : "never",
+    mode: defaults.typingMode,
   });
+  const enqueueTyping = (signal: () => Promise<void>) =>
+    enqueueProgress(async () => {
+      if (progressAllowed()) {
+        await signal();
+      }
+    });
   const typingSignals: TypingSignaler = {
     ...baseTypingSignals,
-    signalRunStart: (visibleText) =>
-      enqueueProgress(() => baseTypingSignals.signalRunStart(visibleText)),
-    signalMessageStart: () => enqueueProgress(baseTypingSignals.signalMessageStart),
-    signalTextDelta: (text) => enqueueProgress(() => baseTypingSignals.signalTextDelta(text)),
-    signalReasoningDelta: () => enqueueProgress(baseTypingSignals.signalReasoningDelta),
-    signalToolStart: () => enqueueProgress(baseTypingSignals.signalToolStart),
+    signalRunStart: () => enqueueTyping(baseTypingSignals.signalRunStart),
+    signalMessageStart: () => enqueueTyping(baseTypingSignals.signalMessageStart),
+    signalTextDelta: (text) => enqueueTyping(() => baseTypingSignals.signalTextDelta(text)),
+    signalReasoningDelta: () => enqueueTyping(baseTypingSignals.signalReasoningDelta),
+    signalToolStart: () => enqueueTyping(baseTypingSignals.signalToolStart),
     signalExecutionActivity: () =>
-      enqueueProgress(
-        baseTypingSignals.signalExecutionActivity ?? baseTypingSignals.signalRunStart,
-      ),
+      enqueueTyping(baseTypingSignals.signalExecutionActivity ?? baseTypingSignals.signalRunStart),
   };
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,

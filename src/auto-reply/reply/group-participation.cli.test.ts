@@ -1,30 +1,72 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { judgment } from "./group-participation.decision.test-support.js";
 import { fixture, models } from "./group-participation.runner.test-support.js";
+import type { TypingController } from "./typing.js";
 
 it.each([
-  ["engagement", "instant", true],
-  ["opportunity", "message", true],
-  ["none", "instant", false],
-  ["engagement", "never", false],
+  ["engagement", "instant", true, false],
+  ["opportunity", "message", true, false],
+  ["none", "instant", false, false],
+  ["engagement", "never", false, false],
+  ["engagement", "instant", true, true],
 ] as const)(
-  "starts typing after participation (%s, %s)",
-  async (attention, typingMode, shouldType) => {
+  "types through generation (%s, %s, typing: %s, failure: %s)",
+  async (attention, typingMode, shouldType, fail) => {
     fixture.config.agents!.defaults!.typingMode = typingMode;
+    const started = createDeferred();
+    const release = createDeferred();
+    let typing: TypingController | undefined;
     models.decision.mockImplementation(async (batch) => {
       expect(fixture.typing()).toBe(0);
       return judgment(batch, { attention });
     });
-    models.embedded.mockImplementation(async (params) => {
-      expect(fixture.typing()).toBe(0);
-      await params.onPartialReply?.({ text: "Approved reply." });
-      expect(fixture.typing() > 0).toBe(shouldType);
+    models.embedded.mockImplementation(async () => {
+      started.resolve();
+      await release.promise;
+      if (fail) {
+        throw new FailoverError("Synthetic provider outage", { reason: "rate_limit" });
+      }
       return { payloads: [{ text: "Approved reply." }], meta: { durationMs: 1 } };
     });
-    await fixture.reply("Bob, which port?", "typing-order-source", "-10114");
-    expect(fixture.typing() > 0).toBe(shouldType);
-    expect(models.embedded).toHaveBeenCalledTimes(attention === "none" ? 0 : 1);
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const pending = fixture.reply("Bob, which port?", "typing-order-source", "-10114", {
+      typingKeepalive: true,
+      onTypingController: (controller) => {
+        typing = controller;
+      },
+    });
+    try {
+      if (attention !== "none") {
+        await awaitGateBeforeSettlement(
+          started.promise,
+          pending,
+          "Primary generation did not start",
+        );
+        expect(typing?.isActive()).toBe(shouldType);
+        expect(fixture.partials).toHaveLength(0);
+        const initialTyping = fixture.typing();
+        await vi.advanceTimersByTimeAsync(18_000);
+        expect(fixture.typing() > initialTyping).toBe(shouldType);
+        expect(typing?.isActive()).toBe(shouldType);
+      }
+      release.resolve();
+      const reply = await pending;
+      if (fail) {
+        expect(reply).toMatchObject({ isError: true });
+      }
+      expect(models.embedded).toHaveBeenCalledTimes(attention === "none" ? 0 : 1);
+      expect(fixture.typing() > 0).toBe(shouldType);
+      expect(typing?.isActive()).toBe(false);
+      const completedTyping = fixture.typing();
+      await vi.advanceTimersByTimeAsync(18_000);
+      expect(fixture.typing()).toBe(completedTyping);
+    } finally {
+      release.resolve();
+      await pending.catch(() => undefined);
+      vi.useRealTimers();
+    }
   },
 );
 
@@ -88,7 +130,7 @@ it.each([
   }
 });
 
-it("preserves ordinary policy when an admitted embedded reply falls back to CLI", async () => {
+it("keeps the approved reply commitment through CLI fallback", async () => {
   fixture.config.agents!.defaults!.model = {
     primary: "test-provider/test-model",
     fallbacks: ["fixture-cli/test-model"],
@@ -104,11 +146,16 @@ it("preserves ordinary policy when an admitted embedded reply falls back to CLI"
     }),
   );
   models.cli.mockResolvedValue({
-    payloads: [{ text: "Ordinary fallback reply." }],
-    meta: { durationMs: 1 },
+    payloads: [],
+    meta: { durationMs: 1, terminalReply: { disposition: "silent" } },
   });
   const reply = await fixture.reply("Bob, do you know the port?", "cli-fallback-source", "-10102");
-  expect(reply).toMatchObject({ text: "Ordinary fallback reply." });
+  expect(reply).toMatchObject({
+    isError: true,
+    text: expect.stringContaining(
+      "Fallback used fixture-cli/test-model, but it produced no visible reply",
+    ),
+  });
   expect(fixture.typing()).toBeGreaterThan(0);
   expect(models.embedded).toHaveBeenCalledTimes(1);
   expect(models.embedded.mock.calls[0]?.[0]).toMatchObject({

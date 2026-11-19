@@ -15,8 +15,13 @@ import { waitForSessionMaintenance } from "../../agents/session-maintenance/coor
 import { sendDurableMessageBatchCore } from "../../channels/message/send.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { stripNormalizedTargetProviderPrefixes } from "../../infra/outbound/target-normalization.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { dispatchLowLevelChannelReplyFromConfig } from "./dispatch-from-config.js";
@@ -75,7 +80,7 @@ export async function createGroupReplyFixture() {
     },
     channels: { telegram: { groups: { "*": { requireMention: false } } } },
     session: { store: storePath },
-    tools: { profile: "coding" },
+    tools: { profile: "coding", alsoAllow: ["message"] },
     messages: { queue: { mode: "followup", debounceMsByChannel: { telegram: 0 } } },
     models: {
       providers: {
@@ -138,6 +143,7 @@ export async function createGroupReplyFixture() {
     });
   return {
     config,
+    context,
     storePath,
     requests,
     partials,
@@ -178,16 +184,25 @@ export async function createGroupReplyFixture() {
           {
             pluginId: "telegram",
             source: "test",
-            plugin: createOutboundTestPlugin({
-              id: "telegram",
-              outbound: {
-                deliveryMode: "direct",
-                sendText: async ({ text }) => {
-                  sent.push(text);
-                  return { channel: "telegram", messageId: `sent-${sent.length}` };
+            plugin: {
+              ...createOutboundTestPlugin({
+                id: "telegram",
+                capabilities: { chatTypes: ["group"] },
+                messaging: {
+                  normalizeTarget: (raw) =>
+                    stripNormalizedTargetProviderPrefixes(raw, ["telegram"]),
+                  targetResolver: { looksLikeId: (_raw, normalized) => normalized === groupId },
                 },
-              },
-            }),
+                outbound: {
+                  deliveryMode: "direct",
+                  sendText: async ({ text }) => {
+                    sent.push(text);
+                    return { channel: "telegram", messageId: `sent-${sent.length}` };
+                  },
+                },
+              }),
+              config: createChannelTestPluginBase({ id: "telegram" }).config,
+            },
           },
         ]),
       );
