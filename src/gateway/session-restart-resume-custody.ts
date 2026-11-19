@@ -24,7 +24,7 @@ import {
   captureOperatorToolGatewayContinuationContext,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
-import type { RestartResumeParams } from "./session-restart-resume.js";
+import type { RestartResumeParams } from "./session-restart-resume.types.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
 /** A consumed settle input transfers interrupted-turn recovery to the Gateway. */

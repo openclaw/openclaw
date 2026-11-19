@@ -66,12 +66,12 @@ import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startu
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
-import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   hasInterruptedCommittedRequesterSettleInput,
   prepareRestartCompletionCustody,
 } from "./session-restart-resume-custody.js";
 import { GATEWAY_RESTART_RESUME_TEXT } from "./session-restart-resume-prompt.js";
+import type { RestartResumeParams } from "./session-restart-resume.types.js";
 import { recordRestartYieldFailure } from "./session-restart-yield.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
@@ -295,12 +295,6 @@ export async function persistRunningSessionsForRestart(params: {
     }
   }
 }
-
-export type RestartResumeParams = {
-  context: GatewayRequestContext;
-  signal: AbortSignal;
-  log: { warn: (message: string) => void };
-};
 
 /** Admit one ordinary input per marker without holding healthy agents behind preparation. */
 export async function resumeMarkedSessions(params: RestartResumeParams): Promise<void> {
