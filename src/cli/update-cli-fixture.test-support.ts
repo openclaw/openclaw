@@ -273,7 +273,9 @@ export function createUpdateCliFixture(fixtureOptions: { databaseEngines?: strin
         "command fixture",
       );
       vi.mocked(update.runCommandWithTimeout).mockImplementation(async (argv, options) =>
-        argv[2] === "completion" ? createCommandResult(result) : run(argv, options),
+        assert.isCliCommand(argv, undefined, "completion")
+          ? createCommandResult(result)
+          : run(argv, options),
       );
     },
     expectFailedManagedGitRestart: (message: string) => {
