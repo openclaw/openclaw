@@ -779,6 +779,7 @@ describe("publication status real CLI", () => {
                           childRole: "normalCi",
                           jobName: failedJob.name,
                           reason: "Synthetic joined status grant",
+                          evidence: { runId: "101", runAttempt: 1 },
                           aggregates: [],
                         },
                       ]
