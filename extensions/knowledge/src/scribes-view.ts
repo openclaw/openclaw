@@ -47,6 +47,25 @@ const STATUS: Record<ScribeStatus, [string, string]> = {
  */
 const firstRuns = new Set<string>();
 
+type RepairAttempt = { id: string; sent: boolean; session?: ScribeSnapshot["session"] };
+const repairAttempts = new Map<string, RepairAttempt>();
+
+/** A lost response retries the same request and conversation after page replacement. */
+async function repair(ui: Page, snapshot: ScribeSnapshot, job: ScribeJob, agentId: string) {
+  const host = ui.s.context.host;
+  const key = JSON.stringify([host.basePath, agentId, job.id, job.configRevision]);
+  const previous = repairAttempts.get(key);
+  const attempt = previous && !previous.sent ? previous : { id: crypto.randomUUID(), sent: false };
+  repairAttempts.set(key, attempt);
+  const target = attempt.session ? { ...snapshot, session: attempt.session } : snapshot;
+  try {
+    await repairScribe(host, target, job, agentId, attempt.id);
+  } finally {
+    attempt.session = target.session;
+  }
+  attempt.sent = true;
+}
+
 /** Scribes the list shows under "On": everything set up that is not finished or startable. */
 const isOn = (status: ScribeStatus) => status !== "available" && status !== "done";
 
@@ -499,7 +518,7 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
     actions.append(
       control(
         "Repair",
-        () => repairScribe(host, snapshot, job, agentId),
+        () => repair(ui, snapshot, job, agentId),
         status === "missing" && session?.archived
           ? `Restored ${scribeLabel(scribe)} and turned it back on.`
           : `Asked ${scribeLabel(scribe)} to repair its setup.`,

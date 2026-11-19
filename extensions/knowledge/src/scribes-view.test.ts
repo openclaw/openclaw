@@ -695,3 +695,49 @@ it("shows a Run now the scheduler refused instead of reporting it running", asyn
   expect(ui.announce).not.toHaveBeenCalledWith("Knowledge Consolidation is running.");
   expect(load).not.toHaveBeenCalled();
 });
+
+it.each([true, false])(
+  "reuses a lost Repair request after reconnecting (existing conversation: %s)",
+  async (existing) => {
+    const failing = { ...reviewJob, state: { ...reviewJob.state, consecutiveErrors: 1 } };
+    const { render, ui, calls, request, create } = fixture({
+      sessions: existing ? reviewSession : {},
+      jobs: [failing],
+    });
+    create.mockImplementation(async () => `agent:main:repair:${create.mock.calls.length}`);
+    ui.s.scribe = "claim-consolidation";
+    const answer = request.getMockImplementation()!;
+    const sends = () => calls.filter(([method]) => method === "chat.send").map(([, p]) => p!);
+    let loseResponse = false;
+    request.mockImplementation(async (method, params) => {
+      const result = await answer(method, params);
+      if (method === "chat.send" && loseResponse) {
+        loseResponse = false;
+        throw new Error("response lost after acceptance");
+      }
+      return result;
+    });
+    let view = await render();
+    try {
+      loseResponse = true;
+      const retry = buttonNamed(view, "Repair");
+      retry.click();
+      await vi.waitFor(() => {
+        expect(loseResponse).toBe(false);
+        expect(retry.disabled).toBe(false);
+      });
+      // A dropped response replaces the host and page before the operator retries.
+      Object.assign(ui.s.context, { host: { ...ui.s.context.host } });
+      buttonNamed(await render(), "Repair").click();
+      await vi.waitFor(() => expect(sends()).toHaveLength(2));
+      const sent = sends();
+      expect(sent.at(-1)!.idempotencyKey).toBe(sent.at(-2)!.idempotencyKey);
+      expect(sent.map((send) => send.sessionKey)).toEqual(
+        Array(sent.length).fill(existing ? "s-review" : "agent:main:repair:1"),
+      );
+      expect(create).toHaveBeenCalledTimes(existing ? 0 : 1);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  },
+);
