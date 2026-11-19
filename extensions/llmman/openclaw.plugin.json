@@ -1,0 +1,52 @@
+{
+  "id": "llmman",
+  "categories": ["models"],
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["llmman"],
+  "modelCatalog": {
+    "discovery": {
+      "llmman": "refreshable"
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "llmman": {
+        "external": false
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "llmman",
+        "envVars": ["LLMMAN_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "llmman",
+      "method": "api-key",
+      "choiceId": "llmman-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "llmman",
+      "choiceHint": "Local OpenAI-compatible model server",
+      "groupId": "llmman",
+      "groupLabel": "llmman",
+      "groupHint": "Local models, hosted providers, and hybrid routing",
+      "website": "https://github.com/llmmanorg/llmman",
+      "optionKey": "llmmanApiKey",
+      "cliFlag": "--llmman-api-key",
+      "cliOption": "--llmman-api-key <key>",
+      "cliDescription": "llmman API key (use llmman-local for a local server)"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

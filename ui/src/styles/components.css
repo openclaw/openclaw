@@ -3795,6 +3795,13 @@ select.data-table-pagination__size {
   color: var(--brand-google);
 }
 
+/* The llmman mark is a full-color illustration, so show it as an image instead
+   of the flat currentColor mask used for monochrome brand marks. */
+.provider-brand-icon[data-provider-icon="llmman"] {
+  background: var(--provider-icon-url) center / contain no-repeat;
+  mask: none;
+}
+
 .provider-brand-icon[data-provider-icon="llamacpp"],
 .provider-brand-icon[data-provider-icon="lmstudio"],
 .provider-brand-icon[data-provider-icon="ollama"],
