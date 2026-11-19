@@ -79,9 +79,12 @@ function buildDiscordButtonComponent(
     component.style = "link";
     component.url = action.url;
   } else if (action.type === "callback" && agentControlText(action.value)) {
-    // Agent controls are stateless and single-use; a value too long for the id keeps the
-    // registry path below.
-    const internalCustomId = buildDiscordAgentButtonCustomId(nextAgentIndex(), action.value);
+    // Agent controls are stateless; a value too long for the id keeps the registry path below.
+    const internalCustomId = buildDiscordAgentButtonCustomId(
+      nextAgentIndex(),
+      action.value,
+      button.reusable === true,
+    );
     if (internalCustomId) {
       return { ...component, internalCustomId };
     }

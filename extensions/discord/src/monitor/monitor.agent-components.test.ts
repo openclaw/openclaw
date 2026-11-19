@@ -116,6 +116,7 @@ async function tap(params: {
     } as unknown as BaseComponentInteraction["rawData"],
     values: params.values ?? [],
     update,
+    acknowledge: vi.fn().mockResolvedValue(undefined),
   } as unknown as Partial<BaseComponentInteraction>);
   await control?.run(fixture.interaction, parseCustomId(params.customId).data as ComponentData);
   return { ...fixture, update };
@@ -161,6 +162,40 @@ it("delivers an agent select choice after the component registry is gone", async
   });
 
   expect(lastBody).toBe("callback_data: size:m");
+});
+
+it("consumes only the agent's controls and keeps reusable ones", async () => {
+  const components = sendMarked([
+    {
+      type: "buttons",
+      buttons: [
+        { label: "Pick", value: "pick" },
+        { label: "Docs", action: { type: "url", url: "https://example.com/docs" } },
+        { label: "Refresh", value: "refresh", reusable: true },
+      ],
+    },
+  ]);
+  const [pickId, refreshId] = controlIds(components);
+
+  const pick = await tap({ components, customId: pickId!, type: ComponentType.Button });
+  expect(pick.update).toHaveBeenCalledExactlyOnceWith({
+    components: [
+      expect.objectContaining({
+        components: [
+          {
+            type: ComponentType.ActionRow,
+            components: [
+              expect.objectContaining({ label: "Docs", url: "https://example.com/docs" }),
+            ],
+          },
+        ],
+      }),
+    ],
+  });
+
+  const refresh = await tap({ components, customId: refreshId!, type: ComponentType.Button });
+  expect(refresh.update).not.toHaveBeenCalled();
+  expect(lastBody).toBe("callback_data: refresh");
 });
 
 it("keeps duplicate agent values distinct in one message", () => {

@@ -1,7 +1,15 @@
-import { ComponentType, type APIMessageTopLevelComponent } from "discord-api-types/v10";
+import {
+  ComponentType,
+  type APIComponentInContainer,
+  type APIComponentInMessageActionRow,
+  type APIMessageTopLevelComponent,
+} from "discord-api-types/v10";
 import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
 import { logError } from "openclaw/plugin-sdk/logging-core";
-import { parseDiscordAgentButtonValue } from "../component-custom-id.js";
+import {
+  isDiscordAgentControlCustomId,
+  parseDiscordAgentButtonCustomId,
+} from "../component-custom-id.js";
 import type {
   BaseMessageInteractiveComponent,
   BaseComponentInteraction,
@@ -19,18 +27,25 @@ import type {
 const AGENT_BUTTON_KEY = "agent";
 const AGENT_SELECT_KEY = "agentsel";
 
-// The tap consumes the controls; text and media stay on the message.
-function withoutActionRows(components: unknown[]): APIMessageTopLevelComponent[] {
-  return components.flatMap((component) => {
-    const record = component as { type?: number; components?: unknown[] };
-    if (record.type === ComponentType.ActionRow) {
+type MessageComponent =
+  | APIMessageTopLevelComponent
+  | APIComponentInContainer
+  | APIComponentInMessageActionRow;
+
+// The tap consumes the agent's controls; text, media, links and other controls stay.
+function withoutAgentControls<T extends MessageComponent>(components: readonly T[]): T[] {
+  return components.flatMap((component): T[] => {
+    if ("custom_id" in component && isDiscordAgentControlCustomId(component.custom_id)) {
       return [];
     }
-    return [
-      (Array.isArray(record.components)
-        ? { ...record, components: withoutActionRows(record.components) }
-        : record) as APIMessageTopLevelComponent,
-    ];
+    if (component.type === ComponentType.ActionRow) {
+      const controls = withoutAgentControls(component.components);
+      return controls.length > 0 ? [{ ...component, components: controls }] : [];
+    }
+    if (component.type === ComponentType.Container) {
+      return [{ ...component, components: withoutAgentControls(component.components) }];
+    }
+    return [component];
   });
 }
 
@@ -40,6 +55,7 @@ async function runAgentControlInteraction(params: {
   interaction: AgentComponentMessageInteraction;
   kind: "button" | "select";
   value: string | undefined;
+  reusable?: boolean;
 }): Promise<void> {
   const { interaction, kind, value } = params;
   const label = `discord agent ${kind}`;
@@ -75,12 +91,15 @@ async function runAgentControlInteraction(params: {
   if (pluginDispatch === "handled") {
     return;
   }
+  const components = interaction.rawData.message?.components;
   try {
-    await interaction.update({
-      components: withoutActionRows(interaction.rawData.message?.components ?? []),
-    });
+    if (params.reusable || !components) {
+      await interaction.acknowledge();
+    } else {
+      await interaction.update({ components: withoutAgentControls(components) });
+    }
   } catch (err) {
-    logError(`${label}: failed to consume the controls: ${String(err)}`);
+    logError(`${label}: failed to answer the interaction: ${String(err)}`);
   }
   // The conversation's session owns the tap, as if the user had typed the value.
   await dispatchDiscordComponentEvent({
@@ -99,11 +118,13 @@ export function createAgentComponentButton(
     customId: `${AGENT_BUTTON_KEY}:seed=1`,
 
     async run(interaction: BaseComponentInteraction): Promise<void> {
+      const parsed = parseDiscordAgentButtonCustomId(resolveInteractionCustomId(interaction));
       await runAgentControlInteraction({
         ctx,
         interaction,
         kind: "button",
-        value: parseDiscordAgentButtonValue(resolveInteractionCustomId(interaction)),
+        value: parsed?.value,
+        reusable: parsed?.reusable,
       });
     },
   };
