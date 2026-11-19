@@ -5,6 +5,7 @@ import { parseConfigJson5 } from "../config/io.read-helpers.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { withLiveStateReads } from "./artifact-preserving-state-reads.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
 import {
   explainMachineFailure,
@@ -44,14 +45,20 @@ export async function upgradeStateOnGatewayStart(
       return;
     }
     // Schema-maintenance ownership admits old schemas: the start writes the pre-images.
-    lock = await acquireGatewayLock({ env, role: "sqlite-maintenance", allowInTests: true });
+    lock = await withLiveStateReads(() =>
+      acquireGatewayLock({ env, role: "sqlite-maintenance", allowInTests: true }),
+    );
   } catch (error) {
     throw explainMachineFailure(error, resolveStateDir(env));
   }
   try {
     const statePath = path.join(resolveStateDir(env), "state", "openclaw.sqlite");
+    // Custody admits no other writer, so its owner-lease check reads the live database and
+    // stages no private copy that a small scratch volume could refuse.
     const acquire = () =>
-      acquireGatewayLock({ env, role: "sqlite-maintenance", allowInTests: true });
+      withLiveStateReads(() =>
+        acquireGatewayLock({ env, role: "sqlite-maintenance", allowInTests: true }),
+      );
     await upgradeStateDirectory({
       env,
       log,
@@ -86,7 +93,7 @@ export async function upgradeStateOnGatewayStart(
       endTrial: async (reason) => {
         const { settleRunningGitReleaseTrial } = await import("../infra/git-release.js");
         await settleRunningGitReleaseTrial();
-        log.warn(
+        log.info(
           `A Git release trial, if any, has ended because ${reason}: a failed start of this release stays on it and is fixed forward (openclaw triage).`,
         );
       },

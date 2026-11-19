@@ -52,19 +52,14 @@ import {
   fsyncPath,
   isMachineFailure,
   isSqliteFile,
-  listFiles,
   normalizeSqliteText,
   pruneGenerations,
   readPlan,
-  finishRestore,
-  changedOutsideImages,
   INVENTORY_FILE,
+  readInventory,
   type Inventory,
   checkpointShadowDatabases,
   foldLiveWal,
-  readRestore,
-  stampStores,
-  writeRestore,
   takeStateUpgradePreImage,
   withRecoveredSource,
   writePlan,
@@ -85,6 +80,7 @@ const UPGRADE_PIN_SCOPE = "upgrade.pin";
 // exactly what its build replaced. A build without a build ID names them by version, as
 // every build did before; those files stay readable and prunable by the same rules.
 const generation = () => resolveRuntimeServiceBuildId() ?? VERSION;
+const suffixOf = () => `.pre-${generation()}`;
 // An applied plan is kept as `.upgraded-<generation>.json` until a later upgrade: a failed
 // Git release trial reads it to know that upgrade finished.
 
@@ -354,7 +350,7 @@ export async function upgradeStateDirectory(params: {
    * pre-images are restored when every outdated database has one, so the start's own
    * refusal keeps the previous package's state; otherwise the state stays migrated.
    */
-  /** Ends a Git release trial when the run leaves state no pre-image covers. */
+  /** Ends a Git release trial before Doctor changes the state in place. */
   endTrial?: (reason: string) => Promise<void>;
   admitConfig?: (live: { configPath: string; stateDir: string }) => Promise<string | undefined>;
 }): Promise<StateUpgradeResult> {
@@ -406,25 +402,13 @@ export async function upgradeStateDirectory(params: {
   let interruptedChain = false;
   // An interrupted in-place run's record: kept until this run has written its own.
   const interruptedDirs: string[] = [];
-  let priorInventory: Set<string> | undefined;
   const priorOutdated = new Set<string>();
-  const priorStarted = new Set<string>();
   const priorImages = new Set<string>();
-  const priorStamps = new Map<string, string>();
   for (const entry of fs.readdirSync(stateDir)) {
     if (!entry.startsWith(WORK_PREFIX)) {
       continue;
     }
     const dir = path.join(stateDir, entry);
-    const restore = readRestore(dir);
-    if (restore) {
-      // A refusal was putting the previous state back; finish it as one set.
-      await params.beforeSwap?.();
-      finishRestore(restore);
-      fs.rmSync(dir, { recursive: true, force: true });
-      params.log.info("Finished restoring the state an earlier refused upgrade had migrated.");
-      continue;
-    }
     const plan = readPlan(dir);
     if (plan) {
       // Environment selection may already hold the shared database being replaced.
@@ -439,24 +423,17 @@ export async function upgradeStateDirectory(params: {
       }
       params.log.info(`Finished an interrupted state upgrade to ${plan.appVersion}.`);
       resumed = true;
-    } else if (entry.startsWith(`${WORK_PREFIX}${generation()}-`)) {
-      // This build's in-place chain was interrupted: its databases may already be
-      // current while the rest of its Doctor work (config, legacy files) is not.
-      interruptedChain = true;
-      interruptedDirs.push(dir);
-      try {
-        const text = fs.readFileSync(path.join(dir, INVENTORY_FILE), "utf8");
-        // SAFETY: only this module writes the inventory.
-        const record = JSON.parse(text) as Inventory;
-        priorInventory = new Set([...(priorInventory ?? []), ...record.files]);
-        record.outdated.forEach((file) => priorOutdated.add(file));
-        record.started.forEach((file) => priorStarted.add(file));
-        record.images.forEach((file) => priorImages.add(file));
-        Object.entries(record.stamps).forEach(([file, stamp]) => priorStamps.set(file, stamp));
-      } catch {
-        // Killed before the inventory was written: nothing had changed yet.
+    } else {
+      // An interrupted in-place chain, of this build or another: its databases may already
+      // be current while the rest of its Doctor work (config, legacy files) is not.
+      const record = readInventory(dir);
+      if (record || entry.startsWith(`${WORK_PREFIX}${generation()}-`)) {
+        interruptedChain = true;
+        interruptedDirs.push(dir);
+        record?.outdated.forEach((file) => priorOutdated.add(file));
+        record?.images.forEach((file) => priorImages.add(file));
+        continue;
       }
-      continue;
     }
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -469,7 +446,7 @@ export async function upgradeStateDirectory(params: {
     const started = targets.filter(
       (target) =>
         target.version > 0 &&
-        (priorOutdated.has(target.path) || fs.existsSync(`${target.path}.pre-${generation()}`)),
+        (priorOutdated.has(target.path) || fs.existsSync(`${target.path}${suffixOf()}`)),
     );
     outdated = [...outdated, ...started.filter((target) => !outdated.includes(target))];
     if (outdated.length === 0) {
@@ -535,21 +512,20 @@ export async function upgradeStateDirectory(params: {
         return { skipped: (error as Error).message };
       }
     };
-    // A revert is safe only if everything the run changes has an image, so the shared state
-    // (which Doctor writes even when current) is imaged with the outdated databases.
-    const shared = targets.find((target) => target.kind === "state" && target.version > 0);
-    const imageTargets =
-      shared && !outdated.includes(shared) ? [...outdated, shared] : [...outdated];
-    let stamps: Map<string, string> | undefined;
-    const before = await inCustody(async () => {
+    await inCustody(async () => {
       // A database the interrupted run started on may have changed since: it keeps the
-      // image that run published, or none. Any other same-named file is a leftover.
-      const resumedImage = (file: string) =>
-        priorImages.has(`${file}${suffix}`) && fs.existsSync(`${file}${suffix}`)
-          ? { path: `${file}${suffix}`, method: "kept" as const }
+      // image that run published (whichever build took it), or none. Any other same-named
+      // file is a leftover.
+      const resumedImage = (file: string) => {
+        const image = [...priorImages].find(
+          (entry) => entry.startsWith(`${file}.pre-`) && fs.existsSync(entry),
+        );
+        return image
+          ? { path: image, method: "kept" as const }
           : { skipped: "the interrupted start had not imaged it before it could change" };
-      for (const target of imageTargets) {
-        const image = priorStarted.has(target.path)
+      };
+      for (const target of outdated) {
+        const image = priorOutdated.has(target.path)
           ? resumedImage(target.path)
           : await takeStateUpgradePreImage(target.path, suffix);
         if ("skipped" in image) {
@@ -568,31 +544,30 @@ export async function upgradeStateDirectory(params: {
       if (fs.lstatSync(configPath, { throwIfNoEntry: false })?.isSymbolicLink()) {
         params.log.info("The config is a link; the upgrade does not write through it.");
       } else if (fs.existsSync(configPath)) {
-        const taken = priorStarted.size > 0 ? resumedImage(configPath) : takeConfigImage();
+        const taken = priorOutdated.size > 0 ? resumedImage(configPath) : takeConfigImage();
         if ("skipped" in taken) {
           warn(`No pre-migration image of the config: ${taken.skipped}.`);
         } else {
           configImage = taken.path;
         }
       }
-      // A database the run starts on without an image ends the Git release trial: once its
-      // migration commits, no launcher can return to the previous release.
-      if (images.size < imageTargets.length) {
-        await params.endTrial?.("a database has no pre-migration image");
-      }
-      // The inventory before Doctor runs; a resumed run keeps the interrupted one's.
-      const listed = priorInventory ?? listFiles(stateDir, skip);
-      stamps = new Map([...stampStores(listed, configPath), ...priorStamps]);
+      // Doctor now changes state in place, also outside these images (legacy sources it
+      // moves, stores it writes, configured paths beyond this directory), and a run can stop
+      // before anything checks what it changed. No revert can be shown safe from here on, so
+      // the Git release trial ends before Doctor runs: no launcher, an older one included,
+      // can return to the previous release after this point.
+      await params.endTrial?.(
+        images.size < outdated.length
+          ? "a database migrates without a pre-migration image"
+          : "the state is migrated in place",
+      );
       // Durable before the interrupted records it replaces are removed.
       const inventory = path.join(workDir, INVENTORY_FILE);
       fs.writeFileSync(
         `${inventory}.tmp`,
         JSON.stringify({
-          files: [...listed],
           outdated: outdated.map((target) => target.path),
-          started: imageTargets.map((target) => target.path),
           images: [...images.values(), ...(configImage ? [configImage] : [])],
-          stamps: Object.fromEntries(stamps),
         } satisfies Inventory),
         { mode: 0o600 },
       );
@@ -612,7 +587,6 @@ export async function upgradeStateDirectory(params: {
           db.close();
         }
       }
-      return listed;
     });
     let mode: "chain" | "fallback" = "chain";
     let failedStep: string | undefined;
@@ -679,52 +653,13 @@ export async function upgradeStateDirectory(params: {
       } finally {
         await closeOpenClawStateDatabaseByPathAsync(liveState);
       }
-      // What a revert can put back is exactly the imaged set. Anything else the run changed
-      // (a legacy source Doctor moved, a store it created or wrote without an image, the
-      // config without one) ends the Git release trial: the install stays on this release.
-      const now = listFiles(stateDir, skip);
-      const outside = changedOutsideImages(before, now, stamps!, new Set(images.keys()), {
-        configPath,
-        configImaged: configImage !== undefined,
-      });
-      if (outside.length > 0) {
-        const listedChanges = outside
-          .slice(0, 3)
-          .map((file) => path.relative(stateDir, file))
-          .join(", ");
-        warn(
-          `This upgrade changed state no pre-migration image covers (${listedChanges}); a failed start of this release stays on it and is fixed forward (openclaw triage).`,
-        );
-        await params.endTrial?.(`it changed ${listedChanges}`);
-      }
       if (refusal !== undefined) {
-        // Only a complete set can be put back: an image of every database the run started
-        // on and of an unlinked config, and nothing changed outside them.
-        const restorable =
-          outside.length === 0 &&
-          imageTargets.every((target) => images.has(target.path)) &&
-          (configImage !== undefined ||
-            !fs.existsSync(configPath) ||
-            fs.lstatSync(configPath).isSymbolicLink());
-        if (restorable) {
-          await params.beforeSwap?.();
-          const restore = {
-            suffix,
-            files: [...images.keys(), ...(configImage ? [configPath] : [])],
-          };
-          writeRestore(workDir, restore);
-          finishRestore(restore);
-        }
+        // Doctor already changed the state in place, so it is not put back; the images stay
+        // for an operator's recovery and the start reports the refusal.
         keepChainLog();
         fs.rmSync(workDir, { recursive: true, force: true });
         params.log.warn(
-          `State upgrade to ${VERSION} not applied: ${refusal}${
-            restorable
-              ? " The previous databases and config were restored."
-              : outside.length > 0
-                ? " The databases stay migrated: the run changed state no pre-migration image covers."
-                : " The databases stay migrated; no pre-migration image exists to restore them."
-          }`,
+          `State upgrade to ${VERSION} applied, but the start is refused: ${refusal} The databases stay migrated, with their pre-migration images kept as *${suffix}. Fix the config (openclaw doctor --fix) and start again.`,
         );
         return { status: "refused", reason: refusal };
       }
@@ -770,7 +705,8 @@ export async function upgradeStateDirectory(params: {
         workDir,
         new Set([...outdated.map((t) => t.path), configPath].filter((file) => !skip(file))),
       );
-      const summary = `State upgraded to ${VERSION} in place by ${mode === "chain" ? "migration chain" : "generic copy"}; ${images.size === outdated.length ? `previous databases kept as *${suffix}` : `${outdated.length - images.size} database(s) without a pre-migration image`}.`;
+      const unimaged = outdated.filter((target) => !images.has(target.path)).length;
+      const summary = `State upgraded to ${VERSION} in place by ${mode === "chain" ? "migration chain" : "generic copy"}; ${unimaged === 0 ? `previous databases kept as *${suffix}` : `${unimaged} database(s) without a pre-migration image`}.`;
       if (pinned) {
         params.log.warn(
           `${summary} ${failedStep ? `Chain step ${failedStep} failed. ` : ""}${setAsideCount} row(s) set aside in diagnostic_events (${UPGRADE_SET_ASIDE_SCOPE}); conservation: ${mismatches.join("; ") || "ok"}. The previous generation is pinned; run openclaw doctor to review.`,

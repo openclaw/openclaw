@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import * as processRole from "../infra/database-engine/admission-scope.js";
+import * as snapshotSource from "../infra/sqlite-snapshot-source.js";
 import { withLiveStateReads } from "./artifact-preserving-state-reads.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import {
@@ -78,4 +79,31 @@ it.each([
     runtime.exec("PRAGMA journal_mode = WAL");
     await expect(prepareSharedAuthStoreOwnership(env)).resolves.toEqual({ location: "state-db" });
   });
+});
+
+it("takes custody without staging a private copy of the shared database", async () => {
+  vi.spyOn(processRole, "getDatabaseProcessRole").mockReturnValue("gateway");
+  const stateDir = dirs.make("state-upgrade-custody-");
+  const env = {
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+  };
+  fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify({ gateway: { mode: "local" } }));
+  fs.mkdirSync(path.join(stateDir, "state"));
+  {
+    using db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
+    db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+    db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
+  }
+  // A scratch volume too small for a copy of the shared database.
+  const copy = vi
+    .spyOn(snapshotSource, "prepareSqliteReadOnlyLocationAwaited")
+    .mockRejectedValue(Object.assign(new Error("ENOSPC: no space left"), { code: "ENOSPC" }));
+
+  // Pre-bootstrap runs outside any live-read scope.
+  await upgradeStateOnGatewayStart(env, ({ mode }) => mode === "local");
+
+  expect(copy).not.toHaveBeenCalled();
+  using db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), { readOnly: true });
+  expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
 });

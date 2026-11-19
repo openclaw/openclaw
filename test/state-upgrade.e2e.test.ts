@@ -63,8 +63,6 @@ function sqliteFiles(root: string): string[] {
     .map(({ relativePath }) => path.join(root, relativePath));
 }
 
-const sha256 = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
-
 /**
  * The schema version and every stored row, independent of the journal mode in the
  * header: a pre-image is kept in rollback-journal mode so reading it leaves no companion.
@@ -201,7 +199,7 @@ function installCorpus(instance: Instance, release: string, gatewayOverride = {}
 }
 
 describe("Gateway start upgrades prior-release state in place", () => {
-  it("a start refused for invalid config restores the previous state", async () => {
+  it("a start refused for invalid config stays migrated with its pre-images", async () => {
     const instance = await createOpenClawTestInstance({
       name: "upgrade-refused",
       startTimeoutMs: 300_000,
@@ -209,23 +207,23 @@ describe("Gateway start upgrades prior-release state in place", () => {
     try {
       // An invalid combination Doctor cannot repair, so the start is refused.
       installCorpus(instance, "2026.10.10", { bind: "lan", tailscale: { mode: "serve" } });
-      const config = sha256(instance.configPath);
       const files = databaseFiles(instance.stateDir);
-      const before = files.map(contents);
+      const before = new Map(files.map((file) => [file, contents(file)]));
       await expect(instance.startGateway()).rejects.toThrow();
-      // The start migrated in place, then put every pre-image and the config back.
-      expect(sha256(instance.configPath)).toBe(config);
-      expect(files.map(contents)).toEqual(before);
-      // No image or work directory is left. Doctor's own credential-cutover image, which
-      // its migration takes inside the cutover transaction, is retained by its owner.
-      expect(
-        listDirectoryTreeStrictSync(instance.stateDir)
-          .map(({ relativePath }) => relativePath)
-          .filter(
+      // Doctor already changed the state in place, so it is not put back: each database is
+      // migrated, and its image still holds the previous data for an operator's recovery.
+      for (const file of files) {
+        const image = fs
+          .readdirSync(path.dirname(file))
+          .find(
             (name) =>
-              (name.includes(".pre-") && !name.includes(".pre-startup-migration-")) ||
-              name.startsWith(".upgrade-"),
-          ),
+              name.startsWith(`${path.basename(file)}.pre-`) && !name.includes("startup-migration"),
+          );
+        expect(image, file).toBeDefined();
+        expect(contents(path.join(path.dirname(file), image!)), file).toBe(before.get(file));
+      }
+      expect(
+        fs.readdirSync(instance.stateDir).filter((name) => name.startsWith(".upgrade-")),
       ).toEqual([]);
     } finally {
       await instance.cleanup();
@@ -247,7 +245,7 @@ describe("Gateway start upgrades prior-release state in place", () => {
 
         if (failStep) {
           // Run this build's Doctor on the live state, then fail, so the generic
-          // fallback rebuilds the databases from their images; the Gateway then starts.
+          // fallback rebuilds the databases as Doctor left them; the Gateway then starts.
           const [entry] = await instance.entrypoint();
           const doctor = createDoctorChain(path.resolve(entry ?? ""), []);
           await upgradeStateDirectory({

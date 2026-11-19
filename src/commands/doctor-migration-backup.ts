@@ -187,16 +187,13 @@ export async function backupDoctorMigrationDatabases(params: {
   // elsewhere (a configured agent directory, or one behind a link) gets Doctor's normal set.
   const covered =
     params.preImageOwner === "state-upgrade"
-      ? (await import("./doctor-state-upgrade-owner.js")).readStateUpgradeCoveredStores(params.env)
+      ? ((await import("./doctor-state-upgrade-owner.js")).readStateUpgradeCoveredStores(
+          params.env,
+        ) ?? new Set<string>())
       : new Set<string>();
   const coveredByStart = (pathname: string) =>
     existsSync(pathname) && covered.has(realpathSync.native(pathname));
-  if (params.preImageOwner === "state-upgrade" && ![...pending].every(coveredByStart)) {
-    // The start has no image of such a store and no launcher restores Doctor's backup of
-    // it, so no Git release trial may revert past its migration.
-    const { settleRunningGitReleaseTrial } = await import("../infra/git-release.js");
-    await settleRunningGitReleaseTrial();
-  } else if (params.preImageOwner === "state-upgrade") {
+  if (params.preImageOwner === "state-upgrade" && [...pending].every(coveredByStart)) {
     // Gateway start already took (or, without room, skipped) the one pre-migration
     // image of each of these databases; a second full set protects nothing more.
     // The version phase runs only where a bounded migration exists, as with backups.

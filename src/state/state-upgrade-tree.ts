@@ -485,18 +485,45 @@ export async function takeStateUpgradePreImage(
   return { path: image, method };
 }
 
-/** Put pre-images back with no companion from the run left beside them. */
-export function restorePreImages(files: readonly string[], suffix: string): void {
+/** Fold this run's own rebuilt databases into one file each; nothing else holds them. */
+export function checkpointShadowDatabases(files: readonly string[]): void {
   for (const file of files) {
-    if (!fs.existsSync(`${file}${suffix}`)) {
+    if (!isSqliteFile(file)) {
       continue;
     }
-    for (const companion of ["-wal", "-journal", "-shm", ".seal"]) {
-      fs.rmSync(`${file}${companion}`, { force: true });
+    const db = openNodeSqliteDatabase(file);
+    try {
+      // A rollback-journal file needs no WAL or SHM companion, so read-only openers
+      // can admit it before the first writer switches it back to WAL.
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode = DELETE;");
+    } finally {
+      db.close();
     }
-    fs.renameSync(`${file}${suffix}`, file);
-    fsyncPath(path.dirname(file), true);
+    for (const suffix of ["-wal", "-shm", "-journal", ".seal"]) {
+      fs.rmSync(`${file}${suffix}`, { force: true });
+    }
   }
+}
+
+// The work record's facts, written before Doctor runs: the outdated databases the run
+// started on and the images it published. The next start resumes from them, and Doctor
+// reads them to know which stores the start covered.
+export const INVENTORY_FILE = "inventory.json";
+export type Inventory = { outdated: string[]; images: string[] };
+
+/** A record's inventory; undefined when it has none (the run had changed nothing yet). */
+export function readInventory(workDir: string): Inventory | undefined {
+  let text: string;
+  try {
+    text = fs.readFileSync(path.join(workDir, INVENTORY_FILE), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+  // SAFETY: the state upgrade (this module's caller) is the only writer of the inventory.
+  return JSON.parse(text) as Inventory;
 }
 
 /**
@@ -533,116 +560,3 @@ export function foldLiveWal(file: string): void {
     throw refuse();
   }
 }
-
-export type Restore = { suffix: string; files: string[] };
-const RESTORE_FILE = "restore.json";
-
-/** Durable before the first image is renamed back, so a stop mid-restore resumes it. */
-export function writeRestore(workDir: string, restore: Restore): void {
-  const file = path.join(workDir, RESTORE_FILE);
-  fs.writeFileSync(`${file}.tmp`, JSON.stringify(restore), { mode: 0o600 });
-  fsyncPath(`${file}.tmp`);
-  fs.renameSync(`${file}.tmp`, file);
-  fsyncPath(workDir, true);
-}
-
-export function readRestore(workDir: string): Restore | undefined {
-  let text: string;
-  try {
-    text = fs.readFileSync(path.join(workDir, RESTORE_FILE), "utf8");
-  } catch (error) {
-    // Only a missing record means no restore is in progress; anything else stops the start.
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  }
-  // SAFETY: writeRestore in this module is the only writer of the restore record.
-  return JSON.parse(text) as Restore;
-}
-
-/** Idempotent: the images go back over their databases and the config. */
-export function finishRestore(restore: Restore): void {
-  restorePreImages(restore.files, restore.suffix);
-}
-
-/** Fold this run's own rebuilt databases into one file each; nothing else holds them. */
-export function checkpointShadowDatabases(files: readonly string[]): void {
-  for (const file of files) {
-    if (!isSqliteFile(file)) {
-      continue;
-    }
-    const db = openNodeSqliteDatabase(file);
-    try {
-      // A rollback-journal file needs no WAL or SHM companion, so read-only openers
-      // can admit it before the first writer switches it back to WAL.
-      db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode = DELETE;");
-    } finally {
-      db.close();
-    }
-    for (const suffix of ["-wal", "-shm", "-journal", ".seal"]) {
-      fs.rmSync(`${file}${suffix}`, { force: true });
-    }
-  }
-}
-
-/** A change marker of a file and its write-ahead log: size and modification time. */
-function stamp(file: string): string {
-  const main = fs.statSync(file, { throwIfNoEntry: false });
-  const wal = fs.statSync(`${file}-wal`, { throwIfNoEntry: false });
-  return `${main?.size}:${main?.mtimeMs}:${wal?.size}:${wal?.mtimeMs}`;
-}
-
-/** Stamps of every store in the inventory and of the config, taken before Doctor runs. */
-export function stampStores(files: ReadonlySet<string>, configPath: string): Map<string, string> {
-  const stamps = new Map<string, string>();
-  for (const file of [...files].filter((entry) => isSqliteFile(entry))) {
-    stamps.set(file, stamp(file));
-  }
-  if (fs.existsSync(configPath)) {
-    stamps.set(configPath, stamp(configPath));
-  }
-  return stamps;
-}
-
-/**
- * The state a run changed outside its images, from an explicit allowlist: only the imaged
- * databases (and the config, if imaged) may change. A file that existed before and is gone
- * (a legacy source Doctor moved), a store created, or a store or config written without an
- * image is outside it. Files Doctor changes in place that are not stores stay as they are.
- */
-export function changedOutsideImages(
-  before: ReadonlySet<string>,
-  now: ReadonlySet<string>,
-  stamps: ReadonlyMap<string, string>,
-  imaged: ReadonlySet<string>,
-  config: { configPath: string; configImaged: boolean },
-): string[] {
-  const changed = [...before].filter(
-    (file) => !now.has(file) && !fs.lstatSync(file, { throwIfNoEntry: false }),
-  );
-  for (const file of now) {
-    if (!before.has(file) && isSqliteFile(file)) {
-      changed.push(file);
-    }
-  }
-  for (const [file, previous] of stamps) {
-    const covered = file === config.configPath ? config.configImaged : imaged.has(file);
-    if (!covered && fs.existsSync(file) && stamp(file) !== previous) {
-      changed.push(file);
-    }
-  }
-  return [...new Set(changed)];
-}
-
-// What existed before Doctor ran, kept in the work directory: the files, the databases the
-// run started on (outdated, and the imaged set), the images it published, and a stamp of
-// each store and the config so a change outside the images is seen.
-export const INVENTORY_FILE = "inventory.json";
-export type Inventory = {
-  files: string[];
-  outdated: string[];
-  started: string[];
-  images: string[];
-  stamps: Record<string, string>;
-};
