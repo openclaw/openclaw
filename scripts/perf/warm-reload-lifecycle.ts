@@ -28,8 +28,11 @@ export async function createWarmReloadGatewayOwner(signal: AbortSignal) {
           joined = true;
           resolve();
         };
-        if (closed) finish();
-        else owned.once("close", finish);
+        if (closed) {
+          finish();
+        } else {
+          owned.once("close", finish);
+        }
       }));
     }
     return (stopping ??= finalizeManagedChild(owned, "SIGTERM", {

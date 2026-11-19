@@ -134,7 +134,9 @@ export async function prepareWarmReloadBuild(
         await cleanup();
       } catch (cleanupError) {
         failManagedCleanup();
-        throw new AggregateError([error, cleanupError], "Warm reload build cleanup failed");
+        throw new AggregateError([error, cleanupError], "Warm reload build cleanup failed", {
+          cause: cleanupError,
+        });
       }
     }
     throw error;

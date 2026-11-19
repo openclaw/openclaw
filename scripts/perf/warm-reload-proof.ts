@@ -158,7 +158,9 @@ async function waitForGateway(url: string, child: ChildProcess) {
   try {
     const deadline = Date.now() + 180000;
     while (Date.now() < deadline) {
-      if (spawnError) throw spawnError;
+      if (spawnError) {
+        throw spawnError;
+      }
       if (child.exitCode !== null || child.signalCode !== null) {
         throw new Error("Owned Gateway exited during startup; inspect gateway.log");
       }
