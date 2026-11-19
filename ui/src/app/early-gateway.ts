@@ -84,6 +84,9 @@ export function startEarlyApplicationGateway(
     );
     return history;
   };
+  // Inline output needs a ready renderer and a snapshot taken after its admission.
+  // Keep the early connection, but leave that combined read to the foreground pane.
+  const earlyHistory = settings.chatInlineCommands !== true;
   const transport = new EarlyGateway(
     {
       ...connection,
@@ -95,12 +98,13 @@ export function startEarlyApplicationGateway(
       modelCatalog: { agentId: route.agentId, sessionKey: route.sessionKey },
     },
     route.sessionKey,
-    connection.offlineRecoveryScope ? undefined : historyFor(),
+    connection.offlineRecoveryScope || !earlyHistory ? undefined : historyFor(),
     window.location.href,
   );
   initial.prewarmChatSnapshot();
   const entry = peekPrewarmedChatSnapshot();
   if (
+    earlyHistory &&
     entry &&
     entry.cacheKey === resolveChatSnapshotKey({ settings, client: transport.client }, route)
   ) {
