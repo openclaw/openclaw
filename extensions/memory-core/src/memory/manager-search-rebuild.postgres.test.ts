@@ -36,6 +36,7 @@ describe("PostgreSQL memory search definition rebuild", () => {
     database: { engine: "postgres" },
     plugins: { enabled: false },
     agents: {
+      ownership: "explicit",
       entries: {
         dimensions: { workspace: path.join(workspace, "dimensions") },
         tokenizer: { workspace: path.join(workspace, "tokenizer") },

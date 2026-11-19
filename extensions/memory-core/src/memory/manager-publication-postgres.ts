@@ -4,6 +4,7 @@ import type {
   SearchSchema,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
+  DatabaseSearchCapabilityUnavailableError,
   isPostgresSqlConnection,
   MEMORY_INDEX_DERIVED_TABLES,
   MEMORY_INDEX_STATE_TABLE,
@@ -167,6 +168,11 @@ export function bindPostgresMemoryPublication(
         metadata = previousMetadata;
         created = previousCreated;
         cacheSize = previousCacheSize;
+      }
+      if (error instanceof DatabaseSearchCapabilityUnavailableError) {
+        // Deferred search admission must retain the same actionable capability
+        // error as eager admission, after the publication transaction rolls back.
+        throw Object.assign(error, { entered, committed });
       }
       return {
         ok: false,
