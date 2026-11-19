@@ -1,0 +1,3 @@
+# Prompt-cache invariant: cron, steer, tool-result overflow and concurrent-chat steps on five transports,
+# plus the seeded randomized journey suite (requested by the prompt-cache owner).
+326
