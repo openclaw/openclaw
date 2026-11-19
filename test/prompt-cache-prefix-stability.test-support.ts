@@ -123,7 +123,7 @@ function cronReplyMerged(previous: WireRequest, current: WireRequest): boolean {
 // request (src/agents/sessions/background-result-placement.ts). On every route the request after
 // the next user turn carries the reply twice; Chat Completions and Gemini then merge the copy
 // with the following tool-call message.
-const CRON_REPLY_TWICE = "cron reply sent twice (reported to the prompt-cache owner)";
+const CRON_REPLY_TWICE = "https://github.com/openclaw/openclaw/pull/201838";
 // Breaks that main still has. Each entry checks the whole request, so its known change cannot hide
 // another one. Remove an entry when its owner lands; the journey then fails until it goes.
 export const KNOWN_BREAKS: ReadonlyArray<{
