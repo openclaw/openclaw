@@ -17,6 +17,10 @@ const { createTelegramBotCore } = await import("./bot-core.js");
 // test/telegram-agent-control-taps.integration.test.ts.
 const AGENT_CALLBACK = "::/pick a|1";
 
+// v2026.11.5 agent envelopes share the opaque envelope's checksum.
+const buildLegacyAgentCallback = (value: string) =>
+  buildTelegramOpaqueCallbackData(value).replace(/^tgcb1:/u, "tgac1:");
+
 const useConfig = (telegram: TelegramChannelConfig) =>
   getLoadConfigMock().mockReturnValue(makeTelegramConfig(telegram));
 
@@ -64,6 +68,19 @@ it("delivers an agent button already sent by v2026.11.5", async () => {
 
   expect(replySpy.mock.calls[0]?.[0].Body).toContain("callback_data: pick:beta");
   expect(replySpy.mock.calls[0]?.[0].Body).not.toContain("tgac1");
+});
+
+it("keeps the routing of a v2026.11.5 agent button whose value starts with the mark", async () => {
+  const handler = vi.fn(async (_ctx: unknown) => ({ handled: true }));
+  registerPluginInteractiveHandler("pick-owner", {
+    channel: "telegram",
+    namespace: "pick",
+    handler,
+  });
+  await tap(buildLegacyAgentCallback("::pick:a"));
+
+  expect(handler).not.toHaveBeenCalled();
+  expect(replySpy.mock.calls[0]?.[0].Body).toContain("callback_data: ::pick:a");
 });
 
 it("offers an agent tap to the plugin that owns its value first", async () => {

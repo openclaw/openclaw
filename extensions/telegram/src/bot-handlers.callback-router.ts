@@ -140,10 +140,9 @@ export function createTelegramCallbackRouter({
       const hasReservedOpaquePrefix = hasTelegramOpaqueCallbackPrefix(data);
       const opaqueCallbackData = parseTelegramOpaqueCallbackData(callback.data?.trimStart());
       // Agent-authored values stay data even when slash-prefixed; commands use action.type "command".
-      const legacyAgentCallbackData = parseTelegramAgentCallbackData(data);
-      const agentCallbackText =
-        agentControlText(data) ??
-        (legacyAgentCallbackData ? `callback_data: ${legacyAgentCallbackData}` : undefined);
+      // Agent buttons already delivered by v2026.11.5 continue as their marked value.
+      const agentCallbackData = parseTelegramAgentCallbackData(data) ?? data;
+      const agentCallbackText = agentControlText(agentCallbackData);
       const hasReservedTypedPrefix = hasReservedOpaquePrefix || agentCallbackText !== undefined;
       const genericCallbackText = data.startsWith("/") ? data : `callback_data: ${data}`;
       const callbackCommandText =
@@ -320,7 +319,7 @@ export function createTelegramCallbackRouter({
           ctx,
           callbackMessage,
           data,
-          pluginCallbackData: opaqueCallbackData ?? legacyAgentCallbackData ?? data,
+          pluginCallbackData: opaqueCallbackData ?? agentCallbackData,
           callbackConversationId,
           callbackThreadId,
           senderId,
