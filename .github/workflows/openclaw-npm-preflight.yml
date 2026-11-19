@@ -276,7 +276,15 @@ jobs:
     outputs:
       source_check_json: ${{ steps.source_evidence.outputs.bundle_json }}
     steps:
-      - *checkout_npm_source
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout: package.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
       - *checkout_npm_harness
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
