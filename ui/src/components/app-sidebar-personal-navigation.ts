@@ -223,8 +223,14 @@ export function createSidebarPinnedSessions(
         if (!current()) {
           return;
         }
+        const row = owned.observation?.isCurrent() ? owned.observation.row : undefined;
         retire(key);
         reads.set(key, "invalidated");
+        // Invalidation asks for a fresh description; it does not establish that
+        // the pin was removed. Bridge the read just as for roster replacement.
+        if (row) {
+          seed([host.getSessionNavigationState().toSidebarSession(row)]);
+        }
         if (host.isConnected) {
           host.sessionData.requestSessionDataUpdate();
         }
