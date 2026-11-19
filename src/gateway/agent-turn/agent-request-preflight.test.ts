@@ -24,7 +24,10 @@ async function runRequest(
   const respond = vi.fn();
   const context = { getRuntimeConfig, dedupe };
   const client = backend
-    ? { connect: { client: { mode: "backend" }, scopes: ["operator.write"] } }
+    ? {
+        connect: { client: { mode: "backend" }, scopes: ["operator.write"] },
+        internal: { localBackendClient: true },
+      }
     : backend === false
       ? undefined
       : null;
