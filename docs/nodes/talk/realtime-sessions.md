@@ -81,9 +81,12 @@ With `talk.realtime.consultRouting: "force-agent-consult"`, a Gateway-controlled
 GA session disables provider auto-responses. After each final user transcript
 that is not a spoken control such as "status" or "cancel", the Gateway waits
 briefly for a native `openclaw_agent_consult` call, then runs one agent consult
-itself and speaks its answer. A native call for a consult that already started
-receives an "already delivered" result instead of a second run. GPT-Live
-delegates natively, so forced routing with GPT-Live fails visibly.
+itself and speaks its answer. Spoken controls get the normal control reply even
+when nothing is running. A native call for a consult that already started
+receives an "already delivered" result instead of a second run. When the call's
+consult queue is full, the Gateway says so instead of staying silent. GPT-Live
+delegates natively, so a Gateway-controlled GPT-Live session ignores forced
+routing, logs a warning, and starts normally.
 
 Success returns `clientControl: { owner: "gateway" }`, a 60-second single-use
 `clientSecret`, and the relative offer URL `/plugins/openai/realtime/calls`.

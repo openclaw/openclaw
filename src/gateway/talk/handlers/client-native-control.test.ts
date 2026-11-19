@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { getActiveNativeAttempt } from "../../../agents/embedded-agent-runner/run-state.js";
 import * as workspace from "../../../agents/workspace.js";
@@ -593,18 +592,6 @@ function oauthOnlyForcedConsult(config: OpenClawConfig) {
   realtime.consultRouting = "force-agent-consult";
 }
 
-function createGatewayControlledTalk(
-  invokeResponse: Parameters<Parameters<typeof withNativePlugin>[0]>[0]["invokeResponse"],
-) {
-  return invokeResponse("talk.client.create", {
-    sessionKey: SESSION_KEY,
-    mode: "realtime",
-    transport: "webrtc",
-    brain: "agent-consult",
-    capabilities: ["gateway-control-v1"],
-  });
-}
-
 describe("Gateway-controlled GA Talk over ChatGPT OAuth", () => {
   installNativePluginTestHooks();
 
@@ -619,10 +606,8 @@ describe("Gateway-controlled GA Talk over ChatGPT OAuth", () => {
     );
     upstream.runEmbeddedAgent.mockImplementation(nativeConsult("You have two meetings today."));
     await withNativePlugin(
-      async ({ invokeResponse, offer }) => {
-        const [ok, result, error] = await createGatewayControlledTalk(invokeResponse);
-        expect({ ok, error }).toEqual({ ok: true, error: undefined });
-        const created = result as Record<string, unknown>;
+      async ({ create, offer }) => {
+        const created = await create(true);
         expect(created.clientControl).toEqual({ owner: "gateway" });
 
         const { handling, response } = offer(requireString(created, "clientSecret"), GA_AUDIO_SDP);
@@ -668,16 +653,17 @@ describe("Gateway-controlled GA Talk over ChatGPT OAuth", () => {
     );
   });
 
-  it("rejects forced consult routing for GPT-Live, which delegates natively", async () => {
+  it("keeps GPT-Live native delegation and ignores forced consult routing", async () => {
+    upstream.runEmbeddedAgent.mockImplementation(nativeConsult("Delegated answer."));
     await withNativePlugin(
-      async ({ invokeResponse }) => {
-        const [ok, , error] = await createGatewayControlledTalk(invokeResponse);
-        expect(ok).toBe(false);
-        expect(error).toMatchObject({
-          code: ErrorCodes.INVALID_REQUEST,
-          message: expect.stringContaining("cannot use forced agent consult routing"),
-        });
-        expect(upstream.fetch).not.toHaveBeenCalled();
+      async (fixture) => {
+        const { socket } = await connectNativeSession(fixture);
+        expect(fixture.warn).toHaveBeenCalledWith(
+          expect.stringContaining("force-agent-consult routing is ignored for GPT-Live"),
+        );
+        socket.serverEvent(nativeDelegation("live", "What is on my calendar today?"));
+        await socket.waitForSent((frame) => frame.includes("Delegated answer."));
+        expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
       },
       { model: "gpt-live-1-codex", configure: oauthOnlyForcedConsult },
     );

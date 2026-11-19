@@ -121,9 +121,6 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
     const wantsCameraFrames = params.capabilities?.includes("camera-frame") === true;
     const wantsGatewayControl = params.capabilities?.includes("gateway-control-v1") === true;
     const clientControl = wantsGatewayControl ? { owner: "gateway" as const } : undefined;
-    // Client-owned sessions keep provider replies; only Gateway control can force consults.
-    const forceAgentConsult =
-      wantsGatewayControl && realtimeConfig.consultRouting === "force-agent-consult";
     const transportError = resolveTalkClientLaunchError({
       mode,
       brain,
@@ -160,7 +157,6 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
       agentId,
       defaultModel: realtimeConfig.model,
       surface: "browser-session",
-      ...(forceAgentConsult ? { autoRespondToAudio: false } : {}),
       requiredCapabilities: { supportsVideoFrames: wantsCameraFrames },
       clientControl,
     });
@@ -171,10 +167,15 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
         `Realtime provider "${resolution.provider.id}" does not support gateway-control-v1 with its configured authentication`,
       );
     }
-    if (forceAgentConsult && providerCapabilities?.handlesAgentConsult === true) {
-      const message = `Realtime provider "${resolution.provider.id}" delegates to the agent natively and cannot use forced agent consult routing; select a GA realtime model or set talk.realtime.consultRouting to "provider-direct"`;
-      context.logGateway.warn(`talk client rejected: ${message}`);
-      return rejectRequest(ErrorCodes.INVALID_REQUEST, message);
+    // Client-owned sessions keep provider replies; only Gateway control can force consults.
+    const forceRequested =
+      wantsGatewayControl && realtimeConfig.consultRouting === "force-agent-consult";
+    // GPT-Live keeps native delegation; forced routing is a GA-model mode.
+    const forceAgentConsult = forceRequested && providerCapabilities?.handlesAgentConsult !== true;
+    if (forceRequested && !forceAgentConsult) {
+      context.logGateway.warn(
+        "talk client: force-agent-consult routing is ignored for GPT-Live under Gateway control; GPT-Live delegates to the agent natively",
+      );
     }
     if (wantsCameraFrames && providerCapabilities?.supportsVideoFrames !== true) {
       return rejectRequest(

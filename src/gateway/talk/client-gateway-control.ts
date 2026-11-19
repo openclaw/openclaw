@@ -291,6 +291,7 @@ export function createTalkClientGatewayControlOwner(
   const runControl = createTalkRealtimeRunControlOwner({
     controlSource: params.controlSource,
     supportsToolCalls: params.supportsToolCalls,
+    answerIdleControls: forcedConsults !== undefined,
     hasActiveRun: () => consultControllers.size > 0 || resolveRunTarget() !== null,
     prepare: prepareControl,
     speak: (message) => {

@@ -9,6 +9,9 @@ import {
 } from "../../talk/forced-consult-coordinator.js";
 
 const FORCED_CONSULT_FAILURE_SPEECH = "OpenClaw could not finish that request. Please try again.";
+// Admission stays sealed after overflow, so only a new call can take more work.
+const FORCED_CONSULT_QUEUE_FULL_SPEECH =
+  "OpenClaw cannot take more requests on this call. Please start a new call to ask again.";
 
 export type TalkConsultOutcome = "completed" | "cancelled" | "failed";
 
@@ -29,6 +32,13 @@ export function createTalkGatewayForcedConsultRouter(params: {
   warn: (message: string) => void;
 }) {
   const { forcedConsults, warn } = params;
+  const speak = (text: string) => {
+    try {
+      params.speak(text);
+    } catch (error) {
+      warn(`talk Gateway control forced consult speech failed: ${formatError(error)}`);
+    }
+  };
   return {
     scheduleForFinalTranscript(question: string): void {
       if (forcedConsults.hasRecentNativeConsult(question)) {
@@ -65,16 +75,13 @@ export function createTalkGatewayForcedConsultRouter(params: {
                 warn("talk Gateway control forced consult returned no speakable result");
                 return;
               }
-              try {
-                params.speak(text);
-              } catch (error) {
-                warn(`talk Gateway control forced consult speech failed: ${formatError(error)}`);
-              }
+              speak(text);
             },
           );
           if (!started) {
             forcedConsults.markCancelled(handle);
             warn("talk Gateway control dropped forced consult: consult queue is full");
+            speak(FORCED_CONSULT_QUEUE_FULL_SPEECH);
           }
         } catch (error) {
           forcedConsults.markCancelled(handle);
