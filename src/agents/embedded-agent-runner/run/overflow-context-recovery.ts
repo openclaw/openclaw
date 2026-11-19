@@ -253,7 +253,9 @@ async function recoverContextPressure(
         maxCharsOverride: resolveLiveToolResultMaxChars({
           contextWindowTokens: contextTokenBudget,
         }),
-        protectTrailingToolResults: preflightRecovery?.route === "compact_then_truncate",
+        protectTrailingToolResults:
+          !isPreflightRecovery && preflightRecovery?.route === "compact_then_truncate",
+        preserveSentToolResults: isPreflightRecovery,
         projectionState,
         ...target,
       });
@@ -488,6 +490,7 @@ async function recoverContextPressure(
       messages: input.attempt.messagesSnapshot,
       contextWindowTokens: input.contextTokenBudget,
       maxCharsOverride: toolResultMaxChars,
+      preserveSentToolResults: isPreflightRecovery,
     });
     if (hasOversized) {
       input.state.toolResultTruncationAttempted = true;
