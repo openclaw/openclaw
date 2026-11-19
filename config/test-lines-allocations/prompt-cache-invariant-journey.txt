@@ -1,4 +1,5 @@
 # Prompt-cache invariant: cron, steer, tool-result overflow and concurrent-chat steps on five transports,
 # plus the seeded randomized journey suite (requested by the prompt-cache owner), and known-break
-# checks that compare the whole request with negative controls (review round 3).
-583
+# checks that compare the whole request with negative controls (review round 3), and the default
+# Tool Search surface with an opt-out variant (requested by the prompt-cache owner).
+625
