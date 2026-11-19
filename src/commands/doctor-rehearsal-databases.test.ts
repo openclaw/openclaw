@@ -106,6 +106,22 @@ it("omits only disposable core migration backups for the shipped flag", async ()
   expectBackup(foreign);
 });
 
+it("retains the shared credential cutover fallback during a disposable rehearsal", async () => {
+  await owned(() =>
+    backupDoctorMigrationDatabases({
+      env: f.env,
+      pendingDatabasePaths: [f.shared, f.agent],
+      pendingMigrations: [
+        { kind: "state", path: f.shared, foundVersion: 24, supportedVersion: 40 },
+        { kind: "agent", path: f.agent, foundVersion: 27, supportedVersion: 39 },
+      ],
+      databasePaths: [f.shared, f.agent],
+    }),
+  );
+  expectBackup(f.shared);
+  expect(f.backups(f.agent)).toEqual([]);
+});
+
 it.each(["flag-only", "foreign-temp"])("retains ordinary backups for %s Doctor", async (kind) => {
   const env =
     kind === "flag-only"
