@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
+import { assertConfigWriteAllowedInCurrentMode } from "../../config/config-write-guard.js";
 import type { ConfigWriteOptions } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { commitConfigWithPendingPluginInstalls } from "../../plugins/install-record-commit.js";
@@ -33,6 +34,10 @@ export async function storeChannelSetupCredentials(params: {
     const name = `CHANNEL_SETUP_${randomBytes(16).toString("hex").toUpperCase()}`;
     const value = typeof target.value === "string" ? target.value : JSON.stringify(target.value);
     await params.beforePersistentEffect?.();
+    if (sourceConfig === params.cfg) {
+      // Refuse a known immutable config before leaving a credential it cannot reference.
+      assertConfigWriteAllowedInCurrentMode();
+    }
     await runWithLocalStateOwner({
       method: "secrets.store.set",
       params: { name, value, kind: "secret" },
