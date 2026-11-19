@@ -13,7 +13,7 @@ import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types
 type ComposerKeyDownDeps = {
   prediction?: { text: string | null; dismiss: () => void };
   acceptPrediction?: () => void;
-  /** True when a pending plugin proposal replaced the draft. */
+  /** True when a plugin proposal replaced the draft. */
   acceptProposal?: () => boolean;
   state: ChatComposerState;
   props: ChatComposerProps;
@@ -103,7 +103,7 @@ export function createComposerKeyDownHandler({
       return;
     }
 
-    if (state.proposal.pending) {
+    if (state.tasks.card?.kind === "proposal") {
       if (
         event.key === "Tab" &&
         !event.shiftKey &&
@@ -117,7 +117,7 @@ export function createComposerKeyDownHandler({
       }
       if (event.key === "Escape") {
         event.preventDefault();
-        state.proposal.dismiss();
+        state.tasks.dismiss();
         return;
       }
     }

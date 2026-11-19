@@ -27,8 +27,7 @@ export function ChatComposerPluginContributions(props: {
     },
     getDraft: () => props.composer.getDraft?.() ?? props.composer.draft,
     onDraftChange: (next) => props.composer.onDraftChange(next),
-    propose: (text, title, signal) =>
-      getChatComposerState(props.composer.paneId).proposal.offer(text, title, signal),
+    tasks: () => getChatComposerState(props.composer.paneId).tasks,
   };
   return (
     <Show when={application}>

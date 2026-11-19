@@ -13,18 +13,21 @@ const otherSessionKey = "agent:main:composer-seams-other";
 const DRAFT = "first draft";
 const PROPOSED = "A rewritten draft.";
 
-// An icon composer action toggles a composer accessory, then proposes a replacement draft.
+// An icon composer action runs a host task: working with steps, then a proposal or a failure.
 const fixture = `export default { id: "composer-fixture", activate(host) {
-  const proof = globalThis.composerProof = { busy: false, outcomes: [], render: () => {} };
+  const proof = globalThis.composerProof = { outcomes: [], runs: 0, mode: "propose" };
   host.ui.registerAction({
     id: "rewrite", label: "Rewrite", icon: "pencilSparkles", placement: "composer",
-    resolve: () => ({ label: proof.busy ? "Stop rewrite" : "Rewrite", pressed: proof.busy }),
-    async run({ composer, signal }) {
-      proof.busy = true; proof.render(); host.ui.invalidate();
-      await new Promise((resolve) => { proof.finish = resolve; signal.addEventListener("abort", resolve, { once: true }); });
-      proof.busy = false; proof.render(); host.ui.invalidate();
-      if (signal.aborted) return;
-      proof.outcomes.push(await composer.propose(${JSON.stringify(PROPOSED)}, { title: "Fixture rewrite" }));
+    async run({ composer }) {
+      proof.runs += 1;
+      const task = composer.startTask({ title: "Rewriting" });
+      proof.cancelled = false;
+      task.signal.addEventListener("abort", () => { proof.cancelled = true; }, { once: true });
+      task.update({ summary: "2 steps", steps: [{ label: "read notes.md", state: "done" }, { label: "ls src", state: "running" }] });
+      await new Promise((resolve) => { proof.finish = resolve; task.signal.addEventListener("abort", resolve, { once: true }); });
+      if (task.signal.aborted) return;
+      if (proof.mode === "fail") { task.fail("Fixture model unavailable"); return; }
+      proof.outcomes.push(await task.propose(${JSON.stringify(PROPOSED)}, { title: "Fixture rewrite" }));
     },
   });
   host.ui.registerAction({
@@ -39,15 +42,6 @@ const fixture = `export default { id: "composer-fixture", activate(host) {
     id: "broken", label: "Broken", icon: "alertTriangle", placement: "composer",
     run() { throw new Error("Fixture action failed"); },
   });
-  host.ui.registerAccessory({ id: "status", placement: "composer", mount(container) {
-    const card = document.createElement("div");
-    card.className = "composer-fixture-card";
-    card.textContent = "Rewriting";
-    container.append(card);
-    proof.render = () => { card.hidden = !proof.busy; };
-    proof.render();
-    return { dispose: () => card.remove() };
-  } });
 } };`;
 
 async function open(page: Page) {
@@ -87,7 +81,13 @@ async function open(page: Page) {
 
 // Globals the fixture plugin and the mock Gateway install in the page.
 type ComposerProofWindow = Window & {
-  composerProof?: { finish?: () => void; outcomes: string[] };
+  composerProof?: {
+    finish?: () => void;
+    outcomes: string[];
+    runs: number;
+    mode: string;
+    cancelled?: boolean;
+  };
   openclawControlUiE2eGateway: { findRequests: (method: string) => unknown[] };
 };
 const finish = (page: Page) =>
@@ -103,26 +103,50 @@ const sendCount = (page: Page) =>
   );
 
 suite.define(() => {
-  it("renders an icon action in the toolbar and an accessory in the composer float", async () => {
+  it("runs a task in one composer card; the pressed icon cancels it", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       await open(page);
       const lead = page.locator(".agent-chat__composer-lead");
       const action = lead.getByRole("button", { name: "Rewrite", exact: true });
       await action.waitFor();
       expect(await action.getAttribute("aria-pressed")).toBe("false");
-      // No text action bar above the composer, and an idle accessory adds no layout.
+      // Idle: no card and no text action bar above the composer.
       expect(await page.locator(".chat-footer__context").isVisible()).toBe(false);
       await action.click();
-      const card = page.locator(".composer-fixture-card");
+      const card = page.locator('.agent-chat__composer-task[data-state="working"]');
       await card.waitFor();
       expect(await card.evaluate((el) => Boolean(el.closest(".agent-chat__composer-float")))).toBe(
         true,
       );
+      await card.getByText("ls src").waitFor();
+      await expect.poll(() => action.getAttribute("aria-pressed")).toBe("true");
+      await action.click();
+      await expect.poll(() => card.count()).toBe(0);
       expect(
-        await lead.getByRole("button", { name: "Stop rewrite" }).getAttribute("aria-pressed"),
-      ).toBe("true");
+        await page.evaluate(
+          () => (window as unknown as ComposerProofWindow).composerProof?.cancelled,
+        ),
+      ).toBe(true);
+      expect(await action.getAttribute("aria-pressed")).toBe("false");
+    });
+  });
+
+  it("shows a failure in place and Try again runs the action again", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const { textarea } = await open(page);
+      await page.evaluate(() => {
+        (window as unknown as ComposerProofWindow).composerProof!.mode = "fail";
+      });
+      await page.getByRole("button", { name: "Rewrite", exact: true }).click();
       await finish(page);
-      await expect.poll(() => card.isHidden()).toBe(true);
+      const failed = page.locator('.agent-chat__composer-task[data-state="failed"]');
+      await failed.getByText("Fixture model unavailable").waitFor();
+      expect(await textarea.inputValue()).toBe(DRAFT);
+      await failed.getByRole("button", { name: "Try again" }).click();
+      await page.locator('.agent-chat__composer-task[data-state="working"]').waitFor();
+      expect(
+        await page.evaluate(() => (window as unknown as ComposerProofWindow).composerProof?.runs),
+      ).toBe(2);
     });
   });
 
@@ -191,7 +215,7 @@ suite.define(() => {
       await textarea.focus();
       await textarea.press("Escape");
       await expect.poll(() => outcomes(page)).toEqual(["dismissed"]);
-      expect(await page.locator(".agent-chat__composer-proposal").count()).toBe(0);
+      expect(await page.locator(".agent-chat__composer-task").count()).toBe(0);
       expect(await textarea.inputValue()).toBe(DRAFT);
 
       await rewrite.click();
@@ -211,7 +235,7 @@ suite.define(() => {
       }, other);
       await page.waitForURL(other);
       await expect.poll(() => outcomes(page)).toEqual(["dismissed", "dismissed"]);
-      expect(await page.locator(".agent-chat__composer-proposal").count()).toBe(0);
+      expect(await page.locator(".agent-chat__composer-task").count()).toBe(0);
     });
   });
 });

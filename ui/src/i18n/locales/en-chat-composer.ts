@@ -27,6 +27,15 @@ const catalog = {
         unavailable:
           "This composer can’t show suggested drafts. Switch back to the built-in composer and try again.",
       },
+      task: {
+        cancel: "Cancel",
+        starting: "Starting",
+        failedTitle: "Couldn’t finish",
+        draftUnchanged: "your draft is unchanged",
+        retry: "Try again",
+        working: "{title}. Your draft won’t change until you choose.",
+        failed: "{title} couldn’t finish. Your draft is unchanged.",
+      },
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
       emptyHint: "Type a message first.",

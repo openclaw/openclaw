@@ -82,11 +82,9 @@
     > .agent-chat__composer-notices > .chat-composer-lit-content > *,
     > .chat-composer-lit-content
       > :not(openclaw-plugin-contributions, openclaw-chat-outbox-recovery),
-    > .chat-composer-lit-content > openclaw-plugin-contributions > :not(openclaw-plugin-view),
+    > .chat-composer-lit-content > openclaw-plugin-contributions > *,
     > .chat-composer-lit-content > openclaw-chat-outbox-recovery > *,
-    > openclaw-plugin-contributions > :not(openclaw-plugin-view),
-    /* An accessory counts only while its plugin shows something. */
-    > openclaw-plugin-contributions > openclaw-plugin-view > [data-plugin-view-root] > :not([hidden]),
+    > openclaw-plugin-contributions > *,
     > openclaw-chat-outbox-recovery > *
   )
 ) {

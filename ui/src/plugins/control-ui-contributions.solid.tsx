@@ -226,7 +226,16 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
     );
   });
   type Action = ReturnType<typeof actions>[number];
+  // A composer action whose task is working shows pressed; clicking it again cancels the task.
+  const runningTask = (action: Action) => {
+    const card = host.composer?.tasks().card;
+    return card?.kind === "working" && card.actionKey === action.entry.key;
+  };
   const runAction = (current: Action) => {
+    if (runningTask(current)) {
+      host.composer?.tasks().cancel();
+      return;
+    }
     const runtime = context?.plugins;
     if (!runtime || current.signal.aborted || !host.presented || !host.isConnected) {
       return;
@@ -242,6 +251,12 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
       composer: host.composer,
       signal: current.signal,
       isCurrent: () => host.isConnected && host.presented,
+      retry: () => {
+        const next = actions().find((action) => action.entry.key === current.entry.key);
+        if (next) {
+          runAction(next);
+        }
+      },
     }).catch((error: unknown) => {
       if (!current.signal.aborted) {
         throw error;
@@ -251,7 +266,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
     void promise.catch(() => setActionRead({ promise }));
     setActionRead({ promise });
   };
-  const accessories = (kind: "session-header" | "composer") => (
+  const accessories = (kind: "session-header") => (
     <For
       each={source()
         .read()
@@ -319,7 +334,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
                         class="agent-chat__input-btn agent-chat__composer-action"
                         type="button"
                         aria-label={action().state?.label ?? action().entry.value.label}
-                        aria-pressed={action().state?.pressed ? "true" : "false"}
+                        aria-pressed={runningTask(action()) ? "true" : "false"}
                         disabled={action().state?.disabled ?? false}
                         onClick={() => runAction(action())}
                       >
@@ -329,7 +344,6 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
                   </Show>
                 )}
               </For>
-              <Show when={props.kind === "composer"}>{accessories("composer")}</Show>
             </>
           }
         >

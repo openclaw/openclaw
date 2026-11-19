@@ -201,15 +201,15 @@ Export `defineControlUiPlugin({ id, activate(host) })` from the browser entry.
 Its id must match the plugin manifest. Register contributions through
 `host.ui`; each registration returns a disposer.
 
-| Registration                            | Host placement                                                                                                                             |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `registerPage` and `registerNavigation` | Plugin-owned routes and sidebar destinations.                                                                                              |
-| `registerAction`                        | Composer, header, or session menu actions. An optional `resolve` function supplies the current label, hidden, disabled, and pressed state. |
-| `registerPanel`                         | Session panels.                                                                                                                            |
-| `registerAccessory`                     | Session header content (`session-header`), or a card attached above the composer input (`composer`).                                       |
-| `registerInlineView`                    | Data-populated native views in the chat transcript.                                                                                        |
-| `registerWidget`                        | Native dashboard widget views.                                                                                                             |
-| `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, `tool-result`, or `run-failure-feedback`.                                           |
+| Registration                            | Host placement                                                                                                                          |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `registerPage` and `registerNavigation` | Plugin-owned routes and sidebar destinations.                                                                                           |
+| `registerAction`                        | Composer, header, or session menu actions. An optional `resolve` function supplies the current label, hidden state, and disabled state. |
+| `registerPanel`                         | Session panels.                                                                                                                         |
+| `registerAccessory`                     | Session header content.                                                                                                                 |
+| `registerInlineView`                    | Data-populated native views in the chat transcript.                                                                                     |
+| `registerWidget`                        | Native dashboard widget views.                                                                                                          |
+| `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, `tool-result`, or `run-failure-feedback`.                                        |
 
 The `run-failure-feedback` replacement occupies only the feedback action beside
 an existing terminal run failure. Its props are `{ sessionKey, agentId, runId,
@@ -319,28 +319,30 @@ host.ui.registerAction({
 });
 ```
 
-To suggest a draft instead of writing over the user's text, call
-`composer.propose(text, { title })`. The host shows the text above the composer
-with **Use** (Tab) and **Dismiss** (Escape); nothing changes and nothing is sent
-until the user accepts. Accepting replaces the draft as one editor change, so
-undo restores the previous draft. The promise resolves `"accepted"` or
-`"dismissed"`; a newer proposal, a chat switch, or the action's `signal` aborting
-dismisses an unanswered one. A replacement composer cannot show proposals, so
-`propose` rejects there; fall back to `setDraft` or report the error.
-
 A composer action with a host icon-registry `icon` renders as a compact button in
 the composer toolbar, after the attachment menu, with `label` as its accessible
-name and tooltip. Return `pressed: true` from `resolve` while the action's work
-runs, and call `host.ui.invalidate()` when it changes. Composer actions without
-an icon keep the text button above the composer.
+name and tooltip. Composer actions without an icon keep the text button above
+the composer, as do icon actions beside a replacement composer.
 
-An accessory with `placement: "composer"` mounts in the stack above the composer
-input, beside the host's queue, progress, and approval cards. Hide its root
-element (the `hidden` attribute) while it has nothing to show: a hidden accessory
-reserves no space. To hand over from an accessory card to a proposal without
-moving the composer, size the card with `block-size:
-var(--chat-composer-float-card-block-size)` and hide it in the same task that
-calls `propose`.
+For work that produces a draft, such as rewriting, translating or shortening it,
+call `composer.startTask({ title })`. The host shows one card above the input
+that changes in place, so the composer never moves:
+
+- **Working:** the title, an elapsed clock, **Cancel**, and the steps you report
+  with `task.update({ steps, summary })`. The invoking action shows as pressed;
+  clicking it again cancels. Cancel, a chat switch, or the action retiring aborts
+  `task.signal`; stop your work when it aborts.
+- **Proposal:** `task.propose(text, { title })` shows the text with **Use** (Tab)
+  and **Dismiss** (Escape). Nothing changes and nothing is sent until the user
+  accepts. Accepting replaces the draft as one editor step, so undo, or the
+  receipt's **Undo**, restores the previous draft with its mentions. The promise
+  resolves `"accepted"` or `"dismissed"`.
+- **Failure:** `task.fail(message)` shows the message with **Dismiss** and **Try
+  again**, which runs the action again.
+
+`composer.propose(text, { title })` offers a draft without a working phase. A
+replacement composer has no task card, so `startTask` throws and `propose`
+rejects there; fall back to `setDraft` or report the error.
 
 ```typescript
 host.ui.registerAction({
@@ -348,10 +350,15 @@ host.ui.registerAction({
   label: "Rewrite",
   icon: "pencilSparkles",
   placement: "composer",
-  async run({ composer, signal }) {
+  async run({ composer }) {
     if (!composer) return;
-    const text = await rewrite(composer.draft, signal);
-    await composer.propose(text, { title: "Rewritten draft" });
+    const task = composer.startTask({ title: "Rewriting your draft" });
+    try {
+      const text = await rewrite(composer.draft, task.signal, (steps) => task.update({ steps }));
+      await task.propose(text, { title: "Rewritten draft" });
+    } catch (error) {
+      if (!task.signal.aborted) task.fail(error instanceof Error ? error.message : String(error));
+    }
   },
 });
 ```

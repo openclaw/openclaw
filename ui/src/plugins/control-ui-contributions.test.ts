@@ -13,6 +13,7 @@ import {
   createGatewayHarness,
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
+import { createComposerTasks } from "../pages/chat/components/chat-composer-task.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import {
@@ -21,9 +22,9 @@ import {
 } from "../test-helpers/solid-application-context.tsx";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import { PluginManager } from "./control-ui-manager.solid.tsx";
-import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 import "./control-ui-view.solid.tsx";
 import "./control-ui-contributions.solid.tsx";
+import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 
 type ContributionsElement = HTMLElementTagNameMap["openclaw-plugin-contributions"];
 const sessionKey = "agent:main:main";
@@ -414,7 +415,13 @@ describe("native plugin session actions", () => {
     const setDraft = vi.fn((text: string) => {
       draft = text;
     });
-    element.composer = { draft: "stale render", getDraft: () => draft, onDraftChange: setDraft };
+    const tasks = createComposerTasks();
+    element.composer = {
+      draft: "stale render",
+      getDraft: () => draft,
+      onDraftChange: setDraft,
+      tasks: () => tasks,
+    };
     element.querySelector<HTMLButtonElement>("button")?.click();
     const composer = run.mock.calls[0]?.[0].composer;
     if (!composer) {

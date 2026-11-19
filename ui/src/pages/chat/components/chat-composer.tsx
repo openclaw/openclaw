@@ -152,9 +152,9 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
       }
       // A proposal belongs to the draft it was offered for; another chat never shows it.
       if (previous && current.draftKey !== previous.context.draftKey) {
-        state.proposal.dismiss();
+        state.tasks.dismiss();
       }
-      state.proposal.syncDraft(current.visibleDraft);
+      state.tasks.syncDraft(current.visibleDraft);
       const options = current.dictationOptions;
       voice.picker.syncCatalog(options.client, options.connected, options.sessionKey);
       voice.dictation.update(options);

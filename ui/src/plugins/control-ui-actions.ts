@@ -2,11 +2,11 @@ import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import type {
   ControlUiAction,
   ControlUiDraftProposal,
-  ControlUiDraftProposalOutcome,
   ControlUiSession,
 } from "../../../src/plugin-sdk/control-ui.js";
 import type { PluginSessionMenuAction } from "../components/session-menu-solid.tsx";
 import { i18n } from "../i18n/lib/translate.ts";
+import type { ComposerTasks } from "../pages/chat/components/chat-composer-task.ts";
 import type { ControlUiPluginCapability } from "./control-ui-capability.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
 
@@ -15,12 +15,8 @@ export type ControlUiComposerDraft = {
   draft: string;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
-  /** Rejects where the pane cannot present proposals, such as beside a replacement composer. */
-  propose: (
-    text: string,
-    title: string,
-    signal: AbortSignal,
-  ) => Promise<ControlUiDraftProposalOutcome>;
+  /** The pane's task owner; it refuses tasks where no card can show them (a replacement). */
+  tasks: () => ComposerTasks;
 };
 
 export function pluginSessionMenuActions(
@@ -62,6 +58,8 @@ export async function runControlUiPluginAction(
     composer?: ControlUiComposerDraft;
     signal: AbortSignal;
     isCurrent?: () => boolean;
+    /** Runs this action again, for a failed task's Try again. */
+    retry?: () => void;
   },
 ): Promise<void> {
   // The lazy native-plugin loader installs action copy before exposing registrations.
@@ -128,9 +126,13 @@ export async function runControlUiPluginAction(
         checkComposer();
         composer.onDraftChange(text);
       },
-      propose: (text: string, proposal: ControlUiDraftProposal) => {
+      startTask: ({ title }: { title: string }) => {
         checkComposer();
-        return composer.propose(text, proposal.title, signal);
+        return composer.tasks().start({ title, signal, actionKey: entry.key, retry: params.retry });
+      },
+      propose: async (text: string, proposal: ControlUiDraftProposal) => {
+        checkComposer();
+        return composer.tasks().offer(text, proposal.title, signal);
       },
     },
   });

@@ -33,13 +33,10 @@ import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createComposerMobileInteraction } from "./chat-composer-mobile-interaction.tsx";
 import { ChatComposerPluginContributions } from "./chat-composer-plugin-contributions.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
-import {
-  ComposerProposalCard,
-  composerProposalAnnouncement,
-} from "./chat-composer-proposal-card.tsx";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
 import { ComposerQueue, ComposerInputScope, ComposerProgress } from "./chat-composer-regions.tsx";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
+import { ComposerTaskCardView, composerTaskAnnouncement } from "./chat-composer-task-card.tsx";
 import { renderComposerTextarea, type ComposerTextareaProps } from "./chat-composer-textarea.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import { ComposerWidthEdge, prepareComposerWidthEdge } from "./chat-composer-width-ref.tsx";
@@ -312,8 +309,8 @@ export function renderChatComposerView(
       <div class="agent-chat__composer-float" ref={[elementRef(props.onComposerFloatRef)]}>
         <div class="chat-footer__context" ref={(element) => (state.composerContext = element)}>
           {props.footerContent}
-          <ComposerProposalCard
-            proposal={state.proposal}
+          <ComposerTaskCardView
+            tasks={state.tasks}
             draft={context().visibleDraft}
             canCompose={context().canCompose}
             keyHints={!props.mobileComposer}
@@ -603,7 +600,7 @@ export function renderChatComposerView(
                   {predictionAnnouncement()}
                 </span>
                 <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
-                  {composerProposalAnnouncement(state.proposal)}
+                  {composerTaskAnnouncement(state.tasks)}
                 </span>
                 <span
                   id={slashMenuAnnouncementId()}

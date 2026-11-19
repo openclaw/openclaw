@@ -210,13 +210,43 @@ export type ControlUiDraftProposal = {
 /** The user's choice; `"dismissed"` also covers the pane, chat, or action retiring first. */
 export type ControlUiDraftProposalOutcome = "accepted" | "dismissed";
 
+/** One line of a running composer task's progress, such as a tool call. */
+export type ControlUiComposerTaskStep = {
+  label: string;
+  state: "running" | "done" | "failed";
+};
+
+/**
+ * Work an action runs for the composer, shown by the host in one card above the input:
+ * working, then a proposal or a failure, without moving the composer. The card leaves when the
+ * task settles, the user cancels, the chat changes, or the action's `signal` aborts.
+ */
+export type ControlUiComposerTask = {
+  /** Aborts when the user cancels the task or the action retires. */
+  readonly signal: AbortSignal;
+  /** Replace the working card's progress: the newest steps and an optional summary. */
+  update: (progress: { steps?: readonly ControlUiComposerTaskStep[]; summary?: string }) => void;
+  /** Turn the card into a proposal of `text`; resolves when the user chooses. */
+  propose: (
+    text: string,
+    proposal: ControlUiDraftProposal,
+  ) => Promise<ControlUiDraftProposalOutcome>;
+  /** Show a failure in the card; the user can dismiss it or run the action again. */
+  fail: (message: string) => void;
+};
+
 export type ControlUiComposerHandle = {
   readonly draft: string;
   setDraft: (text: string) => void;
   /**
-   * Offer `text` as a replacement draft. The user accepts it (Use or Tab) or dismisses it
-   * (Dismiss or Escape); it is never sent. Accepting replaces the draft as one native edit,
-   * so undo restores the previous draft. A newer proposal replaces an unanswered one.
+   * Start a task card titled `title`. While it runs, the invoking composer action shows as
+   * pressed, and its Cancel aborts `task.signal`. Starting another task replaces this one.
+   */
+  startTask: (options: { title: string }) => ControlUiComposerTask;
+  /**
+   * Offer `text` as a replacement draft without a working phase. The user accepts it (Use or
+   * Tab) or dismisses it (Dismiss or Escape); it is never sent. Accepting replaces the draft as
+   * one editor change, so undo restores the previous draft, including mentions.
    */
   propose: (
     text: string,
@@ -237,8 +267,6 @@ export type ControlUiAction = {
     label?: string;
     disabled?: boolean;
     hidden?: boolean;
-    /** Shows the button as active, for example while the action's work runs. */
-    pressed?: boolean;
   };
   run: (
     context: BoardGetParams & {
@@ -253,11 +281,7 @@ export type ControlUiAction = {
 
 export type ControlUiAccessory = {
   id: string;
-  /**
-   * `session-header`: beside the chat title. `composer`: attached above the composer input,
-   * with the host's queue, progress, and approval cards.
-   */
-  placement: "session-header" | "composer";
+  placement: "session-header";
   mount: ControlUiView<BoardGetParams>;
 };
 
