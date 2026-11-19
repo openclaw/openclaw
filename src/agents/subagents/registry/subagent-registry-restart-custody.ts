@@ -4,14 +4,15 @@
 // the previous lifecycle left running, so a delegate the bounded shutdown kill did not reach, or
 // one a crash stranded, would stay `running` with no execution owner. Gateway activation settles
 // those rows once: terminal with an explicit interruption, no completion text, never relaunched,
-// and no child-session effects. The lifecycle owner then finishes cleanup without the delegate's
-// own requester delivery or settle wake; the root's resume input (graceful restart) or the user
-// (crash) reconciles.
+// and no child-session effects. The interruption is the delegate's one outcome, owed to its
+// requester like the shutdown's own (upstream #201544): startup's restart completion recovery
+// admits it under current authority and delivers it through the delegate's return mode. The
+// sweeper never adds a second outcome for it.
 import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { withSubagentOutcomeTiming } from "../announce/subagent-announce-output.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
-import { ensureDeliveryState } from "./subagent-delivery-state.js";
+import { ensureCompletionState, ensureDeliveryState } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import {
   safeRemoveAttachmentsDir,
@@ -49,7 +50,7 @@ function isOwnerlessContinuationChild(entry: SubagentRunRecord): boolean {
 }
 
 /**
- * Runs on Gateway activation, before the root resume input can inspect these children. Best
+ * Runs on Gateway activation, before restart resume discovers what each requester is owed. Best
  * effort: a failed write is logged and the rows wait for the next activation, so it never
  * blocks the restart resume.
  */
@@ -89,8 +90,11 @@ export async function settleOwnerlessContinuationChildren(
         // A kill the earlier lifecycle never finished has no owner either. Recording it as a
         // kill would retire the row at cleanup; the interruption keeps it inspectable.
         entry.killIntent = undefined;
-        entry.suppressCompletionDelivery = true;
-        ensureDeliveryState(entry).disposition = "intentional_non_delivery";
+        // An error outcome freezes no result text, as the canonical completion does.
+        const completion = ensureCompletionState(entry);
+        completion.resultText = null;
+        completion.capturedAt = endedAt;
+        ensureDeliveryState(entry);
         postimages.set(entry.runId, entry);
       }
       return { value: [...postimages.values()], postimages };
@@ -108,6 +112,14 @@ export async function settleOwnerlessContinuationChildren(
     if (shouldRemoveSubagentAttachments(entry)) {
       await safeRemoveAttachmentsDir(entry);
     }
-    startSubagentAnnounceCleanupFlow(entry);
+    // Retired completion custody (a new process) waits for restart completion recovery to
+    // admit the owed outcome; live custody (an in-process restart) delivers it now, and a row
+    // that owes none finishes cleanup now.
+    if (
+      entry.delivery?.status === "not_required" ||
+      !subagentRuns.isCompletionAuthorityRetired(entry)
+    ) {
+      startSubagentAnnounceCleanupFlow(entry);
+    }
   }
 }

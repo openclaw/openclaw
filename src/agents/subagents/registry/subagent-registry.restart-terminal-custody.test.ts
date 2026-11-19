@@ -7,10 +7,11 @@
 //    owed. After startup the requester receives that one outcome; it is never a success return.
 // 2. A delegate row the previous Gateway lifecycle left running has no execution owner; the
 //    next activation settles it to an explicit interrupted outcome. It is never relaunched and
-//    carries no completion text.
+//    carries no completion text. That interruption is its one outcome: the requester receives
+//    it after startup through the delegate's return mode, after a crash as after a graceful stop.
 // 3. The root's generic resume input and a delegate's own outcome describe different facts: the
-//    resume input names no child and claims no child completion, and no child gets a second
-//    outcome.
+//    resume input names no child and claims no child completion. Every accepted delegate is
+//    accounted for once, by its own outcome, and no child gets a second outcome.
 // 4. The parent can inspect that row itself: its `subagents` tool and its next turn's runtime
 //    facts show the child ended, and a run snapshot names the restart interruption.
 // Preserve module setup before modules that consume it.
@@ -19,6 +20,8 @@ import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { requestContinuationWake } from "../../../auto-reply/continuation/continuation-wake.js";
+import { enqueueContinuationReturnDeliveries } from "../../../auto-reply/continuation/targeting.js";
 import * as sessionEventHandoff from "../../../auto-reply/reply/session-event-handoff.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { loadExactSessionEntry } from "../../../config/sessions/session-accessor.js";
@@ -54,9 +57,11 @@ import {
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-// The requester-facing delivery seam: the real announce flow renders and routes each outcome,
-// and this records what the requester would receive instead of starting its turn.
+// The requester-facing delivery seams: the real announce flow renders and routes each outcome by
+// return mode, and these record what each recipient would receive instead of starting its turn.
 vi.mock("../announce/subagent-announce-delivery.js", { spy: true });
+vi.mock("../../../auto-reply/continuation/targeting.js", { spy: true });
+vi.mock("../../../auto-reply/continuation/continuation-wake.js", { spy: true });
 
 const fixture = useSubagentControlFixture();
 const parent = "agent:main:main";
@@ -160,6 +165,8 @@ function childOutcomeText(runId: string, status: string): string {
 }
 
 const GRACEFUL_STOP_STATUS = "failed: Gateway stopped";
+const RESTART_INTERRUPTED_STATUS =
+  "failed: subagent run interrupted: the Gateway restarted before it ended";
 
 async function writeParentSession() {
   return await writeSubagentSessionEntry({
@@ -170,11 +177,21 @@ async function writeParentSession() {
   });
 }
 
-type RequesterMessage = { sessionKey: string; source: string; text: string };
+type RequesterMessage =
+  | { sessionKey: string; source: string; text: string }
+  | {
+      sessionKey: string;
+      source: string;
+      text: string;
+      wakeRecipients: boolean | undefined;
+      returnWake: unknown;
+    }
+  | { sessionKey: string; source: string; reason: string };
 
 /**
- * What requesters receive across the restart: each root resume input, and each child outcome the
- * announce flow delivers, keyed by the child run it reports.
+ * What recipients receive across the restart: each root resume input, each child outcome the
+ * announce flow delivers directly or as a continuation return, and each return wake, keyed by the
+ * child run it reports.
  */
 function recordRequesterMessages() {
   const messages: RequesterMessage[] = [];
@@ -201,6 +218,33 @@ function recordRequesterMessages() {
     });
     return { delivered: true, path: "direct" };
   });
+  vi.mocked(enqueueContinuationReturnDeliveries).mockImplementation(async (params) => {
+    for (const sessionKey of params.targetSessionKeys) {
+      messages.push({
+        sessionKey,
+        source: `return:${params.childRunId}`,
+        text: params.text,
+        wakeRecipients: params.wakeRecipients,
+        returnWake: params.returnWake,
+      });
+    }
+    return {
+      enqueued: params.targetSessionKeys.length,
+      delivered: params.targetSessionKeys.length,
+      deliveryIds: params.targetSessionKeys.map((key) => `return:${params.childRunId}:${key}`),
+      deliveredSessionKeys: [...params.targetSessionKeys],
+      heldSessionKeys: [],
+      resetHeldSessionKeys: [],
+      refusedSessionKeys: [],
+    };
+  });
+  vi.mocked(requestContinuationWake).mockImplementation((request) => {
+    messages.push({
+      sessionKey: request.sessionKey,
+      source: `wake:${request.parentRunId}`,
+      reason: request.reason,
+    });
+  });
   return messages;
 }
 
@@ -225,9 +269,8 @@ function expectInterrupted(row: SubagentRunRecord | undefined) {
     endedAt: expect.any(Number),
     outcome: { status: "error", error: expect.stringContaining("interrupted") },
   });
-  expect(row?.completion?.resultText ?? undefined).toBeUndefined();
-  // Recorded as intentionally not delivered: nothing wakes or notifies the requester.
-  expect(row?.delivery).toMatchObject({ disposition: "intentional_non_delivery" });
+  expect(row?.endedReason).toBe("subagent-error");
+  expect(row?.completion).toMatchObject({ required: true, resultText: null });
 }
 
 /** Upstream #201544: the shutdown's error outcome, owed to the requester. */
@@ -273,11 +316,13 @@ it("1: a graceful shutdown stops an accepted delegate with one outcome of its ow
   expect(fixture.gateway).not.toHaveBeenCalled();
 });
 
-it("2: a crash-restored delegate with no execution owner settles interrupted, never relaunched", async () => {
+it("2: a crash-restored delegate with no execution owner settles interrupted and owes one outcome, never relaunched", async () => {
+  await writeParentSession();
   await addRunningChild("crashed-delegate");
   // A plain (non-continuation) child keeps upstream's restored-history semantics.
   await addRunningChild("crashed-plain", { drainsContinuationDelegateQueue: undefined });
   // The process dies here: no shutdown kill, no resume marker.
+  const messages = recordRequesterMessages();
 
   await restartGateway();
   await testing.sweepOnceForTests();
@@ -286,17 +331,27 @@ it("2: a crash-restored delegate with no execution owner settles interrupted, ne
   const durable = loadSubagentRegistryFromSqlite();
   expectInterrupted(durable.get("crashed-delegate"));
   expectInterrupted(subagentRuns.get("crashed-delegate"));
-  // The lifecycle owner finished cleanup without a requester delivery.
-  expect(durable.get("crashed-delegate")).toMatchObject({
-    cleanupCompletedAt: expect.any(Number),
-    delivery: { status: "not_required" },
-  });
+  // Owed to its requester; retired custody delivers nothing before restart recovery admits it.
+  expect(durable.get("crashed-delegate")?.delivery).toEqual({ status: "pending" });
   expect(durable.get("crashed-plain")?.execution.status).toBe("running");
   expect(durable.get("crashed-plain")?.execution.endedAt).toBeUndefined();
-  // Not relaunched or waited on, and no completion is announced to the parent.
-  expect(fixture.gateway).not.toHaveBeenCalled();
   expect(fixture.announce).not.toHaveBeenCalled();
-  expect(fixture.wake).not.toHaveBeenCalled();
+
+  await resumeRoots();
+  // No resume marker, so no root resume input: the delegate's own outcome is the requester's
+  // one account of it. The plain child keeps upstream's history and gets none.
+  expect(messages).toEqual([
+    {
+      sessionKey: parent,
+      source: "outcome:crashed-delegate",
+      text: childOutcomeText("crashed-delegate", RESTART_INTERRUPTED_STATUS),
+    },
+  ]);
+  expect(loadSubagentRegistryFromSqlite().get("crashed-delegate")?.delivery).toMatchObject({
+    status: "delivered",
+  });
+  // Not relaunched or waited on.
+  expect(fixture.gateway).not.toHaveBeenCalled();
   // The requester no longer counts a dead child as running work it must wait for.
   const unsettled = await listUnsettledRequesterChildren({ requesterSessionKey: parent });
   expect(unsettled.map((child) => child.runId)).not.toContain("crashed-delegate");
@@ -319,6 +374,7 @@ it("2: a crash-restored delegate whose kill never finished settles interrupted",
   const settled = loadSubagentRegistryFromSqlite().get("crashed-killing");
   expectInterrupted(settled);
   expect(settled?.killIntent).toBeUndefined();
+  expect(settled?.delivery).toEqual({ status: "pending" });
   expect(fixture.gateway).not.toHaveBeenCalled();
   expect(fixture.announce).not.toHaveBeenCalled();
 });
@@ -341,6 +397,7 @@ it("2: an interrupted delegate's materialized attachments are released", async (
 });
 
 it("2: an in-process restart settles the earlier lifecycle's delegate and keeps the current one", async () => {
+  await writeParentSession();
   await addRunningChild("earlier-lifecycle");
   const killIntent = {
     requestedAt: Date.now() - 500,
@@ -352,6 +409,7 @@ it("2: an in-process restart settles the earlier lifecycle's delegate and keeps 
   rotateAgentEventLifecycleGeneration();
   // A delegate this lifecycle admitted before activation keeps its execution owner.
   await addRunningChild("current-lifecycle");
+  const messages = recordRequesterMessages();
 
   await activateSubagentRegistry(resolveGateway);
   await fixture.settle();
@@ -366,9 +424,21 @@ it("2: an in-process restart settles the earlier lifecycle's delegate and keeps 
     execution: { status: "running" },
   });
   expect(fixture.gateway).not.toHaveBeenCalled();
+  // In-process, completion custody stays live, so the settled delegate's one outcome goes out
+  // now rather than waiting for restart completion recovery.
+  expect(messages).toEqual([
+    {
+      sessionKey: parent,
+      source: "outcome:earlier-lifecycle",
+      text: childOutcomeText("earlier-lifecycle", RESTART_INTERRUPTED_STATUS),
+    },
+  ]);
+  expect(loadSubagentRegistryFromSqlite().get("earlier-lifecycle")?.delivery).toMatchObject({
+    status: "delivered",
+  });
 });
 
-it("4: the parent inspects a crash-settled delegate as interrupted by the restart", async () => {
+it("4: the parent inspects a crash-settled delegate as interrupted by the restart, its outcome still owed", async () => {
   await addRunningChild("inspected-delegate");
   // Another requester's delegate settles too, but never reaches this parent's view.
   await addRunningChild("other-parent-delegate", {
@@ -389,7 +459,7 @@ it("4: the parent inspects a crash-settled delegate as interrupted by the restar
     expect.objectContaining({
       runId: "inspected-delegate",
       status: "failed",
-      deliveryStatus: "not_required",
+      deliveryStatus: "pending",
       endedAt: expect.any(Number),
     }),
   ]);
@@ -408,7 +478,7 @@ it("4: the parent inspects a crash-settled delegate as interrupted by the restar
           status: "error",
           error: "subagent run interrupted: the Gateway restarted before it ended",
         },
-        deliveryStatus: "not_required",
+        deliveryStatus: "pending",
         endedAt: expect.any(Number),
       },
     ],
@@ -416,7 +486,7 @@ it("4: the parent inspects a crash-settled delegate as interrupted by the restar
   });
   expect(snapshot.details).not.toHaveProperty("unavailable");
 
-  // The parent's next turn carries the same ended row, and no result awaiting delivery.
+  // The parent's next turn carries the same ended row as a result still awaiting delivery.
   const facts = (
     await buildRuntimeFactsContext({
       cfg: getRuntimeConfig(),
@@ -428,10 +498,11 @@ it("4: the parent inspects a crash-settled delegate as interrupted by the restar
   )
     .map((fragment) => fragment.text)
     .join("\n\n");
-  expect(facts).toContain("## Recently Completed Subagents");
-  expect(facts).toMatch(/run=inspected-delegate; status=failed; .*delivery=not_required;/);
+  expect(facts).toContain("## Child results awaiting delivery");
+  expect(facts).toMatch(
+    /run_json="inspected-delegate"; .*outcome=error; delivery=pending; .*result_json="";/,
+  );
   expect(facts).not.toContain("## Active Subagents");
-  expect(facts).not.toContain("## Child results awaiting delivery");
   expect(facts).not.toContain("other-parent-delegate");
   expect(fixture.announce).not.toHaveBeenCalled();
   expect(fixture.wake).not.toHaveBeenCalled();
@@ -455,7 +526,8 @@ it("3: the root's resume input is not a child outcome; each accepted delegate ke
   await restartGateway();
   await resumeRoots();
 
-  // The root got its one generic resume input, and the stopped delegate its one outcome...
+  // The root got its one generic resume input, and each delegate its one outcome: the stopped
+  // one its graceful stop, the unreached one its interruption...
   expect(messages).toEqual([
     { sessionKey: parent, source: "restart", text: GATEWAY_RESTART_RESUME_TEXT },
     {
@@ -463,11 +535,18 @@ it("3: the root's resume input is not a child outcome; each accepted delegate ke
       source: "outcome:resume-reached",
       text: childOutcomeText("resume-reached", GRACEFUL_STOP_STATUS),
     },
+    {
+      sessionKey: parent,
+      source: "outcome:resume-unreached",
+      text: childOutcomeText("resume-unreached", RESTART_INTERRUPTED_STATUS),
+    },
   ]);
   // ...and every accepted delegate still has its own terminal custody receipt.
   const durable = loadSubagentRegistryFromSqlite();
   expectGracefullyStopped(durable.get("resume-reached"));
   expectInterrupted(durable.get("resume-unreached"));
+  expect(durable.get("resume-reached")?.delivery).toMatchObject({ status: "delivered" });
+  expect(durable.get("resume-unreached")?.delivery).toMatchObject({ status: "delivered" });
   // On its resume turn the root reads each delegate's own outcome.
   const snapshot = await createSubagentsTool({ agentSessionKey: parent }).execute("wait", {
     action: "wait",
@@ -495,12 +574,7 @@ it("3: the root's resume input is not a child outcome; each accepted delegate ke
 });
 
 it("3: activation settles an earlier process's delegate before the sweeper, so its requester gets no second outcome", async () => {
-  await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey: parent,
-    defaultSessionId: "sess-parent",
-  });
+  await writeParentSession();
   // Rows the earlier Gateway process created, owed to this requester: upstream's sweeper fails
   // such a child with its own notice once the root's resume re-admits completion custody.
   const earlier = Math.floor(performance.timeOrigin) - 10 * 60_000;
@@ -520,18 +594,7 @@ it("3: activation settles an earlier process's delegate before the sweeper, so i
     drainsContinuationDelegateQueue: undefined,
   });
   await shutDownGracefully([reached]);
-  const enqueue = vi
-    .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
-    .mockImplementation(() => ({
-      id: "resume-event",
-      accepted: Promise.resolve({ ok: true as const }),
-      cancel: () => true,
-      settled: Promise.resolve({
-        status: "completed" as const,
-        executionStarted: true,
-        delivered: true,
-      }),
-    }));
+  const messages = recordRequesterMessages();
   const registryWarn = vi.spyOn(subagentRegistryLog, "warn");
 
   await restartGateway();
@@ -541,14 +604,7 @@ it("3: activation settles an earlier process's delegate before the sweeper, so i
   await testing.sweepOnceForTests();
   await fixture.settle();
   expect(subagentRuns.get("swept-plain")?.execution.endedAt).toBeUndefined();
-  const warn = vi.fn();
-  const context = createContext();
-  // Restart completion recovery re-admits custody through the Gateway that resumes the root.
-  context.resolveGatewayContext = () => context;
-  await resumeMarkedSessions({ context, signal: new AbortController().signal, log: { warn } });
-  await fixture.settle();
-  await testing.sweepOnceForTests();
-  await fixture.settle();
+  await resumeRoots();
 
   const durable = loadSubagentRegistryFromSqlite();
   const noticeRunIds = () =>
@@ -562,8 +618,8 @@ it("3: activation settles an earlier process's delegate before the sweeper, so i
     error: expect.stringContaining("did not survive the restart"),
   });
   expect(noticeRunIds()).toContain("swept-plain");
-  // ...but the delegate keeps the receipt activation wrote, and nothing reaches its requester
-  // beyond the root's one resume input.
+  // ...but the delegate keeps the receipt activation wrote, and its requester gets exactly that
+  // one outcome beside the root's one resume input: never the sweeper's second.
   expectInterrupted(durable.get("swept-delegate"));
   expect(durable.get("swept-delegate")?.execution.outcome).toMatchObject({
     error: "subagent run interrupted: the Gateway restarted before it ended",
@@ -572,9 +628,88 @@ it("3: activation settles an earlier process's delegate before the sweeper, so i
     "Settling subagent interrupted by Gateway restart",
     expect.objectContaining({ runId: "swept-delegate" }),
   );
-  expect(noticeRunIds()).not.toContain("swept-delegate");
-  expect(enqueue.mock.calls.filter(([, options]) => options.source === "restart")).toEqual([
-    [expect.any(String), expect.objectContaining({ sessionKey: parent, source: "restart" })],
+  expect(
+    fixture.announce.mock.calls.filter(([request]) => request.childRunId === "swept-delegate"),
+  ).toHaveLength(1);
+  expect(messages.filter(({ source }) => source === "outcome:swept-delegate")).toEqual([
+    {
+      sessionKey: parent,
+      source: "outcome:swept-delegate",
+      text: childOutcomeText("swept-delegate", RESTART_INTERRUPTED_STATUS),
+    },
   ]);
-  expect(warn).not.toHaveBeenCalled();
+  expect(messages.filter(({ source }) => source === "restart")).toEqual([
+    { sessionKey: parent, source: "restart", text: GATEWAY_RESTART_RESUME_TEXT },
+  ]);
+  // Every child is accounted for once.
+  expect(messages.map(({ source }) => source)).toEqual([
+    "restart",
+    "outcome:swept-reached",
+    "outcome:swept-delegate",
+    "outcome:swept-plain",
+  ]);
 });
+
+const target = "agent:main:target";
+const silentWake = (runId: string) => ({ reason: "silent-wake-enrichment", parentRunId: runId });
+const RETURN_MODES = [
+  {
+    mode: "silent",
+    fields: { silentAnnounce: true },
+    recipient: parent,
+    wakeRecipients: false,
+    returnWake: (_runId: string) => false,
+    wakes: false,
+  },
+  {
+    mode: "silent-wake",
+    fields: { silentAnnounce: true, wakeOnReturn: true },
+    recipient: parent,
+    wakeRecipients: false,
+    returnWake: silentWake,
+    wakes: true,
+  },
+  {
+    mode: "targeted",
+    fields: { continuationTargetSessionKey: target },
+    recipient: target,
+    wakeRecipients: true,
+    returnWake: (_runId: string) => undefined,
+    wakes: false,
+  },
+] as const;
+
+it.each(RETURN_MODES)(
+  "3: a $mode return carries the stopped and the unreached delegate's one outcome each",
+  async ({ mode, fields, recipient, wakeRecipients, returnWake, wakes }) => {
+    await writeParentSession();
+    const reached = await addRunningChild(`${mode}-reached`, fields);
+    await addRunningChild(`${mode}-unreached`, fields);
+    await shutDownGracefully([reached]);
+
+    const messages = recordRequesterMessages();
+    await restartGateway();
+    await resumeRoots();
+
+    // Each delegate's outcome travels its own return route, once; the root's resume input stays
+    // the root's.
+    const returned = (runId: string, status: string) => [
+      {
+        sessionKey: recipient,
+        source: `return:${runId}`,
+        text: childOutcomeText(runId, status),
+        wakeRecipients,
+        returnWake: returnWake(runId),
+      },
+      ...(wakes
+        ? [{ sessionKey: parent, source: `wake:${runId}`, reason: "silent-wake-enrichment" }]
+        : []),
+    ];
+    expect(messages).toEqual([
+      { sessionKey: parent, source: "restart", text: GATEWAY_RESTART_RESUME_TEXT },
+      ...returned(`${mode}-reached`, GRACEFUL_STOP_STATUS),
+      ...returned(`${mode}-unreached`, RESTART_INTERRUPTED_STATUS),
+    ]);
+    expect(fixture.announce).toHaveBeenCalledTimes(2);
+  },
+);
