@@ -84,7 +84,11 @@ import { subagentAttachmentRootForRun } from "./subagents/subagent-attachment-pa
 import { applySwarmCollectorToolContract } from "./subagents/swarm/swarm-collector-capability.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import type { ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
-import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
+import {
+  DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+  expandToolGroups,
+  normalizeToolPolicyName,
+} from "./tool-policy.js";
 import { listsFixedToolSet } from "./tool-search-config.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "./tool-search-protocol.js";
 import { createToolSearchTools, resolveToolSearchConfig } from "./tool-search.js";
@@ -335,9 +339,11 @@ export function* assembleOpenClawCodingTools(
   const ownerOnlyCoreToolDenylist = automationsScope.denied
     ? [...sessionToolAccess.ownerOnlyCoreToolDenylist, AUTOMATIONS_TOOL_NAME]
     : sessionToolAccess.ownerOnlyCoreToolDenylist;
+  // A fixed listing keeps every grant (sender and group allows enable optional plugins) and
+  // the default plugin tools a session-fact allowlist would build; the turn policy gates calls.
   const pluginToolAllowlist = appendRuntimePluginToolGrant(
-    fixedListing
-      ? capabilityProfile.policy.sessionToolAllowlist
+    fixedListing && capabilityProfile.policy.sessionToolAllowlist.length === 0
+      ? [DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, ...capabilityProfile.policy.explicitToolAllowlist]
       : capabilityProfile.policy.explicitToolAllowlist,
     runtimePluginToolGrant,
   );

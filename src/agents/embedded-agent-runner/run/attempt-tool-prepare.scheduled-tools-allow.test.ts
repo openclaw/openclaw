@@ -23,8 +23,10 @@ import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 
 // One MCP-backed plugin tool the allowlist does not name.
+const pluginToolAllowlists: Array<string[] | undefined> = [];
 vi.mock("../../openclaw-plugin-tools.js", async (importOriginal) => {
-  const pluginTools = () => {
+  const pluginTools = (params?: { options?: { pluginToolAllowlist?: string[] } }) => {
+    pluginToolAllowlists.push(params?.options?.pluginToolAllowlist);
     const tool = createStubTool("world__calendar_list");
     setPluginToolMeta(tool, {
       pluginId: "bundle-mcp",
@@ -41,7 +43,9 @@ vi.mock("../../openclaw-plugin-tools.js", async (importOriginal) => {
   return {
     ...(await importOriginal<typeof import("../../openclaw-plugin-tools.js")>()),
     resolveOpenClawPluginToolsForOptions: pluginTools,
-    resolveOpenClawPluginToolsForOptionsAsync: async () => pluginTools(),
+    resolveOpenClawPluginToolsForOptionsAsync: async (options: {
+      pluginToolAllowlist?: string[];
+    }) => pluginTools(options),
   };
 });
 
@@ -558,4 +562,13 @@ it("keeps removing a host ring-zero tool the run allowlist does not name", async
   );
   expect(run.listed).not.toContain("tool_search");
   expect(run.listed).not.toContain("host_probe");
+});
+
+it("keeps a sender's optional-plugin grant when building the fixed listing", async () => {
+  pluginToolAllowlists.length = 0;
+  await prepareTools(guestGroup, withSenderPolicy({ allow: ["diffs"] }));
+  // The grant still reaches plugin construction, beside the default plugin tools.
+  expect(pluginToolAllowlists.at(-1)).toEqual(
+    expect.arrayContaining(["diffs", "__openclaw_default_plugin_tools__"]),
+  );
 });
