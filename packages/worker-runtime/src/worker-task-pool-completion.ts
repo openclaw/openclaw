@@ -106,10 +106,11 @@ export function createWorkerTaskCompletion<Input, Output>(
   return {
     resolveFailure,
     complete: () => {
-      // The native receipt precedes the result even while preparation retains input.
+      // Report retirement and reject independently of the input factory.
+      // Preparation cleanup below still owns input and admission.
       settlementError = task.runInContext(() => notifyExecutionSettled(task));
-      if (error && !resolveFailure) {
-        task.reject(error);
+      if (error) {
+        task.reject(resolveFailure?.() ?? error);
       }
       void preparation.promise
         .then(() => {

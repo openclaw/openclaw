@@ -1,9 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import type { WorkerOptions } from "node:worker_threads";
+import { pathToFileURL } from "node:url";
+import { MessageChannel, type WorkerOptions } from "node:worker_threads";
 import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -96,6 +98,84 @@ it("preserves workerData through retained task startup", async () => {
   const pool = taskFixture(true, { workerData });
   const reply = await pool.run({ label: "startup", readStartupOptions: true }, {});
   expect(reply.startupOptions?.data).toEqual(workerData);
+});
+
+it("rejects task-channel loss after retirement without waiting for pending preparation", async () => {
+  const workerPath = path.join(tempDirs.make("worker-preparation-loss-"), "worker.mjs");
+  await writeFile(
+    workerPath,
+    `
+    import { parentPort, workerData } from "node:worker_threads";
+    parentPort.once("message", ({ port }) => {
+      port.on("message", ({ input, taskId }) => {
+        port.postMessage({ status: "ok", taskId, value: input });
+      });
+      workerData.control.on("message", () => port.close());
+      port.postMessage({ status: "ready" });
+    });
+  `,
+  );
+  const control = new MessageChannel();
+  const pool = createPool<string, string>(pathToFileURL(workerPath).href, true, {
+    maxPendingBytes: 8,
+    workerOptions: { workerData: { control: control.port2 }, transferList: [control.port2] },
+  });
+  const preparation = Promise.withResolvers<void>();
+  const execution = Promise.withResolvers<{ retired: boolean }>();
+  const captured = ["retained input"];
+  let preparedInput: string[] | undefined;
+  const consumed = vi.fn(() => {
+    captured.length = 0;
+  });
+  let outcome: unknown = "pending";
+  let observed: Promise<void> | undefined;
+  try {
+    await expect(pool.run("warm", {})).resolves.toBe("warm");
+    observed = pool
+      .run(
+        async () => {
+          await preparation.promise;
+          preparedInput = [...captured];
+          return "late input";
+        },
+        { inputBytes: 8, onInputConsumed: consumed, onExecutionSettled: execution.resolve },
+      )
+      .then(
+        (value) => {
+          outcome = value;
+        },
+        (error: unknown) => {
+          outcome = error;
+        },
+      );
+    control.port1.postMessage("close task channel");
+    expect(await execution.promise).toEqual({ retired: true });
+    // Let the caller's rejection reaction run after the native execution receipt.
+    await Promise.resolve();
+    expect(outcome).toMatchObject({
+      code: "unavailable",
+      message: expect.stringContaining("Native worker task channel closed"),
+    });
+    expect(consumed).not.toHaveBeenCalled();
+    expect(captured).toEqual(["retained input"]);
+    expect(pool.getSnapshot()).toMatchObject({ workers: 0, pendingTasks: 1 });
+    await expect(pool.run("over capacity", { inputBytes: 1 })).rejects.toMatchObject({
+      code: "overloaded",
+    });
+    preparation.resolve();
+    await pool.close();
+    await observed;
+    expect(preparedInput).toEqual(["retained input"]);
+    expect(consumed).toHaveBeenCalledOnce();
+    expect(captured).toEqual([]);
+    expect(pool.getSnapshot().pendingTasks).toBe(0);
+  } finally {
+    preparation.resolve();
+    await observed;
+    await pool.close();
+    control.port1.close();
+    control.port2.close();
+  }
 });
 
 const pause = new Int32Array(new SharedArrayBuffer(4));
