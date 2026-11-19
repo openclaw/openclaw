@@ -38,6 +38,71 @@ beforeEach(() => {
 });
 afterEach(() => clearRuntimeConfigSnapshot());
 
+it("preserves shared packs across local clones and stops rewriting private packs", async () => {
+  const root = tempDirs.make("worktree-hardlinked-packs-");
+  const source = await initRepo(root);
+  const payload = createCipheriv("aes-256-ctr", Buffer.alloc(32), Buffer.alloc(16)).update(
+    Buffer.alloc(128 * 1024),
+  );
+  const addPack = async (repo: string, sequence: number) => {
+    payload.writeUInt32LE(sequence);
+    const oid = await requireGit(repo, ["hash-object", "-w", "--stdin"], { input: payload });
+    await requireGit(repo, ["pack-objects", path.join(repo, ".git/objects/pack/pack")], {
+      input: `${oid}\n`,
+    });
+    await git(repo, "prune-packed");
+    return oid;
+  };
+  const inventory = async (repo: string) => {
+    const directory = path.join(repo, ".git/objects/pack");
+    return Promise.all(
+      (await fs.readdir(directory))
+        .filter((name) => name.endsWith(".pack"))
+        .toSorted()
+        .map(async (name) => {
+          const { ino, size, nlink } = await fs.stat(path.join(directory, name));
+          return { name, ino, size, nlink };
+        }),
+    );
+  };
+  const objects = [];
+  for (let i = 0; i < 4; i++) {
+    objects.push(await addPack(source, i));
+  }
+  const clones = [];
+  for (let i = 0; i < 3; i++) {
+    const clone = path.join(root, `clone-${i}`);
+    await requireGit(root, ["clone", "--local", "--no-checkout", source, clone]);
+    await insertRegistryWorktree(env, makeWorktreeRecord(clone, `hardlinks-${i}`));
+    clones.push(clone);
+  }
+  const shared = await inventory(source);
+  expect(shared.every((pack) => pack.nlink === 4)).toBe(true);
+  const rows = [];
+  for (let cycle = 0; cycle < 6; cycle++) {
+    if (cycle === 2) {
+      // Equal private peers fold once; the shared history must not affect selection.
+      objects.push(await addPack(clones[0]!, 4), await addPack(clones[0]!, 5));
+    }
+    const before = await inventory(clones[0]!);
+    const progress = new WorktreeGcProgress();
+    await createWorktreeGitMaintenance(env)({ progress });
+    expect(progress.result.issues).toEqual([]);
+    const after = await inventory(clones[0]!);
+    rows.push(after.filter((pack) => !before.some((old) => old.name === pack.name)).length);
+    for (const repo of [source, ...clones]) {
+      const packs = await inventory(repo);
+      expect(packs.filter((pack) => pack.nlink > 1)).toEqual(shared);
+    }
+  }
+  expect(rows).toEqual([0, 0, 1, 0, 0, 0]);
+  expect(
+    await requireGit(clones[0]!, ["cat-file", "--batch-check=%(objecttype)"], {
+      input: `${objects.join("\n")}\n`,
+    }),
+  ).toBe(objects.map(() => "blob").join("\n"));
+});
+
 it.each([false, true])(
   "converges overlapping history packs and bounds hourly writes (promisor=%s)",
   async (promisor) => {
