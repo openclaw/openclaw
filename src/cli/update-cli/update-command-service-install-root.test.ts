@@ -8,6 +8,8 @@ import { inspectManagedGatewayServiceBeforeUpdate } from "./update-command-servi
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-revalidation.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+// The fixture is a systemd-style command; Windows inspection requires a managed task source.
+const itOnPosix = it.skipIf(process.platform === "win32");
 let home: string;
 
 beforeEach(() => {
@@ -34,7 +36,7 @@ async function writeInstall(root: string, version: string) {
   );
 }
 
-function serviceRunning(root: string): GatewayServiceState {
+function stoppedService(root: string): GatewayServiceState {
   return {
     installed: true,
     running: false,
@@ -62,7 +64,7 @@ async function pnpmStoreLayout() {
   await writeInstall(next, "2026.11.5");
   await fs.mkdir(path.dirname(entry), { recursive: true });
   await fs.symlink(previous, entry);
-  const state = serviceRunning(await fs.realpath(previous));
+  const state = stoppedService(await fs.realpath(previous));
   const verdict = await inspectManagedGatewayServiceBeforeUpdate({ root: entry, state });
   const before = { serviceEnv: state.env, serviceManagerUid: 1000, serviceUpdateVerdict: verdict };
   const swap = async () => {
@@ -72,7 +74,7 @@ async function pnpmStoreLayout() {
   return { previous, next, entry, state, verdict, before, swap };
 }
 
-it.each(["kept", "pruned"] as const)(
+itOnPosix.each(["kept", "pruned"] as const)(
   "restarts the stopped service of the same pnpm installation after the update (old store %s)",
   async (oldStore) => {
     const layout = await pnpmStoreLayout();
@@ -94,16 +96,16 @@ it.each(["kept", "pruned"] as const)(
   },
 );
 
-it.each(["another installation", "an edited definition"] as const)(
+itOnPosix.each(["another installation", "an edited definition"] as const)(
   "still refuses a stopped service that %s replaced",
   async (change) => {
     const layout = await pnpmStoreLayout();
     await layout.swap();
     const elsewhere = path.join(home, "elsewhere", "openclaw");
     await writeInstall(elsewhere, "2026.11.5");
-    const state = serviceRunning(await fs.realpath(layout.previous));
+    const state = stoppedService(await fs.realpath(layout.previous));
     if (change === "another installation") {
-      state.command = serviceRunning(elsewhere).command;
+      state.command = stoppedService(elsewhere).command;
     } else {
       state.command?.programArguments.push("--verbose");
     }

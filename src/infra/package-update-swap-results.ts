@@ -6,7 +6,6 @@ import type {
   StagedPackageSwapResult,
 } from "./package-update-swap-contract.js";
 import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
-import { repairStagedRuntimeLauncher } from "./update-launcher-repair.js";
 import type { NpmGlobalPrefixLayout } from "./update-npm-prefix.js";
 import {
   resolveRuntimeLauncherTargets,
@@ -82,9 +81,8 @@ export function createPackageSwapResults(
       if (!params.stage.native) {
         return;
       }
-      // A published launcher that cannot start the new package leaves no CLI. Repair one
-      // that still names the removed stage; otherwise fail so the transaction restores
-      // the previous launchers instead of reporting success.
+      // A published launcher that cannot start the new package leaves no CLI. Fail so the
+      // transaction restores the previous launchers instead of reporting success.
       for (const { destination } of launchers) {
         const unreadable = await isLauncherFormatUnknown(destination);
         try {
@@ -95,14 +93,6 @@ export function createPackageSwapResults(
             // A format this updater cannot read proves nothing either way.
             warnings.push(
               `Published launcher ${destination} could not be verified: ${formatErrorMessage(error)}. Reinstall the current ${params.packageName} version with ${params.installTarget.manager} to recreate the launcher.`,
-            );
-            continue;
-          }
-          const repair = await repairStagedRuntimeLauncher(destination).catch(() => undefined);
-          if (repair?.outcome === "repaired") {
-            await verifyRuntimeLauncher(destination, "openclaw.mjs");
-            warnings.push(
-              `Repaired published launcher ${destination}: it still pointed into the removed update stage ${repair.stage}.`,
             );
             continue;
           }
