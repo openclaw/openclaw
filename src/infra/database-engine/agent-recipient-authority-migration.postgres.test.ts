@@ -1,7 +1,7 @@
-// Continuation (karmaterminal): recipient authority is agent schema 42, above upstream's
+// Continuation (karmaterminal): recipient authority is agent schema 44, above upstream's
 // PostgreSQL-only steps 34-36 and 38, the cold-archive chunk step 37, the cold-navigation step 39,
-// the creation-receipt step 40 and the active-event-facts step 41. These cases run that ladder in
-// place through the agent owner.
+// the creation-receipt step 40, the active-event-facts step 41, the tool-usage step 42 and the
+// pending-input endings step 43. These cases run that ladder in place through the agent owner.
 import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
@@ -203,7 +203,7 @@ describe.skipIf(!connection)("PostgreSQL agent recipient-authority migration", (
     };
   }
 
-  it("migrates a populated schema-34 store through 35-42 in place and re-admits it without DDL", async () => {
+  it("migrates a populated schema-34 store through 35-44 in place and re-admits it without DDL", async () => {
     const root = dirs.make("pg-authority-chain-");
     const anchorPath = path.join(root, "openclaw-agent.sqlite");
     const namespace = install(historical(34, step(35).fromSchema), anchorPath);
@@ -240,12 +240,13 @@ describe.skipIf(!connection)("PostgreSQL agent recipient-authority migration", (
       ...retained,
       schema_meta: after.tables.schema_meta,
       openclaw_schema_meta: after.tables.openclaw_schema_meta,
+      agent_tool_usage: "[]",
       session_creation_operations: "[]",
       session_recipient_authority: "[]",
       session_transcript_active_event_facts: "[]",
       session_transcript_cold_archive_chunks: "[]",
     });
-    // The in-place result is the catalog a fresh schema-42 store bootstraps.
+    // The in-place result is the catalog a fresh schema-44 store bootstraps.
     expect(after.catalog).toEqual(await catalog(reference));
     // Step 35 rebuilds only its own indexes; every other relation keeps its storage.
     const rebuilt = before.relations
@@ -278,12 +279,13 @@ describe.skipIf(!connection)("PostgreSQL agent recipient-authority migration", (
     expect(await snapshot(namespace)).toEqual(after);
   });
 
-  // Upstream's own 35-41 stores reach 42 in place and gain only the empty authority table (and,
-  // below 37, 40 and 41, the empty cold-archive chunk, creation-receipt and active-event-facts
-  // tables). 38 is upstream's text-search split, 39 its widened transcript payload constraint, 40
-  // its creation receipts and 41 its active event facts.
-  it.each([35, 36, 37, 38, 39, 40, 41])(
-    "migrates upstream's populated schema-%i store to 42 in place and re-admits it without DDL",
+  // Upstream's own 35-43 stores reach 44 in place and gain only the empty authority table (and,
+  // below 37, 40, 41 and 42, the empty cold-archive chunk, creation-receipt, active-event-facts
+  // and tool-usage tables). 38 is upstream's text-search split, 39 its widened transcript payload
+  // constraint, 40 its creation receipts, 41 its active event facts, 42 its tool usage and 43 its
+  // pending-input endings.
+  it.each([35, 36, 37, 38, 39, 40, 41, 42, 43])(
+    "migrates upstream's populated schema-%i store to 44 in place and re-admits it without DDL",
     async (version) => {
       const root = dirs.make(`pg-authority-upstream-${version}-`);
       const anchorPath = path.join(root, "openclaw-agent.sqlite");
@@ -304,6 +306,7 @@ describe.skipIf(!connection)("PostgreSQL agent recipient-authority migration", (
         ...retained,
         schema_meta: after.tables.schema_meta,
         openclaw_schema_meta: after.tables.openclaw_schema_meta,
+        agent_tool_usage: "[]",
         session_creation_operations: "[]",
         session_recipient_authority: "[]",
         session_transcript_active_event_facts: "[]",
