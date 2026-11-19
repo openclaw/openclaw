@@ -9,7 +9,7 @@
 // pending unlink until Discovery confirms it; earlier pending unlinks are kept too. A claw no
 // registration was ever sent for cannot be at Discovery: its unlink is local only, with nothing
 // pending. A registration is marked sent in this lane before it is sent, so an unlink either sees
-// the mark or comes first, and then the publication finds the claw unlinked and sends nothing.
+// the mark or comes first, and then the mark fails and the publication sends nothing.
 import {
   bytesToHex,
   isIrohEndpointKey,
@@ -219,17 +219,21 @@ export function createUnlinkOperations(owner: {
 
     /**
      * Records, before a registration of `clawId` is sent, that Discovery may hold it from now
-     * on. A claw unlinked meanwhile is gone from the record, and nothing is sent for it.
+     * on. False when `clawId` is no longer the linked claw (unlinked meanwhile): send nothing.
      */
-    registrationSending(clawId: string): Promise<void> {
+    registrationSending(clawId: string): Promise<boolean> {
       return serialize(async () => {
         const current = await load();
-        if (current?.claw_id === clawId && current.discovery.registration_unsent) {
+        if (current?.claw_id !== clawId || !current.authority) {
+          return false;
+        }
+        if (current.discovery.registration_unsent) {
           await commit({
             ...current,
             discovery: { ...current.discovery, registration_unsent: false },
           });
         }
+        return true;
       });
     },
 

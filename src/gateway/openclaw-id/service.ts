@@ -348,7 +348,7 @@ export function createOpenClawIdService(params: {
     }
     const client = createDiscoveryClient({ baseUrl: config.discoveryUrl, signer, signal });
     const { reconcileRegistration } = await import("./registration-recovery.js");
-    const recoveryFailure = await reconcileRegistration(owner, client);
+    const recoveryFailure = await reconcileRegistration(owner, client, code !== undefined);
     // Recovery persisted the account before publication; consume the authority's current record.
     record = owner.current()!;
     const outcome =

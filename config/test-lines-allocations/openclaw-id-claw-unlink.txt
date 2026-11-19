@@ -4,6 +4,6 @@
 # pending unlink across restarts, Discovery's refusal kept as refused, the sender's stop/start
 # lifecycle, the CLI warning and confirmation, and the Control UI dialog. Review repairs add the
 # signed-out local Unlink entry, a claw that never sent its registration versus one that did
-# (service, CLI exit code and status lines, dialog), an unlink racing a registration in flight, and
-# the pre-unlink stored-claw upgrade proof on the real store.
-438
+# (service, CLI exit code and status lines, dialog), an unlink racing a registration in flight or
+# its lookup, a publication without a link code, and the pre-unlink stored-claw upgrade proof.
+474

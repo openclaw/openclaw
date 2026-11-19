@@ -260,6 +260,42 @@ describe("unlink", () => {
     }
   });
 
+  it("marks a registration sent only when one is sent, for the claw still linked", async () => {
+    const racing: { enabled: boolean; discoveryUrl: string; relayUrl?: string } = {
+      ...config,
+      relayUrl: "https://relay.example.test",
+    };
+    const lookup = Promise.withResolvers<void>();
+    const paths: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      paths.push(`${init?.method ?? "GET"} ${url.pathname}`);
+      if (paths.length > 1 && url.pathname.endsWith("/registration")) {
+        await lookup.promise;
+      }
+      return Response.json({ error: { code: "not_found", message: "x" } }, { status: 404 });
+    });
+    const claw = await linkedClaw();
+    const { service } = serviceFor(claw.authority, racing);
+    try {
+      // Without a link code nothing is registered, so the claw stays never registered.
+      expect(await service.publish()).toMatchObject({ state: "needs_enrollment_code" });
+      // With one, an unlink while Discovery is still being asked stops the registration.
+      const publishing = service.publish("ENROLL-CODE");
+      await vi.waitFor(() => expect(paths).toHaveLength(2));
+      delete racing.relayUrl;
+      expect(await service.unlink.run("local_operator", claw.clawId)).toMatchObject({
+        discovery: "local_only",
+      });
+      lookup.resolve();
+      expect(await publishing).toMatchObject({ state: "failed", code: "claw_changed" });
+      expect(paths.filter((path) => path === "POST /v1/claws")).toEqual([]);
+    } finally {
+      lookup.resolve();
+      await service.stop();
+    }
+  });
+
   it("unlinks only the claw whose warning was confirmed", async () => {
     const { claw, service } = await clawWithMember();
     const fetch = vi.spyOn(globalThis, "fetch");
