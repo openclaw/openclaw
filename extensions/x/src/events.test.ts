@@ -5,7 +5,7 @@ import { createXTestApi as createXApiClient } from "./test-support/api-client.js
 import { budgetApi, post } from "./test-support/events.js";
 import { createXTestSpend } from "./test-support/spend.js";
 
-const event = (payload: unknown) =>
+const mentionEvent = (payload: unknown) =>
   JSON.stringify({ data: { event_type: "post.mention.create", payload } });
 
 function streamFixture(options: Partial<Parameters<typeof runXEvents>[0]> = {}) {
@@ -136,7 +136,7 @@ describe("X event transport", () => {
           setImmediate(resolve);
         }).then(() => {
           if (hasData) {
-            test.send(event(post("20")));
+            test.send(mentionEvent(post("20")));
           }
         });
         vi.advanceTimersByTime(27_800);

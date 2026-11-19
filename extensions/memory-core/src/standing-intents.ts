@@ -31,21 +31,31 @@ const knownDueAt = new Map<string, number>();
 const sweeps = { active: 0, waiting: [] as Array<() => void> };
 
 function recordDueAt(path: string, nextDueAt: number | null): void {
-  if (nextDueAt === null) knownDueAt.delete(path);
-  else knownDueAt.set(path, nextDueAt);
+  if (nextDueAt === null) {
+    knownDueAt.delete(path);
+  } else {
+    knownDueAt.set(path, nextDueAt);
+  }
   scheduleMaintenance?.(path, nextDueAt);
 }
 
 async function withSweepSlot<T>(run: () => Promise<T>): Promise<T> {
   if (sweeps.active >= 2) {
-    await new Promise<void>((resolve) => sweeps.waiting.push(resolve));
-  } else sweeps.active += 1;
+    await new Promise<void>((resolve) => {
+      sweeps.waiting.push(resolve);
+    });
+  } else {
+    sweeps.active += 1;
+  }
   try {
     return await run();
   } finally {
     const next = sweeps.waiting.shift();
-    if (next) next();
-    else sweeps.active -= 1;
+    if (next) {
+      next();
+    } else {
+      sweeps.active -= 1;
+    }
   }
 }
 
@@ -122,7 +132,9 @@ async function executeStandingIntent(
         return result.value;
       } catch (error) {
         // An uncertain write may have committed; only the first failure resets the retry deadline.
-        if (knownDueAt.has(options.path)) recordDueAt(options.path, null);
+        if (knownDueAt.has(options.path)) {
+          recordDueAt(options.path, null);
+        }
         throw error;
       } finally {
         await worker.close();
@@ -185,7 +197,9 @@ export function startStandingIntentMaintenance(params: {
     schedule(path, knownDueAt.get(path) ?? null);
   }
   return () => {
-    if (scheduleMaintenance === schedule) scheduleMaintenance = undefined;
+    if (scheduleMaintenance === schedule) {
+      scheduleMaintenance = undefined;
+    }
     for (const job of jobs.values()) {
       job.cancel();
     }
