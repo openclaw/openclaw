@@ -1,6 +1,7 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import type { Accessor } from "solid-js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { parseMarkdownJson } from "../../../components/markdown-json.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import {
@@ -282,7 +283,8 @@ export function messageMarkdownRenderOptions(
   return {
     assistantTranscriptRoleHeaders: role === "assistant",
     codeBlockChrome: role === "user" ? "none" : "copy",
-    codeBlockInteraction: role === "assistant" ? "interactive" : "static",
+    codeBlockInteraction:
+      role === "assistant" ? "interactive" : role === "user" ? "wrap" : "static",
     fileLinks: true,
     humanMentions: markdown === preparation.displayMarkdown ? preparation.humanMentions : undefined,
     interactiveImages: opts.onOpenImage !== undefined,
@@ -314,7 +316,7 @@ export function prepareGroupedMessage(
 
   const voiceTranscript = isProviderVoiceTranscript(message);
   const isToolShell = normalizedRole === "tool";
-  const isStandaloneToolMessage = isStandaloneToolMessageForDisplay(message);
+  const standaloneToolSource = isStandaloneToolMessageForDisplay(message);
 
   const toolCards = (opts.showToolCalls ?? true) ? extractToolCardsCached(message) : [];
   // Nested cards moved under their parent must not leave empty message shells.
@@ -350,10 +352,14 @@ export function prepareGroupedMessage(
     visibleAttachments.length !== 0 ||
     assistantViewBlocks.length !== 0 ||
     inlineViewBlocks.length !== 0;
+  // Promoted execution containers keep their media on the original message surface.
+  const isStandaloneToolMessage = standaloneToolSource && (hasToolCards || !hasMediaContent);
   const clawHubCards = normalizedMessage.content.filter((item) => item.type === "clawhub");
-  const extractedThinking =
+  const templatePluginCards = normalizedMessage.content.filter(
+    (item) => item.type === "template_plugin_install",
+  );
+  const reasoningMarkdown =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
-  const reasoningMarkdown = extractedThinking ? `_Reasoning:_\n\n${extractedThinking}` : null;
   const markdown =
     (normalizedRole === "user" ? opts.messageActions?.markdown : undefined) ??
     (displayMarkdown || null);
@@ -412,16 +418,20 @@ export function prepareGroupedMessage(
     !hasToolCards &&
     !hasMediaContent &&
     clawHubCards.length === 0 &&
+    templatePluginCards.length === 0 &&
     !normalizedMessage.replyTarget;
 
   const toolMessageDisclosureId = `toolmsg:${messageKey}`;
-  const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
+  const toolMessageExpanded =
+    opts.isToolMessageExpanded?.(toolMessageDisclosureId, toolCards[0]) ?? false;
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
+  const singleImageTool =
+    singleToolCard && unwrapToolCallForDisplay(singleToolCard).name === "view_image";
   const standaloneToolPayload =
     isStandaloneToolMessage &&
     Boolean(markdown) &&
     !jsonResult &&
-    !hasImages &&
+    (!hasImages || singleImageTool) &&
     singleToolCard?.outputText?.trim() === markdown?.trim();
   const bodyMarkdown = standaloneToolPayload ? null : markdown;
   const renderInOrder = rendersMediaInOrder({
@@ -442,7 +452,9 @@ export function prepareGroupedMessage(
   // One expanded card already closes with its own outcome line; every other
   // shape renders inline rows only, so the message body records the failure.
   const expandsSingleToolCard =
-    Boolean(singleToolCard) && (!markdown || standaloneToolPayload) && !hasImages;
+    Boolean(singleToolCard) &&
+    (!markdown || standaloneToolPayload) &&
+    (!hasImages || singleImageTool);
   const failedToolCard = expandsSingleToolCard ? undefined : toolCards.find(isToolCardError);
 
   // Pure tool messages (no text/images/attachments) skip the "Tool output"
@@ -479,6 +491,7 @@ export function prepareGroupedMessage(
     assistantViewBlocks,
     inlineViewBlocks,
     clawHubCards,
+    templatePluginCards,
     reasoningMarkdown,
     markdown,
     markdownRenderOptions,

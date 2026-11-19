@@ -66,6 +66,26 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
 
+  it("explains why Install is disabled while plugin inventory is loading", async () => {
+    const { page, gateway } = await setup(
+      {},
+      { heldMethods: ["plugins.list"], awaitInitialRoster: false },
+    );
+    await page.goto(`${server.baseUrl}plugins/${matrixDiscoveryPlugin.id}`);
+    await gateway.waitForRequest("plugins.list");
+
+    const install = role(page, "button", "Install");
+    const loading = page.getByText("Loading plugins…", { exact: true });
+    await install.waitFor();
+    expect(await install.isDisabled()).toBe(true);
+    await loading.waitFor({ timeout: 1_500 });
+    await captureScreenshot(page, "catalog-detail-inventory-pending.png", "viewport");
+
+    await gateway.resolveDeferred("plugins.list");
+    await expect.poll(() => install.isEnabled()).toBe(true);
+    await loading.waitFor({ state: "detached" });
+  });
+
   it("keeps category navigation while a search replaces pending category results", async () => {
     const { context, page, gateway } = await setup(
       {},
@@ -150,7 +170,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     expect.soft(await labels()).toEqual(categories);
   });
 
-  it("renders unified discovery with focused search, category sections, and settings navigation", async () => {
+  it("renders unified discovery with an unfocused search, category sections, and settings navigation", async () => {
     const context = await newContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -165,9 +185,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const catalog = page.getByRole("region", { name: "Explore plugins" });
       const search = catalog.getByRole("searchbox", { name: "Search plugins" });
       await search.waitFor();
-      await expect
-        .poll(() => search.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+      expect(await search.evaluate((element) => element === document.activeElement)).toBe(false);
       expect(
         await page.getByRole("heading", { name: "Installed plugins", exact: true }).count(),
       ).toBe(0);

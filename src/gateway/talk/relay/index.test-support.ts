@@ -15,6 +15,35 @@ export function createRelayAgentConfig(agentId: "main" | "ops"): OpenClawConfig 
   };
 }
 
+export function createRelayEventRecorder() {
+  const closed = createDeferred();
+  const events: Array<{
+    event: string;
+    payload: unknown;
+    connIds: string[];
+    opts?: { dropIfSlow?: boolean };
+  }> = [];
+  const context = {
+    broadcastToConnIds: (
+      event: string,
+      payload: unknown,
+      connIds: ReadonlySet<string>,
+      opts?: { dropIfSlow?: boolean },
+    ) => {
+      events.push({ event, payload, connIds: [...connIds], opts });
+      if (
+        typeof payload === "object" &&
+        payload !== null &&
+        "type" in payload &&
+        payload.type === "close"
+      ) {
+        closed.resolve();
+      }
+    },
+  } as never;
+  return { events, context, closed: closed.promise };
+}
+
 export function makeRelayTransport<Overrides extends Partial<RealtimeVoiceBridge> = object>(
   overrides: Overrides = {} as Overrides,
 ) {

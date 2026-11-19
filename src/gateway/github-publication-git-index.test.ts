@@ -156,22 +156,25 @@ async function interruptAcceptedUpdate() {
 }
 
 describe("GitHub publication index update", () => {
-  it.each(["full", "shallow", "uncached", "unregistered"])(
+  it.each(["full", "shallow", "uncached", "unregistered", "contents", "trees"])(
     "reuses commits and isolates cached-base fetches (%s)",
     async (mode) => {
       const shallow = mode === "shallow";
+      const hydrateContents = mode === "contents" || mode === "trees";
       await f.git("config", "uploadpack.allowFilter", "true");
       const clone = await makeDirectory("partial");
       const url = pathToFileURL(f.cwd).href;
       await git(clone, [
         "clone",
-        ...(mode === "unregistered" ? [] : ["--filter=blob:none"]),
+        ...(mode === "unregistered"
+          ? []
+          : [`--filter=${mode === "trees" ? "tree:0" : "blob:none"}`]),
         "--no-checkout",
         ...(shallow ? ["--depth=1"] : []),
         url,
         ".",
       ]);
-      if (mode !== "unregistered") {
+      if (mode !== "unregistered" && !hydrateContents) {
         await git(clone, ["config", `remote.${url}.promisor`, "true"]);
       }
       if (mode !== "full") {
@@ -191,6 +194,8 @@ describe("GitHub publication index update", () => {
         GIT_AUTHOR_EMAIL: "publication@example.test",
         GIT_COMMITTER_NAME: "Publication Test",
         GIT_COMMITTER_EMAIL: "publication@example.test",
+        // Create a fixture-local commit without hydrating the treeless clone.
+        GIT_ALTERNATE_OBJECT_DIRECTORIES: path.join(f.cwd, ".git/objects"),
       });
       await git(clone, ["update-ref", "refs/heads/unrelated-session", local]);
       const unrelatedPack = await git(
@@ -207,20 +212,27 @@ describe("GitHub publication index update", () => {
         if (argv.includes("fetch")) {
           fetches++;
         }
-        return await runPublicationCommand(
-          argv.map((arg) => arg.replace("https://github.com/example/project.git", url)),
-          {
+        const args = argv.map((arg) => arg.replace("https://github.com/example/project.git", url));
+        if (mode === "contents" && argv.includes("--stdin")) {
+          // A concurrent preparation has already completed this captured content batch.
+          const hydrated = await runPublicationCommand(args, {
             ...options,
-            env: {
-              ...options?.env,
-              GIT_ALLOW_PROTOCOL: allowFetch ? "file" : "",
-              GIT_TRACE_PACKET: packets,
-              GIT_TRACE_PACK_ACCESS: accesses,
-            },
+            env: { ...options?.env, GIT_ALLOW_PROTOCOL: "file" },
+          });
+          expect(hydrated.code).toBe(0);
+          await fs.writeFile(packets, "");
+        }
+        return await runPublicationCommand(args, {
+          ...options,
+          env: {
+            ...options?.env,
+            GIT_ALLOW_PROTOCOL: allowFetch ? "file" : "",
+            GIT_TRACE_PACKET: packets,
+            GIT_TRACE_PACK_ACCESS: accesses,
           },
-        );
+        });
       };
-      const prepare = (sha: string) =>
+      const prepare = (sha: string, contents = false) =>
         requireGitHubPublicationCommit(
           run,
           "example/project",
@@ -229,7 +241,7 @@ describe("GitHub publication index update", () => {
           workspace,
           process.env,
           "Publication commit unavailable",
-          { baseBranch: "main" },
+          { baseBranch: "main", contents },
         );
       const missing = await git(clone, ["rev-list", "--objects", "--missing=print", local]);
       if (mode !== "unregistered") {
@@ -239,12 +251,38 @@ describe("GitHub publication index update", () => {
       expect(fetches).toBe(0);
       expect(await git(clone, ["rev-list", "--objects", "--missing=print", local])).toBe(missing);
 
+      if (hydrateContents) {
+        await git(clone, ["config", "fetch.unpackLimit", "1"]);
+        const packDirectory = path.join(clone, ".git/objects/pack");
+        const previousPacks = new Set(await fs.readdir(packDirectory));
+        allowFetch = true;
+        await prepare(f.previousHead, true);
+        expect(await git(clone, ["show", `${f.previousHead}:artifact.txt`])).toBe("base");
+        const packs = (await fs.readdir(packDirectory)).filter(
+          (file) => file.endsWith(".pack") && !previousPacks.has(file),
+        );
+        expect(fetches).toBe(mode === "trees" ? 2 : 1);
+        if (mode === "contents") {
+          expect(await fs.readFile(packets, "utf8")).not.toMatch(/>\s+want [0-9a-f]{40}/u);
+        }
+        expect(packs).toHaveLength(fetches);
+        for (const pack of packs) {
+          await expect(
+            fs.access(path.join(packDirectory, pack.replace(/\.pack$/u, ".promisor"))),
+          ).resolves.toBeUndefined();
+        }
+        return;
+      }
+
       // The source already owns this unadvertised commit, but the clone does not.
       await f.git("update-ref", "refs/heads/publication", f.headCommit);
       await fs.writeFile(accesses, "");
       allowFetch = true;
       await prepare(f.headCommit);
       expect(fetches).toBe(1);
+      expect(await git(clone, ["rev-parse", `refs/openclaw/fetched/${f.headCommit}`])).toBe(
+        f.headCommit,
+      );
       const trace = await fs.readFile(packets, "utf8");
       expect(trace).toContain(`fetch> have ${f.previousHead}`);
       if (mode !== "uncached" && mode !== "unregistered") {

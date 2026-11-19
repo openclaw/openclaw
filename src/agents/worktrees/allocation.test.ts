@@ -66,6 +66,14 @@ const allocate = <T>(body: (guard: WorktreeAllocationGuard) => Promise<T>) =>
 const reserve = (guard: WorktreeAllocationGuard, bytes = GiB, retained = false) =>
   guard.requireDiskSpace([{ path: root, bytes }], "fixture", retained);
 
+it("closes delegated worker authority with its allocation callback", async () => {
+  const retained = await allocate(async (guard) => guard);
+  expect(() => retained.commitGuard()).toThrow();
+  expect(() => retained.rollbackGuard()).toThrow();
+  expect(() => retained.workerAuthority.assertCurrent?.()).toThrow();
+  await expect(reserve(retained)).rejects.toThrow();
+});
+
 function mockDiskSpace() {
   vi.spyOn(fs, "statfsSync").mockReturnValue(
     Object.assign(fs.statfsSync(root), {

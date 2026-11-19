@@ -88,11 +88,12 @@ export function validateQualificationAdmissionRequest(
   request: unknown,
 ): QualificationAdmissionRequest;
 export function qualificationAdmissionArtifactName(runId: number, runAttempt: number): string;
-export function verifyReleaseQualificationOperator(
+export function verifyReleaseQualificationOperators(
   repository: string,
   actor: unknown,
+  triggeringActor: unknown,
   runGh: QualificationAdmissionGh,
-): { id: number; login: string };
+): { operator: { id: number; login: string }; triggeringOperator: { id: number; login: string } };
 export function produceQualificationAdmission(params: {
   request: QualificationAdmissionRequest;
   producer: QualificationAdmissionProducer;

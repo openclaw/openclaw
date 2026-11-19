@@ -32,10 +32,7 @@ import {
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";
-import {
-  buildFullBootstrapPromptLines,
-  buildLimitedBootstrapPromptLines,
-} from "./bootstrap-prompt.js";
+import { buildBootstrapSystemPromptSection } from "./bootstrap-prompt.js";
 import { buildSubagentPromptGuidance } from "./delegation-guidance.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
 import type {
@@ -220,6 +217,7 @@ export function buildAgentSystemPrompt(params: {
   modelAliasLines?: string[];
   contextFiles?: EmbeddedContextFile[];
   bootstrapMode?: BootstrapMode;
+  bootstrapCompleted?: boolean;
   bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
   /** Records the catalog selected by the renderer without changing prompt bytes. */
@@ -337,8 +335,8 @@ export function buildAgentSystemPrompt(params: {
   const messageToolAvailable = availableTools.has("message");
   const hasAutomations = availableTools.has(AUTOMATIONS_TOOL_NAME);
   const readToolName = resolveToolName("read");
-  const waitToolHints = [
-    hasExec ? `${resolveToolName("exec")} yieldMs` : "",
+  const waitHints = [
+    hasExec ? `${resolveToolName("exec")} awaitResults=true` : "",
     hasProcess ? `${resolveToolName("process")}(poll, timeout=<ms>)` : "",
   ].filter(Boolean);
   const extraSystemPrompt = params.extraSystemPrompt?.trim();
@@ -474,27 +472,11 @@ export function buildAgentSystemPrompt(params: {
   );
   // Cache keys and bootstrap checks retain the original ordered file objects.
   const contextFiles = preparedContextFiles.map(({ file }) => file);
-  const bootstrapSystemPromptSections: string[] = [];
-  if (params.bootstrapMode && params.bootstrapMode !== "none") {
-    bootstrapSystemPromptSections.push(
-      "## Bootstrap Pending",
-      ...(params.bootstrapMode === "limited"
-        ? buildLimitedBootstrapPromptLines({
-            introLine: "Bootstrap pending; this run cannot safely finish full BOOTSTRAP.md.",
-            nextStepLine:
-              "Next: primary interactive run with normal workspace access, or user deletes workspace BOOTSTRAP.md after completion.",
-          })
-        : buildFullBootstrapPromptLines({
-            readLine:
-              params.bootstrapMode === "full" &&
-              contextFiles.some((file) => isBootstrapContextFile(file.path))
-                ? "BOOTSTRAP.md below; follow before normal reply."
-                : "Read workspace BOOTSTRAP.md; follow before normal reply.",
-            firstReplyLine: "First visible reply must follow BOOTSTRAP.md; no generic greeting.",
-          })),
-      "",
-    );
-  }
+  const bootstrapSystemPromptSections = buildBootstrapSystemPromptSection({
+    bootstrapMode: params.bootstrapMode,
+    bootstrapCompleted: params.bootstrapCompleted,
+    bootstrapContextInjected: contextFiles.some((file) => isBootstrapContextFile(file.path)),
+  });
   const bootstrapTruncationNotice = params.bootstrapTruncationNotice?.trim();
   if (bootstrapTruncationNotice) {
     bootstrapSystemPromptSections.push(
@@ -562,7 +544,7 @@ export function buildAgentSystemPrompt(params: {
     }),
     !hasSeparateRuntimeCwd && workspaceGuidance,
     renderOpenClawToolWorkflowHints && [
-      waitToolHints.length > 0 && `Long wait: no rapid poll. Use ${waitToolHints.join(" or ")}.`,
+      waitHints.length > 0 && `Wait: end turn if exit wakes you, else ${waitHints.join(" or ")}.`,
       hasSessionsSpawn && [
         "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner.",
         '`sessions_spawn`: clean context => `context:"isolated"`; transcript needed => `context:"fork"`. Follow the accepted completion mode.',

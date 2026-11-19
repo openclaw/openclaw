@@ -8,6 +8,7 @@ import { waitForSessionRunEnd } from "../../../sessions/session-controller.nativ
 import { isSessionRunActive } from "../../../sessions/session-controller.queries.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
 import { createLazyPromise } from "../../../shared/lazy-promise.js";
+import { subagentCompletionForOutcome } from "../../../shared/subagent-completion.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import {
   isDeliverableMessageChannel,
@@ -117,7 +118,10 @@ async function runSubagentAnnounceFlowBound(
     deliveryResultReported = true;
     // A receipt observer may fail after handoff. Keep the transport outcome
     // authoritative so cleanup does not replay work the requester already consumed.
-    announceOutcome = delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");
+    announceOutcome =
+      delivery.reason === "completion_handoff_pending" && delivery.terminal
+        ? "requester_waiting"
+        : (delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable"));
     await params.onDeliveryResult?.(delivery);
   };
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
@@ -255,20 +259,26 @@ async function runSubagentAnnounceFlowBound(
       }
 
       const childSessionCurrent = await prepareChildSessionEffects();
+      const assertChildSessionCurrent = () => {
+        if (!childSessionEffectsAllowed()) {
+          throw new Error("Subagent child-session effects are no longer current.");
+        }
+      };
       const pendingChildDescendantRuns =
         !childSessionCurrent || !childSessionEffectsAllowed()
           ? 0
-          : Math.max(
-              0,
-              await countPendingDescendantRuns(params.childSessionKey, () => {
-                if (!childSessionEffectsAllowed()) {
-                  throw new Error("Subagent child-session effects are no longer current.");
-                }
-              }),
-            );
+          : await countPendingDescendantRuns(params.childSessionKey, assertChildSessionCurrent);
       if (pendingChildDescendantRuns > 0) {
+        // Suspended descendants keep the child session for recovery but cannot hold this completion.
         shouldDeleteChildSession = false;
-        return "retryable";
+        const unsettledDescendantRuns = await countPendingDescendantRuns(
+          params.childSessionKey,
+          assertChildSessionCurrent,
+          { excludeSuspendedDelivery: true },
+        );
+        if (unsettledDescendantRuns > 0) {
+          return "retryable";
+        }
       }
 
       if (
@@ -594,6 +604,13 @@ async function runSubagentAnnounceFlowBound(
           requesterAgentId: targetRequesterAgentId,
           triggerMessage,
           internalEvents,
+          subagentCompletions: [
+            subagentCompletionForOutcome(
+              { runId: params.childRunId, sessionKey: params.childSessionKey, label: params.label },
+              outcome.status,
+              killed,
+            ),
+          ].filter((completion) => completion !== undefined),
           requesterSessionOrigin: targetRequesterOrigin,
           completionDirectOrigin,
           directOrigin,
@@ -607,8 +624,6 @@ async function runSubagentAnnounceFlowBound(
           requesterIsSubagent,
           expectsCompletionMessage,
           completionTarget: params.completionTarget,
-          completionRequesterSessionId: params.completionRequesterSessionId,
-          completionRequesterLifecycleRevision: params.completionRequesterLifecycleRevision,
           directIdempotencyKey,
           onDeliveryResult: reportDeliveryResult,
           signal: params.signal,

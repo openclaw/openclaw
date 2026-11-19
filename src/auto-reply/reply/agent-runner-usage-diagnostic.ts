@@ -8,16 +8,14 @@ import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
-import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
-import type { accountAgentTurn } from "./agent-runner-result-accounting.js";
+import { estimateAggregateUsageCostAsync } from "../../utils/usage-format.js";
+import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 
-type ReplyAgentAccounting = Awaited<ReturnType<typeof accountAgentTurn>>;
-
-export function emitReplyAgentUsageDiagnostic(state: {
+export async function emitReplyAgentUsageDiagnostic(state: {
   context: FinalizeReplyAgentRunInput;
-  accounting: ReplyAgentAccounting;
-}): void {
+  accounting: AccountedAgentTurn;
+}): Promise<void> {
   const { cfg, followupRun, replyToChannel, runStartedAt, sessionKey } = state.context;
   const { contextTokensUsed, modelUsed, promptTokens, providerUsed, runResult, usage } =
     state.accounting;
@@ -30,12 +28,10 @@ export function emitReplyAgentUsageDiagnostic(state: {
     promptTokens,
     usage,
   });
-  const costUsd = estimateAggregateUsageCost({
+  const costUsd = await estimateAggregateUsageCostAsync({
     usage: diagnosticUsage,
-    provider: providerUsed,
-    model: modelUsed,
-    config: cfg,
-    agentDir: followupRun.run.agentDir,
+    prepareCost: async () =>
+      (await state.accounting.preparePricing()).resolve(providerUsed, modelUsed),
   });
   emitTrustedDiagnosticEvent({
     type: "model.usage",

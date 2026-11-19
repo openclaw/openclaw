@@ -2,6 +2,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, inject, it } from "vitest";
 import { startControlUiBenchGatewayServer } from "../../../scripts/lib/control-ui-bench-gateway-server.ts";
+// Prepare the file worker during collection, outside the suite setup deadline.
+import "../../../src/test-utils/prepare-compiled-subprocesses.ts";
 // Scenario probes use the action-timing owner's optional Window hook.
 import "../../../scripts/lib/control-ui-engine-action-timing.ts";
 import { createEnginePageScenarios } from "../../../scripts/lib/control-ui-engine-page-scenarios.ts";
@@ -122,14 +124,22 @@ suite.define(() => {
         const reader = controlUiE2eBuiltModuleRequest(
           "ui/src/pages/skills/skill-reader-dialog.tsx",
         );
+        const tooltip = controlUiE2eBuiltModuleRequest("ui/src/components/solid/tooltip.tsx");
         let readerRequests = 0;
+        let tooltipRequests = 0;
         page.on("request", (request) => {
           if (reader.test(request.url())) {
             readerRequests += 1;
           }
+          if (tooltip.test(request.url())) {
+            tooltipRequests += 1;
+          }
         });
 
         const observation = await visit(page, route);
+        if (route === "plugins") {
+          expect(tooltipRequests, "Audit tooltip presentation loads only on reveal").toBe(0);
+        }
         const readyAssets = observation.assets.filter((asset) => asset.completedByReady);
         expect(readyAssets.length).toBeGreaterThan(0);
         expect(

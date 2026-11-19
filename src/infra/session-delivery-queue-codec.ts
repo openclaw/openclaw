@@ -25,7 +25,7 @@ import {
 } from "../shared/inline-attachments.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { DeliveryQueueEntryLoadResult } from "./delivery-queue-sqlite-codec.js";
-import type { DeliveryQueueCompletionRetention } from "./delivery-queue-sqlite.js";
+import type { DeliveryQueueCompletionRetention } from "./delivery-queue-sqlite.types.js";
 import { normalizeDiagnosticTraceparent } from "./diagnostic-trace-context.js";
 import {
   hasOnlyGenericAttachmentRefs,
@@ -82,6 +82,26 @@ type SessionDeliveryOwnerReference = {
   deadlineAt: number;
 };
 
+type ProducedSessionDeliveryPayload = {
+  sessionKey: string;
+  /** Legacy inference text is readable but never executed by the delivery queue. */
+  message?: string;
+  messageId: string;
+  expectedSessionId?: string;
+  requesterBinding?: SessionDeliveryRequesterBinding;
+  route?: SessionDeliveryRoute;
+  deliveryContext?: SessionDeliveryContext;
+  inputProvenance?: InputProvenance;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  continuationTrigger?: ContinuationTrigger;
+  expectedMediaUrls?: string[];
+  expectedMediaAttachments?: Record<string, ReplyMediaAttachment>;
+  preparedMediaBlocks?: Record<string, Array<Record<string, unknown>>>;
+  suppressTextDelivery?: true;
+  idempotencyKey?: string;
+  owner?: SessionDeliveryOwnerReference;
+} & QueuedSessionDeliveryPayloadMetadata;
+
 /**
  * Durable payloads whose metadata can contain only descriptor references.
  * Inline attachment bytes are deliberately excluded from generic delivery
@@ -114,26 +134,23 @@ type QueuedSessionDeliveryGenericPayload =
        */
       continuationSourceRunId?: string;
     } & QueuedSessionDeliveryPayloadMetadata)
+  | ({ kind: "agentTurn"; reviewedTaskId?: string } & ProducedSessionDeliveryPayload)
+  /** Held candidates use an inert kind so older binaries neither send nor execute them. */
   | ({
-      kind: "agentTurn";
-      sessionKey: string;
-      /** Legacy inference text is readable but never executed by the delivery queue. */
-      message?: string;
-      messageId: string;
-      expectedSessionId?: string;
-      requesterBinding?: SessionDeliveryRequesterBinding;
-      route?: SessionDeliveryRoute;
-      deliveryContext?: SessionDeliveryContext;
-      inputProvenance?: InputProvenance;
-      sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-      continuationTrigger?: ContinuationTrigger;
-      expectedMediaUrls?: string[];
-      expectedMediaAttachments?: Record<string, ReplyMediaAttachment>;
-      preparedMediaBlocks?: Record<string, Array<Record<string, unknown>>>;
-      suppressTextDelivery?: true;
-      idempotencyKey?: string;
-      owner?: SessionDeliveryOwnerReference;
-    } & QueuedSessionDeliveryPayloadMetadata);
+      kind: "mediaCandidate";
+      taskId: string;
+      disposition: "review_pending" | "superseded";
+      /** Original generation details, including any sandbox inspection references; never inference input. */
+      inspectionContext?: string;
+    } & ProducedSessionDeliveryPayload);
+
+export type SessionDeliveryCandidateMedia = {
+  expectedMediaUrls: string[];
+  expectedMediaAttachments?: Extract<
+    QueuedSessionDeliveryPayload,
+    { kind: "agentTurn" }
+  >["expectedMediaAttachments"];
+};
 
 /**
  * The sole durable queue payload permitted to retain raw inline attachments.
@@ -354,62 +371,81 @@ const QueuedRequesterBindingSchema = z
   })
   .strict();
 
+const QueuedProducedDeliveryFields = {
+  ...QueuedGenericCommonSchema,
+  sessionKey: z.string(),
+  message: z.string().optional(),
+  messageId: z.string(),
+  expectedSessionId: z.string().optional(),
+  requesterBinding: QueuedRequesterBindingSchema.optional(),
+  route: QueuedGenericRouteSchema.optional(),
+  deliveryContext: QueuedGenericDeliveryContextSchema.optional(),
+  inputProvenance: QueuedInputProvenanceSchema.optional(),
+  sourceReplyDeliveryMode: z.enum(["automatic", "message_tool_only"]).optional(),
+  continuationTrigger: z.enum(["work-wake", "delegate-return", "subagent-return"]).optional(),
+  expectedMediaUrls: z.array(z.string()).optional(),
+  expectedMediaAttachments: z
+    .record(
+      z.string(),
+      z
+        .object({
+          type: z.enum(["image", "audio", "video", "file"]).optional(),
+          path: z.string().optional(),
+          url: z.string().optional(),
+          mediaUrl: z.string().optional(),
+          filePath: z.string().optional(),
+          mimeType: z.string().optional(),
+          name: z.string().optional(),
+          sizeBytes: z.number().optional(),
+          durationMs: z.number().optional(),
+          width: z.number().optional(),
+          height: z.number().optional(),
+          trustedLocalMedia: z.boolean().optional(),
+        })
+        .strict(),
+    )
+    .optional(),
+  preparedMediaBlocks: z
+    .record(z.string(), z.array(z.record(z.string(), z.unknown())))
+    .optional(),
+  suppressTextDelivery: z.literal(true).optional(),
+  idempotencyKey: z.string().optional(),
+  owner: z
+    .object({
+      kind: z.literal("subagent_completion"),
+      runId: z.string().min(1),
+      taskId: z.string().min(1),
+      // Upstream types the owner generation as a number; production starts at 1, fixtures use 0.
+      generation: z.number().int().nonnegative(),
+      deadlineAt: z.number(),
+    })
+    .strict()
+    .optional(),
+};
+
 const QueuedAgentTurnSchema = z
   .object({
-    ...QueuedGenericCommonSchema,
+    ...QueuedProducedDeliveryFields,
     kind: z.literal("agentTurn"),
-    sessionKey: z.string(),
-    message: z.string().optional(),
-    messageId: z.string(),
-    expectedSessionId: z.string().optional(),
-    requesterBinding: QueuedRequesterBindingSchema.optional(),
-    route: QueuedGenericRouteSchema.optional(),
-    deliveryContext: QueuedGenericDeliveryContextSchema.optional(),
-    inputProvenance: QueuedInputProvenanceSchema.optional(),
-    sourceReplyDeliveryMode: z.enum(["automatic", "message_tool_only"]).optional(),
-    continuationTrigger: z.enum(["work-wake", "delegate-return", "subagent-return"]).optional(),
-    expectedMediaUrls: z.array(z.string()).optional(),
-    expectedMediaAttachments: z
-      .record(
-        z.string(),
-        z
-          .object({
-            type: z.enum(["image", "audio", "video", "file"]).optional(),
-            path: z.string().optional(),
-            url: z.string().optional(),
-            mediaUrl: z.string().optional(),
-            filePath: z.string().optional(),
-            mimeType: z.string().optional(),
-            name: z.string().optional(),
-            sizeBytes: z.number().optional(),
-            durationMs: z.number().optional(),
-            width: z.number().optional(),
-            height: z.number().optional(),
-            trustedLocalMedia: z.boolean().optional(),
-          })
-          .strict(),
-      )
-      .optional(),
-    preparedMediaBlocks: z
-      .record(z.string(), z.array(z.record(z.string(), z.unknown())))
-      .optional(),
-    suppressTextDelivery: z.literal(true).optional(),
-    idempotencyKey: z.string().optional(),
-    owner: z
-      .object({
-        kind: z.literal("subagent_completion"),
-        runId: z.string().min(1),
-        taskId: z.string().min(1),
-        // Upstream types the owner generation as a number; production starts at 1, fixtures use 0.
-        generation: z.number().int().nonnegative(),
-        deadlineAt: z.number(),
-      })
-      .strict()
-      .optional(),
+    reviewedTaskId: z.string().optional(),
   })
   .strict();
 
-const QueuedGenericDeliverySchema = z.union([QueuedPlainSystemEventSchema, QueuedAgentTurnSchema]);
+const QueuedMediaCandidateSchema = z
+  .object({
+    ...QueuedProducedDeliveryFields,
+    kind: z.literal("mediaCandidate"),
+    taskId: z.string(),
+    disposition: z.enum(["review_pending", "superseded"]),
+    inspectionContext: z.string().optional(),
+  })
+  .strict();
+
+const QueuedGenericDeliverySchema = z.union([
+  QueuedPlainSystemEventSchema,
+  QueuedAgentTurnSchema,
+  QueuedMediaCandidateSchema,
+]);
 
 const QueuedPostCompactionDelegateSchema = z
   .object({
@@ -650,8 +686,7 @@ export function normalizeQueuedSessionDeliveryTraceparent(
   payload: QueuedSessionDeliveryPayload,
 ): QueuedSessionDeliveryPayload {
   const normalizedTraceparent =
-    (payload.kind !== "postCompactionDelegate" && payload.kind !== "agentTurn") ||
-    payload.traceparentProvenance === "internal"
+    payload.kind === "systemEvent" || payload.traceparentProvenance === "internal"
       ? normalizeDiagnosticTraceparent(payload.traceparent)
       : undefined;
   const normalizedPayload: QueuedSessionDeliveryPayload = { ...payload };

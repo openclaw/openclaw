@@ -6,6 +6,7 @@ import {
   runWithSessionTranscriptReadFence,
 } from "../../config/sessions/session-transcript-read-fence.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
+import { GatewayOperatorAccessUnavailableError } from "../../infra/operator-authority-error.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -523,7 +524,32 @@ describe("createFollowupRunner", () => {
     );
   });
 
-  it("consumes revoked operator input instead of retrying a pre-execution refusal", async () => {
+  it.each([
+    new GatewayOperatorAccessUnavailableError(),
+    new Error("internal SDK assertion failure"),
+  ])("defers an unrecorded authority refusal without a failure notice (%s)", async (failure) => {
+    turn.queued.operatorAuthority = {
+      profileId: "guest",
+      scopes: ["operator.write"],
+      signal: new AbortController().signal,
+      assertCurrent() {
+        throw failure;
+      },
+    };
+    const deliver = attachSource(turn);
+    state.admit.mockImplementationOnce(async () => {
+      turn.queued.operatorAuthority!.assertCurrent();
+    });
+
+    await expect(createRunner()(turn.queued)).rejects.toBe(failure);
+
+    expect(state.execute).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(state.completeLifecycle).not.toHaveBeenCalled();
+    expect(turn.queued.operatorAuthority.signal?.aborted).toBe(false);
+  });
+
+  it("withholds revoked operator input visibly instead of retrying a pre-execution refusal", async () => {
     const failure = new Error("original operator role changed");
     turn.queued.operatorAuthority = createAdmittedRunOperatorAuthority({
       profileId: "guest",
@@ -532,15 +558,60 @@ describe("createFollowupRunner", () => {
         throw failure;
       },
     });
-    state.admit.mockRejectedValueOnce(failure);
+    const deliver = attachSource(turn);
+    state.admit.mockImplementationOnce(async () => {
+      turn.queued.operatorAuthority!.assertCurrent();
+    });
 
     await expect(
       createRunner({ typing, typingMode: "never" })(turn.queued),
     ).resolves.toBeUndefined();
 
     expect(state.execute).not.toHaveBeenCalled();
+    // No turn was admitted; the source still receives the refusal with its notice.
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        completion: {
+          kind: "failed",
+          error: failure.message,
+          notice: `withheld: ${failure.message}`,
+        },
+        payloads: [],
+      }),
+    );
     expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
     expect(typing.markRunComplete).toHaveBeenCalledOnce();
+  });
+
+  it("reports revoked operator input as a visible failure, not an abort", async () => {
+    const failure = new Error("original operator role changed");
+    turn = createTurn([], { kind: "aborted", code: "aborted_by_user" });
+    turn.queued.operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "guest",
+      scopes: ["operator.write"],
+      assertCurrent: () => {
+        throw failure;
+      },
+    });
+    const deliver = attachSource(turn);
+    state.admit.mockResolvedValue({ kind: "admitted", turn });
+    state.execute.mockImplementationOnce(async () => {
+      turn.queued.operatorAuthority!.assertCurrent();
+    });
+
+    await createRunner({ typing, typingMode: "instant" })(turn.queued);
+
+    expect(turn.operation.fail).toHaveBeenCalledWith("run_failed", failure);
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        completion: {
+          kind: "failed",
+          error: failure.message,
+          notice: `withheld: ${failure.message}`,
+        },
+      }),
+    );
+    expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
   });
 
   it("does not replay a settled execution after progress presentation fails", async () => {

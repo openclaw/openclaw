@@ -260,6 +260,11 @@ function sanitizeCompactionReplayState(
     ...(replayId !== undefined ? { id: replayId } : {}),
     data,
     ...(encryptedContent !== undefined ? { encryptedContent } : {}),
+    ...(openAISuppression &&
+    typeof value.itemRecovery === "string" &&
+    isSafeReplayIdentifier(value.itemRecovery)
+      ? { itemRecovery: value.itemRecovery }
+      : {}),
     ...(value.replayIndex !== undefined ? { replayIndex: value.replayIndex } : {}),
     provider: value.provider,
     api: value.api,

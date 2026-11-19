@@ -19,12 +19,15 @@ export function FileDownloadButton(props: {
   class: string;
   disabled?: boolean;
   showLabel?: boolean;
+  onDownloadStart?: () => () => void;
 }) {
   const [pending, setPending] = createOptimistic(false);
   const retired = Promise.withResolvers<void>();
   let request: AbortController | null = null;
+  let releaseRequest = () => {};
   onSettled(() => () => {
     request?.abort();
+    releaseRequest();
     retired.resolve();
   });
   const presentDownload = action(function* (completion: Promise<void>) {
@@ -38,6 +41,21 @@ export function FileDownloadButton(props: {
     const controller = new AbortController();
     const scopeKey = props.scopeKey;
     request = controller;
+    // A windowed row must survive until save/error handling finishes. Retiring
+    // its real owner still aborts and releases even when an RPC never settles.
+    const releaseOwner = props.onDownloadStart?.();
+    let released = false;
+    const release = () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      if (request === controller) {
+        request = null;
+      }
+      releaseOwner?.();
+    };
+    releaseRequest = release;
     const current = () => !controller.signal.aborted && props.scopeKey === scopeKey;
     const failed = (error: unknown) => {
       if (current()) {
@@ -64,7 +82,7 @@ export function FileDownloadButton(props: {
       } catch (error) {
         failed(error);
       } finally {
-        request = null;
+        release();
       }
     })();
     // Download callbacks may select their file. Let that owner update land first.

@@ -140,16 +140,34 @@ function pullRequestNumbers(body) {
   );
 }
 
-function commitsMentioning(range, numbers) {
+function commitsMentioning(range, references) {
   const commits = new Set();
-  for (const number of numbers) {
-    const output = git(["log", "--format=%H%x00", "--fixed-strings", `--grep=#${number}`, range], {
-      allowEmpty: true,
-    });
+  for (const reference of references) {
+    const isSha = /^[a-f0-9]{40}$/u.test(reference);
+    const output = git(
+      [
+        "log",
+        "--format=%H%x00",
+        "--fixed-strings",
+        "--regexp-ignore-case",
+        `--grep=${isSha ? reference.slice(0, 7) : reference}`,
+        range,
+      ],
+      { allowEmpty: true },
+    );
     for (const sha of output
       .split("\0")
       .map((value) => value.trim())
       .filter(Boolean)) {
+      // Seven-character or longer whole tokens are evidence, not dependency closure.
+      if (
+        isSha &&
+        ![...commitBody(sha).matchAll(/\b[a-f0-9]{7,40}\b/giu)].some((match) =>
+          reference.startsWith(match[0].toLowerCase()),
+        )
+      ) {
+        continue;
+      }
       commits.add(sha);
     }
   }
@@ -290,7 +308,14 @@ export function analyzeBackportCompanions({ baseline, candidate, scanEnd, select
       commitRecord(commit, new Set(paths)),
     );
     const prNumbers = pullRequestNumbers(commitBody(sha));
-    const laterPrMentions = commitsMentioning(range, prNumbers).map((commit) => ({
+    const laterPrMentions = commitsMentioning(
+      range,
+      prNumbers.map((number) => `#${number}`),
+    ).map((commit) => ({
+      sha: commit,
+      subject: commitSummary(commit),
+    }));
+    const laterShaMentions = commitsMentioning(range, [sha]).map((commit) => ({
       sha: commit,
       subject: commitSummary(commit),
     }));
@@ -302,6 +327,7 @@ export function analyzeBackportCompanions({ baseline, candidate, scanEnd, select
       entries,
       laterSamePath,
       laterPrMentions,
+      laterShaMentions,
     };
   });
 
@@ -418,6 +444,7 @@ function formatMarkdown(report) {
       )}`,
       `- Later same-path commits: ${formatList(item.laterSamePath.map((commit) => `\`${short(commit.sha)}\` ${commit.subject}`))}`,
       `- Later PR-number mentions: ${formatList(item.laterPrMentions.map((commit) => `\`${short(commit.sha)}\` ${commit.subject}`))}`,
+      `- Later commit-SHA mentions: ${formatList(item.laterShaMentions.map((commit) => `\`${short(commit.sha)}\` ${commit.subject}`))}`,
     );
   }
   lines.push("", "## Existing companion candidates");

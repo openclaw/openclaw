@@ -1,9 +1,9 @@
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 
 // Continuation (karmaterminal): durable session-key recipient-authority generations sit on top of
-// upstream's agent schema 41. Each version check keeps upstream's own historical schema; the
+// upstream's agent schema 43. Each version check keeps upstream's own historical schema; the
 // authority step runs after upstream's steps in the same migration transaction.
-export const AGENT_RECIPIENT_AUTHORITY_SCHEMA_VERSION = 42;
+export const AGENT_RECIPIENT_AUTHORITY_SCHEMA_VERSION = 44;
 export const RECIPIENT_AUTHORITY_TABLE = "session_recipient_authority";
 
 export function sessionRecipientAuthoritySchemaSql(schema: string): string {

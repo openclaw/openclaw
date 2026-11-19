@@ -199,7 +199,15 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
       const respondNotCompacted = (details: { ok?: boolean; kept?: number; reason?: string }) => {
         respond(
           true,
-          { ok: true, key: target.canonicalKey, compacted: false, ...details },
+          {
+            ok: true,
+            key: target.canonicalKey,
+            compacted: false,
+            ...details,
+            ...(details.reason === "no transcript"
+              ? { reason: "No chat history to compact." }
+              : {}),
+          },
           undefined,
         );
       };

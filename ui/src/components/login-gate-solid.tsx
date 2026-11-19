@@ -231,21 +231,15 @@ function LoginForm(
             onKeyDown={submitOnEnter}
             placeholder={t("login.secretPlaceholder")}
           />
-          <openclaw-tooltip
-            prop:content={t(
-              props.model.showGatewaySecret ? "login.hideSecret" : "login.showSecret",
-            )}
+          <button
+            type="button"
+            class="settings-secret__toggle"
+            aria-label={t("login.toggleSecretVisibility")}
+            aria-pressed={props.model.showGatewaySecret ? "true" : "false"}
+            onClick={() => props.model.onToggleGatewaySecret()}
           >
-            <button
-              type="button"
-              class="settings-secret__toggle"
-              aria-label={t("login.toggleSecretVisibility")}
-              aria-pressed={props.model.showGatewaySecret ? "true" : "false"}
-              onClick={() => props.model.onToggleGatewaySecret()}
-            >
-              <Icon name={props.model.showGatewaySecret ? "eye" : "eyeOff"} />
-            </button>
-          </openclaw-tooltip>
+            <Icon name={props.model.showGatewaySecret ? "eye" : "eyeOff"} />
+          </button>
         </span>
         {setupCode() && (
           <p id="login-gate-secret-hint" class="muted" role="status">

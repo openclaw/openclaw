@@ -30,10 +30,15 @@ import {
 import { AGENT_JSON_PREDICATE_COLUMNS } from "./openclaw-agent-json-predicate-schema.js";
 import { LEGACY_MEMORY_REVISION_TRIGGER_NAMES } from "./openclaw-agent-memory-revision-migration.js";
 import { withoutOutboxEnqueueSequence } from "./openclaw-agent-outbox-sequence-migration.js";
-import { RECIPIENT_AUTHORITY_TABLE } from "./openclaw-agent-recipient-authority-schema.js";
+import {
+  AGENT_RECIPIENT_AUTHORITY_SCHEMA_VERSION,
+  RECIPIENT_AUTHORITY_TABLE,
+} from "./openclaw-agent-recipient-authority-schema.js";
+import { AGENT_TOOL_USAGE_SCHEMA_VERSION } from "./openclaw-agent-tool-usage-schema.js";
 import { assertMigrationWitnessRegistryPreserved } from "./openclaw-migration-witness-registry.js";
 import {
   type OpenClawMigrationWitness,
+  agentSchemaVersions,
   registryRowSchema,
   witnessIdentifierSchema as identifier,
   witnessSchema,
@@ -44,9 +49,14 @@ import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-versio
 import { resolveOpenClawRegisteredAgentDatabasePath } from "./openclaw-state-db.paths.js";
 
 type OpenClawMigrationWitnessOwner = { role: "agent"; agentId: string } | { role: "global" };
-// 42 is continuation's recipient authority (AGENT_RECIPIENT_AUTHORITY_SCHEMA_VERSION).
-const agentSchemaVersions = new Set([
-  24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42,
+
+const ADDITIVE_AGENT_TABLES = new Map([
+  ["session_transcript_cold_archive_chunks", AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION],
+  ["session_creation_operations", AGENT_CREATION_OPERATIONS_SCHEMA_VERSION],
+  ["session_transcript_active_event_facts", AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION],
+  ["agent_tool_usage", AGENT_TOOL_USAGE_SCHEMA_VERSION],
+  // Continuation's recipient-authority step (44) adds its table empty.
+  [RECIPIENT_AUTHORITY_TABLE, AGENT_RECIPIENT_AUTHORITY_SCHEMA_VERSION],
 ]);
 
 const derivedMigrationColumns = new Map<string, ReadonlySet<string>>(
@@ -54,6 +64,7 @@ const derivedMigrationColumns = new Map<string, ReadonlySet<string>>(
     ...AGENT_JSON_PREDICATE_COLUMNS,
     session_windows: ["row_transcript_json", "row_transcript_updated_at"],
     trajectory_runtime_events: ["event_utf8_bytes", "event_payload", "event_codec"],
+    session_pending_inputs: ["end_cause", "origin_source_json"],
   }).map(([table, columns]) => [table, new Set<string>(columns)]),
 );
 
@@ -112,15 +123,9 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
           "transcript_events",
           "session_key_contract",
           "session_canonical_validation_pending",
-          ...(witness.schemaVersion >= AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION
-            ? ["session_transcript_active_event_facts"]
-            : []),
-          ...(witness.schemaVersion >= AGENT_CREATION_OPERATIONS_SCHEMA_VERSION
-            ? ["session_creation_operations"]
-            : []),
-          ...(witness.schemaVersion >= AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION
-            ? ["session_transcript_cold_archive_chunks"]
-            : []),
+          ...[...ADDITIVE_AGENT_TABLES]
+            .filter(([, version]) => witness.schemaVersion >= version)
+            .map(([table]) => table),
         ]
       : witness.role === "global"
         ? ["schema_meta", "config_machine_state"]
@@ -131,8 +136,8 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
   return witness;
 }
 
-// Schemas 25 and 26 change these derived facts only. persistAgentSchemaMetadata also
-// publishes the target app version and timestamp; payload and creation time stay exact.
+// Versioned projections and new pending-input facts may change across migration.
+// Metadata also publishes the target app version/time; accepted payload bytes stay exact.
 function migrationColumn(role: OpenClawMigrationWitness["role"], table: string, column: string) {
   return !(
     role === "agent" &&
@@ -490,17 +495,10 @@ export function captureOpenClawMigrationWitness(
         continue;
       }
       schemaHash.update(JSON.stringify(object)).update("\n");
-      // Schemas 37, 40 and 41 add empty companion tables. Admission validates their canonical
+      // Additive migrations create empty companion tables. Admission validates their canonical
       // definitions; the crossing comparison below still rejects added rows.
-      if (
-        role === "agent" &&
-        ((schemaVersion >= AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION &&
-          object.tbl_name === "session_transcript_cold_archive_chunks") ||
-          (schemaVersion >= AGENT_CREATION_OPERATIONS_SCHEMA_VERSION &&
-            object.tbl_name === "session_creation_operations") ||
-          (schemaVersion >= AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION &&
-            object.tbl_name === "session_transcript_active_event_facts"))
-      ) {
+      const introducedAt = ADDITIVE_AGENT_TABLES.get(object.tbl_name);
+      if (role === "agent" && introducedAt !== undefined && schemaVersion >= introducedAt) {
         continue;
       }
       // Admission validates canonical objects before migration-only normalization.
@@ -679,21 +677,15 @@ export function assertOpenClawMigrationWitnessPreserved(
   const projected = (witness: OpenClawMigrationWitness) =>
     witness.tables
       .filter((table) => !crossing || table.name !== "session_canonical_validation_pending")
-      .filter(
-        (table) =>
-          !(
-            crossing &&
-            ((original.schemaVersion < AGENT_COLD_ARCHIVE_CHUNKS_SCHEMA_VERSION &&
-              table.name === "session_transcript_cold_archive_chunks") ||
-              (original.schemaVersion < AGENT_CREATION_OPERATIONS_SCHEMA_VERSION &&
-                table.name === "session_creation_operations") ||
-              (original.schemaVersion < AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION &&
-                table.name === "session_transcript_active_event_facts") ||
-              // Continuation's recipient-authority step (42) adds its table empty.
-              table.name === RECIPIENT_AUTHORITY_TABLE) &&
-            table.rowCount === 0
-          ),
-      )
+      .filter((table) => {
+        const introducedAt = ADDITIVE_AGENT_TABLES.get(table.name);
+        return !(
+          crossing &&
+          introducedAt !== undefined &&
+          original.schemaVersion < introducedAt &&
+          table.rowCount === 0
+        );
+      })
       .map((table) => ({
         name: table.name,
         columns: crossing

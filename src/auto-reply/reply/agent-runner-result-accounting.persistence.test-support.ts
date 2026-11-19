@@ -395,12 +395,12 @@ export function observeCompletionCommands(
     afterRead?: () => void | Promise<void>;
   } = {},
 ) {
-  const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
+  const capture = agentExecution.captureOpenClawAgentDatabaseExecutionAsync;
   const commands: string[] = [];
   const execution = vi
-    .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
-    .mockImplementation((...args) => {
-      const owner = capture(...args);
+    .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecutionAsync")
+    .mockImplementation(async (...args) => {
+      const owner = await capture(...args);
       return {
         ...owner,
         get fileIdentity() {

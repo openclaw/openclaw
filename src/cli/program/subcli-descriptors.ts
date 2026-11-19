@@ -3,10 +3,11 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Command } from "commander";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
-// Sub-CLI descriptor catalog used for root help placeholders and lazy registration.
 import { isCronMachineOutput } from "../cron-cli/output-mode.js";
 import { isDevicesMachineOutput } from "../devices-output-mode.js";
 import { isGatewayMachineOutput } from "../gateway-cli/output-mode.js";
+// Sub-CLI descriptor catalog used for root help placeholders and lazy registration.
+import { hasMachineOutputOption } from "../machine-output-argv.js";
 import { isModelsPlainMachineOutput, isModelsStatusJsonOutput } from "../models-output-mode.js";
 import { isNodesMachineOutput } from "../nodes-cli/output-mode.js";
 import { isProxyMachineOutput } from "../proxy-output-mode.js";
@@ -110,6 +111,10 @@ const registrations = {
   promos: {
     register: async (program) => (await import("../promos-cli.js")).registerPromosCli(program),
   },
+  tools: {
+    register: async (program) => (await import("../tools-cli.js")).registerToolsCli(program),
+    machineOutput: ({ argv }) => hasMachineOutputOption(argv, "--json"),
+  },
   telemetry: {
     register: async (program) =>
       (await import("../telemetry-cli.js")).registerTelemetryCli(program),
@@ -133,6 +138,9 @@ const registrations = {
   },
   users: {
     register: async (program) => (await import("../users-cli.js")).registerUsersCli(program),
+  },
+  id: {
+    register: async (program) => (await import("../id-cli.js")).registerIdCli(program),
   },
   node: { register: async (program) => (await import("../node-cli.js")).registerNodeCli(program) },
   connect: {

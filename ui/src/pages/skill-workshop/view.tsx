@@ -27,7 +27,7 @@ import "../../styles/plugins.css";
 import "../../styles/skill-workshop.css";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { PluginsHubHeader } from "../plugins/plugins-hub-header.tsx";
-import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
+import { PLUGINS_HUB_PANEL_ID, pluginsHubPanel } from "../plugins/plugins-hub.ts";
 import { undoMutationFor } from "./api.ts";
 import { Detail } from "./detail.tsx";
 import { DraftDetail } from "./draft-detail.tsx";
@@ -107,7 +107,7 @@ export function SkillWorkshopView(props: { view: WorkshopView; reads: WorkshopRe
         onSelect={(tab) => props.view().context.navigate(tab)}
       />
       <SettingsWorkspace>
-        <div id={PLUGINS_HUB_PANEL_ID} role="tabpanel" aria-labelledby="plugins-tab-skill-workshop">
+        <div {...pluginsHubPanel("skill-workshop")}>
           <SettingsPage wide carapace>
             <Show when={!props.view().plugin} fallback={<PluginUnavailable view={props.view} />}>
               <Toolbar view={props.view} />
@@ -437,15 +437,12 @@ function Library(props: { view: WorkshopView; reads: WorkshopReads }) {
             </Show>
           </div>
         </section>
-        <section
-          class="sw-detail settings-group oc-settings-group"
-          ref={(element) => {
-            detail = element;
-          }}
-        >
-          <Show
-            when={props.view().viewer}
-            fallback={<SettingsEmpty message={t("skillWorkshop.viewer.pick")} carapace />}
+        <Show when={props.view().viewer}>
+          <section
+            class="sw-detail settings-group oc-settings-group"
+            ref={(element) => {
+              detail = element;
+            }}
           >
             <Show
               when={props.view().viewer?.target.draftId}
@@ -453,8 +450,8 @@ function Library(props: { view: WorkshopView; reads: WorkshopReads }) {
             >
               <DraftDetail view={props.view} reads={props.reads} />
             </Show>
-          </Show>
-        </section>
+          </section>
+        </Show>
       </div>
     </Show>
   );

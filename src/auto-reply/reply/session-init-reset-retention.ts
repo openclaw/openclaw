@@ -4,7 +4,7 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareContinuationResetRetention } from "../continuation/session-reset-retention.js";
-import { stopSessionResetSubagents } from "./session-reset-cleanup.js";
+import { stopSessionResetWork } from "./session-reset-cleanup.js";
 
 type ResetSuccessor = { nextLifecycleRevision?: string };
 
@@ -22,14 +22,16 @@ export function prepareResetRetention(
       })
     : undefined;
   return {
-    /** Upstream's reset kill; an explicit reset first marks the runs it retains. */
+    /** Upstream's chat reset stop; an explicit reset first marks the runs it retains. */
     stopSubagents: (
       fromRevision: string | undefined,
-      params: Parameters<typeof stopSessionResetSubagents>[0],
+      params: Parameters<typeof stopSessionResetWork>[0],
     ) =>
       retention
-        ? retention.stopResetSubagents(fromRevision, params)
-        : stopSessionResetSubagents(params),
+        ? retention.stopSubagents({ fromRevision, assertCurrent: params.assertCurrent }, () =>
+            stopSessionResetWork(params),
+          )
+        : stopSessionResetWork(params),
     /** The commit's lifecycle identity, carrying the successor revision the marks name. */
     withSuccessor: <T extends object>(identity: T): T & ResetSuccessor =>
       retention ? { ...identity, nextLifecycleRevision: retention.successorRevision } : identity,

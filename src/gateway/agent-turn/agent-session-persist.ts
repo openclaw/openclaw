@@ -1,7 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
-import { getGeneratedMediaTaskIdsForSessionKey } from "../../agents/media-generation-activity.js";
 import { clearReplacedSessionRuntimeState } from "../../auto-reply/reply/session-init-reset-cleanup.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import {
@@ -13,13 +12,6 @@ import { buildSessionCreationStamp } from "../../config/sessions/session-entry-p
 import { createSessionResetBoundaryId } from "../../config/sessions/session-reset-boundary-event.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  normalizeCronScheduledToolCallerOrigin,
-  normalizeCronScheduledToolPolicy,
-  normalizeCronToolsAllowExecTarget,
-  resolveCronToolsAllowExecTargetRecoveryError,
-  restoreCronPinnedExecGrant,
-} from "../../cron/scheduled-tool-policy.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { withSessionControllerSource } from "../../sessions/session-controller.context.js";
@@ -28,6 +20,7 @@ import { recordSessionCreated } from "../../sessions/session-created.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { errorShapeFromError } from "../error-shape.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import {
   assertExpectedExistingSession,
@@ -46,20 +39,7 @@ import {
   emitGatewaySessionEndPluginHook,
   emitGatewaySessionStartPluginHook,
 } from "../session-lifecycle-plugin-hooks.js";
-import {
-  cronContinuationHasReusableRuntime,
-  resolveAgentSessionWorkStartError,
-  type RestoredCronContinuation,
-} from "./agent-handler-helpers.js";
-
-export type CronContinuationClaim = {
-  storePath: string;
-  sessionKey: string;
-  sessionAgentId: string;
-  lifecycleRevision: string;
-  initialEntry: SessionEntry;
-  mediaTaskIdsBefore: ReadonlySet<string>;
-};
+import { resolveAgentSessionWorkStartBlock } from "./agent-handler-helpers.js";
 
 export type AgentSessionPersistResult = {
   sessionEntry?: SessionEntry;
@@ -76,7 +56,6 @@ export type AgentSessionPersistResult = {
   groupSpace?: string;
   pendingChatRun?: { sessionKey: string; agentId?: string };
   bestEffortDeliver: boolean;
-  restoredCronContinuation?: RestoredCronContinuation;
 };
 
 export type AgentSessionPersistParams = {
@@ -99,10 +78,6 @@ export type AgentSessionPersistParams = {
   runId: string;
   agentId?: string;
   suppressVisibleSessionEffects: boolean;
-  restoredCronContinuationIdentity?: Pick<
-    RestoredCronContinuation,
-    "lifecycleRevision" | "sessionId"
-  >;
   initialPatchBuild: Awaited<ReturnType<typeof buildAgentSessionPatch>>;
   buildSessionPatch: (
     entry: SessionEntry | undefined,
@@ -114,7 +89,6 @@ export type AgentSessionPersistParams = {
   maintenanceConfig: SessionEntryPatchOptions["maintenanceConfig"];
   assertGatewayWorkAdmissionAllowed: () => void;
   respondToGatewayAdmissionOutcome: () => boolean;
-  setCronContinuationClaim: (claim: CronContinuationClaim) => void;
   respond: GatewayRequestHandlerOptions["respond"];
 };
 
@@ -131,7 +105,6 @@ export async function persistAgentSessionPhase(
     supersededSessionId,
   } = params.state;
   let consumedContinuationTraceparent = params.entry?.continuationTraceparent;
-  let restoredCronContinuation: RestoredCronContinuation | undefined;
   let skipAgentInitialSessionTouch = false;
   let createdNewEntry = false;
   const isDeliveryDenied = (entry: SessionEntry | undefined) =>
@@ -167,8 +140,12 @@ export async function persistAgentSessionPhase(
     let persisted: SessionEntry | undefined;
     let mutationError: ReturnType<typeof errorShape> | undefined;
     let creationAuthorizationError: ReturnType<typeof errorShape> | undefined;
-    function rejectMutation(code: Parameters<typeof errorShape>[0], message: string): never {
-      mutationError = errorShape(code, message);
+    function rejectMutation(
+      code: Parameters<typeof errorShape>[0],
+      message: string,
+      opts?: Parameters<typeof errorShape>[2],
+    ): never {
+      mutationError = errorShape(code, message, opts);
       throw new Error(message);
     }
     const buildEntry = async (freshEntry: SessionEntry | undefined) => {
@@ -184,101 +161,21 @@ export async function persistAgentSessionPhase(
           `Session "${params.canonicalSessionKey}" was deleted while starting work. Retry.`,
         );
       }
-      const archivedError = resolveAgentSessionWorkStartError(
+      const workStartBlock = resolveAgentSessionWorkStartBlock(
         params.canonicalSessionKey,
         freshEntry,
       );
-      if (archivedError) {
-        rejectMutation(ErrorCodes.INVALID_REQUEST, archivedError);
-      }
-      let entryForPatch = freshEntry;
-      if (params.restoredCronContinuationIdentity) {
-        const marker = freshEntry?.cronRunContinuation;
-        const provider = normalizeOptionalString(freshEntry?.modelProvider);
-        const model = normalizeOptionalString(freshEntry?.model);
-        const identityMatches =
-          marker?.phase === "ready" &&
-          marker.basePersisted === true &&
-          marker.lifecycleRevision === params.restoredCronContinuationIdentity.lifecycleRevision &&
-          freshEntry?.sessionId === params.restoredCronContinuationIdentity.sessionId;
-        if (!identityMatches || !freshEntry || !provider || !model) {
-          rejectMutation(ErrorCodes.UNAVAILABLE, "cron run continuation changed before admission");
-        }
-        if (
-          !cronContinuationHasReusableRuntime({
-            cfg: params.cfg,
-            entry: freshEntry,
-            agentId: params.sessionAgentId,
-            provider,
-            model,
-          })
-        ) {
-          rejectMutation(
-            ErrorCodes.UNAVAILABLE,
-            "cron run continuation has no reusable native CLI session",
-          );
-        }
-        const restoredCronContinuationError = resolveCronToolsAllowExecTargetRecoveryError({
-          requirement: marker.toolsAllowExecTargetRequirement,
-          execTarget: marker.toolsAllowExecTarget,
-        });
-        if (restoredCronContinuationError) {
-          rejectMutation(ErrorCodes.UNAVAILABLE, restoredCronContinuationError);
-        }
-        const restoredToolsAllow = restoreCronPinnedExecGrant({
-          toolsAllow: marker.toolsAllow,
-          requirement: marker.toolsAllowExecTargetRequirement,
-          execTarget: marker.toolsAllowExecTarget,
-        });
-        const scheduledToolPolicy = normalizeCronScheduledToolPolicy(marker.scheduledToolPolicy);
-        const toolsAllowExecTarget = normalizeCronToolsAllowExecTarget(marker.toolsAllowExecTarget);
-        restoredCronContinuation = {
-          ...params.restoredCronContinuationIdentity,
-          provider,
-          model,
-          ...(freshEntry.thinkingLevel ? { thinking: freshEntry.thinkingLevel } : {}),
-          ...(restoredToolsAllow !== undefined ? { toolsAllow: restoredToolsAllow } : {}),
-          ...(marker.toolsAllowIsDefault === true ? { toolsAllowIsDefault: true } : {}),
-          ...(scheduledToolPolicy ? { scheduledToolPolicy } : {}),
-          ...(scheduledToolPolicy?.mode === "account"
-            ? {
-                scheduledToolCallerOrigin: normalizeCronScheduledToolCallerOrigin(
-                  marker.scheduledToolCallerOrigin,
-                ),
-              }
-            : {}),
-          ...(toolsAllowExecTarget ? { toolsAllowExecTarget } : {}),
-          ...(marker.cliSessionBindingFacts
-            ? { cliSessionBindingFacts: { ...marker.cliSessionBindingFacts } }
-            : {}),
-        };
-        entryForPatch = {
-          ...freshEntry,
-          cronRunContinuation: {
-            ...marker,
-            phase: "continuing",
-            ownerRunId: params.runId,
-            ownerLifecycleGeneration: params.lifecycleGeneration,
-          },
-        };
-        params.setCronContinuationClaim({
-          storePath: params.storePath,
-          sessionKey: params.canonicalSessionKey,
-          sessionAgentId: params.sessionAgentId,
-          lifecycleRevision: marker.lifecycleRevision,
-          initialEntry: structuredClone(entryForPatch),
-          mediaTaskIdsBefore: getGeneratedMediaTaskIdsForSessionKey(
-            params.canonicalSessionKey,
-            params.sessionAgentId,
-          ),
+      if (workStartBlock) {
+        rejectMutation(ErrorCodes.INVALID_REQUEST, workStartBlock.message, {
+          retryable: workStartBlock.retryable,
         });
       }
-      patchBuild = await params.buildSessionPatch(entryForPatch);
+      patchBuild = await params.buildSessionPatch(freshEntry);
       if (
-        resetReason &&
-        (patchBuild.automaticResetReason !== resetReason ||
-          freshEntry?.sessionId !== params.entry?.sessionId ||
-          freshEntry?.lifecycleRevision !== params.entry?.lifecycleRevision)
+        patchBuild.automaticResetReason !== resetReason ||
+        (resetReason &&
+          (freshEntry?.sessionId !== params.entry?.sessionId ||
+            freshEntry?.lifecycleRevision !== params.entry?.lifecycleRevision))
       ) {
         rejectMutation(ErrorCodes.UNAVAILABLE, "Session changed before automatic reset. Retry.");
       }
@@ -297,7 +194,7 @@ export async function persistAgentSessionPhase(
         }
       }
       // Carry the authoritative one-shot value before the canonical row clears it.
-      consumedContinuationTraceparent = entryForPatch?.continuationTraceparent;
+      consumedContinuationTraceparent = freshEntry?.continuationTraceparent;
       const lifecyclePatch = { ...patchBuild.patch, continuationTraceparent: undefined };
       const previousSessionId = normalizeOptionalString(freshEntry?.sessionId);
       const nextSessionId = normalizeOptionalString(lifecyclePatch.sessionId);
@@ -311,7 +208,7 @@ export async function persistAgentSessionPhase(
       const delegatedCreation =
         !freshEntry &&
         !params.creation.actor &&
-        params.cfg.gateway?.roles &&
+        isNamedOperatorRoleEnforcementEnabled(params.cfg) &&
         operatorRoleActor?.kind === "operator"
           ? {
               ...params.creation,
@@ -332,7 +229,7 @@ export async function persistAgentSessionPhase(
             ),
           };
       createdNewEntry = freshEntry === undefined;
-      const merged = mergeSessionEntry(entryForPatch, effectivePatch);
+      const merged = mergeSessionEntry(freshEntry, effectivePatch);
       if (isDeliveryDenied(merged)) {
         deniedSessionEntry = merged;
         return null;
@@ -552,6 +449,5 @@ export async function persistAgentSessionPhase(
       isMainSession && params.requestedBestEffortDeliver === undefined
         ? true
         : params.state.bestEffortDeliver,
-    restoredCronContinuation,
   };
 }

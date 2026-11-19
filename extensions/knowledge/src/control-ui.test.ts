@@ -14,12 +14,12 @@ const answers: Record<string, unknown> = {
     definitions: [{ name: "person", label: "Person", primitive: "entity", recordCount: 410 }],
   },
   recent: { items: [], upperSequence: 0, nextBefore: null },
-  records: { records: [], total: 0, offset: 0, nextOffset: null },
+  records_detail: { records: [], total: 0, offset: 0, nextOffset: null },
 };
 
 // Mounts the page on a fake host. Each `held` answer ("scribes" is the Scribes count's job
 // list) waits until the test releases it; each `failing` action is refused.
-function mount(held: string[] = [], failing: string[] = []) {
+function mount(held: string[] = [], failing: string[] = [], props: Record<string, string> = {}) {
   const calls: string[] = [];
   const gates = new Map(held.map((name) => [name, Promise.withResolvers<void>()]));
   const request = vi.fn(
@@ -53,7 +53,7 @@ function mount(held: string[] = [], failing: string[] = []) {
   void plugin.activate(host);
   const view = registerPage.mock.calls[0]![0].mount(document.body, {
     host,
-    props: {},
+    props,
     signal: controller.signal,
     presented: true,
     mountDefault: () => () => {},
@@ -94,6 +94,28 @@ it("checks status beside store facts and shows both tab counts at once", async (
   expect($(".knowledge-tab-count-pending")).toBeNull();
 });
 
+it.each([
+  ["filter", "Project Orion"],
+  ["type", "company"],
+  ["origin", "agent_inference"],
+])("distinguishes an empty filtered result from an empty store: %s", async (field, value) => {
+  mount([], [], {
+    view: "browse",
+    [field]: value,
+    ...(field === "origin" ? { kind: "claim" } : {}),
+  });
+  await shows("No matching records");
+  expect($(".knowledge-content")!.textContent).toContain(
+    "Try a different search or clear the filters.",
+  );
+  expect($(".knowledge-content")!.textContent).not.toContain("Tell your agent in chat");
+});
+
+it("ignores an inactive claim-origin filter when browsing pages", async () => {
+  mount([], [], { view: "browse", origin: "agent_inference" });
+  await shows("Nothing here yet");
+});
+
 it("shows a tab's last view again while it refreshes on return", async () => {
   const { gates } = mount();
   await shows("No recent activity");
@@ -127,7 +149,7 @@ it("lets Browse follow every returned page beyond offset 500", async () => {
   const { request } = mount();
   const original = request.getMockImplementation()!;
   request.mockImplementation(async (method, params) => {
-    if (method !== "plugins.sessionAction" || params?.actionId !== "records") {
+    if (method !== "plugins.sessionAction" || params?.actionId !== "records_detail") {
       return original(method, params);
     }
     const { offset = 0 } = params.payload as { offset?: number };

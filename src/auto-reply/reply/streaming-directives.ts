@@ -211,7 +211,14 @@ export function createStreamingDirectiveAccumulator(): StreamingDirectiveAccumul
       audioAsVoice: parsed?.audioAsVoice ?? false,
     };
 
-    if (!hasReplyPayloadContent(combinedResult) && !combinedResult.audioAsVoice) {
+    // Whitespace after streamed text is content (line breaks, word gaps); dropping it
+    // corrupts every append-only consumer of these chunks.
+    const streamedWhitespace = hasReturnedText && text.length > 0;
+    if (
+      !streamedWhitespace &&
+      !hasReplyPayloadContent(combinedResult) &&
+      !combinedResult.audioAsVoice
+    ) {
       return null;
     }
 

@@ -1,6 +1,6 @@
 import type { SessionsCompanionStateResult } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
-import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
+import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-selection.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";

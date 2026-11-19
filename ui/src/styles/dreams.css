@@ -166,7 +166,7 @@
 }
 
 .dreams__bubble-text {
-  font-size: var(--control-ui-text-lg);
+  font-size: 16px;
   color: color-mix(in srgb, var(--accent) 50%, var(--text));
   font-style: italic;
   min-width: 180px;
@@ -365,7 +365,7 @@
 .dreams-diary__date {
   display: block;
   min-height: 32px;
-  line-height: calc(32px * var(--control-ui-text-scale));
+  line-height: 32px;
   font-size: var(--control-ui-text-sm);
   font-weight: 600;
   color: var(--text-strong);
@@ -398,11 +398,16 @@
 
 .dreams-diary__para {
   margin: 0;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.7;
   color: var(--text);
   overflow-wrap: anywhere;
   word-break: break-word;
+  /* Diary prose is reading text: keep macOS stem darkening so it does not
+     render thin. Dates, navigation and other chrome keep the app-wide
+     `antialiased` (base.css body). */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
   animation: diary-text-stream 2.4s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -441,7 +446,7 @@
 }
 
 .dreams-diary__preview-title {
-  font-size: var(--control-ui-text-lg);
+  font-size: 16px;
   font-weight: 600;
   color: var(--text);
 }
@@ -475,7 +480,7 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-family: var(--mono);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.65;
   color: var(--text);
 }
@@ -649,7 +654,7 @@
 
   .dreams__bubble-text {
     min-width: 0;
-    font-size: calc(clamp(14px, 4.4vw, 16px) * var(--control-ui-text-scale));
+    font-size: clamp(14px, 4.4vw, 16px);
   }
 
   .dreams__bubble-dot--far {

@@ -349,16 +349,12 @@ function formatFallbackTurns(
  */
 export async function buildClaudeCliFallbackContextPrelude(params: {
   cliSessionId: string | undefined;
-  homeDir?: string;
 }): Promise<string> {
   const sessionId = params.cliSessionId?.trim();
   if (!sessionId) {
     return "";
   }
-  const seed = await readClaudeCliFallbackSeed({
-    cliSessionId: sessionId,
-    homeDir: params.homeDir,
-  });
+  const seed = await readClaudeCliFallbackSeed({ cliSessionId: sessionId });
   if (!seed) {
     return "";
   }

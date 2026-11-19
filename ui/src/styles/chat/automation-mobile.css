@@ -2,7 +2,7 @@
   min-width: 0;
   padding: 12px 14px 24px;
   color: var(--text);
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
   line-height: 1.5;
 }
 
@@ -36,7 +36,7 @@
   margin: 0;
   padding: 8px 12px;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
 
@@ -70,7 +70,7 @@
 
 .session-automation-mobile__list-copy > small {
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -81,7 +81,7 @@
   background: transparent;
   color: var(--accent);
   font: inherit;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 .session-automation-mobile__more {
@@ -109,7 +109,7 @@
   gap: 12px;
   margin-bottom: 12px;
   color: var(--muted);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 .session-automation-mobile__list-icon {

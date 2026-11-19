@@ -9,6 +9,7 @@ import type {
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ContinuationTrigger } from "../../auto-reply/types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import type { CronCreatorAuthorityCapability } from "../../gateway/cron-creator-authority-grant.types.js";
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { ImageContent as LlmImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
@@ -25,7 +26,6 @@ import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-app
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/session-binding.types.js";
-import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
 import type { RuntimeContextFragment } from "../internal-runtime-context.js";
 import type { ReplyExpectation } from "../reply-completion.js";
 import type { RequesterOrigin } from "../requester-origin.js";
@@ -122,6 +122,8 @@ export type AgentCommandOpts = {
   allowModelOverride?: boolean;
   /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */
   toolsAllow?: string[];
+  /** The installer owns initial bootstrap until shared setup has completed. */
+  deferWorkspaceBootstrap?: true;
   /** Trusted owner-scoped plugin tool grant; normal policy and deny rules still apply. */
   runtimePluginToolGrant?: RuntimePluginToolGrant;
   /** Consumed in-process subagent-completion capability; never accepted from public RPC params. */
@@ -145,6 +147,8 @@ export type AgentCommandOpts = {
   abortSignal?: AbortSignal;
   /** Private source-owner fence; cancellation alone does not establish current authority. */
   assertSourceCurrent?: import("../../auto-reply/command-owner-authority.js").CommandOwnerAssertion;
+  /** Host-only source check after queue selection, before preflight or execution. */
+  assertTurnAdmissionCurrent?: () => void;
   /** Original operator restriction; host-only and never accepted from public ingress. */
   operatorAuthority?: import("../admitted-run-context.js").AdmittedRunOperatorAuthority;
   /** Host-captured requester identity for policy resolution across internal continuations. */
@@ -206,6 +210,8 @@ export type AgentCommandOpts = {
   cwd?: string;
   /** Force bundled MCP teardown when a one-shot local run completes. */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /** Settle memory managers before a temporary one-shot caller retires their state. */
+  cleanupMemoryOnRunEnd?: boolean;
   /** Force long-lived CLI live session teardown when a one-shot local run completes. */
   cleanupCliLiveSessionOnRunEnd?: boolean;
   /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
@@ -272,6 +278,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   pinnedWidgetAuthoring: undefined,
   operationalRunInstance: undefined,
   assertSourceCurrent: undefined,
+  assertTurnAdmissionCurrent: undefined,
   operatorAuthority: undefined,
   requesterOrigin: undefined,
   privateCompletion: undefined,
@@ -286,6 +293,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   prepareAssistantTranscriptMessage: undefined,
   internalDeliverySuppressErrors: undefined,
   operatorDirectRoot: undefined,
+  cleanupMemoryOnRunEnd: undefined,
 } as const satisfies Partial<AgentCommandOpts>;
 
 type AgentCommandGatewayOnlyKey = Exclude<

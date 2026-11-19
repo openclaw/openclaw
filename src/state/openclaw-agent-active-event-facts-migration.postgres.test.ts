@@ -22,7 +22,6 @@ describe.skipIf(!connection)("PostgreSQL active event facts migration", () => {
         version: 40,
         postgresMigrations: [],
       };
-      // Continuation (karmaterminal): recipient authority (42) follows step 41; this checks the step.
       const target = { ...agentEngineSchema, ...migration.schema, version: 41 };
       using fixture = createPostgresEngineTestFixture({
         directory: dirs.make("active-facts-upgrade-"),

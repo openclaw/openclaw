@@ -8,12 +8,12 @@ import {
   readReleaseJobListing,
   releaseChildSpec,
   releaseCompositeJobsSha256,
+  terminalPolicyPass,
   validateReleaseChildRunProvenance,
 } from "../full-release-validation-policy.mjs";
 import {
   downloadExactActionsArtifactArchive,
   inspectActionsArtifactZip,
-  readBoundedResponseBody,
 } from "./actions-artifact-archive.mjs";
 import { canonicalizeJsonValue } from "./canonical-json.mjs";
 import {
@@ -22,6 +22,10 @@ import {
 } from "./full-release-evidence.mjs";
 import { execGhRead, execGhReadAsync } from "./plain-gh.mjs";
 import { isRecord } from "./record-shared.mjs";
+import {
+  evaluateReleaseChildPolicy,
+  validateReleaseWaiverAggregates,
+} from "./release-validation-waivers.mjs";
 
 const MAX_RUNS = 100;
 const MAX_ARTIFACT_PROBES = 40;
@@ -74,6 +78,24 @@ function requestValue(request) {
   return { ...request, inputs: normalizedInputs(request.inputs), spec };
 }
 
+function githubFailureReason(error) {
+  // Classify the original response without exposing its body, identity, or credentials.
+  // Keep the ordinary gh route: --include selects a different Octopool transport.
+  const output = [error?.message, error?.stderr, error?.stdout].join("\n");
+  for (const [reason, pattern] of [
+    ["secondary-rate-limit", /secondary rate limit|abuse detection mechanism/iu],
+    ["primary-rate-limit", /API rate limit exceeded/iu],
+    ["permission", /Resource not accessible by (?:integration|personal access token)/iu],
+    ["saml-enforcement", /SAML enforcement|SAML SSO/iu],
+    ["bad-credentials", /Bad credentials/iu],
+  ]) {
+    if (pattern.test(output)) {
+      return reason;
+    }
+  }
+  return "unclassified";
+}
+
 function dependencies(repository, deps) {
   const deadlineMs = deps.deadlineMs ?? Date.now() + 120_000;
   const remaining = (stage = "verification") => {
@@ -81,7 +103,7 @@ function dependencies(repository, deps) {
     requireEvidence(milliseconds > 0, `${stage} exceeded its time budget`);
     return milliseconds;
   };
-  const github = async (endpoint, { smallerPageFallback = false } = {}) => {
+  const github = async (endpoint, { smallerPageFallback = false, replay = true } = {}) => {
     const args = ["api", "repos/" + repository + "/" + endpoint];
     const stage = `API GET ${args[1]}`;
     remaining(stage);
@@ -111,7 +133,7 @@ function dependencies(repository, deps) {
                 `${error?.message ?? ""}\n${error?.stderr ?? ""}`,
               )?.[0] ?? (serverError ? "HTTP 5xx" : undefined);
             throw new Error(
-              `Full release child evidence ${stage} failed${status ? ` (${status})` : ""}`,
+              `Full release child evidence ${stage} failed${status ? ` (${status})` : ""}; reason=${githubFailureReason(error)}`,
             );
           }
           requireEvidence(delay < remaining(stage), `${stage} exceeded its time budget`);
@@ -120,7 +142,7 @@ function dependencies(repository, deps) {
       }
     };
     const value = JSON.parse(
-      await (deps.immutableReads ? deps.immutableReads.text(endpoint, load) : load()),
+      await (replay && deps.immutableReads ? deps.immutableReads.text(endpoint, load) : load()),
     );
     deps.immutableReads?.observeRun(endpoint, value);
     return value;
@@ -128,34 +150,31 @@ function dependencies(repository, deps) {
   return {
     github,
     immutableReads: deps.immutableReads,
+    getJobLog:
+      deps.getJobLog ??
+      (async (id) => {
+        const args = ["api", `repos/${repository}/actions/jobs/${id}/logs`];
+        const read = (extra) =>
+          execGhReadAsync([...args, ...extra], {
+            timeout: Math.min(60_000, remaining("aggregate job log")),
+            maxBuffer: 32 * 1024 * 1024,
+          });
+        try {
+          return await read(["--allow-escape-sequences"]);
+        } catch (error) {
+          if (!String(error?.stderr).includes("unknown flag: --allow-escape-sequences")) {
+            throw error;
+          }
+          return read([]);
+        }
+      }),
     downloadArchive:
       deps.downloadArchive ??
       (async (params) => {
         if (params.token) {
           return downloadExactActionsArtifactArchive({
             ...params,
-            ...(deps.immutableReads
-              ? {
-                  fetchImpl: async (url, options) => {
-                    const route = String(url).replace(
-                      "https://api.github.com/repos/" + repository + "/",
-                      "",
-                    );
-                    if (!route.endsWith("/zip")) {
-                      return fetch(url, options);
-                    }
-                    const bytes = await deps.immutableReads.bytes(route, async () => {
-                      const response = await fetch(url, options);
-                      return readBoundedResponseBody(response, {
-                        expectedBytes: params.expected.artifactSizeBytes,
-                        maxBytes: MAX_RELEASE_ARTIFACT_BYTES,
-                        label: "Child evidence archive",
-                      });
-                    });
-                    return new Response(bytes);
-                  },
-                }
-              : {}),
+            immutableReads: deps.immutableReads,
           });
         }
         // Local verifiers can use gh's authenticated session without exporting
@@ -230,7 +249,8 @@ function validateRun(run, selection, request) {
     run.run_attempt === selection.runAttempt &&
       run.run_attempt <= MAX_ATTEMPTS &&
       run.status === "completed" &&
-      run.conclusion === "success" &&
+      (run.conclusion === "success" ||
+        (request.policyTargetVersion && run.conclusion === "failure")) &&
       run.head_repository?.full_name === request.repository,
     "child is not the current successful attempt",
   );
@@ -324,12 +344,152 @@ function validateSelectionIdentity(selection, request) {
   );
 }
 
-async function validateEvidence(selection, request, deps) {
+async function workloadTree(sha, request, deps) {
+  const commit = await deps.github(`git/commits/${sha}`);
   requireEvidence(
-    selection.workflowSha === request.workflowSha,
-    `tooling ${selection.workflowSha} differs from current parent ${request.workflowSha}; same tooling is required`,
+    commit?.sha === sha && SHA.test(commit?.tree?.sha),
+    "invalid workflow commit tree",
   );
+  const readTree = async (oid) => {
+    const tree = await deps.github(`git/trees/${oid}`);
+    requireEvidence(
+      tree?.sha === oid &&
+        tree.truncated === false &&
+        Array.isArray(tree.tree) &&
+        tree.tree.every(
+          (entry) =>
+            typeof entry.path === "string" &&
+            SHA.test(entry.sha) &&
+            ["blob", "tree", "commit"].includes(entry.type) &&
+            typeof entry.mode === "string",
+        ),
+      "workflow tree is incomplete or invalid",
+    );
+    return tree.tree;
+  };
+  const root = await readTree(commit.tree.sha);
+  const github = root.find((entry) => entry.path === ".github" && entry.type === "tree");
+  requireEvidence(github, "workflow tree omitted .github");
+  const githubTree = await readTree(github.sha);
+  const workflows = githubTree.find((entry) => entry.path === "workflows" && entry.type === "tree");
+  requireEvidence(workflows, "workflow tree omitted workflows");
+  const workflowTree = await readTree(workflows.sha);
+  const selected = new Map();
+  const visit = async (name) => {
+    if (selected.has(name)) {
+      return;
+    }
+    requireEvidence(selected.size < 32, "workflow dependency closure exceeded its bound");
+    const entry = workflowTree.find(
+      (candidate) => candidate.path === name && candidate.type === "blob",
+    );
+    requireEvidence(entry, "workflow dependency is absent: " + name);
+    selected.set(name, entry);
+    const blob = await deps.github("git/blobs/" + entry.sha);
+    requireEvidence(
+      blob?.sha === entry.sha &&
+        blob.encoding === "base64" &&
+        typeof blob.content === "string" &&
+        blob.size > 0 &&
+        blob.size <= 1024 * 1024,
+      "workflow blob is invalid or exceeds its bound",
+    );
+    const bytes = Buffer.from(blob.content, "base64");
+    requireEvidence(
+      bytes.length === blob.size &&
+        createHash("sha1")
+          .update("blob " + bytes.length + "\0")
+          .update(bytes)
+          .digest("hex") === entry.sha,
+      "workflow blob content does not match its immutable identity",
+    );
+    // Like dispatch input discovery, this runs before dependencies are installed.
+    // Support the repository's block-style job declarations; unfamiliar YAML
+    // requires fresh work rather than guessing at a reusable-workflow closure.
+    const source = bytes.toString("utf8");
+    const jobs = /^jobs:\r?\n([\s\S]*?)(?=^\S|(?![\s\S]))/mu.exec(source)?.[1];
+    requireEvidence(jobs, "unsupported workflow jobs declaration");
+    let firstProperty = false;
+    for (const line of jobs.split(/\r?\n/u)) {
+      if (!line.trim() || line.trimStart().startsWith("#")) {
+        continue;
+      }
+      requireEvidence(
+        !/^ {0,5}\S/u.test(line) || /^ {2}\S/u.test(line) || /^ {4}\S/u.test(line),
+        "unsupported reusable workflow indentation",
+      );
+      if (firstProperty) {
+        requireEvidence(
+          /^ {4}\S/u.test(line),
+          "unsupported reusable workflow property indentation",
+        );
+        firstProperty = false;
+      }
+      if (/^ {2}\S/u.test(line)) {
+        requireEvidence(
+          /^ {2}[A-Za-z0-9_-]+:\s*(?:#.*)?$/u.test(line),
+          "unsupported reusable workflow job declaration",
+        );
+        firstProperty = true;
+      }
+      if (!/^ {4}\S/u.test(line)) {
+        continue;
+      }
+      requireEvidence(/^ {4}[A-Za-z0-9_-]+:/u.test(line), "unsupported reusable workflow property");
+      if (!line.startsWith("    uses:")) {
+        continue;
+      }
+      const value = /^ {4}uses:\s*([^#]+?)(?:\s+#.*)?$/u.exec(line)?.[1]?.trim();
+      const use = value?.replace(/^(?:"([^"\\]*)"|'([^']*)')$/u, "$1$2");
+      requireEvidence(
+        use && /^[A-Za-z0-9_./@-]+$/u.test(use),
+        "unsupported reusable workflow reference",
+      );
+      if (use.startsWith("./")) {
+        const dependency = /^\.\/\.github\/workflows\/([A-Za-z0-9_-]+\.ya?ml)$/u.exec(use)?.[1];
+        requireEvidence(dependency, "unsupported local reusable workflow reference");
+        await visit(dependency);
+      }
+    }
+    // Normal CI uses workflow_call jobs for its workflow dependencies. Other
+    // roles can dispatch through scripts (for example Release Checks launches
+    // Telegram), so source-text discovery cannot prove their closure: retain
+    // the complete workflow tree below rather than guessing script imports.
+  };
+  await visit(request.spec.workflow);
+  // Normal CI also materializes Q-owned test, config, normalization and runtime
+  // helpers. Retain their containing trees rather than infer transitive imports.
+  // This conservatively invalidates reuse for unrelated changes in those trees;
+  // other product directories still come from C. Other roles retain the full root.
+  return canonical({
+    root: root.filter(
+      (entry) =>
+        entry.path !== ".github" &&
+        (request.role !== "normalCi" ||
+          entry.type !== "tree" ||
+          ["scripts", "config", "packages", "src", "test"].includes(entry.path)),
+    ),
+    github: githubTree.filter((entry) => entry.path !== "workflows"),
+    workflows: (request.role === "normalCi" ? [...selected.values()] : workflowTree).toSorted(
+      (left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0),
+    ),
+  });
+}
+
+async function validateWorkloadIdentity(workflowSha, request, deps) {
+  if (workflowSha === request.workflowSha) {
+    return;
+  }
+  requireEvidence(
+    (await workloadTree(workflowSha, request, deps)) ===
+      (await workloadTree(request.workflowSha, request, deps)),
+    `tooling ${workflowSha} differs from current parent ${request.workflowSha}; workload closure changed`,
+  );
+}
+
+async function validateEvidence(selection, request, deps) {
   validateSelectionIdentity(selection, request);
+  await validateWorkloadIdentity(selection.workflowSha, request, deps);
   const run = await deps.github(`actions/runs/${selection.runId}`);
   validateRun(run, selection, request);
   if (selection.workflowSha !== request.targetSha) {
@@ -340,11 +500,7 @@ async function validateEvidence(selection, request, deps) {
       "workflow SHA is not a main ancestor or the candidate SHA",
     );
   }
-  const artifact = await deps.github(`actions/artifacts/${String(selection.artifact.id)}`);
-  requireEvidence(
-    canonical(artifactIdentity(artifact, request, run, deps.now)) === canonical(selection.artifact),
-    "artifact identity changed after selection",
-  );
+  // The archive owner returns fresh metadata; validate that one acquisition below.
   const downloaded = await deps.downloadArchive({
     deadlineMs: deps.deadlineMs,
     expected: {
@@ -398,7 +554,8 @@ async function validateEvidence(selection, request, deps) {
       receipt.dispatchId === origin(selection, request) &&
       receipt.sourceParentRunId === selection.sourceParentRunId &&
       receipt.sourceParentAttempt === selection.sourceParentAttempt &&
-      receipt.workloadConclusion === "success" &&
+      (receipt.workloadConclusion === "success" ||
+        (request.policyTargetVersion && receipt.workloadConclusion === "failure")) &&
       canonical(normalizedInputs(receipt.inputs)) === canonical(request.inputs),
     "receipt target, origin, or exact dispatch inputs changed",
   );
@@ -428,17 +585,48 @@ async function validateEvidence(selection, request, deps) {
   composite.compositeJobsSha256 = releaseCompositeJobsSha256(composite);
   requireEvidence(
     composite.jobs.length > 0 &&
-      composite.jobs.every((job) => ["success", "neutral"].includes(job.conclusion)) &&
+      (request.policyTargetVersion ||
+        composite.jobs.every((job) => ["success", "neutral"].includes(job.conclusion))) &&
       Object.entries(composite).every(
         ([key, value]) => canonical(receipt[key]) === canonical(value),
       ),
     "receipt does not match the complete live composite workload",
   );
+  // Callers supply the current admitted candidate version to apply trusted P policy.
+  if (request.policyTargetVersion) {
+    const child = {
+      key: request.role,
+      runId: String(run.id),
+      runAttempt: run.run_attempt,
+      status: run.status,
+      conclusion: run.conclusion,
+      jobs: composite.jobs,
+    };
+    requireEvidence(
+      terminalPolicyPass(child, request.policyTargetVersion, request.targetSha),
+      "workload does not pass recovery release policy",
+    );
+    const policy = evaluateReleaseChildPolicy({
+      child,
+      targetVersion: request.policyTargetVersion,
+      targetSha: request.targetSha,
+    });
+    await validateReleaseWaiverAggregates({
+      policy,
+      jobs: composite.jobs.map((job) =>
+        attempts
+          .find((attempt) => attempt.runAttempt === job.acceptedRunAttempt)
+          .jobs.find((raw) => raw.name === job.name),
+      ),
+      getJobLog: deps.getJobLog,
+    });
+  }
   // The source parent is the pinned dispatch origin, not a live evidence producer.
   // Its later reruns do not supersede the independently checked child attempt.
   // Read the exact origin below, including when immutable payloads are replayed.
   const parent = await deps.github(
     `actions/runs/${selection.sourceParentRunId}/attempts/${selection.sourceParentAttempt}`,
+    { replay: false },
   );
   requireEvidence(
     String(parent?.id) === selection.sourceParentRunId &&
@@ -484,7 +672,11 @@ export async function discoverReusableReleaseChild(request, deps = {}) {
     );
   for (const run of inventory.workflow_runs.slice(0, MAX_RUNS)) {
     scanned += 1;
-    if (run.status !== "completed" || run.conclusion !== "success") {
+    if (
+      run.status !== "completed" ||
+      (run.conclusion !== "success" &&
+        !(normalized.policyTargetVersion && run.conclusion === "failure"))
+    ) {
       skip("not-green");
       continue;
     }
@@ -528,14 +720,6 @@ export async function discoverReusableReleaseChild(request, deps = {}) {
         skip("target receipt absent");
         continue;
       }
-      // Older tooling cannot pass validation; keep it off the full-validation budget.
-      if (run.head_sha !== request.workflowSha) {
-        skip("other tooling");
-        report(
-          `run ${run.id} ${run.display_title}: rejected: tooling ${run.head_sha} differs from current parent ${request.workflowSha}; same tooling is required`,
-        );
-        continue;
-      }
       evaluated += 1;
       requireEvidence(matching.length === 1, "receipt artifact is ambiguous");
       const selection = {
@@ -554,7 +738,7 @@ export async function discoverReusableReleaseChild(request, deps = {}) {
         inputs: normalized.inputs,
       };
       const verified = await validateEvidence(selection, normalized, resolved);
-      report(`run ${run.id} ${run.display_title}: reused: verified receipt and same tooling`);
+      report(`run ${run.id} ${run.display_title}: reused: verified receipt and workload closure`);
       summary(true);
       return verified.selection;
     } catch (error) {

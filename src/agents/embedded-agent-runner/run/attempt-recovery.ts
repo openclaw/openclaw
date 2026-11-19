@@ -24,6 +24,7 @@ import { observeReplyDelivery } from "../../reply-completion.js";
 import type { normalizeUsage } from "../../usage.js";
 import { resolveSourceReplyDelivery } from "../delivery-evidence.js";
 import { log } from "../logger.js";
+import { isEmbeddedRunReplaySafe } from "../transcript-conflict.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
 import type { NormalizedEmbeddedRunAttempt } from "./attempt-normalization.js";
@@ -70,7 +71,6 @@ export async function recoverEmbeddedRunAttempt(input: {
     typeof recoverEmbeddedRunTimeout
   >[0]["resolveContextEnginePluginId"];
   buildRuntimeSettings: Parameters<typeof recoverEmbeddedRunTimeout>[0]["buildRuntimeSettings"];
-  armPostCompactionGuard: () => void;
   usageAccumulator: ReturnType<typeof createUsageAccumulator>;
   lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
   runtimeAuthRetry: boolean;
@@ -131,6 +131,10 @@ export async function recoverEmbeddedRunAttempt(input: {
   const midTurnPrecheck =
     promptErrorSource === "precheck" && attempt.preflightRecovery?.source === "mid-turn";
   const settledEvidence = resolveSettledToolBatchEvidence(attempt, { midTurn: midTurnPrecheck });
+  // The context-pressure owner stops for maintenance only at a boundary it proved
+  // continuable, and maintenance always continues the turn.
+  const boundaryMaintenance =
+    promptErrorSource === "precheck" && attempt.preflightRecovery?.pressure === "maintenance";
   // Project decisions at their existing return points; diagnostics never decide
   // replay safety or imply that recorded tool results prove settled side effects.
   const recordRecoveryDecision = (
@@ -140,6 +144,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       | "live_model_switch"
       | "timeout_recovery"
       | "transient_retry"
+      | "item_conflict"
       | "replay_unsafe"
       | "overflow_recovery"
       | "overflow_unrecoverable"
@@ -147,6 +152,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       | "harness_retry_unavailable"
       | "prompt_failure"
       | "prompt_recovery"
+      | "boundary_maintenance"
       | "no_recovery",
   ) => {
     emitDiagnosticsTimelineEvent(
@@ -332,6 +338,23 @@ export async function recoverEmbeddedRunAttempt(input: {
     recordRecoveryDecision("accepted", "live_model_switch");
     throw new LiveSessionModelSwitchError(requestedSelection);
   }
+  if (
+    attemptAssistant?.itemConflictRecovery === "deferred" &&
+    !input.contextRecoveryState.itemConflictRecoveryAttempted &&
+    !terminalInterrupted &&
+    !promptError &&
+    isEmbeddedRunReplaySafe(normalizedAttempt.replayState, attempt) &&
+    (await observeReplyDelivery(params.resolveReplyDelivery, 0, (error) =>
+      log.warn(
+        `reply delivery observation failed; retaining custody: ${formatErrorMessage(error)}`,
+      ),
+    )) === "missing"
+  ) {
+    // The transport saved the repair; execution and delivery owners must both allow replay.
+    input.contextRecoveryState.itemConflictRecoveryAttempted = true;
+    recordRecoveryDecision("accepted", "item_conflict");
+    return retry();
+  }
   const assistantSignal =
     attemptAssistant?.stopReason === "error"
       ? buildAssistantFailoverSignal(attemptAssistant)
@@ -404,7 +427,6 @@ export async function recoverEmbeddedRunAttempt(input: {
       target: sessionPromptState.sessionTarget,
     }),
     prepareCompactedTranscriptRetry: sessionPromptState.prepareCompactedTranscriptRetry,
-    armPostCompactionGuard: input.armPostCompactionGuard,
     usageAccumulator: input.usageAccumulator,
   };
   if (
@@ -422,12 +444,46 @@ export async function recoverEmbeddedRunAttempt(input: {
     recordRecoveryDecision("accepted", "timeout_recovery");
     return retry();
   }
+  const emitTransientRetryStatus = async ({
+    attempt: retryAttempt,
+    maxRetries,
+    delayMs,
+    reason,
+  }: {
+    attempt: number;
+    maxRetries: number;
+    delayMs: number;
+    reason: FailoverReason | "output_limit";
+  }) => {
+    const event = {
+      stream: "run_status",
+      data: {
+        phase: "retrying",
+        message:
+          reason === "rate_limit"
+            ? `Waiting for rate limit… ${Math.ceil(delayMs / 1_000)}s (attempt ${retryAttempt + 1}/${maxRetries + 1}).`
+            : reason === "output_limit"
+              ? `Retrying… ${retryAttempt + 1}/${maxRetries + 1}`
+              : `Provider temporarily unavailable. Retrying in ${Math.ceil(delayMs / 1_000)}s (${retryAttempt}/${maxRetries}).`,
+        retryAttempt,
+        maxRetries,
+        delayMs,
+        retryAt: Date.now() + delayMs,
+        attempt: retryAttempt + 1,
+        maxAttempts: maxRetries + 1,
+        reason,
+      },
+    };
+    emitAgentEvent({ runId: params.runId, sessionKey: params.sessionKey, ...event });
+    await params.onAgentEvent?.(event);
+  };
   const recoveryReason = outputLimitFailure ? "output_limit" : failureReason;
   const retryCode = promptError ? getFailoverErrorCode(promptError) : assistantSignal?.code;
   const retryMessage = promptError ? formatErrorMessage(promptError) : assistantSignal?.message;
   // The finished attempt has released its tools. Continue its transcript, including
   // partial output and uncertain effects; never resubmit the original user request.
   if (
+    !boundaryMaintenance &&
     !externalAbort &&
     !terminalState.signalOwnedInterruption &&
     !timedOutByRunBudget &&
@@ -453,32 +509,10 @@ export async function recoverEmbeddedRunAttempt(input: {
         ? resolveRetryAfterMs(formatErrorMessage(promptError), Date.now(), promptError)
         : assistantSignal?.retryAfterMs,
       maxRetryDelayMs: attempt.providerRetryMaxDelayMs,
-      // Fallback and rotation both require a replay-safe attempt; without one the
-      // only recovery left is to wait out the floor and continue the transcript.
+      // Fallback and rotation both require a replay-safe attempt; unsafe attempts
+      // may only continue the transcript when the retry controller admits the wait.
       failoverEligible: currentAttemptReplaySafe,
-      onRetry: async ({ attempt: retryAttempt, maxRetries, delayMs, reason }) => {
-        const event = {
-          stream: "run_status",
-          data: {
-            phase: "retrying",
-            message:
-              reason === "rate_limit"
-                ? `Waiting for rate limit… ${Math.ceil(delayMs / 1_000)}s (attempt ${retryAttempt + 1}/${maxRetries + 1}).`
-                : reason === "output_limit"
-                  ? `Retrying… ${retryAttempt + 1}/${maxRetries + 1}`
-                  : `Provider temporarily unavailable. Retrying in ${Math.ceil(delayMs / 1_000)}s (${retryAttempt}/${maxRetries}).`,
-            retryAttempt,
-            maxRetries,
-            delayMs,
-            retryAt: Date.now() + delayMs,
-            attempt: retryAttempt + 1,
-            maxAttempts: maxRetries + 1,
-            reason,
-          },
-        };
-        emitAgentEvent({ runId: params.runId, sessionKey: params.sessionKey, ...event });
-        await params.onAgentEvent?.(event);
-      },
+      onRetry: emitTransientRetryStatus,
     }))
   ) {
     runInput.laneController.throwIfAborted();
@@ -533,6 +567,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     });
   }
   if (
+    !boundaryMaintenance &&
     !currentAttemptReplaySafe &&
     !canContinueSettledMidTurnOverflow &&
     !canRecoverSettledToolResults
@@ -556,9 +591,21 @@ export async function recoverEmbeddedRunAttempt(input: {
     attemptCompactionCount,
     prepareCurrentTranscriptRetry: sessionPromptState.continueFromCurrentTranscript,
     markOwnedTranscriptRetry: sessionPromptState.markOwnedTranscriptRetry,
+    // A provider outage during recovery compaction gets the same bounded backoff as a
+    // failed model request; the retried attempt rechecks the budget and compacts again.
+    retryTransientCompactionFailure: (failure) =>
+      failoverRetryController.maybeRetryTransient({
+        ...failure,
+        maxRetryDelayMs: attempt.providerRetryMaxDelayMs,
+        failoverEligible: currentAttemptReplaySafe,
+        onRetry: emitTransientRetryStatus,
+      }),
   });
   if (overflowRecovery.action === "retry") {
-    recordRecoveryDecision("accepted", "overflow_recovery");
+    recordRecoveryDecision(
+      "accepted",
+      boundaryMaintenance ? "boundary_maintenance" : "overflow_recovery",
+    );
     return retry();
   }
   if (overflowRecovery.action === "surface") {

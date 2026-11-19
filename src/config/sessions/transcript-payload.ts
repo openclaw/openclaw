@@ -388,12 +388,19 @@ export function prepareTranscriptPayloadForReuse(
   database: EngineConnection,
   eventJson: string,
   parsedEvent?: unknown,
+  navigationJson?: string,
 ): PreparedTranscriptPayload {
   const storageEncoding = readTranscriptStorageEncoding(database);
   return {
     eventJson,
     storageEncoding,
-    payload: prepareTranscriptPayload(database, eventJson, parsedEvent, storageEncoding),
+    payload: prepareTranscriptPayload(
+      database,
+      eventJson,
+      parsedEvent,
+      storageEncoding,
+      navigationJson,
+    ),
   };
 }
 
@@ -411,6 +418,7 @@ export function prepareTranscriptPayload(
   eventJson: string,
   parsedEvent?: unknown,
   storageEncoding = readTranscriptStorageEncoding(database),
+  navigationJson?: string,
 ): TranscriptPayloadRecord {
   const rawBytes = Buffer.byteLength(eventJson, "utf8");
   const utf8 = storageEncoding === "UTF-8";
@@ -439,6 +447,12 @@ export function prepareTranscriptPayload(
   const maximumStoredBytes = rawBytes - Math.max(64, Math.ceil(rawBytes / 10));
   if (compressed.byteLength > maximumStoredBytes) {
     return identity;
+  }
+  // Cold restoration retains navigation for these exact immutable archive bytes.
+  if (navigationJson !== undefined) {
+    return compressed.byteLength + Buffer.byteLength(navigationJson, "utf8") <= maximumStoredBytes
+      ? { ...identity, event_json: null, event_zstd: compressed, navigation_json: navigationJson }
+      : identity;
   }
   let reportJson: string;
   try {

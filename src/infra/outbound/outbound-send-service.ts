@@ -142,6 +142,8 @@ export async function executeSendAction(params: SendActionParams): Promise<{
   payload: unknown;
   /** Exact text handed to the direct transport after core normalization and hooks. */
   deliveredText?: string;
+  /** Confirmed visible content after adapter preparation and delivery hooks. */
+  deliveredPayloads?: ReplyPayload[];
   toolResult?: AgentToolResult<unknown>;
   sendResult?: MessageSendResult;
 }> {
@@ -204,11 +206,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
         onHandled: async (deliveryFact) => {
           try {
             await params.ctx.onSendAccepted?.();
-            if (
-              !deliveryFact ||
-              deliveryFact.partialDelivery ||
-              params.ctx.input.callerRecordsDestinationHistory
-            ) {
+            if (!deliveryFact || deliveryFact.partialDelivery) {
               return;
             }
             if (deliveryFact.createdThreadIds.length > 1) {
@@ -258,7 +256,10 @@ export async function executeSendAction(params: SendActionParams): Promise<{
       throw error;
     }
     if (pluginHandled) {
-      return pluginHandled;
+      return {
+        ...pluginHandled,
+        deliveredPayloads: [{ ...defaultPayload, text: pluginMessage }],
+      };
     }
   }
 
@@ -305,6 +306,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     queuePolicy,
     deps: params.ctx.input.deps,
     gateway: params.ctx.gateway,
+    gatewayClientScopes: params.ctx.input.gatewayClientScopes,
     idempotencyKey: params.ctx.idempotencyKey,
     runId: params.ctx.input.runId,
     executionIdentityToken: params.ctx.input.executionIdentityToken,
@@ -317,7 +319,6 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     deliveryIntentId: params.ctx.input.deliveryIntentId,
     deliveryCompletion: params.ctx.input.deliveryCompletion,
     transcriptRoute: params.ctx.transcriptRoute,
-    skipDestinationHistory: params.ctx.input.callerRecordsDestinationHistory,
     conversationDeliveryTarget: params.ctx.input.conversationDeliveryTarget,
     deliveryRetryOwner: params.ctx.deliveryRetryOwner,
     requireUnknownSendReconciliation: params.ctx.input.requireQueuePersistence ? false : undefined,
@@ -348,6 +349,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     handledBy: "core",
     payload: result,
     ...(deliveredText ? { deliveredText } : {}),
+    deliveredPayloads,
     sendResult: result,
   };
 }

@@ -183,6 +183,7 @@ export async function sweepCollectorArchiveGroups(
         return {
           value: true,
           postimages: new Map(groupEntries.map(([runId]) => [runId, null])),
+          removalReason: "retention",
         };
       },
       { runs },

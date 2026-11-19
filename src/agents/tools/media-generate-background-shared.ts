@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import { formatErrorMessage as formatToolErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { computeBackoffSchedule, sleepWithAbort } from "@openclaw/retry";
 import { getRuntimeConfig } from "../../config/config.js";
-import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
@@ -15,24 +14,26 @@ import {
   sameSessionTranscriptStorageEnvironment,
 } from "../../config/sessions/transcript-target-binding.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
-import { removeCronRunContinuationSessionIfIdle } from "../../cron/run-continuation-cleanup.js";
 import {
   clearAgentRunContext,
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
 import { formatActiveContinuationTraceparent } from "../../infra/continuation-tracer.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { captureGatewayContextResolver } from "../../plugins/runtime/gateway-context-binding.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import {
+  captureSessionControllerSettlement,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { monotonicNow } from "../../shared/monotonic-time.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
@@ -60,6 +61,7 @@ import {
   getGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
 import {
+  hasMediaGenerationCustodyObligation,
   retainBlockedMediaCompletion,
   wakeMediaGenerationTaskCompletion,
   type MediaGenerationCompletionWakeOutcome,
@@ -74,26 +76,11 @@ const MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS = 120_000;
 
 export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => void;
 
-function shouldDetachMediaGenerationTask(
-  sessionKey: string | undefined,
-  entry?: SessionEntry,
-): boolean {
+// A cron run is already background work and delivers its own output, so it
+// waits for its media inline instead of resuming after the run has ended.
+function shouldDetachMediaGenerationTask(sessionKey: string | undefined): boolean {
   const normalizedSessionKey = sessionKey?.trim();
-  if (!normalizedSessionKey) {
-    return false;
-  }
-  if (!parseCronRunScopeSuffix(normalizedSessionKey).runId) {
-    return true;
-  }
-  const marker = entry?.cronRunContinuation;
-  if (!marker) {
-    // Exact cron work without a durable checkpoint cannot be resumed safely.
-    return false;
-  }
-  const cliExecutionProvider = marker.cliExecutionProvider?.trim();
-  return (
-    !cliExecutionProvider || Boolean(getCliSessionBinding(entry, cliExecutionProvider)?.sessionId)
-  );
+  return Boolean(normalizedSessionKey && !parseCronRunScopeSuffix(normalizedSessionKey).runId);
 }
 
 export type MediaGenerationExecutionResult = {
@@ -111,6 +98,7 @@ type CreateMediaGenerationTaskRunParams = {
   inputProvenance?: InputProvenance;
   prompt: string;
   providerId?: string;
+  deliveryMode?: "review";
   assertCurrent?: () => void;
 };
 
@@ -297,6 +285,12 @@ async function createMediaGenerationTaskRun(
             lifecycleRevision: entry.lifecycleRevision ?? null,
           }
         : undefined;
+    if (params.deliveryMode === "review" && entry?.incognito) {
+      throw new Error("Review-before-delivery requires a durable chat session");
+    }
+    const deliveryQueueContext = requesterTranscript
+      ? captureOpenClawStateWorkerContext()
+      : undefined;
     const task = createMediaGenerationOperation({
       taskId: runId,
       status: "running",
@@ -304,18 +298,40 @@ async function createMediaGenerationTaskRun(
       sourceId: params.providerId ? `${params.toolName}:${params.providerId}` : params.toolName,
       requesterSessionKey: sessionKey,
       requesterAgentId: params.requesterAgentId,
+      requesterSessionId: requesterTranscript?.sessionId,
+      requesterStorePath: requesterTranscript?.storePath,
+      requesterLifecycleRevision: requesterTranscript?.lifecycleRevision,
       runId,
       task: params.prompt,
       progressSummary: params.queuedProgressSummary,
     });
+    const detach = Boolean(requesterTranscript) && shouldDetachMediaGenerationTask(sessionKey);
     const handle = {
       taskId: task.taskId,
       runId,
       requesterSessionKey: sessionKey,
       requesterAgentId: params.requesterAgentId,
       requesterOrigin,
-      detach: Boolean(requesterTranscript) && shouldDetachMediaGenerationTask(sessionKey, entry),
+      detach,
+      deliveryMode: params.deliveryMode,
+      deliveryQueueContext,
+      acceptedOperation: task,
       requesterTranscript,
+      // Snapshot only the work that owns the requester now: the originating turn
+      // may still own terminal persistence when the media is ready, but later
+      // turns must not hold its delivery. Nothing survives a restart, so a
+      // recovered completion is not held.
+      requesterSettlement:
+        detach && requesterTranscript
+          ? captureSessionControllerSettlement({
+              target: captureSessionTarget({
+                storeScope: requesterTranscript.storePath,
+                sessionKey: requesterTranscript.sessionKey,
+                incarnation: requesterTranscript.sessionId,
+                agentId: requesterTranscript.agentId,
+              }),
+            })
+          : undefined,
       resolveGatewayContext,
       taskLabel: params.prompt,
       traceparent: formatActiveContinuationTraceparent(),
@@ -348,23 +364,8 @@ function recordMediaGenerationTaskProgress(params: RecordMediaGenerationTaskProg
 }
 
 function clearMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle): void {
-  const current = isMediaGenerationOperationCurrent(handle.runId);
   clearGeneratedMediaTaskActivity(handle.runId);
   clearAgentRunContext(handle.runId);
-  if (!current) {
-    return;
-  }
-  // A one-shot cron job can be deleted before detached media settles, leaving no
-  // later timer tick to reap its exact continuation row.
-  void removeCronRunContinuationSessionIfIdle(handle.requesterSessionKey).catch(
-    (error: unknown) => {
-      log.warn("Failed to remove settled cron media continuation", {
-        taskId: handle.taskId,
-        runId: handle.runId,
-        error: formatErrorMessage(error),
-      });
-    },
-  );
 }
 
 export function createDefaultMediaGenerateBackgroundScheduler(params: {
@@ -443,7 +444,10 @@ export function scheduleMediaGenerationTaskCompletion(params: {
       return;
     }
 
-    if (!isMediaGenerationOperationCurrent(params.handle.runId)) {
+    if (
+      !isMediaGenerationOperationCurrent(params.handle.runId) &&
+      !hasMediaGenerationCustodyObligation(params.handle)
+    ) {
       clearMediaGenerationTaskRunContext(params.handle);
       return;
     }

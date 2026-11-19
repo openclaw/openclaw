@@ -299,6 +299,7 @@ export type SubagentRunMaintenanceRecord = Pick<
   | "continuationRecipientAuthorityBinding"
 > & {
   execution: Pick<SubagentExecutionState, "status" | "endedAt">;
+  requesterSettleWake?: Pick<RequesterSettleWakeState, "status">;
   delivery?: Pick<SubagentCompletionDeliveryState, "status" | "suspendedAt">;
 };
 

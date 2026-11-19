@@ -79,6 +79,7 @@ export function planQueuedSubagentRunStart(
   return {
     value: { source: current, entry, terminalBeforeAcceptance },
     postimages,
+    removalReason: "run_rekeyed",
     ...(current.runId !== nextRunId ? { rekeys: new Map([[current.runId, nextRunId]]) } : {}),
   };
 }

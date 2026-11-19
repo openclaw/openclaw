@@ -1,2 +1,0 @@
-4
-# Keep the Outputs demand fixture closed until its native toggle opens the held Session module.

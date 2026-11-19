@@ -16,6 +16,7 @@ import { getRuntimeConfigCapture } from "../../config/runtime-config-capture-sta
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import { intersectSessionToolOverrides } from "../../config/sessions/session-tool-overrides.js";
+import { SessionWorkStartChangedError } from "../../config/sessions/work-start-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronJobToolPolicyContext } from "../../cron/execution-context-admission.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
@@ -44,6 +45,9 @@ export function narrowSessionEventSettings(
   };
 }
 
+/** Policy publications an accepted occurrence may outlive before it settles as failed. */
+const MAX_CONFIG_READMISSION_ATTEMPTS = 2;
+
 /** One occurrence keeps its original policy while selected model consumers may change. */
 export function captureSessionEventConfigPolicy(
   config: OpenClawConfig,
@@ -55,10 +59,18 @@ export function captureSessionEventConfigPolicy(
   let checkedConfig = config;
   let checkedPublication = publication;
   let changed = false;
+  let started = false;
   let matches = captureSessionEventConfigRelevance(captured, agentId, job);
   return {
     get changed() {
       return changed;
+    },
+    /** Config gates admission only: a started turn finishes under the config it started with. */
+    start() {
+      started = true;
+    },
+    canReadmit(attempt: number) {
+      return attempt < MAX_CONFIG_READMISSION_ATTEMPTS;
     },
     selectModel(selection: PolicySelection) {
       if (job) {
@@ -70,13 +82,15 @@ export function captureSessionEventConfigPolicy(
     },
     assertCurrent(current: OpenClawConfig, routeChannels: Array<string | undefined>) {
       const currentPublication = getRuntimeConfigSnapshotMetadata();
-      if (current === checkedConfig && currentPublication === checkedPublication) {
+      if (started || (current === checkedConfig && currentPublication === checkedPublication)) {
         return;
       }
       if (!matches(current, routeChannels)) {
         // Only this recorded refusal permits the handoff owner to re-admit unstarted work.
         changed = true;
-        throw new Error("Session event configuration changed; inspect the run before retrying");
+        throw new SessionWorkStartChangedError(
+          "Session event configuration changed; inspect the run before retrying",
+        );
       }
       checkedConfig = current;
       checkedPublication = currentPublication;
@@ -162,12 +176,22 @@ export function captureSessionEventConfigRelevance(
         mcp,
         channels: channelConfig,
         logging: _logging,
+        diagnostics: _diagnostics,
+        ui: _ui,
+        telemetry: _telemetry,
+        update: _update,
+        session,
         meta: _meta,
+        // Plugin reloads own their admitted turns: they hand over at a step boundary or
+        // stay pinned to the admitted generation (src/agents/plugin-turn-handover.ts).
+        plugins: _plugins,
         ...global
       }: OpenClawConfig,
       profiles: ReadonlySet<string>,
     ) => ({
       ...global,
+      // Housekeeping does not alter the admitted target, permissions, or tools.
+      session: { ...session, maintenance: undefined },
       // OpenClaw's MCP owner revokes exact servers; native runtimes can retain raw config.
       mcp: runtimeOwnsMcpServers ? { ...mcp, servers: undefined } : mcp,
       models: selection
@@ -200,6 +224,8 @@ export function captureSessionEventConfigRelevance(
         },
         agent: {
           ...resolveAgentEntry({ agents }, agentId),
+          // Display identity does not change an admitted event's authority.
+          identity: undefined,
           modelPolicy: selection ? undefined : resolveAgentEntry({ agents }, agentId)?.modelPolicy,
         },
       },
@@ -220,7 +246,10 @@ export function captureSessionEventConfigRelevance(
     const relevantPath = (path: string, profiles: ReadonlySet<string>) => {
       const tokens = parseConcreteConfigPathTokens(path);
       if (
-        tokens?.[0] === "logging" ||
+        ["logging", "diagnostics", "ui", "telemetry", "update", "plugins"].some(
+          (key) => tokens?.[0] === key,
+        ) ||
+        (tokens?.[0] === "session" && tokens[1] === "maintenance") ||
         (runtimeOwnsMcpServers && tokens?.[0] === "mcp" && tokens[1] === "servers")
       ) {
         return false;
@@ -238,8 +267,10 @@ export function captureSessionEventConfigRelevance(
         );
       }
       if (tokens?.[0] === "agents" && tokens[1] === "entries" && typeof tokens[2] === "string") {
-        // Matches the projection, which keeps only this agent's entry.
-        return normalizeAgentId(tokens[2]) === normalizeAgentId(agentId);
+        // Matches the projection: only this agent's non-display settings.
+        return (
+          tokens[3] !== "identity" && normalizeAgentId(tokens[2]) === normalizeAgentId(agentId)
+        );
       }
       return (
         !job ||
@@ -283,5 +314,37 @@ export function captureSessionEventConfigRelevance(
         getRuntimeConfigCapture(candidate)?.source ?? candidate,
       )
     );
+  };
+}
+
+/** Nested callers intersect ceilings; only an unrestricted same-session owner retains the exemption. */
+export function inheritSessionEventToolPolicy(
+  identity: {
+    agentId: string;
+    sessionKey: string;
+    sessionEventToolsAllow?: readonly string[];
+    sessionEventToolsAllowSessionScoped?: true;
+  },
+  owner?: {
+    agentId: string;
+    sessionKey: string;
+    sessionEventToolsAllow?: readonly string[];
+    sessionEventToolsAllowSessionScoped?: true;
+  },
+) {
+  return {
+    sessionEventToolsAllow:
+      identity.sessionEventToolsAllow && owner?.sessionEventToolsAllow
+        ? identity.sessionEventToolsAllow.filter((name) =>
+            owner.sessionEventToolsAllow!.includes(name),
+          )
+        : (identity.sessionEventToolsAllow ?? owner?.sessionEventToolsAllow),
+    sessionEventToolsAllowSessionScoped:
+      !owner ||
+      (owner.agentId === identity.agentId.trim() &&
+        owner.sessionKey === identity.sessionKey.trim() &&
+        (!owner.sessionEventToolsAllow || owner.sessionEventToolsAllowSessionScoped))
+        ? identity.sessionEventToolsAllowSessionScoped
+        : undefined,
   };
 }

@@ -119,9 +119,12 @@ beforeEach(async () => {
   spawned = createDeferredCore();
   mocks.spawn.mockImplementation((_command: string, args: string[], options: SpawnOptions) => {
     child = new ChildProcess();
-    Object.defineProperty(child, "pid", { value: 654 });
-    child.stdout = new PassThrough();
-    child.stderr = new PassThrough();
+    Object.defineProperties(child, {
+      pid: { value: 654 },
+      stdin: { value: null },
+      stdout: { value: new PassThrough() },
+      stderr: { value: new PassThrough() },
+    });
     childEnv = options.env ?? {};
     contextPath = args[args.indexOf("--context") + 1]!;
     observedContext = JSON.parse(fsSync.readFileSync(contextPath, "utf8"));

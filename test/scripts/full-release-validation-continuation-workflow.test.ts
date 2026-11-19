@@ -15,17 +15,29 @@ const workflow = parse(source) as {
     {
       if?: string;
       env?: Record<string, string>;
+      with?: Record<string, unknown>;
       needs?: string[];
       steps: Array<Record<string, unknown>>;
     }
   >;
   on: { workflow_dispatch: { inputs: Record<string, unknown> } };
 };
+const watcher = parse(
+  readFileSync(".github/workflows/full-release-state-watcher.yml", "utf8"),
+) as typeof workflow;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const allSteps = Object.values(workflow.jobs).flatMap(({ steps }) => steps);
+const allSteps = [...Object.values(workflow.jobs), workflowJob("watch")].flatMap(
+  ({ steps }) => steps ?? [],
+);
+
+function workflowJob(name: string) {
+  const job = name === "watch" ? watcher.jobs.watch : workflow.jobs[name];
+  assert(job, `missing workflow job: ${name}`);
+  return job;
+}
 
 function step(job: string, name: string) {
-  const match = workflow.jobs[job]?.steps.find((entry) => entry.name === name);
+  const match = workflowJob(job).steps?.find((entry) => entry.name === name);
   assert(match, `missing workflow step: ${job}/${name}`);
   return match;
 }
@@ -46,9 +58,15 @@ it("runs release tooling only from the trusted revision without persisted creden
     const sparseCheckout = checkout["sparse-checkout"];
     if (sparseCheckout !== undefined) {
       assert(typeof sparseCheckout === "string");
-      expect(sparseCheckout.split(/\s+/u)).toContain("scripts");
+      expect(sparseCheckout.split(/\s+/u).map((path) => path.replace(/^\/|\/$/gu, ""))).toContain(
+        "scripts",
+      );
     }
   }
+  expect(step("resolve_target", "Checkout trusted workflow helper").with).toMatchObject({
+    "sparse-checkout-cone-mode": false,
+    "sparse-checkout": expect.stringContaining("/extensions/*/package.json"),
+  });
   const targets = allSteps.filter((entry) => String(entry.name).startsWith("Checkout target"));
   expect(targets.length).toBeGreaterThan(0);
   for (const entry of targets) {
@@ -119,7 +137,7 @@ describe("full release same-parent recovery workflow", () => {
   it.each(["failure", "success", "missing"])(
     "reports %s locale diagnostics without changing validation evidence",
     (conclusion) => {
-      const summaryStep = step("diagnostic_drain", "Summarize locale validation");
+      const summaryStep = step("watch", "Summarize locale validation");
       const root = tempDirs.make("openclaw-release-locales-");
       const diagnosticPath = join(root, "diagnostics.json");
       const summaryPath = join(root, "summary.md");
@@ -161,7 +179,9 @@ describe("full release same-parent recovery workflow", () => {
     let artifactDispatches = 0;
     for (const job of Object.values(workflow.jobs)) {
       const artifact = job.env?.CHILD_WORKFLOW_KIND?.startsWith("artifact-");
-      const dispatches = job.steps.filter((entry) => String(entry.name).startsWith("Dispatch"));
+      const dispatches = (job.steps ?? []).filter((entry) =>
+        String(entry.name).startsWith("Dispatch"),
+      );
       for (const dispatch of dispatches) {
         const env = dispatch.env as Record<string, unknown> | undefined;
         if (!artifact && env?.CHILD_WORKFLOW_KIND) {
@@ -247,22 +267,27 @@ describe("full release same-parent recovery workflow", () => {
             },
           },
           github: { workspace: "/workspace" },
+          inputs: { qualification_workflow_sha: verifierCheckedOut ? verifierSha : "" },
           fromJSON: JSON.parse,
           format: (pattern: string, value: string) => pattern.replace("{0}", value),
         });
       };
-      for (const jobName of [
-        "release_decision",
-        "diagnostic_drain",
-        "summary",
-        "release_execution_plan",
-        "evidence_reuse",
-      ]) {
-        const job = workflow.jobs[jobName];
+      for (const caller of ["release_decision", "diagnostic_drain"]) {
+        expect(evaluate(workflowJob(caller).with?.qualification_workflow_sha)).toBe(
+          verifierCheckedOut ? verifierSha : "",
+        );
+      }
+      expect(evaluate(step("watch", "Checkout release state tooling").if ?? "true")).toBe(
+        !verifierCheckedOut,
+      );
+      for (const jobName of ["watch", "summary", "release_execution_plan", "evidence_reuse"]) {
+        const job = jobName === "watch" ? watcher.jobs.watch : workflow.jobs[jobName];
         assert(job);
         const checkout = step(jobName, "Checkout admitted qualification verifier");
         expect(evaluate(checkout.if), jobName).toBe(verifierCheckedOut);
-        expect(evaluate((checkout.with as Record<string, unknown>).ref), jobName).toBe(verifierSha);
+        expect(evaluate((checkout.with as Record<string, unknown>).ref), jobName).toBe(
+          jobName === "watch" && !verifierCheckedOut ? "" : verifierSha,
+        );
         if (job.env?.RELEASE_STATE_SCRIPT) {
           expect(evaluate(job.env.RELEASE_STATE_SCRIPT), jobName).toBe(
             `${verifierRoot}/scripts/full-release-validation-state.mjs`,
@@ -374,11 +399,9 @@ describe("full release same-parent recovery workflow", () => {
   });
 
   it("keeps immutable plan artifacts parent-bound and non-overwriting", () => {
-    const artifactSteps = Object.values(workflow.jobs)
-      .flatMap(({ steps }) => steps)
-      .filter((entry) =>
-        /^(?:Upload|Download|Restore).*immutable release execution plan/u.test(String(entry.name)),
-      );
+    const artifactSteps = allSteps.filter((entry) =>
+      /^(?:Upload|Download|Restore).*immutable release execution plan/u.test(String(entry.name)),
+    );
     expect(artifactSteps.length).toBeGreaterThan(0);
     for (const entry of artifactSteps) {
       const options = entry.with as Record<string, unknown>;
@@ -405,13 +428,11 @@ describe("full release same-parent recovery workflow", () => {
   });
 
   it("only fail-fast decision collection can cancel children", () => {
-    expect(step("release_decision", "Evaluate release decision").env).toMatchObject({
-      FAIL_FAST: "${{ inputs.fail_fast }}",
-      FULL_RELEASE_STATE_MODE: "decision",
+    expect(step("watch", "Evaluate release state").env).toMatchObject({
+      FAIL_FAST: "${{ inputs.mode == 'decision' && inputs.fail_fast || false }}",
+      FULL_RELEASE_STATE_MODE: "${{ inputs.mode }}",
     });
-    expect(step("diagnostic_drain", "Drain child diagnostics").env).toMatchObject({
-      FAIL_FAST: "false",
-      FULL_RELEASE_STATE_MODE: "drain",
-    });
+    expect(workflowJob("release_decision").with?.mode).toBe("decision");
+    expect(workflowJob("diagnostic_drain").with?.mode).toBe("drain");
   });
 });

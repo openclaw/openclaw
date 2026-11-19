@@ -497,7 +497,7 @@ export async function prepareReplyAgentPayloads(state: {
     : [];
 
   // Report usage before any early return so silent replies still emit it (#152396).
-  emitReplyAgentUsageDiagnostic(state);
+  await emitReplyAgentUsageDiagnostic(state);
 
   // A tool-only continuation turn may have no visible text while still needing
   // delegate consumption/persistence below. Exact counts: before custody hydration or
@@ -676,9 +676,9 @@ export async function prepareReplyAgentPayloads(state: {
   const responseUsageSessionRaw =
     activeSessionEntry?.responseUsage ??
     (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
-  const responseUsageLine = resolveResponseUsageLine({
+  const responseUsageLine = await resolveResponseUsageLine({
+    preparePricing: accounting.preparePricing,
     config: cfg,
-    agentDir: followupRun.run.agentDir,
     sessionRaw: responseUsageSessionRaw,
     channel: replyToChannel,
     usage,

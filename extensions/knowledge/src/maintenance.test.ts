@@ -217,7 +217,7 @@ it("a scheduled pass links across every store and partition, skips unprovisioned
   expect(status.lastRun!.linked).toBe(3);
   expect(status.nextRunAt).toBe("2026-10-20T12:00:00.000Z");
   const entities = async (ctx: any, id: any) =>
-    (await service.record({ id, includeMetadata: true }, ctx)).record!.metadata!.entities;
+    (await service.record_detail({ id, includeMetadata: true }, ctx)).record!.metadata!.entities;
   expect(await entities(main, a)).toStrictEqual([atlas.id]);
   expect(await entities(ops, b)).toStrictEqual([nimbus.id]);
   expect(
@@ -281,7 +281,7 @@ it("a pass leaves claims it cannot link for the review scribe and never reaches 
   expect(Object.keys(status.lastRun!), "a pass records no review").not.toContain("review");
   expect(Object.keys(status), "status names no review automation").not.toContain("reviewJobId");
   expect(getCron, "maintenance never looks up or queues an automation").not.toHaveBeenCalled();
-  const record = (await service.record({ id: left, includeMetadata: true }, main)).record!;
+  const record = (await service.record_detail({ id: left, includeMetadata: true }, main)).record!;
   expect(record.metadata!.entities ?? [], "the preference stays unlinked").toStrictEqual([]);
 });
 

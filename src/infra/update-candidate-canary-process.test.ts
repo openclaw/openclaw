@@ -3,7 +3,6 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { resolveForwardedNodeCompilerArgs } from "../bootstrap/node-compiler-args.js";
 import { launchCanary } from "./update-candidate-canary-process.js";
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn<typeof import("node:child_process").spawn>() }));
@@ -14,12 +13,18 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 const root = path.resolve("canary-image");
+function createChild() {
+  return Object.defineProperties(new ChildProcess(), {
+    stdin: { value: null },
+    stdout: { value: new PassThrough() },
+    stderr: { value: new PassThrough() },
+  });
+}
+
 beforeEach(() => {
   vi.stubGlobal("__openclawStandaloneRootUrl", pathToFileURL(root).href);
   mocks.spawn.mockImplementation(() => {
-    const child = new ChildProcess();
-    child.stdout = new PassThrough();
-    child.stderr = new PassThrough();
+    const child = createChild();
     queueMicrotask(() => {
       child.stdout?.destroy();
       child.stderr?.destroy();
@@ -34,29 +39,9 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-it("routes a worker target through the embedded entry dispatcher", async () => {
-  const entry = path.join(root, "dist/infra/update-migrated-finalize.worker.js");
-  const running = launchCanary({
-    target: { kind: "worker", url: pathToFileURL(entry) },
-    args: ["--check"],
-    root,
-    env: {},
-    stateDir: root,
-    capture() {},
-  });
-  await running.closed;
-  expect(await running.result).toBe(0);
-  const flags = process.versions.bun ? ["--no-install"] : resolveForwardedNodeCompilerArgs();
-  expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
-    process.execPath,
-    [...flags, entry, "--check"],
-    expect.objectContaining({ cwd: root }),
-  );
-});
-
 it("routes a CLI target through the standalone command entry", async () => {
   const running = launchCanary({
-    target: { kind: "cli", entryPath: path.join(root, "dist/index.js") },
+    entryPath: path.join(root, "dist/index.js"),
     args: ["gateway", "run"],
     root,
     env: {},

@@ -1,0 +1,2 @@
+# Extend default-store path coverage with normalization inputs and redundant-join work counts.
+11

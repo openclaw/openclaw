@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { constants, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -7,7 +8,11 @@ import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { WorktreeAllocationGuard } from "./allocation.js";
+import {
+  withWorktreeAllocationLease,
+  withWorktreeMutationLease,
+  type WorktreeAllocationGuard,
+} from "./allocation.js";
 import type { WorktreeGcProgress } from "./gc-progress.js";
 import {
   collectOrphanWorktreeBranches,
@@ -19,14 +24,17 @@ import {
   shouldPreserveOrphanCandidate,
 } from "./orphan-paths.js";
 import { readPendingWorktrees } from "./pending-slots.js";
-import { readRegistryWorktrees } from "./registry-read.js";
+import { captureWorktreeRegistryReadGuard, readRegistryWorktrees } from "./registry-read.js";
+import { worktreeGcRevision } from "./registry-read.kernel.js";
 import { isWorktreePermissionError } from "./removal-errors.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import { retireExpiredManagedWorktreeSnapshot } from "./snapshot-host.js";
 import { WORKTREE_TEMPLATE_DIRECTORY } from "./template-cache.js";
-import type { ManagedWorktreeRecord } from "./types.js";
+import type { ManagedWorktreeRecord, WorktreeMutationGuard } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
+
+export type WorktreeOrphanFailures = Map<string, { dev: number; ino: number; error: unknown }>;
 
 async function hasUnregisteredArtifacts(
   root: string,
@@ -65,17 +73,19 @@ export async function collectRetiredWorktreeArtifacts({
   getConfig,
   records,
   expiresBefore,
+  retryDeferred,
   progress,
   orphanFailures,
-  withAllocationLease,
+  guard: callerGuard,
 }: {
   env: NodeJS.ProcessEnv;
   getConfig?: () => OpenClawConfig;
   records: readonly ManagedWorktreeRecord[];
   expiresBefore: number;
+  retryDeferred?: boolean;
   progress: WorktreeGcProgress;
-  orphanFailures: Map<string, { dev: number; ino: number; error: unknown }>;
-  withAllocationLease: (run: (guard: WorktreeAllocationGuard) => Promise<void>) => Promise<void>;
+  orphanFailures: WorktreeOrphanFailures;
+  guard: WorktreeMutationGuard;
 }): Promise<{ orphansDeleted: number; snapshotsPruned: number }> {
   const context = captureWorktreeRunEndContext(env);
   let orphansDeleted = 0;
@@ -127,8 +137,12 @@ export async function collectRetiredWorktreeArtifacts({
   }
   if (hasOrphanCandidates || expired.length > 0 || pending.length > 0 || repositories.size > 0) {
     try {
-      await withAllocationLease(async (guard) => {
-        const slots = await readPendingWorktrees(context.environment);
+      await withWorktreeMutationLease({ ...callerGuard, env, id: "artifacts" }, async (guard) => {
+        const slots = pending.length
+          ? await withWorktreeAllocationLease({ ...guard, env }, () =>
+              readPendingWorktrees(context.environment),
+            )
+          : [];
         for (const { record, state } of slots) {
           if (state !== "recovering") {
             continue;
@@ -184,14 +198,22 @@ export async function collectRetiredWorktreeArtifacts({
         }
         for (const record of expired) {
           try {
-            if (
-              await retireExpiredManagedWorktreeSnapshot({
-                env,
-                id: record.id,
-                expiresBefore,
-                guard,
-              })
-            ) {
+            const outcome = await retireExpiredManagedWorktreeSnapshot({
+              env,
+              id: record.id,
+              expiresBefore,
+              retryDeferred,
+              guard,
+            });
+            if (typeof outcome === "string") {
+              progress.result.retiredCheckoutPaths.push(record.path);
+              progress.record("snapshots", "deferred", outcome, record.id);
+              if (record.gcProtection !== outcome) {
+                log.warn(
+                  `snapshot retention deferred for ${record.id}: ${outcome}; inspect ${record.path}, then run openclaw worktrees gc --retry-deferred`,
+                );
+              }
+            } else if (outcome) {
               snapshotsPruned += 1;
             }
           } catch (error) {
@@ -259,8 +281,10 @@ async function reconcileOrphans(
   pendingPaths: readonly string[],
   guard: WorktreeAllocationGuard,
   progress: WorktreeGcProgress,
-  orphanFailures: Map<string, { dev: number; ino: number; error: unknown }>,
+  orphanFailures: WorktreeOrphanFailures,
 ): Promise<number> {
+  const observed = new Map(records.map((record) => [record.id, worktreeGcRevision(record)]));
+  const configuredRoot = getConfig?.().worktreeRoot;
   const managedPaths = await resolveManagedWorktreePathKeys(records);
   if (!managedPaths) {
     return 0;
@@ -336,7 +360,7 @@ async function reconcileOrphans(
       if (!name.isDirectory()) {
         continue;
       }
-      const candidate = path.join(fingerprintPath, name.name);
+      let candidate = path.join(fingerprintPath, name.name);
       if (await shouldPreserveOrphanCandidate(candidate, managedPaths, customRoots)) {
         continue;
       }
@@ -350,7 +374,41 @@ async function reconcileOrphans(
         }
         orphanFailures.delete(candidate);
       }
+      let removalAttempted = false;
       try {
+        const original = candidate;
+        candidate = await withWorktreeAllocationLease({ ...guard, env }, async (allocation) => {
+          const context = captureWorktreeRunEndContext(env);
+          const accept = captureWorktreeRegistryReadGuard(context, "record");
+          const slots = await readPendingWorktrees(env);
+          const current = [
+            ...slots.map(({ record }) => record),
+            ...(await readRegistryWorktrees(env)),
+          ];
+          const assertRegistryCurrent = accept(undefined);
+          if (
+            getConfig?.().worktreeRoot !== configuredRoot ||
+            current.length !== observed.size ||
+            current.some((record) => observed.get(record.id) !== worktreeGcRevision(record))
+          ) {
+            throw new Error(
+              "Worktree inventory changed during orphan planning; directory preserved",
+            );
+          }
+          const stat = await fs.lstat(original);
+          if (!stat.isDirectory() || stat.dev !== source.dev || stat.ino !== source.ino) {
+            throw new Error("Orphan removal root changed during planning; directory preserved");
+          }
+          allocation.commitGuard();
+          assertRegistryCurrent();
+          // The atomic namespace change commits retirement. Recursive deletion owns only this
+          // unselectable sibling after allocation is released; a crash leaves it for the next GC.
+          const retired = path.join(fingerprintPath, `.openclaw-retired-${randomUUID()}`);
+          removalAttempted = true;
+          await fs.rename(original, retired);
+          return retired;
+        });
+        candidates.add(candidate);
         assertCurrent();
         try {
           await fs.rm(candidate, { recursive: true, force: true });
@@ -373,12 +431,15 @@ async function reconcileOrphans(
         deleted += 1;
       } catch (error) {
         assertCurrent();
+        progress.error("orphans", error, candidate);
+        if (!removalAttempted) {
+          continue;
+        }
         const stat = await fs.lstat(candidate).catch(() => undefined);
         if (stat?.dev === source.dev && stat.ino === source.ino) {
           materializeErrorStack(error);
           orphanFailures.set(candidate, { dev: stat.dev, ino: stat.ino, error });
         }
-        progress.error("orphans", error, candidate);
         log.warn(
           `worktree orphan cleanup deferred for ${candidate}; repair access and run openclaw worktrees gc --retry-deferred: ${String(error)}`,
         );
@@ -386,7 +447,7 @@ async function reconcileOrphans(
     }
     if (!pendingPaths.some((pendingPath) => isPathInside(fingerprintPath, pendingPath))) {
       guard.commitGuard?.();
-      await fs.rmdir(fingerprintPath).catch(() => undefined);
+      // Leave the empty namespace container: a creator may already have reserved a child.
     }
   }
   for (const candidate of orphanFailures.keys()) {

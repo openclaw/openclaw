@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { sanitizeAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import { runAgentStep } from "./agent-step.js";
@@ -9,13 +10,11 @@ import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
 const agentWaitMock = vi.hoisted(() => vi.fn());
-const requesterDeliveryGeneration = {
+const requesterDeliveryGeneration = chatRef({
   agentId: "main",
   storePath: "/test/agents/main/sessions/sessions.json",
   sessionKey: "agent:main:discord:channel:target-room",
-  sessionId: "session-source",
-  lifecycleRevision: null,
-};
+});
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
@@ -68,7 +67,7 @@ function deliveryTarget(sessionKey: string, agentId = "main") {
     callGateway: callGatewayMock,
     targetSessionKey: sessionKey,
     targetAgentId: agentId,
-    requesterDeliveryGeneration: { ...requesterDeliveryGeneration, agentId, sessionKey },
+    requesterDeliveryGeneration: chatRef({ ...requesterDeliveryGeneration, agentId, sessionKey }),
   };
 }
 function visibleReply(text: string) {
@@ -327,7 +326,7 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
       await runFlow({
         callGateway: callGatewayMock,
         requesterDeliveryGeneration: generation
-          ? { ...requesterDeliveryGeneration, sessionKey }
+          ? chatRef({ ...requesterDeliveryGeneration, sessionKey })
           : undefined,
         targetSessionKey: sessionKey,
         requesterChannel: "qa-channel",

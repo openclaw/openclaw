@@ -1,9 +1,12 @@
 import qrcode from "qrcode";
-import { renderOpenClawMascotSvg } from "../../../src/shared/openclaw-mascot.ts";
 
 const QUIET_ZONE = 4;
 const SUBMODULES = 3;
 const PIXEL_SCALE = 3;
+
+// Broad palm and rounded jaws stay recognizable through the QR module centers.
+const CLAW_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path d="M39 94 33 79C19 72 12 60 11 45C10 29 21 16 37 12C27 23 25 33 31 42C36 49 44 51 49 46C57 38 54 24 47 8C66 7 83 19 87 39C91 58 81 73 66 80L61 94Z"/></svg>';
 
 type PublicShareQr = { halftone: string };
 
@@ -13,7 +16,7 @@ export async function createPublicShareQr(url: string): Promise<PublicShareQr | 
     const { size, data, reservedBit } = qrcode.create(url, { errorCorrectionLevel: "H" }).modules;
     const width = (size + QUIET_ZONE * 2) * SUBMODULES * PIXEL_SCALE;
     const imageSize = size * SUBMODULES;
-    const image = await mascotPixels(imageSize);
+    const image = await clawPixels(imageSize);
     const canvas = document.createElement("canvas");
     canvas.width = canvas.height = width;
     const context = canvas.getContext("2d");
@@ -57,11 +60,9 @@ export async function createPublicShareQr(url: string): Promise<PublicShareQr | 
   }
 }
 
-async function mascotPixels(size: number): Promise<Uint8ClampedArray> {
+async function clawPixels(size: number): Promise<Uint8ClampedArray> {
   const image = new Image();
-  image.src =
-    "data:image/svg+xml;charset=utf-8," +
-    encodeURIComponent(renderOpenClawMascotSvg("share-qr", true));
+  image.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(CLAW_SVG);
   await image.decode();
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = size;

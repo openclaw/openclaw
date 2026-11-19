@@ -75,6 +75,9 @@ On embedded, CLI, and harness runtime prompt-preparation paths (including
 ACPX, Agents API, Codex, and Copilot), ordering is: drain queued injections →
 `agent_turn_prepare` → ordinary
 `before_prompt_build` → finalized tool policy → authorized prompt enrichment.
+On CLI runtimes, authorized enrichment also runs after the native session
+reuse decision, transcript checks, and history selection, so it can report and
+respond to that decision on the same turn.
 
 For multiple registrations, the first defined provider/model/fallback override and
 `systemPrompt` win. Context additions concatenate in priority order, and tool
@@ -94,7 +97,7 @@ Keep system context small and stable; put turn-specific material in `prependCont
 or `appendContext` instead.
 
 `before_prompt_build` and `agent_turn_prepare` receive a model-context view with
-fresh message arrays and envelopes per dispatch. Owned transcript payload leaves
+fresh message arrays and envelopes per dispatch. Proven immutable payload leaves
 (such as content blocks and tool arguments) are shared and deeply frozen. Treat
 nested history as read-only: writing a frozen leaf throws a `TypeError` in strict
 mode. Return the hook's result fields to contribute context or change the prompt;
@@ -103,7 +106,7 @@ in-place history edits do not update core history or become hook results.
 Registrations within one dispatch share its array and envelopes in priority order.
 Replacing an envelope field or editing the array remains local to that dispatch.
 Prepare, ordinary prompt-build, authorized enrichment, and later prompt rebuilds
-receive separate arrays and envelopes. Non-owned values are deep-cloned and retain
+receive separate arrays and envelopes. Other values are deep-cloned and retain
 the shared-memory isolation checks. Storage-only native prompt text and tool-result
 details are excluded. See the [migration note](/plugins/sdk-migration#prompt-hook-history-is-read-only)
 if your plugin previously mutated nested content.
@@ -201,6 +204,53 @@ Treat `toolAuthority` as an ephemeral capability:
 The host revalidates authority after each awaited handler and discards stale
 enrichment. A retained `toolAuthority` object rejects use after dispatch.
 
+#### Session continuity
+
+In this phase, `event.continuity` reports what the runtime's session owner
+decided for this request:
+
+- `state`: `fresh` (no prior native session), `resumed` (the request continues
+  an existing session), or `invalidated` (a stored native session binding was
+  discarded for this turn, so the model starts a replacement session).
+- `invalidatedReason`: optional runtime reason when `state` is `invalidated`.
+  CLI runtimes use their session-reuse reasons, such as `prompt-tools`,
+  `system-prompt`, `auth-profile`, `auth-epoch`, `mcp`, `cwd`,
+  `missing-transcript`, and `orphaned-tool-use`.
+- `history`: `included` when the host placed prior conversation in this
+  request (replayed history or a resume handoff), `withheld` when it sent only
+  a notice that earlier messages exist without their contents, and `none`
+  otherwise.
+
+The field contains no transcript content and grants no authority; it does not
+allow replaying history across an account or authentication boundary. Use it to
+restore plugin-owned context only when a turn needs it, for example:
+
+```typescript
+api.on(
+  "before_prompt_build",
+  async (event) =>
+    event.continuity?.state === "invalidated"
+      ? { prependContext: await loadPluginSummary() }
+      : undefined,
+  { requiresToolAuthority: true },
+);
+```
+
+CLI runtimes report all three states. Codex reports `fresh` or `resumed` from
+its native thread binding and `invalidated` when that binding is discarded
+before the turn starts: rotated away by the token limit, or replaced by a new
+thread when resuming fails. The embedded runtime owns its transcript and has no
+native binding, so it reports `fresh` or `resumed`. Other runtimes omit the
+field; omission means unknown. The ordinary prompt-build phase never receives
+it, because its tool restrictions are inputs to the reuse decision.
+
+The phase runs on every attempt, including each model fallback candidate. Each
+run reports that attempt's own continuity and receives that attempt's model,
+context budget, and tool authority, so handlers repeat their own model- and
+authority-keyed checks. A handler that wants to avoid repeated work across
+fallback candidates owns that cache and keys it on every input that changes its
+answer.
+
 This option requires a host that implements the post-policy phase. Published
 plugins must set `package.json` `openclaw.compat.pluginApi` to a range beginning
 with the first OpenClaw version they build against for this contract. Older
@@ -218,7 +268,9 @@ the runner submits the same prepared image bytes after approval. The event is a
 copy, so mutating its images does not rewrite model input. `images: []` means no
 current-turn images; an absent field means an older host without this contract.
 Gateway worker turns expose Gateway-prepared images too; legacy worker turns do
-not expose a worker-local system prompt. Paired-node CLI sessions do not support
+not expose a worker-local system prompt. Their history preparation reads the selected
+conversation branch, leaving inactive branches unloaded. Recorder-owned user input
+is persisted only after policy approval. Paired-node CLI sessions do not support
 images. This hook remains limited to runners that implement it. Return `{ outcome: "block", reason, message? }`
 to stop the run before the model reads the prompt. `reason` is internal;
 `message` is the user-facing replacement. Only `pass` and `block` outcomes are
@@ -276,6 +328,13 @@ When sender identity is available, agent hook contexts also include:
 - `ctx.channelContext.chat.id` - the same conversation ID as `ctx.chatId`,
   under a channel-owned object plugins can extend with channel-specific
   fields.
+- `ctx.requesterDeviceId` - the paired device id of the Gateway connection
+  that sent the turn, set only after the Gateway verified that device's
+  signature. It never comes from request params or the client's declared
+  name, and it is absent for runs that did not start from a device
+  connection. It is also absent once another device or a device-less
+  source steers input into the run, so it always names the device that
+  wrote the input, or nothing.
 
 Core only defines the nested `id` fields. Channel plugins that pass richer
 sender or chat metadata through the inbound helper can augment
@@ -326,6 +385,16 @@ augmentation.
   to review the finished turn in the background. It is absent when the runtime
   recorded no final entry, such as CLI backends or a turn superseded before it
   finished.
+- `ctx.turnTainted` reports turn provenance on `agent_end`, `before_agent_finalize`,
+  `before_prompt_build`, `llm_input`, `llm_output`, `before_compaction`, and `after_compaction`.
+  `true` means the runtime observed a network-marked tool result or inherited taint;
+  `false` means it tracked the turn and observed none so far. `"unknown"` means the
+  runtime cannot report a measurement, including when compaction has no turn tracker.
+  A missing field on an older host also means `"unknown"`.
+  Compare values explicitly (`ctx.turnTainted === true`); `"unknown"` is a truthy string.
+  None of the states means the content is safe. Unmarked tool results and the user's
+  message can still contain untrusted text. Memory-flush runs inherit taint when
+  the source turn was tainted or the sender wasn't the owner. See [memory provenance](/concepts/memory-provenance#freeform-edits-and-quarantine).
 
 `agent_end` is an observation hook. Channel-backed paths generally run
 it fire-and-forget after the turn, while local one-shot paths can wait
@@ -367,6 +436,35 @@ Copilot harness does not dispatch it.
 Codex native `Stop` hooks are relayed into this hook as OpenClaw
 `before_agent_finalize` decisions.
 
+#### Presentation on an accepted final
+
+When `event.supportsFinalPresentation === true`, a handler can return
+`{ finalPresentation: MessagePresentation }` with or without an action. Compute
+the presentation from this invocation's candidate answer; returning it does not
+send a message or force finalization. OpenClaw normalizes it through the existing
+presentation model and carries it only with the selected ordinary final reply.
+Adapters retain rendering, text fallback, routing and delivery ownership.
+
+The first presentation in hook priority order wins. A revision decision discards
+the candidate's presentation, even when the revision budget is exhausted. An
+explicit `finalize` decision still overrides revisions under the existing rules;
+if it follows a revision, only its own presentation can accompany that decision.
+Later handlers cannot change an already-forced finalization. Timeout or failure
+does not accept a late handler result.
+
+Support currently covers natural final answers in the embedded runner. It does
+not create an answer for an empty, silent, failed, canceled or incomplete turn,
+or decorate explicit tool/approval output. The native Codex relay, Copilot and
+settled-tool finalization do not advertise this capability. Missing support must
+not be treated as successful preparation. The flag describes the finalization
+path, not whether the destination renders cards or other structured content.
+
+This contract has no cross-hook staging or preparation tool. Do not use a
+session-keyed or run-keyed map to infer the accepted candidate: a run can contain
+multiple attempts. A tool-prepared presentation needs a separately supported
+execution/attempt association. Existing `reply_payload_sending` hooks still apply
+their sequential transformations and cancellation before delivery.
+
 When returning `action: "revise"`, plugins can include `retry` metadata to
 bound repeated revision requests within a run:
 
@@ -387,6 +485,122 @@ tighter overall revision limit; the embedded runner allows at most three.
 
 Conversation access and prompt mutation have separate permission gates; see
 [Permissions and scope](/plugins/hooks#permissions-and-scope) before enabling these hooks.
+
+### Final model request policy
+
+`before_model_request` is an awaited, modifying policy hook on the last step
+before a model sees a request. On the embedded runner it sits on the provider
+transport and runs once per provider request, including each model call inside
+a tool loop and each encode-only transport retry, after provider and config
+`onPayload` transforms. For transports that use host request encoding it runs
+at final encoding instead. On supported Google video routes, ordinary provider transforms still see placeholders; only the opted-in final policy sees the outgoing video content after media preparation. The returned payload is what the transport hashes,
+records for context-retry admission, and sends.
+
+On CLI-backed runtimes such as `claude-cli`, the CLI owns its provider
+requests, so the hook runs where OpenClaw hands text to the CLI: once per CLI
+turn dispatch (including each recovery retry), and once per input steered into
+a live CLI turn. It runs after history reseeding, resume context, and plugin
+input text transforms, before image paths are attached.
+
+Embedded compaction runs the same gate. Summary requests and server-side compaction
+requests over older history pass through it with `requestKind: "compaction"`, after the
+same provider and config `onPayload` transforms as a turn.
+
+Side questions run it too. A `/btw` side question and a plugin session fork
+(`api.runtime.subagent.forkSession`) resend the conversation, so each of their provider
+requests passes through it with `requestKind: "side_question"`, on embedded and CLI
+runtimes. A fork replays the parent's last request before the gate, so a handler that
+rewrites the same input the same way keeps the parent's cached prefix. A thrown error
+fails the side question.
+
+The event is `{ runtime, requestKind, payload, provider, model, messages }`:
+
+- `runtime` is `"embedded"` or `"cli"`.
+- `requestKind` is `"turn"` for an agent turn (including steered CLI input),
+  `"compaction"` for an embedded compaction request, or `"side_question"` for a side
+  question or session fork. More kinds may be added; treat an unknown kind like `"turn"`.
+- On embedded runs, `payload` is the provider-specific request body. Return
+  `{ payload }` to replace it, or return nothing to send it unchanged. Handlers
+  run in priority order and each one sees the previous replacement.
+- On CLI runs, `payload` is `{ prompt, prependContext?, appendContext? }`: the
+  turn or steered prompt text and the runtime context OpenClaw adds around it.
+  A replacement must keep that shape with string values; anything else fails
+  the dispatch. In-place edits to `payload` are sent too. The system prompt,
+  image attachments, and what the CLI does inside its own tool loop are not part
+  of the payload.
+- An embedded replacement may rewrite content but not the tool surface, model, or
+  Access program. The hook protects `tools`, `tool_choice`, `toolConfig`,
+  `functions`, `function_call`, `model`, and `access_programs` at the top level or
+  under `config`. It also protects Mistral's `toolChoice` and Google Interactions'
+  `generation_config.tool_choice`. Changing a protected field fails the request.
+  The check also covers in-place edits to `payload` when a handler returns
+  nothing. Tool, model, and Access-program authorization is settled before this
+  hook, and provider-hosted tools have no later local gate.
+- `messages` is a detached copy of the model-facing history, including
+  host-owned metadata such as `__openclaw.senderIsOwner` and input `provenance`
+  (for example `kind: "inter_session"` with `sourceSessionKey` on a subagent
+  completion). On CLI runs it is the session transcript view with the current
+  turn's (or steered input's) user message last. Editing it does not change the
+  request. Use that metadata, not text inside a message, to decide sender
+  trust.
+- Some requests resend history as text, so `messages` does not map one to one
+  onto `payload`. A `"compaction"` summary request is the summary call itself:
+  the older history is serialized into one user message inside `payload`, and
+  `messages` holds only that request, with no per-message sender metadata. A CLI
+  `"side_question"` carries the conversation as text inside `payload.prompt`;
+  `messages` holds that history with its metadata, followed by the side question.
+  A handler that decides trust from metadata must locate that text in the
+  payload itself, and cannot tell outside content apart inside a compaction
+  summary request.
+
+The hook context carries the usual agent fields (`agentId`, `sessionKey`,
+`sessionId`, `runId`, channel and sender fields when known) plus
+`modelProviderId` and `modelId`.
+
+A thrown error or a timeout (10 seconds by default) fails the model request;
+the original payload is never sent. On CLI runs the CLI is not started for that
+turn, and a steered input is refused. A scanner that wants outage passthrough
+must catch its own failures and return nothing. If the turn is aborted while a
+handler runs, the request is not sent.
+
+The hook is off by default. Enable it per plugin with
+`plugins.entries.<id>.hooks.allowModelRequest: true`; bundled plugins need the
+same opt-in. Without it the registration is ignored, and Gateway startup logs
+and `openclaw plugins inspect <id> --runtime --json` show a diagnostic naming
+the key:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "my-scanner": {
+        hooks: {
+          allowModelRequest: true,
+          allowConversationAccess: true,
+        },
+      },
+    },
+  },
+}
+```
+
+The opt-in does not replace the other gates: the hook still needs conversation
+access and prompt modification, like `before_prompt_build`. It still runs for incognito sessions, as other policy
+hooks do; `llm_input` and `llm_output` observations stay suppressed there. With
+no handler registered, messages are not copied and nothing is awaited.
+
+This hook changes only the outgoing request. It does not rewrite stored history:
+`messages` is a copy, and a value redacted in `payload` stays in the transcript, so it
+reaches every later request that is not gated. To keep a value out of history, redact it
+when it is written with `tool_result_persist` or `before_message_write`, and use this hook
+as the last gate on what leaves.
+
+Scope: embedded agent attempts, embedded compaction, side questions and session forks,
+and CLI-backed agent turns. External harnesses such as Codex (including their side
+questions), turns that run on cloud workers, compaction a CLI runtime runs itself,
+isolated completions, other control operations, tool results a CLI reads inside its own
+loop, custom provider transports that bypass both `onPayload` and host encoding, and
+provider-hosted tool results that never return to the client are not intercepted.
 
 ### Session extensions and next-turn injections
 

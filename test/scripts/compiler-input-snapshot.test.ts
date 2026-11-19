@@ -56,6 +56,40 @@ function fixture(root = roots.make("compiler-input-snapshot-")) {
   return { root, write: put, snapshot, signature, record, matches };
 }
 
+it("reports the first invalid cache boundary without repeating snapshot reads", () => {
+  const f = fixture();
+  f.write("dist/index.d.ts", "export declare const value = 1;\n");
+  const record = f.record(f.snapshot(), ["dist/index.d.ts"]);
+  const reasons = vi.fn();
+  const matches = (snapshot: CompilerInputSnapshot, required = ["dist/index.d.ts"]) =>
+    snapshot.matches(
+      record,
+      "tsconfig.json",
+      ["fixture-compiler"],
+      required,
+      undefined,
+      undefined,
+      reasons,
+    );
+  expect(matches(f.snapshot())).toBe(true);
+  expect(reasons).not.toHaveBeenCalled();
+
+  expect(matches(f.snapshot(), ["dist/missing.d.ts"])).toBe(false);
+  expect(reasons).toHaveBeenLastCalledWith('required output is missing: "dist/missing.d.ts"');
+  f.write("dist/index.d.ts", "export declare const value = 2;\n");
+  const changed = f.snapshot();
+  expect(matches(changed)).toBe(false);
+  expect(reasons).toHaveBeenLastCalledWith('output bytes changed: "dist/index.d.ts"');
+  const reads = vi.spyOn(fs, "readFileSync");
+  try {
+    expect(matches(changed)).toBe(false);
+    expect(reads).not.toHaveBeenCalled();
+  } finally {
+    reads.mockRestore();
+  }
+  expect(reasons).toHaveBeenCalledTimes(3);
+});
+
 it.each([
   ['{"compilerOptions":{"target":"invalid"},"include":["src/**/*.ts"]}', "TS6046"],
   ['{"extends":"./missing.json","include":["src/**/*.ts"]}', "TS5083"],

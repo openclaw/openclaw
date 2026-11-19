@@ -12,6 +12,10 @@ import {
   computeSkillReasons,
   isSkillAvailable,
 } from "../../lib/skills-shared.ts";
+import {
+  skillApiKeyReplaceable,
+  storedSkillApiKeySource,
+} from "../../lib/skills/api-key-source.ts";
 import type { ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
 import { MarkdownContent, SkillReaderDialog } from "./skill-reader-dialog.tsx";
 import { verdictForSkill, verdictStatus } from "./skill-status.tsx";
@@ -32,6 +36,23 @@ export function SkillDetail(props: {
     resolveSafeExternalUrl(props.skill.homepage ?? "", window.location.href),
   );
   const editValue = createMemo(() => props.view.state.skillEdits[props.skill.skillKey] ?? "");
+  // Typing over a SecretRef or ${VAR} would store the key as plaintext, as in the Settings forms.
+  const keySource = () =>
+    storedSkillApiKeySource(props.view.apiKeyConfig.snapshot(), props.skill.skillKey);
+  const keyLocked = createMemo(
+    () => skillApiKeyReplaceable(props.view.apiKeyConfig.snapshot(), props.skill.skillKey) !== true,
+  );
+  const keyLoadError = createMemo(() =>
+    keySource() === undefined ? props.view.apiKeyConfig.error() : null,
+  );
+  const keyPlaceholder = createMemo(() => {
+    const source = keySource();
+    return source?.kind === "environment"
+      ? t("skillsPage.apiKeyFromEnvironment", { name: source.name })
+      : source?.kind === "reference"
+        ? t("skillsPage.apiKeyFromSecretRef")
+        : undefined;
+  });
   const message = () => props.view.state.skillMessages[props.skill.skillKey] ?? null;
   const installOption = createMemo(() => {
     const missingBins = new Set([...props.skill.missing.bins, ...props.skill.missing.anyBins]);
@@ -76,8 +97,8 @@ export function SkillDetail(props: {
             <Show when={props.skill.primaryEnv}>
               <button
                 class="btn primary"
-                disabled={updateLocked() || !editValue().trim()}
-                onClick={() => props.view.onSaveKey(props.skill.skillKey)}
+                disabled={updateLocked() || keyLocked() || !editValue().trim()}
+                onClick={() => props.view.onSaveKey(props.skill.skillKey, skillApiKeyReplaceable)}
               >
                 {t("skillsPage.saveKey")}
               </button>
@@ -194,13 +215,32 @@ export function SkillDetail(props: {
               <input
                 type="password"
                 required
-                disabled={updateLocked()}
+                disabled={updateLocked() || keyLocked()}
+                placeholder={keyPlaceholder()}
                 value={editValue()}
                 onInput={(event) =>
                   props.view.onEdit(props.skill.skillKey, event.currentTarget.value)
                 }
               />
             </label>
+            <Show when={keyLoadError()}>
+              {(error) => (
+                <InlineAlert
+                  tone="danger"
+                  action={
+                    <button
+                      type="button"
+                      class="btn btn--sm"
+                      onClick={() => props.view.apiKeyConfig.retry()}
+                    >
+                      {t("skillsPage.retry")}
+                    </button>
+                  }
+                >
+                  {t("skillsPage.apiKeyConfigError", { error: formatUiExternalText(error()) })}
+                </InlineAlert>
+              )}
+            </Show>
             <Show when={homepageHref()}>
               {(href) => (
                 <div class="skill-detail__note">
@@ -346,11 +386,7 @@ function InstalledSkillCard(props: { skill: SkillStatusEntry; view: SkillsProps 
       <Show
         when={content() !== undefined}
         fallback={
-          <div
-            class="muted"
-            role="status"
-            style={{ "font-size": "calc(13px * var(--control-ui-text-scale))" }}
-          >
+          <div class="muted" role="status" style={{ "font-size": "13px" }}>
             {t("skillsPage.skillCardNotLoaded")}
           </div>
         }
@@ -369,11 +405,7 @@ function InstalledSkillCard(props: { skill: SkillStatusEntry; view: SkillsProps 
       <Loading
         on={acceptedContent() === undefined ? completion() : null}
         fallback={
-          <div
-            class="muted"
-            role="status"
-            style={{ "font-size": "calc(13px * var(--control-ui-text-scale))" }}
-          >
+          <div class="muted" role="status" style={{ "font-size": "13px" }}>
             {t("skillsPage.loadingSkillCard")}
           </div>
         }

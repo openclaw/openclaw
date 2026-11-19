@@ -66,5 +66,5 @@ export async function createOpenClawCodingToolsInternalAsync(
 export function createOpenClawCodingToolsAsync(
   options?: PluginCodingToolsOptions,
 ): Promise<AnyAgentTool[]> {
-  return createOpenClawCodingToolsInternalAsync(options);
+  return createOpenClawCodingToolsInternalAsync({ ...options, unverifiedExecutionPolicy: true });
 }

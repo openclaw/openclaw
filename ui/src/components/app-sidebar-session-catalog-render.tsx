@@ -237,7 +237,6 @@ function renderCatalogHostGroup(
                 class="session-action"
                 data-catalog-session-menu="true"
                 type="button"
-                title={t("chat.sidebar.openSessionMenu")}
                 aria-label={`${t("chat.sidebar.openSessionMenu")}: ${label()}`}
                 aria-haspopup="menu"
                 aria-expanded={menuOpen() ? "true" : "false"}
@@ -451,10 +450,6 @@ function renderCatalogGroup(
       requiredScope: "operator.write",
     }),
   );
-  const sectionDragDisabledReason = () => {
-    const access = groupWriteAccess();
-    return access.allowed ? undefined : access.reason;
-  };
   const sectionId = createMemo(() => `catalog:${readCatalog().id}`);
   const collapsed = createMemo(() => params.host.collapsedSessionSections.has(sectionId()));
   const rows = createMemo(() => readCatalog().visibleHosts.flatMap((host) => host.sessions));
@@ -496,17 +491,17 @@ function renderCatalogGroup(
       ]}
       data-session-section={sectionId()}
       onDragOver={(event: DragEvent) => {
-        if (!sectionDragDisabledReason()) {
+        if (groupWriteAccess().allowed) {
           params.host.sessionOrganizer.sectionDragOver(event, sectionId());
         }
       }}
       onDragLeave={(event: DragEvent) => {
-        if (!sectionDragDisabledReason()) {
+        if (groupWriteAccess().allowed) {
           params.host.sessionOrganizer.sectionDragLeave(event, sectionId());
         }
       }}
       onDrop={(event: DragEvent) => {
-        if (!sectionDragDisabledReason()) {
+        if (groupWriteAccess().allowed) {
           params.host.sessionOrganizer.sectionDrop(event, sectionId());
         }
       }}
@@ -533,7 +528,7 @@ function renderCatalogGroup(
               }
             : undefined
         }
-        disabledReason={sectionDragDisabledReason()}
+        draggable={groupWriteAccess().allowed}
         onStartDrag={(id) => params.host.sessionOrganizer.startSidebarSectionDrag(id)}
         onFinishDrag={() => params.host.sessionOrganizer.finishSidebarSectionDrag()}
         onContextMenu={(event) => {

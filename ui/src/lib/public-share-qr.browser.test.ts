@@ -20,6 +20,8 @@ it("keeps function marks, centers and quiet zone exact while the surrounding cel
   expect(image.width).toBe((modules.size + 8) * 9);
   let incorrect = 0;
   let imageLed = 0;
+  const notch: boolean[] = [];
+  const wrist: boolean[] = [];
   for (let y = 0; y < image.height; y++) {
     for (let x = 0; x < image.width; x++) {
       const shade = pixels[(y * image.width + x) * 4];
@@ -37,11 +39,26 @@ it("keeps function marks, centers and quiet zone exact while the surrounding cel
         if (shade !== (bit ? 0 : 255)) {
           incorrect++;
         }
-      } else if (shade! < 128 !== bit) {
-        imageLed++;
+      } else {
+        const dark = shade! < 128;
+        if (dark !== bit) {
+          imageLed++;
+        }
+        const u = (sx / (modules.size * 3) - 0.08) / 0.84;
+        const v = (sy / (modules.size * 3) - 0.08) / 0.84;
+        if (u > 0.38 && u < 0.48 && v > 0.24 && v < 0.32) {
+          notch.push(dark);
+        }
+        if (u > 0.44 && u < 0.56 && v > 0.84 && v < 0.9) {
+          wrist.push(dark);
+        }
       }
     }
   }
+  // Recover the artwork from eligible peripheral cells, not the overlaid QR bits.
+  // The rounded pincer has an upper notch and a centered wrist.
+  expect(notch.filter(Boolean).length / notch.length).toBeLessThan(0.1);
+  expect(wrist.filter(Boolean).length / wrist.length).toBeGreaterThan(0.9);
   expect(incorrect).toBe(0);
   // The previous 0–64/192–255 periphery never crossed a QR bit's threshold,
   // so its almost invisible artwork could pass a mere "pixels changed" test.

@@ -24,7 +24,7 @@
 
 .exec-approval-queue,
 .exec-approval-chip {
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 500;
   color: var(--muted);
   border: 1px solid var(--border);
@@ -52,7 +52,7 @@
 
 .exec-approval-scope {
   margin-top: 8px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   color: var(--muted);
 }
 
@@ -60,7 +60,7 @@
   margin-top: 12px;
   display: grid;
   gap: 6px;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   color: var(--muted);
 }
 
@@ -81,7 +81,7 @@
 .exec-approval-details {
   margin-top: 10px;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .exec-approval-details summary {
@@ -95,7 +95,7 @@
 
 .exec-approval-warning {
   margin-top: 10px;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   color: var(--warn);
 }
 
@@ -128,7 +128,7 @@
     -webkit-line-clamp: 2;
     overflow: hidden;
     font-weight: 400;
-    line-height: calc(24px * var(--control-ui-text-scale));
+    line-height: 24px;
     overflow-wrap: anywhere;
   }
 
@@ -143,8 +143,8 @@
 
   .exec-approval-countdown {
     margin: 0;
-    font-size: var(--control-ui-text-sm);
-    line-height: calc(24px * var(--control-ui-text-scale));
+    font-size: 12px;
+    line-height: 24px;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
@@ -153,8 +153,8 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    font-size: calc(13px * var(--control-ui-text-scale));
-    line-height: calc(19px * var(--control-ui-text-scale));
+    font-size: 13px;
+    line-height: 19px;
   }
 
   .exec-approval-notes:empty {
@@ -261,7 +261,7 @@
   width: 24px;
   height: 24px;
   border-radius: var(--radius-full);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 500;
 }
 
@@ -286,8 +286,8 @@
 .exec-approval-shell {
   max-height: min(40dvh, 320px);
   overflow-y: auto;
-  font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: calc(21px * var(--control-ui-text-scale));
+  font-size: 13px;
+  line-height: 21px;
 }
 
 .exec-approval-prompt {
@@ -296,7 +296,7 @@
   align-items: center;
   gap: 0 10px;
   margin-bottom: 2px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   overflow-wrap: anywhere;
   user-select: none;
 }
@@ -471,8 +471,8 @@
   border: 0;
   border-radius: 0;
   background: transparent;
-  font-size: var(--control-ui-text-sm);
-  line-height: calc(20px * var(--control-ui-text-scale));
+  font-size: 12px;
+  line-height: 20px;
   white-space: nowrap;
 }
 
@@ -511,7 +511,7 @@
 .exec-approval-list__heading {
   padding: 2px 4px 6px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -552,7 +552,7 @@
   grid-row: 1;
   width: 20px;
   height: 20px;
-  font-size: calc(10px * var(--control-ui-text-scale));
+  font-size: 10px;
 }
 
 .exec-approval-list__command {
@@ -561,7 +561,7 @@
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .exec-approval-list__expiry {
@@ -573,7 +573,7 @@
   padding-inline-start: 24px;
   background: linear-gradient(to right, transparent, var(--exec-approval-row-bg) 24px);
   color: var(--warn);
-  font: var(--control-ui-text-xs)/1.2 var(--mono);
+  font: 11px/1.2 var(--mono);
   font-variant-numeric: tabular-nums;
   text-align: end;
   white-space: nowrap;
@@ -590,7 +590,7 @@
 
 .exec-approval-card--command .exec-approval-list__heading {
   padding: 0 0 4px;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-weight: 400;
   letter-spacing: normal;
   text-transform: none;
@@ -615,7 +615,7 @@
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   text-decoration: underline;
   text-underline-offset: 3px;
   cursor: var(--cursor-action);

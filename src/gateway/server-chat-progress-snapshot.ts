@@ -6,7 +6,8 @@ import {
 } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isCompleteAgentPreamble } from "../agents/agent-activity-presentation.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
-import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
+import { boundedJsonUtf8Bytes, jsonStringByteLengthUpToLimit } from "../infra/json-utf8-bytes.js";
+import { freezeTrustedJsonSnapshot, isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 
 const STARTUP_PHASES = new Set<string>(ChatRunStartupPhaseSchema.anyOf.map((phase) => phase.const));
 const CHAT_RUN_PROGRESS_MAX_EVENTS = 50;
@@ -20,7 +21,6 @@ const TOOL_PROGRESS_FIELDS = new Map<string, readonly string[]>([
   ["review", ["review", "approvalReviewOutcome"]],
   ["result", ["approvalReviewOutcome", "isError", "result"]],
 ]);
-const retainedEventBytes = new WeakMap<AgentEventPayload, number>();
 const isRawJSON =
   "isRawJSON" in JSON && typeof JSON.isRawJSON === "function" ? JSON.isRawJSON : undefined;
 
@@ -34,15 +34,14 @@ function stringifyProgressEvent(event: AgentEventPayload): string {
     }
   };
   const primitive = (value: unknown) => {
-    if (typeof value === "string" && value.length + 2 > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES - bytes) {
-      throw new RangeError("Progress event exceeds replay budget");
-    }
     charge(
-      value === null || value === true
-        ? 4
-        : value === false
-          ? 5
-          : Buffer.byteLength(JSON.stringify(value), "utf8"),
+      typeof value === "string"
+        ? jsonStringByteLengthUpToLimit(value, CHAT_RUN_PROGRESS_MAX_EVENT_BYTES - bytes)
+        : value === null || value === true
+          ? 4
+          : value === false
+            ? 5
+            : Buffer.byteLength(JSON.stringify(value), "utf8"),
     );
   };
 
@@ -88,32 +87,118 @@ function stringifyProgressEvent(event: AgentEventPayload): string {
   });
 }
 
-function captureProgressEvent(event: AgentEventPayload) {
+type ProgressEventFacts = Pick<AgentEventPayload, "stream" | "ts" | "data">;
+type CapturedProgressEvent =
+  | { kind: "event"; facts: ProgressEventFacts; event: AgentEventPayload; byteLength: number }
+  | { kind: "output"; facts: ProgressEventFacts; byteLength: number; json: string };
+
+function isCanonicalImmutableOutput(value: unknown): boolean {
+  if (!isDeeplyFrozenPlainData(value)) {
+    return false;
+  }
+  const output = asNullableRecord(value);
+  if (
+    !output ||
+    "toJSON" in output ||
+    !Object.prototype.propertyIsEnumerable.call(output, "text") ||
+    typeof output.text !== "string"
+  ) {
+    return false;
+  }
+  const keys = Reflect.ownKeys(output);
+  if (keys.length === 1) {
+    return true;
+  }
+  if (keys.length !== 2 || !Object.prototype.propertyIsEnumerable.call(output, "liveOutput")) {
+    return false;
+  }
+  const live = asNullableRecord(output.liveOutput);
+  return Boolean(
+    live &&
+    !("toJSON" in live) &&
+    Reflect.ownKeys(live).length === 2 &&
+    Object.prototype.propertyIsEnumerable.call(live, "text") &&
+    Object.prototype.propertyIsEnumerable.call(live, "omittedChars") &&
+    typeof live.text === "string" &&
+    typeof live.omittedChars === "number" &&
+    Number.isSafeInteger(live.omittedChars) &&
+    live.omittedChars >= 0 &&
+    !Object.is(live.omittedChars, -0),
+  );
+}
+
+function captureProgressEvent(
+  event: AgentEventPayload,
+  deferOutput: boolean,
+): CapturedProgressEvent | undefined {
   try {
+    // Only the fresh tool-output envelope has fully controlled predicate facts.
+    // Inherited JSON transforms can reshape those facts and keep eager capture.
+    const serializedOutput = deferOutput && !("toJSON" in event) && !("toJSON" in event.data);
+    if (
+      serializedOutput &&
+      typeof event.runId === "string" &&
+      Number.isFinite(event.seq) &&
+      !Object.is(event.seq, -0) &&
+      Number.isFinite(event.ts) &&
+      !Object.is(event.ts, -0) &&
+      (event.sessionKey === undefined || typeof event.sessionKey === "string") &&
+      (event.agentId === undefined || typeof event.agentId === "string") &&
+      isCanonicalImmutableOutput(event.data.partialResult)
+    ) {
+      // Canonical immutable facts need no JSON copy. Keep the existing byte
+      // budget and generic native capture for mutable/custom producer values.
+      const size = boundedJsonUtf8Bytes(event, CHAT_RUN_PROGRESS_MAX_EVENT_BYTES);
+      if (!size.complete) {
+        return undefined;
+      }
+      const captured = freezeTrustedJsonSnapshot(event);
+      return { kind: "event", facts: captured, event: captured, byteLength: size.bytes };
+    }
     const json = stringifyProgressEvent(event);
     const byteLength = Buffer.byteLength(json, "utf8");
     if (byteLength > CHAT_RUN_PROGRESS_MAX_EVENT_BYTES) {
       return undefined;
     }
-    // Own the wire representation; producers and replay readers cannot change
-    // captured content or invalidate its size after this synchronous receipt.
+    if (serializedOutput) {
+      // Capture producer getters/toJSON now, but decode only the retained receipt
+      // when recovery reads it. Output bodies are not used by owner predicates.
+      const { partialResult: _partialResult, ...data } = event.data;
+      return {
+        kind: "output",
+        facts: { stream: event.stream, ts: event.ts, data },
+        byteLength,
+        json,
+      };
+    }
+    // Generic progress predicates consume the captured native JSON facts.
     const captured: AgentEventPayload = JSON.parse(json);
     freezeTrustedJsonSnapshot(captured);
     if (!asNullableRecord(captured.data)) {
       return undefined;
     }
-    retainedEventBytes.set(captured, byteLength);
-    return { event: captured, byteLength };
+    return { kind: "event", facts: captured, event: captured, byteLength };
   } catch {
     return undefined;
   }
 }
 
 export type ChatRunProgressSnapshot = {
-  events: AgentEventPayload[];
+  entries: CapturedProgressEvent[];
   byteLength: number;
   lastSeq: number;
 };
+
+/** Materialize frozen replay events from the owner's immutable captured receipts. */
+export function readChatRunProgressEvents(
+  snapshot: ChatRunProgressSnapshot | undefined,
+): AgentEventPayload[] | undefined {
+  return snapshot?.entries.map((entry) =>
+    entry.kind === "output"
+      ? freezeTrustedJsonSnapshot<AgentEventPayload>(JSON.parse(entry.json))
+      : entry.event,
+  );
+}
 
 export function updateChatRunProgressSnapshot(
   snapshot: ChatRunProgressSnapshot | undefined,
@@ -133,8 +218,8 @@ export function updateChatRunProgressSnapshot(
     event.stream === "run_status" &&
     (phase === "waiting_for_model" ||
       (phase === "starting_model" &&
-        snapshot?.events.some(
-          (candidate) =>
+        snapshot?.entries.some(
+          ({ facts: candidate }) =>
             candidate.stream === "run_status" && candidate.data.phase === "waiting_for_model",
         )));
   const isRetryStatus = event.stream === "run_status" && phase === "retrying";
@@ -144,8 +229,8 @@ export function updateChatRunProgressSnapshot(
   const isAssistant =
     event.stream === "assistant" &&
     Boolean(
-      snapshot?.events.some(
-        (candidate) =>
+      snapshot?.entries.some(
+        ({ facts: candidate }) =>
           candidate.stream === "run_status" ||
           (candidate.stream === "lifecycle" &&
             (candidate.data.phase === "fallback_step" || candidate.data.phase === "finishing")),
@@ -186,8 +271,8 @@ export function updateChatRunProgressSnapshot(
     isGuardian &&
     phase === "completed" &&
     Boolean(guardianTargetItemId) &&
-    snapshot?.events.some(
-      (candidate) =>
+    snapshot?.entries.some(
+      ({ facts: candidate }) =>
         candidate.stream === event.stream &&
         candidate.data.phase === "strict_review_required" &&
         candidate.data.reviewId === data.reviewId,
@@ -210,7 +295,7 @@ export function updateChatRunProgressSnapshot(
     return snapshot;
   }
 
-  const next = snapshot ?? { events: [], byteLength: 0, lastSeq: 0 };
+  const next = snapshot ?? { entries: [], byteLength: 0, lastSeq: 0 };
   // Agent events are run-sequenced. Reject delayed duplicates so reconnect
   // state cannot resurrect a tool that a newer result already completed.
   if (event.seq <= next.lastSeq) {
@@ -233,21 +318,23 @@ export function updateChatRunProgressSnapshot(
   ) {
     return next;
   }
-  const matchesPreamble = (candidate: AgentEventPayload) =>
+  const matchesPreamble = (candidate: ProgressEventFacts) =>
     candidate.stream === "item" &&
     candidate.data?.kind === "preamble" &&
     (candidate.data.itemId ?? "") === preambleItemId;
-  const previousPreamble = preambleItemId ? next.events.find(matchesPreamble) : undefined;
+  const previousPreamble = preambleItemId
+    ? next.entries.find(({ facts: candidate }) => matchesPreamble(candidate))?.facts
+    : undefined;
   const previousUsage = isUsage
-    ? next.events.find((candidate) => candidate.stream === "usage")
+    ? next.entries.find(({ facts: candidate }) => candidate.stream === "usage")?.facts
     : undefined;
 
-  const removeWhere = (predicate: (candidate: AgentEventPayload) => boolean) => {
-    next.events = next.events.filter((candidate) => {
-      if (!predicate(candidate)) {
+  const removeWhere = (predicate: (candidate: ProgressEventFacts) => boolean) => {
+    next.entries = next.entries.filter((entry) => {
+      if (!predicate(entry.facts)) {
         return true;
       }
-      next.byteLength -= retainedEventBytes.get(candidate)!;
+      next.byteLength -= entry.byteLength;
       return false;
     });
   };
@@ -255,7 +342,9 @@ export function updateChatRunProgressSnapshot(
   if (
     isStartupStatus &&
     !isModelWait &&
-    next.events.some((candidate) => candidate.stream === "tool" || candidate.stream === "item")
+    next.entries.some(
+      ({ facts: candidate }) => candidate.stream === "tool" || candidate.stream === "item",
+    )
   ) {
     return next;
   }
@@ -320,7 +409,12 @@ export function updateChatRunProgressSnapshot(
   }
 
   const storedData: Record<string, unknown> = isTool
-    ? { phase, name: typeof data.name === "string" ? data.name : undefined, toolCallId }
+    ? {
+        phase,
+        name: typeof data.name === "string" ? data.name : undefined,
+        toolCallId,
+        ...(phase === "update" && data.outputOnly === true ? { outputOnly: true } : {}),
+      }
     : isAssistant
       ? {} // Reconnect needs the progress sequence, not another copy of buffered assistant text.
       : isPreamble
@@ -353,38 +447,39 @@ export function updateChatRunProgressSnapshot(
     ...(event.sessionKey ? { sessionKey: event.sessionKey } : {}),
     ...(event.agentId ? { agentId: event.agentId } : {}),
   };
-  let captured = captureProgressEvent(storedEvent);
+  const deferOutput = isTool && mode === "full" && phase === "update" && data.outputOnly === true;
+  let captured = captureProgressEvent(storedEvent, deferOutput);
   if (!captured && isTool) {
     delete storedData.args;
     delete storedData.partialResult;
     delete storedData.diff;
     delete storedData.result;
-    captured = captureProgressEvent(storedEvent);
+    captured = captureProgressEvent(storedEvent, deferOutput);
   }
   if (!captured) {
     return next;
   }
-  next.events.push(captured.event);
+  next.entries.push(captured);
   next.byteLength += captured.byteLength;
   if (phase === "review") {
-    const reviews = next.events.filter(
-      (candidate) =>
+    const reviews = next.entries.filter(
+      ({ facts: candidate }) =>
         candidate.stream === "tool" &&
         candidate.data?.toolCallId === toolCallId &&
         candidate.data?.phase === "review",
     );
     const overflow = reviews.length - CHAT_RUN_PROGRESS_MAX_REVIEWS_PER_TOOL;
     if (overflow > 0) {
-      const evicted = new Set(reviews.slice(0, overflow));
+      const evicted = new Set(reviews.slice(0, overflow).map((entry) => entry.facts));
       removeWhere((candidate) => evicted.has(candidate));
     }
   }
   while (
-    next.events.length > CHAT_RUN_PROGRESS_MAX_EVENTS ||
+    next.entries.length > CHAT_RUN_PROGRESS_MAX_EVENTS ||
     next.byteLength > CHAT_RUN_PROGRESS_MAX_BYTES
   ) {
     // The single usage snapshot is current run state, not evictable activity history.
-    const oldest = next.events.find((candidate) => candidate.stream !== "usage");
+    const oldest = next.entries.find(({ facts: candidate }) => candidate.stream !== "usage")?.facts;
     if (!oldest) {
       break;
     }

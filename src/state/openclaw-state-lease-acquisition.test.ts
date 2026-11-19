@@ -76,16 +76,17 @@ it("names the checkout operation holding up foreground preparation", async () =>
   await withOpenClawTestState({ label: "checkout-owner" }, async ({ env }) => {
     const capture = createWarnLogCapture("checkout-owner");
     const abort = new AbortController();
+    const context = workerContext.captureOpenClawStateWorkerContext({ env });
     vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async () => abort.abort());
     try {
       await withProjectCheckoutLifecycle(
         "synthetic-project",
-        { env, operation: "worktree.maintenance.retire" },
+        { context, operation: "worktree.maintenance.retire" },
         async () => {
           await expect(
             withProjectCheckoutLifecycle(
               "synthetic-project",
-              { env, signal: abort.signal },
+              { context, signal: abort.signal },
               async () => {},
             ),
           ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });

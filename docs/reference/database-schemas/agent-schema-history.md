@@ -58,7 +58,9 @@ backup and its matching build, not just reinstalling the older package.
 | 39      | Retained cold transcript navigation for bounded history reads without restoration                                                                                                                                                                      | `Unreleased` |
 | 40      | Durable session creation receipts bound to the original session incarnation                                                                                                                                                                            | `Unreleased` |
 | 41      | Active transcript byte and dependency facts in an initially empty companion table                                                                                                                                                                      | `Unreleased` |
-| 42      | Continuation: durable session-key recipient-authority generations for delayed named returns                                                                                                                                                            | `Unreleased` |
+| 42      | Opt-in aggregate successful tool usage scores, without transcript backfill                                                                                                                                                                             | `Unreleased` |
+| 43      | Pending-input terminal causes and original-source storage; legacy user Stop and dismissal facts become `user-stop` without changing accepted message bytes                                                                                             | `Unreleased` |
+| 44      | Continuation: durable session-key recipient-authority generations for delayed named returns                                                                                                                                                            | `Unreleased` |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
 extended-stable `v2026.7.35`. Versions 2, 4, 5–6, and 7 were development-only
@@ -440,9 +442,9 @@ the existing [schema migration handoff](/reference/database-schemas/versioning#s
 
 ### Session recipient authority
 
-Agent schema **42** (continuation) adds `session_recipient_authority`, one durable
+Agent schema **44** (continuation) adds `session_recipient_authority`, one durable
 recipient-authority generation per canonical logical `sessionKey` for delayed named
-returns, on top of upstream's schema 41. The generation survives session materialization
+returns, on top of upstream's schema 43. The generation survives session materialization
 and deletion; the table has no `session_nodes` foreign key because deletion is one of
 its generation edges.
 
@@ -455,7 +457,7 @@ Doctor-owned session entries remain unchanged for Doctor repair. Transcript byte
 retention, and permissions are unchanged. Doctor's declared backup scope for the step is
 the new table alone.
 
-Older builds refuse schema 42; rollback requires the pre-upgrade database backup and
+Older builds refuse schema 44; rollback requires the pre-upgrade database backup and
 matching build, not lower version markers.
 
 ### Session hot facts and snapshots

@@ -1,4 +1,3 @@
-import type { Result } from "@openclaw/normalization-core/result";
 import { registerListener } from "../../../../src/shared/listeners.js";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
@@ -17,6 +16,7 @@ import {
   invalidateConfigConnection,
   setConfigSnapshot,
   type RuntimeConfigGateway,
+  type ConfigReadResult,
   type RuntimeConfigState,
 } from "./config-state-model.ts";
 import type { RuntimeConfigEditor } from "./runtime-config-editor.ts";
@@ -45,7 +45,7 @@ export function createRuntimeConfigCapability(
   let editor: RuntimeConfigEditor | null = null;
   let activation: Promise<RuntimeConfigEditor | null> | null = null;
   let disposed = false;
-  let pendingSchema: Promise<Result<void, string>> | null = null;
+  let pendingSchema: Promise<ConfigReadResult> | null = null;
   let suspension: Parameters<RuntimeConfigEditor["setWritesSuspended"]> = [false];
   let stopEditor: (() => void) | undefined;
   let updateEditorConnection: ((snapshot: RuntimeConfigGateway["snapshot"]) => void) | undefined;
@@ -318,7 +318,7 @@ export function createRuntimeConfigCapability(
     }
     return editor;
   };
-  const loadSchema = (refresh: boolean): Promise<Result<void, string>> => {
+  const loadSchema = (refresh: boolean): Promise<ConfigReadResult> => {
     if (editor) {
       pendingSchema = null;
       return refresh ? editor.refreshSchema() : editor.ensureSchemaLoaded();
@@ -326,7 +326,7 @@ export function createRuntimeConfigCapability(
     if (pendingSchema) {
       return pendingSchema;
     }
-    const requested: Promise<Result<void, string>> = activate().then(
+    const requested: Promise<ConfigReadResult> = activate().then(
       (loaded) =>
         loaded?.schemaRead ??
         (loaded && pendingSchema === requested

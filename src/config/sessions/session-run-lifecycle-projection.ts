@@ -13,6 +13,10 @@ import {
 } from "../../routing/session-key.js";
 import type { ProviderReviewTerminalFact } from "../../sessions/provider-review-terminal.js";
 import { buildUpdatedSessionGoalStatus } from "./goals-transitions.js";
+import {
+  createRestartResumeMarker,
+  resolveRestartResumeScope,
+} from "./session-restart-resume-scope.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionLifecycleProviderReview = Pick<
@@ -98,7 +102,7 @@ type LifecycleSessionShape = Pick<
 
 type PersistedLifecycleSessionShape = Pick<
   SessionEntry,
-  keyof LifecycleSessionShape | "status" | "lifecycleRunId"
+  keyof LifecycleSessionShape | "status" | "lifecycleRunId" | "lifecycleRestartScope"
 >;
 
 type GatewaySessionLifecycleSnapshot = Partial<
@@ -286,7 +290,11 @@ export function derivePersistedSessionLifecyclePatch(params: {
   return {
     ...snapshot,
     ...(phase === "start"
-      ? { lifecycleRunId: runId, lastRunId: undefined }
+      ? {
+          lifecycleRunId: runId,
+          lifecycleRestartScope: resolveRestartResumeScope(),
+          lastRunId: undefined,
+        }
       : snapshot.status && resolveSettledLifecycleTerminalOutcome(params.event)
         ? { lifecycleRunId: undefined, lastRunId: clientRunId }
         : {}),
@@ -449,7 +457,7 @@ export function projectSessionLifecyclePatch(
     !restartResumeSkipReason(params.canonicalKey, entry)
   ) {
     // A timed-out shutdown marker must not turn cancellation into a lost continuation.
-    patch.resumeAfterRestart = entry.resumeAfterRestart ?? { queuedInputIds: [] };
+    patch.resumeAfterRestart = entry.resumeAfterRestart ?? createRestartResumeMarker({});
   }
   const stopped =
     patch.status === "killed" &&
@@ -460,7 +468,7 @@ export function projectSessionLifecyclePatch(
     entry.goal?.status === "active" &&
     entry.goal.updatedAt <= endedAt
   ) {
-    // Commit a definitive failure or Stop with its goal pause and frozen timer.
+    // Commit a definitive failure or interruption with its goal pause and frozen timer.
     // Restart, supersession, and yielded work retain their continuation custody.
     // A delayed terminal must not undo a newer resume or replacement goal.
     patch.goal = buildUpdatedSessionGoalStatus(
@@ -468,7 +476,7 @@ export function projectSessionLifecyclePatch(
       {
         status: "paused",
         note: stopped
-          ? "Paused after Stop. Resume to continue."
+          ? "Paused after an interruption. Resume to continue."
           : `Paused after an error. Resume to continue. ${patch.lastRunError ?? (patch.status === "timeout" ? "Run timed out." : "Run failed.")}`,
       },
       endedAt,

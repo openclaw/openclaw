@@ -86,3 +86,23 @@ it("retains a saved unavailable model without offering it for another default se
   await choosePickerValue(picker, "fixture/last");
   expect(onUtilityFallbackChange).toHaveBeenLastCalledWith("fixture/last");
 });
+
+it("names agents with their own utility settings and opens their Overview", async () => {
+  const onOpenAgent = vi.fn();
+  const container = mount(
+    props({
+      utilityOverrides: [
+        { agentId: "forge", label: "Forge", model: "fixture/small", fallbacks: ["fixture/backup"] },
+        { agentId: "quiet", label: "Quiet", model: "", fallbacks: [] },
+      ],
+      onOpenAgent,
+    }),
+  );
+  const row = settingsRow(container, "Utility model");
+  expect(row.textContent).toContain("Forge: fixture/small · fallbacks: fixture/backup");
+  expect(row.textContent).toContain("Quiet: Disabled");
+  const link = row.querySelector<HTMLAnchorElement>('[data-agent-id="forge"] a')!;
+  expect(link.getAttribute("href")).toBe("/settings/agents/forge");
+  link.click();
+  expect(onOpenAgent).toHaveBeenCalledWith("forge");
+});

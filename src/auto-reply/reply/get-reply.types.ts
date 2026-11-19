@@ -3,7 +3,6 @@ import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
-import type { CronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import type {
   ReplyDeliveryFactsObserver,
   ReplyDeliveryObserver,
@@ -13,6 +12,7 @@ import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/tr
 import type { SessionEntry, SessionToolOverrides } from "../../config/sessions/types.js";
 // Shared get-reply type contracts for command, directive, and runtime layers.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CronCreatorAuthorityCapability } from "../../gateway/cron-creator-authority-grant.types.js";
 import type { DashboardMessageReadAdmission } from "../../gateway/message-action-turn-capability.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
 import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
@@ -25,7 +25,7 @@ import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import { getRequesterProfile } from "../requester-profile.js";
 import type { MsgContext } from "../templating.js";
-import type { VerboseLevel } from "../thinking.js";
+import type { VerboseLevel } from "../thinking.shared.js";
 import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
 import type { ReplyOptionsWithOperationRunState } from "./reply-operation-run-state.js";
@@ -53,6 +53,8 @@ export type ReplyRunVerbosity = {
 };
 
 type InternalReplySessionOptions = {
+  /** Normalize a machine-selected thinking preference against the execution model. */
+  normalizeThinkingLevelOverride?: boolean;
   /** Dispatch-owned command requester binding; never part of the public plugin API. */
   withCommandNativeSubagents?: <T>(
     binding: {

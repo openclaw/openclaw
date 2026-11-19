@@ -19,7 +19,7 @@
   background: var(--session-rail-background, var(--bg-elevated));
   color: var(--muted-strong);
   font-size: calc(14px * var(--control-ui-text-scale, 1));
-  line-height: calc(18px * var(--control-ui-text-scale));
+  line-height: 18px;
 }
 
 .session-panel-rail[data-presentation="desktop"] {
@@ -48,7 +48,7 @@
   padding: 0 8px;
   border-bottom-color: var(--border-strong);
   background: var(--mobile-panel-rail-background);
-  line-height: calc(20px * var(--control-ui-text-scale));
+  line-height: 20px;
 }
 
 .session-panel-rail .session-panel-rail__group,
@@ -155,11 +155,9 @@
 }
 
 .session-panel-rail
-  .session-panel-rail__button:is(
-    :hover,
-    :focus-visible,
-    [aria-expanded="true"]:not(.session-panel-rail__toggle)
-  ):not(:disabled):not([aria-disabled="true"]) {
+  .session-panel-rail__button:is(:hover, :focus-visible, [aria-expanded="true"]):not(:disabled):not(
+    [aria-disabled="true"]
+  ) {
   background: var(--session-rail-hover, var(--bg-hover));
   color: var(--text);
 }

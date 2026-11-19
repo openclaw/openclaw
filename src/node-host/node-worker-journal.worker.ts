@@ -146,7 +146,8 @@ function refreshNodeHostOpenClawIdTargetInWorker(
             Boolean(
               target.freshness?.snapshot &&
               (!input.target.freshness?.snapshot ||
-                isOlderSnapshot(input.target.freshness.snapshot, target.freshness.snapshot) ||
+                (input.target.freshness.snapshot.k_gw === target.freshness.snapshot.k_gw &&
+                  isOlderSnapshot(input.target.freshness.snapshot, target.freshness.snapshot)) ||
                 input.target.freshness.snapshot.binding_seq <
                   target.freshness.snapshot.binding_seq),
             );

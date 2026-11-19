@@ -100,6 +100,15 @@ async function resolveCliEntrypointPathForService(
     }
   }
   const looksLikeDist = isGatewayDistEntrypointPath(resolvedPath);
+  if (looksLikeDist && service === "gateway") {
+    // A Git release install's service names its launcher, which counts trial starts.
+    const { resolveGitReleaseLauncherForEntrypoint } =
+      await import("../infra/git-release-paths.js");
+    const launcher = resolveGitReleaseLauncherForEntrypoint(normalized);
+    if (launcher && (await canAccessEntrypoint(launcher))) {
+      return launcher;
+    }
+  }
   if (looksLikeDist) {
     // Existing installed command lines may point at versioned pnpm realpaths.
     // Repair prefers stable package symlink paths when they still exist.

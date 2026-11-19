@@ -584,9 +584,6 @@ it.each(["runtime", "ambient"])(
         { mode: "dark" },
         {
           client: synthetic,
-          context: {
-            validateAgentRuntimeApprovalAuthority: (candidate) => candidate === identity,
-          },
         },
       );
     const result =
@@ -706,28 +703,4 @@ it("rejects model-selected profile targeting", async () => {
   }
   preferences();
   preferences({}, otherId);
-});
-
-it("rolls back both import and selection when the live run retires at the commit boundary", async () => {
-  const identity = runtimeIdentity(requesterId);
-  const synthetic = syntheticClient(identity);
-  let active = true;
-  let reachedCommit = false;
-  beforeWorkerCommit(() => {
-    reachedCommit = true;
-    active = false;
-  });
-  await expectError(
-    importTheme(
-      "retired",
-      { apply: true },
-      {
-        client: synthetic,
-        context: { validateAgentRuntimeApprovalAuthority: () => active },
-      },
-    ),
-    "no longer active",
-  );
-  expect(reachedCommit).toBe(true);
-  preferences();
 });

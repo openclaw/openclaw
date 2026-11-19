@@ -3,7 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
-import { captureRequesterOrigin, type RequesterOrigin } from "../agents/requester-origin.js";
+import { captureRequesterOrigin } from "../agents/requester-origin.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import { normalizeInputProvenance } from "./input-provenance.js";
@@ -67,6 +67,9 @@ export function buildPersistedUserTurnMetadata(
     : undefined;
   return {
     ...(requesterOrigin ? { requesterOrigin } : {}),
+    ...(input.subagentCompletions?.length
+      ? { subagentCompletions: input.subagentCompletions.map((completion) => ({ ...completion })) }
+      : {}),
     // Privileged synthetic handoffs may execute owner tools but never author trusted memory.
     ...(input.senderIsOwner === undefined
       ? {}
@@ -121,44 +124,6 @@ export function buildPersistedUserTurnMetadata(
         }
       : {}),
   };
-}
-
-// Exposed messages are projections. Only producer facts or exact accepted
-// pending custody can supply identity to a fresh write.
-export function projectPersistedUserTurnRequesterOrigin<
-  T extends PersistedUserTurnMessage | undefined,
->(candidate: T, requesterOrigin: RequesterOrigin | undefined): T {
-  if (!candidate) {
-    return candidate;
-  }
-  const { requesterOrigin: _previousOrigin, ...metadata } = candidate["__openclaw"] ?? {};
-  if (requesterOrigin) {
-    metadata.requesterOrigin = requesterOrigin;
-  }
-  const next = { ...candidate };
-  delete next["__openclaw"];
-  if (Object.keys(metadata).length > 0) {
-    next["__openclaw"] = metadata;
-  }
-  return next;
-}
-
-export function applyPersistedUserTurnReplacementText(
-  candidate: PersistedUserTurnMessage | undefined,
-  replacementText: string | undefined,
-): PersistedUserTurnMessage | undefined {
-  if (!candidate || replacementText === undefined) {
-    return candidate;
-  }
-  const metadata = { ...candidate["__openclaw"] };
-  if (candidate.content !== replacementText) {
-    delete metadata.humanMentions;
-    delete metadata.workContext;
-    delete metadata.appContext;
-  }
-  const next = { ...candidate, content: replacementText };
-  delete next["__openclaw"];
-  return Object.keys(metadata).length > 0 ? { ...next, __openclaw: metadata } : next;
 }
 
 export function rewritePersistedSteerTargetRunId(

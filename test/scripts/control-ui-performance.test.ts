@@ -608,12 +608,8 @@ describe("Control UI performance budgets", () => {
             createHash("sha256").update(String(index)).digest("hex"),
           ).join(""),
       );
-      for (let index = 0; index < 32; index++) {
-        fixture.writeAsset(
-          "extra-" + index + ".css",
-          Math.ceil(CONTROL_UI_PERFORMANCE_BUDGETS.totalCssRawBytes / 32) + 1,
-          Math.ceil(CONTROL_UI_PERFORMANCE_BUDGETS.totalCssGzipBytes / 32) + 1,
-        );
+      for (let index = 0; index < 34; index++) {
+        fixture.writeAsset("extra-" + index + ".css", 53_000, 10_500);
       }
       const summary = path.join(fixture.rootDir, "summary.md");
       const args = mode === "report-only" ? ["--report-only"] : ["--base-dist", fixture.distDir];

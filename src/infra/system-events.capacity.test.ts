@@ -3,6 +3,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import {
   consumeSelectedSystemEventEntries,
   enqueueAutomationSystemEvent,
+  enqueueRequiredSystemEventEntry,
   prepareAutomationSystemEvents,
   enqueueSystemEvent,
   enqueueSystemEventEntry,
@@ -93,6 +94,23 @@ it("does not record a refused keyed event as the session's last context", () => 
     }),
   ).toBe(false);
   expect(isSystemEventContextChanged(sessionKey, "cron:19")).toBe(false);
+});
+
+it("bounds passive notices separately from the turn-owned occurrences that resume a session", () => {
+  const sessionKey = "agent:main:capacity-pools";
+  for (let index = 0; index < 20; index++) {
+    enqueueSystemEvent(`Exec completed ${index}`, { sessionKey, contextKey: `exec:${index}` });
+  }
+  expect(enqueueSystemEvent("Unadmitted notice", { sessionKey, contextKey: "exec:20" })).toBe(
+    false,
+  );
+  for (let index = 0; index < 20; index++) {
+    expect(enqueueRequiredSystemEventEntry(`Resume ${index}`, { sessionKey })).not.toBeNull();
+  }
+  expect(() => enqueueRequiredSystemEventEntry("Unadmitted resume", { sessionKey })).toThrow(
+    "queue is full",
+  );
+  expect(texts(sessionKey)).toHaveLength(40);
 });
 
 it("coalesces deferred duplicates only within the same selected scheduled slot", async () => {

@@ -10,12 +10,9 @@ import type {
   SessionRecipientAuthority,
   SessionRecipientAuthorityRecordState,
 } from "./session-recipient-authority-types.js";
+import type { SessionSharingExpectedEntry } from "./session-sharing-authority.types.js";
 import type { SessionEntry, SessionProfileInvolvement } from "./types.js";
 
-export type SessionSharingExpectedEntry = Pick<
-  SessionEntry,
-  "sessionId" | "createdActor" | "visibility" | "incognito"
->;
 export type SessionMetadataExpectedEntry = SessionSharingExpectedEntry &
   Pick<SessionEntry, "lifecycleRevision">;
 export type SessionOwnerAssignParams = {

@@ -237,6 +237,7 @@ export function createAutoReviewTool(context: OpenClawPluginToolContext<2>): Any
     description:
       "Run the installed Auto Review checkpoint against changes in the current sandbox. The canonical helper supplies review settings; provide only the target and explicitly requested overrides. Returns the complete helper-validated report.",
     parameters: autoReviewParameters,
+    getExecutionTimeoutMs: (_args, lifetime) => lifetime?.parentTimeoutMs,
     async execute(_id, input, signal) {
       if (!Value.Check(autoReviewParameters, input)) {
         throw new Error(

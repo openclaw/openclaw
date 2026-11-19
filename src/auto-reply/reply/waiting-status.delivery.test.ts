@@ -185,6 +185,23 @@ it.each([
 });
 
 describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (lane) => {
+  it.each(["required", "optional"] as const)(
+    "honors %s waiting replies without newly spawned children",
+    async (expectation) => {
+      result.acceptedSessionSpawns = [];
+      result.meta.yieldAcknowledgment = "The existing task is still running.";
+      context.followupRun.run.terminalReplyExpectation = expectation;
+      captureContinuation();
+
+      const payloads = await prepare(lane);
+
+      expect(payloads.map((payload) => payload.text)).toEqual(
+        expectation === "required" ? ["The existing task is still running."] : [],
+      );
+      expect(settleRequester).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["explicit acknowledgment", "visible final", "optional turn", "delivered message"])(
     "selects waiting status for %s",
     async (selection) => {

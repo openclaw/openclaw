@@ -70,6 +70,8 @@ export class CreationComposer {
   mentions: readonly HumanMention[] = [];
   inputs: CreationComposerInput[] = [];
   error: string | null = null;
+  /** Setup recovery survives edits that clear transient composition errors. */
+  recovery: { error: string; label: string; pending: boolean; retry: () => void } | undefined;
   flushInput: (() => void) | undefined;
   releasePresentation: (() => void) | undefined;
   private readonly listeners = createChangeListeners();
@@ -80,6 +82,7 @@ export class CreationComposer {
   private readonly unregisterReload;
   private accepted: SessionCreateOutcome | undefined;
   private transferred = false;
+  private initializationPending = false;
   private transfer: CreationComposerTransfer | undefined;
   private disposed = false;
 
@@ -88,6 +91,7 @@ export class CreationComposer {
     readonly agentId: string,
     public incognito: boolean,
     private readonly notifyDraft: () => void,
+    private readonly retireCreation?: () => void,
   ) {
     this.gatewayUrl = context.gateway.connection.gatewayUrl;
     this.recoveryScope = context.gateway.snapshot.hello?.auth?.recoveryScope;
@@ -148,7 +152,7 @@ export class CreationComposer {
   canAdopt(): boolean {
     // This is local custody, not send admission. The destination must keep its
     // draft even if connection recovery has not yet authorized outbox writes.
-    return this.canDisplay() && this.accepted !== undefined;
+    return this.canDisplay() && this.accepted !== undefined && !this.initializationPending;
   }
 
   readonly notify = () => {
@@ -211,8 +215,9 @@ export class CreationComposer {
     this.notify();
   }
 
-  accept(result: SessionCreateOutcome): void {
+  accept(result: SessionCreateOutcome, options?: { initializationPending: true }): void {
     this.accepted = result;
+    this.initializationPending = options?.initializationPending === true;
   }
 
   take(onComplete: () => void = () => {}): CreationComposerTransfer | undefined {
@@ -282,6 +287,8 @@ export class CreationComposer {
       return;
     }
     this.disposed = true;
+    this.retireCreation?.();
+    this.recovery = undefined;
     for (const listener of this.invalidations) {
       listener();
     }

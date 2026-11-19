@@ -66,6 +66,7 @@ export function renderModelSetupLoading(modelConfigured: boolean) {
           rows: 2,
         })}
         {renderLoadingSection(t("modelSetup.signIn.title"), {
+          intro: t("modelSetup.signIn.description"),
           className: "model-setup__loading-section--sign-in",
         })}
         {renderLoadingSection(t("modelSetup.manual.title"))}

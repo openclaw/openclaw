@@ -133,9 +133,9 @@ Notes:
   `curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git --version main`.
 - Downgrade protection: if the target version is older than the current
   version, OpenClaw prompts for confirmation (skip with `--yes`).
-- Extended-stable always uses its verified exact package target. It is not a
-  one-off alias for `--tag extended-stable`, and `--tag` cannot be combined
-  with an effective extended-stable channel.
+- Extended-stable uses its verified exact package target by default. An explicit
+  `--tag` overrides that target for one update without replacing the saved channel.
+  The explicit target still goes through the normal compatibility checks.
 - `--channel beta` differs from `--tag beta`: the channel flow can fall back
   to stable/latest when beta is missing or older, while `--tag beta` always
   targets the raw `beta` dist-tag for that one run.

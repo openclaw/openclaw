@@ -118,29 +118,6 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
   font-variant-numeric: tabular-nums;
 }
 
-.chat-turn-recap__claw {
-  width: 18px;
-  height: 18px;
-  display: inline-flex;
-  align-items: center;
-  color: var(--accent);
-}
-
-.chat-turn-recap__claw svg {
-  width: 18px;
-  height: 18px;
-  fill: currentColor;
-  stroke: none;
-  transform: rotate(8deg);
-}
-
-/* The parked claw reports a settled turn, not an active run. */
-.chat-turn-recap__claw svg .claw-icon__jaw {
-  transform-box: view-box;
-  transform-origin: 8.6px 11px;
-  transform: rotate(-4deg);
-}
-
 .chat-turn-recap--continuation {
   margin-bottom: 0;
   font-size: var(--control-ui-text-sm);
@@ -174,7 +151,7 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
   position: absolute;
   right: -14px;
   top: -2px;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   line-height: 1;
   color: var(--accent);
   opacity: 0;
@@ -763,14 +740,6 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
   min-width: 0;
 }
 
-.chat-subagent-wait__toggle,
-.chat-handoff-resume__rule {
-  padding: 0;
-  border: 0;
-  background: none;
-  font-family: inherit;
-}
-
 .chat-handoff-sessions,
 .chat-handoff-resume__rule {
   color: var(--muted);
@@ -801,14 +770,17 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
   font-size: var(--control-ui-text-xs);
 }
 
-[data-status="attention"] > .chat-handoff-sessions__status,
-.chat-subagent-wait__attention {
+[data-status="attention"] > .chat-handoff-sessions__status {
   color: var(--warn);
 }
 
 .chat-handoff-resume__rule {
   display: flex;
   align-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
   gap: 8px;
   width: 100%;
   margin: 8px 0;
