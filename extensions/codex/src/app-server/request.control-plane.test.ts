@@ -54,7 +54,10 @@ describe("Codex control-plane request scope", () => {
       const harness = createHarness();
       await expect(
         withCodexAppServerJsonClient({ requestScope: "control-plane" }, async (request, client) => {
-          expect(Object.keys(client).sort()).toEqual(["captureCatalogLifetime", "retireIfCurrent"]);
+          expect(Object.keys(client).toSorted()).toEqual([
+            "captureCatalogLifetime",
+            "retireIfCurrent",
+          ]);
           expect(client).not.toBe(harness.client);
           return request({ method });
         }),
