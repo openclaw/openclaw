@@ -393,7 +393,11 @@ async function resumeRestartStore(
             if (!selected) {
               return { result: undefined };
             }
+            const skip = restartResumeSkipReason(sessionKey, selected);
             let parked = resolveSessionYieldWait(sessionKey, selected, agentId);
+            if (parked === "unreachable" && !skip) {
+              parked = "resume";
+            }
             if (
               parked &&
               (await hasInterruptedCommittedRequesterSettleInput(
@@ -403,7 +407,6 @@ async function resumeRestartStore(
             ) {
               parked = undefined;
             }
-            const skip = restartResumeSkipReason(sessionKey, selected);
             const sameRun = selected.lifecycleRunId === snapshotEntry.lifecycleRunId;
             const resolved = resolveStartupRestartMarker(selected, sameRun, {
               parked,

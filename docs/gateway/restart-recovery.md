@@ -13,7 +13,9 @@ then aborts executing work promptly. This includes accepted turns still preparin
 their runtime when shutdown begins. At the next startup, an interrupted root
 execution gets one ordinary system input asking the agent to inspect current
 state and continue. Recorded yield waits stay parked when their wake source
-survives; a lost source produces a visible failure instead.
+survives. A lost source settles a sub-agent with a visible failure; its registry
+completion wakes the requester. A root with no remaining child settlement or
+delivery receives the ordinary resume input to inspect and reconcile instead.
 The transcript remains the agent's context; the Gateway does not reconstruct or
 replay the old execution. For a captured interrupted turn, the shutdown marker
 retains its original requester's bounded authentication source. Startup revalidates
@@ -200,7 +202,7 @@ heartbeat observer works independently of the optional V8 flight recorder.
 | Running sub-agent                                                 | Stops quietly; its root requester receives the resume input                                            |
 | Session parked in `sessions_yield` with a surviving wake source   | Keeps its recorded wait, including dashboard roots; no startup model request                           |
 | Yielded requester whose descendants were stopped                  | Receives the root resume input to reconcile their work                                                 |
-| Yielded session whose external continuation source is gone        | Closes with a recorded, visible failure                                                                |
+| Yielded sub-agent whose external continuation source is gone      | Closes with a recorded, visible failure; its requester receives the child settlement                   |
 | Background process                                                | Ends with the old process; its root session receives the resume input                                  |
 | Already-produced outbound messages and media                      | Keep the existing delivery queue and delivery reconciliation                                           |
 | Scheduled jobs                                                    | Keep cron's own scheduling, catch-up, and interruption policy                                          |
