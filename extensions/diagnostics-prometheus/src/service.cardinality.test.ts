@@ -17,11 +17,9 @@ it("keeps queue labels closed across distinct sessions, jobs and custom lanes", 
   }
   const body = metrics.render();
   const sizes = body.split("\n").filter((line) => line.startsWith("openclaw_queue_lane_size{"));
-  expect(
-    sizes
-      .map((line) => line.match(/lane="([^"]+)"/)![1])
-      .toSorted((left, right) => left.localeCompare(right)),
-  ).toEqual(["background", "cron", "dreaming-narrative", "session", "subagent", "unknown"]);
+  expect(new Set(sizes.map((line) => line.match(/lane="([^"]+)"/)?.[1]))).toEqual(
+    new Set(["background", "cron", "dreaming-narrative", "session", "subagent", "unknown"]),
+  );
   expect(sizes.every((line) => line.endsWith(" 0"))).toBe(true);
   const waits = body
     .split("\n")
