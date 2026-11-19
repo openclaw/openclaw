@@ -406,6 +406,90 @@ struct ChatSessionsCodingTests {
             Array(raw.dropLast()))
     }
 
+    @Test(arguments: [
+        "same", "foreign", "missing-source", "missing-turn", "unowned", "input-only", "final-only", "reply-only",
+        "steer-local", "steer-foreign",
+    ])
+    @MainActor func `ios idle collapse keeps nested ownership and interleaving order`(scope: String) async throws {
+        let isSteer = scope.hasPrefix("steer-")
+        let foldsNested = ["same", "input-only", "final-only", "reply-only", "steer-local"].contains(scope)
+        let first: [String: Any] = [
+            "role": "user", "content": "First request", "timestamp": 0,
+            "__openclaw": ["id": "a-input", "runId": "run-a"],
+        ]
+        let firstAnswer: [String: Any] = [
+            "role": "assistant", "content": "First answer", "timestamp": 1, "phase": "final_answer",
+            "__openclaw": ["id": "a-answer", "runId": "run-a"],
+        ]
+        var inputMetadata: [String: Any] = ["id": "b-input"]
+        if !["missing-turn", "unowned", "final-only", "reply-only"].contains(scope) {
+            inputMetadata["runId"] = "run-b"
+        }
+        if isSteer { inputMetadata["steerTargetRunId"] = "run-a" }
+        let second: [String: Any] = [
+            "role": "user", "content": "Second request", "timestamp": 2, "__openclaw": inputMetadata,
+        ]
+        let work: [String: Any] = [
+            "role": "assistant", "timestamp": 3, "__openclaw": ["id": "b-work", "runId": "run-b"],
+            "content": [
+                ["type": "toolCall", "id": "b-exec", "name": "exec", "arguments": ["command": "printf done"]],
+                ["type": "tool_result", "id": "b-exec", "name": "exec", "text": "Done"],
+            ],
+        ]
+        var nested = Self.nestedEnvelope
+        var nestedMetadata: [String: Any] = ["id": "nested-row"]
+        if !["missing-source", "unowned"].contains(scope) {
+            nestedMetadata["runId"] = ["foreign", "steer-local"].contains(scope) ? "run-a" : "run-b"
+        }
+        nested["__openclaw"] = nestedMetadata
+        nested["timestamp"] = isSteer ? 1 : 4
+        var finalMetadata: [String: Any] = ["id": "b-answer"]
+        if !["missing-turn", "unowned", "input-only", "reply-only"].contains(scope) { finalMetadata["runId"] = "run-b" }
+        let final: [String: Any] = [
+            "role": "assistant", "content": "Second answer", "timestamp": 5, "phase": "final_answer",
+            "__openclaw": finalMetadata,
+        ]
+        var wire = isSteer ? [first, nested, second, work, final] : [first, firstAnswer, second, work, nested, final]
+        if scope == "reply-only" {
+            wire.insert([
+                "role": "assistant", "content": "Checking", "phase": "commentary", "timestamp": 2.5,
+                "__openclaw": ["id": "b-progress", "runId": "run-b"],
+            ], at: 3)
+        }
+        let decoded = try await OpenClawChatViewModel.decodeMessages(wire.map(Self.nestedRaw))
+        let raw = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: decoded))
+        #expect(ChatTranscriptRow.collapseCompletedWork(raw, runWorking: true) == raw)
+        #expect(ChatTranscriptRow.collapseCompletedWork(raw, runWorking: false, activeRunIDs: ["run-b"]) == raw)
+        #expect(ChatTranscriptRow.collapseCompletedWork(raw, runWorking: false, searchActive: true) == raw)
+        let settled = ChatTranscriptRow.collapseCompletedWork(raw, runWorking: false)
+        let groups = settled.compactMap { row -> ChatTranscriptRow.CompletedWork? in
+            if case let .completedWork(work) = row { return work }
+            return nil
+        }
+        let secondWork = try #require(groups.first { $0.messages.contains { $0.transcriptMessageID == "b-work" } })
+        #expect(secondWork.messages.map(\.transcriptMessageID) ==
+            (foldsNested && !isSteer ? ["b-work", "nested-row"] : ["b-work"]))
+        #expect(secondWork.messages.flatMap { ChatToolActivity.items(message: $0) }.map(\.id) ==
+            (foldsNested && !isSteer ? ["b-exec", "nested-call"] : ["b-exec"]))
+        #expect(groups.count == (scope == "steer-local" ? 2 : 1))
+        if scope == "steer-local" { #expect(groups.first?.messages.map(\.transcriptMessageID) == ["nested-row"]) }
+        let order = settled.compactMap { row -> String? in
+            switch row {
+            case let .message(message): message.transcriptMessageID
+            case .completedWork: "Worked"
+            default: nil
+            }
+        }
+        var expected = isSteer ? ["a-input", foldsNested ? "Worked" : "nested-row", "b-input", "Worked", "b-answer"] :
+            ["a-input", "a-answer", "b-input", "Worked"] + (foldsNested ? [] : ["nested-row"]) + ["b-answer"]
+        if scope == "reply-only" { expected.insert("b-progress", at: 3) }
+        #expect(order == expected)
+        #expect(order.filter { $0 == "nested-row" }.count == (foldsNested ? 0 : 1))
+        #expect(ChatTranscriptRow.collapseCompletedWork(settled, runWorking: false) == settled)
+        let frames = ChatAssistantRunGroup.build(settled, liveRunID: nil, hasLiveContent: false, searchActive: false)
+        #expect(ChatAssistantListCell.cells(frames[...]).map(\.id) == settled.map { .row($0.id) })
+    }
+
     static var nestedEnvelope: [String: Any] {
         [
             "role": "custom",

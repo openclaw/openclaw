@@ -68,9 +68,18 @@ extension ChatTranscriptRow {
             }
             let answeredOutput = turn.prefix(finalIndex.map { $0 + 1 } ?? turn.count)
             let replyRuns = Set(answeredOutput.compactMap { row -> String? in
-                guard let message = row.workMessage, message.hasWorkReplyContent else { return nil }
+                guard let message = row.workMessage, !message.isNestedToolActivity,
+                      message.hasWorkReplyContent else { return nil }
                 return message.workRunID
             })
+            // A continuing steer may borrow its successor's terminal reply, never its ownership.
+            let inputRunID = turn.first.flatMap { row -> String? in
+                guard row.startsTurn, let input = row.workMessage, !input.isNestedToolActivity else { return nil }
+                return input.workRunID
+            }
+            let turnRunID = inputRunID ??
+                finalIndex.flatMap { turn[$0].workMessage?.workRunID } ??
+                (replyRuns.count == 1 ? replyRuns.first : nil)
             while end + 1 < turn.count, turn[end + 1].isWorkOutput {
                 if let runID = turn[end + 1].workMessage?.workRunID, !replyRuns.contains(runID) { break }
                 end += 1
@@ -80,7 +89,10 @@ extension ChatTranscriptRow {
                 guard let source = row.workMessage else { return [(row, .visible)] }
                 if source.role.lowercased() == "assistant", !source.hasWorkReplyContent,
                    !source.content.contains(where: \.isWorkContent) { return [] }
-                let canFold = (finalIndex.map { cursor < $0 } ?? true) || !source.hasUnresolvedWork
+                let ownsNestedWork = !source.isNestedToolActivity ||
+                    (source.workRunID != nil && source.workRunID == turnRunID)
+                let canFold = ownsNestedWork &&
+                    ((finalIndex.map { cursor < $0 } ?? true) || !source.hasUnresolvedWork)
                 return source.workPresentationParts.map { message in
                     let kind: ChatWorkPartKind = canFold && message.isCollapsibleWork ? .work : .visible
                     return (.message(message), kind)
