@@ -12,11 +12,11 @@ import {
   type AuthProfileCredential,
   type AuthProfileStore,
   type OAuthCredential,
-} from "openclaw/plugin-sdk/agent-runtime";
+} from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   hasUsableOAuthCredential,
   resolveOpenAICodexAuthIdentity,
-} from "openclaw/plugin-sdk/provider-auth";
+} from "openclaw/plugin-sdk/provider-oauth-runtime";
 import {
   CODEX_APP_SERVER_API_KEY_ENV_VARS,
   fingerprintApiKeyAuthProfileCacheKey,
@@ -64,10 +64,10 @@ import type {
 import {
   isCodexResponsesOAuthCredential,
   resolveCodexInferenceCredential,
-  resolveCodexResponsesOAuthProfileFingerprint,
-} from "./responses-oauth.js";
+} from "./responses-oauth-policy.js";
+import { resolveCodexResponsesOAuthProfileFingerprint } from "./responses-oauth.js";
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
-import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
+import { resolveCodexAppServerSpawnEnv } from "./spawn-env.js";
 
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";
 const CODEX_HOME_ENV_VAR = "CODEX_HOME";

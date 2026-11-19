@@ -8,10 +8,8 @@ import {
   isCodexAppServerProxyLaunch,
   resolveCodexPrivateLauncher,
 } from "./app-server/launch-args.js";
-import {
-  resolveCodexAppServerSpawnEnv,
-  resolveCodexAppServerSpawnInvocation,
-} from "./app-server/transport-stdio.js";
+import { resolveCodexAppServerSpawnEnv } from "./app-server/spawn-env.js";
+import { resolveCodexAppServerSpawnInvocation } from "./app-server/transport-stdio.js";
 import { resolveCodexDoctorStartOptions } from "./doctor-start-options.js";
 
 export type CodexWorkspaceWriteSandboxProbe =

@@ -46,4 +46,34 @@ describe("Codex prepared-runtime registration import boundary", () => {
       ]),
     ).toEqual([]);
   });
+
+  it("loads the catalog owner without starting the native client or host execution graph", async () => {
+    expect(
+      await findSourceImportBackedges("extensions/codex/src/app-server/model-catalog.ts", [
+        "extensions/codex/src/app-server/client.ts",
+        "extensions/codex/src/app-server/shared-client.ts",
+        "extensions/codex/src/app-server/transport-stdio.ts",
+        "extensions/codex/src/app-server/dynamic-tool-execution.ts",
+        "src/agents/prepared-model-runtime.ts",
+        "src/agents/agent-tools.ts",
+        "src/plugin-sdk/agent-runtime.ts",
+        "src/plugin-sdk/agent-harness-runtime.ts",
+        "src/plugin-sdk/provider-auth.ts",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("acquires the live client without host tool construction or onboarding", async () => {
+    expect(
+      await findSourceImportBackedges("extensions/codex/src/app-server/shared-client.ts", [
+        "extensions/codex/src/app-server/dynamic-tool-execution.ts",
+        "src/agents/tools/ask-user-tool-normalization.ts",
+        "src/agents/prepared-model-runtime.ts",
+        "src/agents/agent-tools.ts",
+        "src/plugin-sdk/agent-runtime.ts",
+        "src/plugin-sdk/agent-harness-runtime.ts",
+        "src/plugin-sdk/provider-auth.ts",
+      ]),
+    ).toEqual([]);
+  });
 });

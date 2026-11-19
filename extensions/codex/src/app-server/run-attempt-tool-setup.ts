@@ -36,7 +36,7 @@ import {
 } from "./native-tool-catalog.js";
 import { CodexCompactionPlanState } from "./plan-compaction-state.js";
 import { requestPluginApprovalOutcome } from "./plugin-approval-roundtrip.js";
-import { isCodexResponsesOAuth } from "./responses-oauth.js";
+import { isCodexResponsesOAuth } from "./responses-oauth-policy.js";
 import { emitCodexAppServerEvent, runCodexCleanupStep } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";

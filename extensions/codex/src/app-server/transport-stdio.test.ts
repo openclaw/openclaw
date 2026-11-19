@@ -1,10 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./config.js";
-import {
-  createStdioTransport,
-  resolveCodexAppServerSpawnEnv,
-  withCodexAppServerGitConfig,
-} from "./transport-stdio.js";
+import { resolveCodexAppServerSpawnEnv, withCodexAppServerGitConfig } from "./spawn-env.js";
+import { createStdioTransport } from "./transport-stdio.js";
 
 const spawnMock = vi.hoisted(() =>
   vi.fn<(command: string, args: string[], options: unknown) => { pid: number }>(() => ({

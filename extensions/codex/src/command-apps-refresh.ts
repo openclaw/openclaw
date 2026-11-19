@@ -1,11 +1,11 @@
 import type { PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { defaultCodexAppInventoryCache } from "./app-server/app-inventory-cache.js";
+import { refreshCodexAppRuntimeState } from "./app-server/plugin-activation.js";
+import type { CodexAppServerRequestResult } from "./app-server/protocol.js";
 import {
   isCodexAppServerIndeterminateRequestCancellationError,
   isCodexAppServerPrewriteRequestCancellationError,
-} from "./app-server/client.js";
-import { refreshCodexAppRuntimeState } from "./app-server/plugin-activation.js";
-import type { CodexAppServerRequestResult } from "./app-server/protocol.js";
+} from "./app-server/rpc-error.js";
 import { CodexAppServerRpcError } from "./app-server/rpc-error.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import {

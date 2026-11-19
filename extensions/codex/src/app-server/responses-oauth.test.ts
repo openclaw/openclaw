@@ -1,4 +1,7 @@
-import type { AuthProfileCredential, AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+} from "openclaw/plugin-sdk/provider-auth-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
 import {
   createCodexResponsesOAuth,
@@ -10,8 +13,8 @@ const owner = vi.hoisted(() => ({
   resolve: vi.fn(),
   readCurrent: vi.fn<() => AuthProfileCredential | undefined>(),
 }));
-vi.mock("openclaw/plugin-sdk/agent-runtime", async (original) => ({
-  ...(await original<typeof import("openclaw/plugin-sdk/agent-runtime")>()),
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (original) => ({
+  ...(await original<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
   findPersistedAuthProfileCredentialAsync: async () => owner.credential,
   resolveApiKeyForProfile: owner.resolve,
 }));

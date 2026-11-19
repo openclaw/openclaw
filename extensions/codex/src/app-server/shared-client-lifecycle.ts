@@ -391,3 +391,24 @@ export function releaseSharedClientEntry(
   closeRetiredSharedClientEntryIfIdle(entry);
   scheduleSharedClientIdleRetirement(entry);
 }
+
+/** Captures the physical client lifetime for passive catalog reads. */
+export function captureSharedCodexAppServerCatalogLifetime(
+  client: CodexAppServerClient,
+): () => boolean {
+  const isCurrent = captureSharedClientRegistration(client);
+  const revision = client.getModelCatalogRevision();
+  return () => isCurrent() && client.getModelCatalogRevision() === revision;
+}
+
+/** Registration ends on retirement even when sibling leases keep the process alive. */
+export function captureSharedClientRegistration(client: CodexAppServerClient): () => boolean {
+  const state = getSharedCodexAppServerClientState();
+  const entry = getCurrentSharedClientEntry(client);
+  return () =>
+    entry !== undefined &&
+    state.clients.get(entry.key) === entry &&
+    entry.client === client &&
+    !entry.closeWhenIdle &&
+    !client.getCloseError();
+}

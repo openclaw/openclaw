@@ -10,9 +10,9 @@ import {
   CodexAppServerRpcError,
   isCodexAppServerBrokenPipeError,
   isCodexAppServerOverloadError,
-  isCodexAppServerRequestTimeoutError,
   type CodexAppServerClient,
 } from "./client.js";
+import { isCodexAppServerRequestTimeoutError } from "./rpc-error.js";
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
 import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";

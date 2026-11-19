@@ -21,11 +21,10 @@ import {
   withAgentQuestionAnswerAuthority,
 } from "../harness/host-private-capabilities.js";
 import { captureAgentPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
+import { DEFAULT_ASK_USER_TIMEOUT_SECONDS, QUESTION_RPC_GRACE_MS } from "../question-timeout.js";
 import { ASK_USER_TOOL_DISPLAY_SUMMARY, describeAskUserTool } from "../tool-description-presets.js";
 import {
   AskUserToolSchema,
-  DEFAULT_ASK_USER_TIMEOUT_SECONDS,
-  QUESTION_RPC_GRACE_MS,
   REQUIRED_ACTION_READY,
   type NormalizedAskUserParams,
   normalizeAskUserParams,

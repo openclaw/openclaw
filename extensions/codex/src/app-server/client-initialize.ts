@@ -1,4 +1,4 @@
-import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-registration";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parse as parseSemver } from "semver";
 import { CODEX_APP_SERVER_OPT_OUT_NOTIFICATION_METHODS } from "./notification-policy.js";

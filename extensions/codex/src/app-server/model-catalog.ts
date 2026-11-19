@@ -1,11 +1,7 @@
 import type { AgentHarnessModelCatalogParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderCatalogOutcome } from "openclaw/plugin-sdk/provider-catalog-shared";
-import {
-  resolveCodexAppServerAuthProfileId,
-  resolveCodexAppServerAuthProfileStore,
-} from "./auth-profile.js";
-import { isCodexAppServerIndeterminateRequestCancellationError } from "./client.js";
+import { createCodexAuthProfileSelection } from "./auth-profile-selection.js";
 import { readCodexPluginConfig } from "./config-parsing.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import { isCodexAppServerProxyLaunch } from "./launch-args.js";
@@ -18,11 +14,12 @@ import {
 import { probeCodexNativeAuth } from "./native-auth.js";
 import type { CodexGetAccountResponse } from "./protocol.js";
 import { withCodexAppServerJsonClient } from "./request.js";
-import { isCodexResponsesOAuthCredential } from "./responses-oauth.js";
+import { isCodexResponsesOAuthCredential } from "./responses-oauth-policy.js";
+import { isCodexAppServerIndeterminateRequestCancellationError } from "./rpc-error.js";
 import {
   captureSharedCodexAppServerCatalogLifetime,
   retireSharedCodexAppServerClientIfCurrent,
-} from "./shared-client.js";
+} from "./shared-client-lifecycle.js";
 
 type ModelInputType = NonNullable<ModelCatalogEntry["input"]>[number];
 const INPUT_TYPES: ReadonlySet<string> = new Set(["text", "image", "audio", "video", "document"]);
@@ -56,7 +53,12 @@ function codexAppServerModelsToCatalogEntries(
 }
 
 /** One harness registration owns its observations; none travel with worker snapshots. */
-export function createCodexAppServerModelCatalog(runtime: string) {
+export function createCodexAppServerModelCatalog(
+  runtime: string,
+  modelAuth: Parameters<typeof createCodexAuthProfileSelection>[0],
+) {
+  const { resolveCodexAppServerAuthProfileId, resolveCodexAppServerAuthProfileStore } =
+    createCodexAuthProfileSelection(modelAuth);
   type Observation = {
     pluginConfig: unknown;
     models?: ReadonlySet<string>;

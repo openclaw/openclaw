@@ -8,6 +8,7 @@ import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
+import { withCodexAppServerGitConfig } from "./spawn-env.js";
 import {
   listenForNativeResponses,
   nativeAppServerOptions,
@@ -15,7 +16,6 @@ import {
   runNativeTurn,
   sendNativeResponse,
 } from "./thread-native.test-support.js";
-import { withCodexAppServerGitConfig } from "./transport-stdio.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 vi.unmock("node:child_process");

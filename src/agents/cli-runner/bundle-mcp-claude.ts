@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { BundleMcpConfig } from "../../plugins/bundle-mcp.types.js";
-import { resolveQuestionTimeoutMs } from "../tools/ask-user-tool-normalization.js";
+import { resolveQuestionTimeoutMs } from "../question-timeout.js";
 
 export const CLAUDE_MANAGED_MCP_TIMEOUT_MS = resolveQuestionTimeoutMs(3_600);
 

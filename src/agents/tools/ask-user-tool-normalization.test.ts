@@ -1,5 +1,8 @@
 import { Value } from "typebox/value";
 import { expect, it } from "vitest";
+import { normalizeQuestionTimeoutSeconds as normalizeHarnessQuestionTimeout } from "../../plugin-sdk/time-runtime.js";
+import { normalizeQuestionTimeoutSeconds, resolveQuestionTimeoutMs } from "../question-timeout.js";
+import { ToolInputError } from "../tool-input-error.js";
 import { AskUserToolSchema, normalizeAskUserParams } from "./ask-user-tool-normalization.js";
 import { createDeploymentQuestion } from "./ask-user-tool.test-support.js";
 
@@ -7,6 +10,20 @@ const question = createDeploymentQuestion("Deployment target");
 const validArgs = { questions: [question] };
 const withQuestion = (overrides: Partial<typeof question>) => ({
   questions: [{ ...question, ...overrides }],
+});
+
+it("shares the human-question deadline and error contract with harness watchdogs", () => {
+  expect(normalizeHarnessQuestionTimeout).toBe(normalizeQuestionTimeoutSeconds);
+  expect(normalizeHarnessQuestionTimeout(undefined)).toBe(900);
+  expect(resolveQuestionTimeoutMs(undefined)).toBe(910_000);
+  expect(normalizeHarnessQuestionTimeout(5)).toBe(30);
+  expect(normalizeHarnessQuestionTimeout(9_999)).toBe(3_600);
+  for (const value of ["30", 1.5, NaN, Infinity]) {
+    expect(() => normalizeHarnessQuestionTimeout(value)).toThrow(ToolInputError);
+    expect(() => normalizeAskUserParams({ ...validArgs, timeoutSeconds: value })).toThrow(
+      ToolInputError,
+    );
+  }
 });
 
 it("normalizes headers, forces free text, and clamps timeout", () => {

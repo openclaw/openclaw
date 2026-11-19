@@ -4,7 +4,7 @@ import { bridgeCodexAppServerStartOptions } from "./auth-bridge.js";
 import type { CodexAppServerStartOptions, CodexPluginConfig } from "./config-contracts.js";
 import { resolveCodexComputerUseConfig } from "./config-runtime.js";
 import { isCodexAppServerProxyLaunch } from "./launch-args.js";
-import { withCodexAppServerGitConfig } from "./transport-stdio.js";
+import { withCodexAppServerGitConfig } from "./spawn-env.js";
 
 /** Prepare the exact process options shared by key selection and native startup. */
 export async function prepareClientStartOptions(

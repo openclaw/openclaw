@@ -17,11 +17,7 @@ import {
   isCodexAppServerClientRuntimeLive,
 } from "./app-server/client-runtime.js";
 import type { CodexAppServerLiveThreadOwnership } from "./app-server/client-thread-owner.js";
-import {
-  isCodexAppServerIndeterminateRequestCancellationError,
-  isCodexAppServerOverloadError,
-  type CodexAppServerClient,
-} from "./app-server/client.js";
+import { isCodexAppServerOverloadError, type CodexAppServerClient } from "./app-server/client.js";
 import { codexSandboxPolicyForTurn } from "./app-server/config.js";
 import {
   assertCodexThreadAcceptsDirectInput,
@@ -29,6 +25,7 @@ import {
   CodexThreadDirectInputError,
 } from "./app-server/protocol-validators.js";
 import type { CodexTurnStartResponse } from "./app-server/protocol.js";
+import { isCodexAppServerIndeterminateRequestCancellationError } from "./app-server/rpc-error.js";
 import { CodexAppServerRpcError, isCodexThreadReadMissingError } from "./app-server/rpc-error.js";
 import { assertNativeConversationApprovalPolicySupported } from "./app-server/sandbox-guard.js";
 import {

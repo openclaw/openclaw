@@ -1,5 +1,5 @@
 import type * as Loopback from "../../gateway/mcp-http.loopback-runtime.js";
-import { resolveQuestionTimeoutMs } from "../tools/ask-user-tool-normalization.js";
+import { resolveQuestionTimeoutMs } from "../question-timeout.js";
 
 type McpTerminalOutcome = Loopback.McpLoopbackToolCallTerminalOutcome;
 export type CliToolTerminalOutcome = McpTerminalOutcome | { outcome: "completed" };

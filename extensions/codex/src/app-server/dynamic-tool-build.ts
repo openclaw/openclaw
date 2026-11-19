@@ -50,7 +50,7 @@ import {
 } from "./native-execution-policy.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
 import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js";
-import { isCodexResponsesOAuthRun } from "./responses-oauth.js";
+import { isCodexResponsesOAuthRun } from "./responses-oauth-policy.js";
 import type { CodexSandboxExecEnvironment } from "./sandbox-exec-server.js";
 import type { CodexEffectiveSessionPermissionPolicy } from "./session-permission-policy.js";
 import {

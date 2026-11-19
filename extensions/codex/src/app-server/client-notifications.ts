@@ -1,4 +1,4 @@
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import { readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isJsonObject, type CodexServerNotification, type JsonObject } from "./protocol.js";
 

@@ -4,13 +4,13 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, expect, it, vi } from "vitest";
 import { TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS } from "./attempt-timeouts.js";
 import { createWebSocketPeer } from "./client-websocket.test-support.js";
+import { CodexAppServerClient } from "./client.js";
 import {
-  CodexAppServerClient,
   isCodexAppServerIndeterminateRequestCancellationError,
   isCodexAppServerIndeterminateTransportError,
   isCodexAppServerPrewriteRequestCancellationError,
   isCodexAppServerRequestTimeoutError,
-} from "./client.js";
+} from "./rpc-error.js";
 import { createClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 

@@ -11,11 +11,11 @@ import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import { createCodexDynamicToolDiagnostics } from "./dynamic-tool-diagnostics.js";
 import {
   handleDynamicToolCallWithTimeout,
-  resolveDynamicToolCallTimeoutMs,
   toCodexDynamicToolProgressResponse,
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
 import { recordCodexDynamicToolResult } from "./dynamic-tool-result-projection.js";
+import { resolveDynamicToolCallTimeoutMs } from "./dynamic-tool-timeout.js";
 import { routeCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { shouldEmitTranscriptToolProgress } from "./event-projector-tool-progress.js";
 import { readCodexDynamicToolCallParams } from "./protocol-validators.js";

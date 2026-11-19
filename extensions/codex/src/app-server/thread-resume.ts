@@ -12,11 +12,11 @@ import { forgetCodexWorkspaceReferences } from "./client-runtime.js";
 import {
   CodexAppServerRpcError,
   isCodexAppServerOverloadError,
-  isCodexAppServerPrewriteRequestCancellationError,
   type CodexAppServerClient,
 } from "./client.js";
 import { assertCodexThreadResumeResponse } from "./protocol-validators.js";
 import type { CodexThreadResumeParams, CodexThreadResumeResponse } from "./protocol.js";
+import { isCodexAppServerPrewriteRequestCancellationError } from "./rpc-error.js";
 import {
   CodexAppServerScopedRequestRejectedError,
   isCodexThreadClosingError,

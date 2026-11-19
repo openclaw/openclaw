@@ -27,8 +27,6 @@ import {
 } from "./app-server/capabilities.js";
 import {
   CodexAppServerRpcError,
-  isCodexAppServerIndeterminateRequestCancellationError,
-  isCodexAppServerIndeterminateTransportError,
   isCodexAppServerOverloadError,
   type CodexAppServerClient,
 } from "./app-server/client.js";
@@ -52,6 +50,10 @@ import {
   withCodexAppServerJsonClient,
   type CodexAppServerScopedRequest,
 } from "./app-server/request.js";
+import {
+  isCodexAppServerIndeterminateRequestCancellationError,
+  isCodexAppServerIndeterminateTransportError,
+} from "./app-server/rpc-error.js";
 import { createCodexSessionGenerationSupersededError } from "./app-server/session-binding.js";
 import { resumeCodexAppServerThread } from "./app-server/thread-resume.js";
 import type { CodexCatalogPreviewCache } from "./session-catalog-native-projection.js";

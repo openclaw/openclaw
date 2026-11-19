@@ -1,11 +1,8 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SemVer } from "semver";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  CodexAppServerClient,
-  isCodexAppServerApprovalRequest,
-  isCodexAppServerIndeterminateTransportError,
-} from "./client.js";
+import { CodexAppServerClient, isCodexAppServerApprovalRequest } from "./client.js";
+import { isCodexAppServerIndeterminateTransportError } from "./rpc-error.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.test-support.js";
 import { createClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";

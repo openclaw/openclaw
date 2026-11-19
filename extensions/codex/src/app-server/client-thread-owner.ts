@@ -1,4 +1,5 @@
-import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { CodexServiceTier, JsonObject } from "./protocol.js";
 
 export type ThreadOwnerToken = {

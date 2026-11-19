@@ -17,10 +17,8 @@ import {
 } from "./client-initialize.js";
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import { INSTALLED_CODEX_PROBE_TIMEOUT_MS as HANDSHAKE_TIMEOUT_MS } from "./managed-binary.js";
-import {
-  resolveCodexAppServerSpawnEnv,
-  resolveCodexAppServerSpawnInvocation,
-} from "./transport-stdio.js";
+import { resolveCodexAppServerSpawnEnv } from "./spawn-env.js";
+import { resolveCodexAppServerSpawnInvocation } from "./transport-stdio.js";
 
 const HANDSHAKE_MAX_OUTPUT_CHARS = 1024 * 1024;
 const HANDSHAKE_EXIT_TIMEOUT_MS = 2_000;

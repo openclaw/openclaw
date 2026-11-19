@@ -1,7 +1,5 @@
-import {
-  AgentHarnessPreflightError,
-  formatErrorMessage,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-registration";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 export class CodexThreadStartRequestError extends Error {
   constructor(cause: unknown) {
     super(`thread/start: ${formatErrorMessage(cause)}`, { cause });

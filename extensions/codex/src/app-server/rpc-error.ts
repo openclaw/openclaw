@@ -121,3 +121,55 @@ export function isMissingCodexParentThreadError(error: unknown): boolean {
     message.includes("includeTurns is unavailable before first user message")
   );
 }
+
+export function isCodexAppServerRequestTimeoutError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED" &&
+    "reason" in error &&
+    error.reason === "timed out"
+  );
+}
+
+export class CodexAppServerIndeterminateTransportError extends Error {
+  readonly code = "CODEX_APP_SERVER_REQUEST_TRANSPORT_INDETERMINATE";
+  readonly mayHaveWritten = true;
+
+  constructor(method: string, cause: Error) {
+    super(`${method} transport failed after request write: ${cause.message}`, { cause });
+    this.name = "CodexAppServerIndeterminateTransportError";
+  }
+}
+
+/** True when a local cancellation can leave an app-server request in flight. */
+export function isCodexAppServerIndeterminateRequestCancellationError(
+  error: unknown,
+): error is Error & { code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED"; mayHaveWritten: true } {
+  return hasRequestWriteState(error, "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED", true);
+}
+
+/** True when local cancellation happened before a request write was attempted. */
+export function isCodexAppServerPrewriteRequestCancellationError(
+  error: unknown,
+): error is Error & { code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED"; mayHaveWritten: false } {
+  return hasRequestWriteState(error, "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED", false);
+}
+
+/** True when transport failure cannot prove a written request stopped running. */
+export function isCodexAppServerIndeterminateTransportError(error: unknown): error is Error & {
+  code: "CODEX_APP_SERVER_REQUEST_TRANSPORT_INDETERMINATE";
+  mayHaveWritten: true;
+} {
+  return hasRequestWriteState(error, "CODEX_APP_SERVER_REQUEST_TRANSPORT_INDETERMINATE", true);
+}
+
+function hasRequestWriteState(error: unknown, code: string, written: boolean): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === code &&
+    "mayHaveWritten" in error &&
+    error.mayHaveWritten === written
+  );
+}

@@ -1,5 +1,8 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+import {
+  resolveAuthProfileOrder,
+  type AuthProfileStore,
+} from "openclaw/plugin-sdk/provider-auth-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexAppServerModelCatalog } from "./model-catalog.js";
 import { listAllCodexAppServerModels } from "./models.js";
@@ -16,15 +19,6 @@ vi.mock("./native-auth.js", () => ({ probeCodexNativeAuth: vi.fn() }));
 const profiles = vi.hoisted((): { store: AuthProfileStore } => ({
   store: { version: 1, profiles: {} },
 }));
-// mock-isolation: Exercise real profile selection against the catalog fixture, without host credential storage.
-vi.mock("./auth-profile.js", async () => {
-  const { resolveAuthProfileOrder } = await import("openclaw/plugin-sdk/provider-auth");
-  const { createCodexAuthProfileSelection } = await import("./auth-profile-selection.js");
-  return createCodexAuthProfileSelection({
-    ensureAuthProfileStoreAsync: async () => profiles.store,
-    resolveAuthProfileOrder,
-  });
-});
 
 const rpc = vi.hoisted(() => ({ request: vi.fn(), retire: vi.fn(), epoch: 0, client: {} }));
 vi.mock("./request.js", () => ({
@@ -34,7 +28,7 @@ vi.mock("./request.js", () => ({
   ),
 }));
 // mock-isolation: Keep physical clients and shared lease state outside catalog projection tests.
-vi.mock("./shared-client.js", () => ({
+vi.mock("./shared-client-lifecycle.js", () => ({
   retireSharedCodexAppServerClientIfCurrent: rpc.retire,
   captureSharedCodexAppServerCatalogLifetime: () => {
     const epoch = rpc.epoch;
@@ -89,7 +83,10 @@ describe("Codex app-server model catalog", () => {
     rpc.request
       .mockReset()
       .mockResolvedValue({ account: { type: "apiKey" }, requiresOpenaiAuth: true });
-    owner = createCodexAppServerModelCatalog("codex");
+    owner = createCodexAppServerModelCatalog("codex", {
+      ensureAuthProfileStoreAsync: async () => profiles.store,
+      resolveAuthProfileOrder,
+    });
   });
 
   it.each(["chatgpt", "apiKey"])(
@@ -124,6 +121,16 @@ describe("Codex app-server model catalog", () => {
       error: new CodexAppServerLocalRequestCancellationError("account/read", "aborted", true),
       retires: true,
     },
+    {
+      name: "account read cancelled before write",
+      error: new CodexAppServerLocalRequestCancellationError("account/read", "aborted", false),
+      retires: false,
+    },
+    {
+      name: "ordinary account read failure",
+      error: new Error("synthetic account read failure"),
+      retires: false,
+    },
   ])("preserves discovery ownership after $name", async ({ error, retires }) => {
     listModelsMock.mockResolvedValue(opaqueCatalog());
     rpc.request.mockRejectedValueOnce(error);
@@ -132,6 +139,8 @@ describe("Codex app-server model catalog", () => {
     if (retires) {
       expect(rpc.retire).toHaveBeenCalledWith(rpc.client);
     }
+    expect(listModelsMock).not.toHaveBeenCalled();
+    expect(read()).toBeUndefined();
   });
 
   it("keeps native picker models independent of a host transport", async () => {

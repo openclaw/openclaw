@@ -12,13 +12,11 @@ import {
 import type { CodexSessionCatalogControlFactory } from "../session-catalog-types.js";
 import { codexLastTerminalTurnId, codexUpstreamBaseline } from "../session-upstream-marker.js";
 import { forkCanonicalCodexSession } from "./canonical-session-fork.js";
-import {
-  isCodexAppServerOverloadError,
-  isCodexAppServerPrewriteRequestCancellationError,
-} from "./client.js";
+import { isCodexAppServerOverloadError } from "./client.js";
 import { assertCodexThreadForkResponse } from "./protocol-validators.js";
 import type { CodexThread, CodexThreadForkResponse } from "./protocol.js";
 import { CodexAppServerScopedRequestRejectedError } from "./request.js";
+import { isCodexAppServerPrewriteRequestCancellationError } from "./rpc-error.js";
 import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
 import { createImportedCodexSession } from "./session-history-import.js";
 import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
