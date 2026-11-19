@@ -1146,11 +1146,13 @@ dynamic and shadowed resolution, and fresh-process export recovery/rejection.
 Keep registration of original, typed, image and relocated roots, plus all
 child-process inputs and assertions. Production and shared helpers are unchanged.
 
-Source-hook controls reproduce lost failed and unattempted roots in both
+Actual Vitest-hook controls reproduce lost failed and unattempted roots in both
 suites. The shared owner preserves the same error, cleans the healthy root,
-retains the failed root and removes it on retry. Actual Vitest-hook controls,
-including a present relocated root, and clean-suite qualification are pending
-in the native PR workspace.
+retains the failed root and removes it on retry, including a present relocated
+root beside an already absent original root. Clean baseline and candidate runs
+pass all ten cases; temporary instrumentation is restored byte for byte.
+Scoped typecheck, lint, formatting and line-cap checks pass. Independent
+preservation and local reviews found no actionable defects.
 
 ## Pending qualification and proof repairs
 
