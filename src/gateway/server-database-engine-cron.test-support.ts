@@ -11,6 +11,7 @@ import {
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
+import { parseLogLine } from "../logging/parse-log-line.js";
 import type { GatewayClient } from "./client.js";
 
 type CronRetrySnapshot = {
@@ -76,41 +77,45 @@ export async function readCronRetrySnapshot(
   }
 }
 
-export async function observeCronRetryDeadline<T>(
+async function observeCronRetryDeadline<T>(
   retry: Promise<T>,
   signal: AbortSignal,
   dueAtMs: number,
+  lateAtMs: number,
   readSnapshot: () => Promise<CronRetrySnapshot>,
+  observeOwner: () => Promise<unknown>,
 ) {
   const observation = new AbortController();
-  let reading: Promise<unknown> | undefined;
-  // One read after the durable due time separates an unclaimed retry from a blocked launch.
-  const snapshot = delay(Math.max(0, dueAtMs + 5_000 - Date.now()), undefined, {
-    signal: observation.signal,
-  }).then(async () => {
-    signal.throwIfAborted();
-    const pending = readSnapshot();
-    reading = pending;
-    const { enabled, state, receipts } = await pending;
-    const remaining = (time: number | undefined) =>
-      time === undefined ? null : Math.round(time - Date.now());
-    console.info("cron-retry-deadline-snapshot", {
-      enabled,
-      nextRunDelayMs: remaining(state.nextRunAtMs),
-      startupCatchupDelayMs: remaining(state.startupCatchupAtMs),
-      queued: state.queuedAtMs !== undefined,
-      running: state.runningAtMs !== undefined,
-      runningReceipt: state.runningReceiptId !== undefined,
-      admissionRetryDelayMs: remaining(state.admissionDeferred?.retryAtMs),
-      receipts: receipts.map(({ status, started_at_ms }) => ({ status, started_at_ms })),
-    });
-    return await retry;
-  });
+  // Serial reads keep both observations joined even if delayed timers become due together.
+  const snapshots = (async () => {
+    for (const at of new Set([Math.min(dueAtMs + 5_000, lateAtMs), lateAtMs])) {
+      await delay(Math.max(0, at - Date.now()), undefined, { signal: observation.signal });
+      signal.throwIfAborted();
+      const { enabled, state, receipts } = await readSnapshot();
+      const remaining = (time: number | undefined) =>
+        time === undefined ? null : Math.round(time - Date.now());
+      console.info("cron-retry-deadline-snapshot", {
+        enabled,
+        nextRunDelayMs: remaining(state.nextRunAtMs),
+        startupCatchupDelayMs: remaining(state.startupCatchupAtMs),
+        queued: state.queuedAtMs !== undefined,
+        running: state.runningAtMs !== undefined,
+        runningReceipt: state.runningReceiptId !== undefined,
+        admissionRetryDelayMs: remaining(state.admissionDeferred?.retryAtMs),
+        receipts: receipts.map(({ status, started_at_ms }) => ({ status, started_at_ms })),
+      });
+      await observeOwner();
+    }
+  })();
   try {
-    return await withinTest(Promise.race([retry, snapshot]), signal);
+    return await withinTest(Promise.race([retry, snapshots.then(() => retry)]), signal);
   } finally {
     observation.abort();
-    await reading;
+    await snapshots.catch((error: unknown) => {
+      if (!(error instanceof Error && error.name === "AbortError")) {
+        throw error;
+      }
+    });
   }
 }
 
@@ -121,6 +126,7 @@ export function createCronRestartDiagnostics(
 ) {
   const started = performance.now();
   let phase = "setup";
+  let ownerLogs: Record<string, number | boolean> | undefined;
   const elapsedMs = () => Math.round(performance.now() - started);
   const trace = (next: string) => {
     phase = next;
@@ -128,12 +134,67 @@ export function createCronRestartDiagnostics(
       phase,
       elapsedMs: elapsedMs(),
       requests: requests(),
+      ownerLogs,
     });
   };
   const onAbort = () => trace(`aborted-during-${phase}`);
   signal.addEventListener("abort", onAbort, { once: true });
   resources.defer(() => signal.removeEventListener("abort", onAbort));
-  return { trace, elapsedMs };
+  const observeOwner = async (gateway: GatewayClient) => {
+    try {
+      const tail = await gateway.request<{ lines: string[]; truncated: boolean }>(
+        "logs.tail",
+        { limit: 500, maxBytes: 64 * 1024 },
+        { timeoutMs: 5_000 },
+      );
+      const messages = tail.lines.map(parseLogLine).filter((line) => line !== null);
+      const cron = messages.filter(
+        (line) => line.module === "cron" || line.subsystem === "gateway/cron",
+      );
+      ownerLogs = {
+        available: true,
+        truncated: tail.truncated,
+        started: cron.filter((line) => line.message === "cron: started").length,
+        startFailed: cron.filter((line) => line.message.startsWith("failed to start:")).length,
+        startRootFailed: cron.filter((line) =>
+          line.message.startsWith("failed to enter start root:"),
+        ).length,
+        schedulingDelayed: cron.filter((line) =>
+          line.message.startsWith("cron: scheduling delayed; worker will retry"),
+        ).length,
+        refreshDelayed: cron.filter((line) =>
+          line.message.startsWith("cron: worker refresh delayed"),
+        ).length,
+        maintenanceFailed: messages.filter((line) =>
+          line.message.startsWith("gateway post-ready maintenance startup failed:"),
+        ).length,
+        maintenanceDeferred: messages.filter((line) =>
+          line.message.startsWith("gateway post-ready maintenance deferred task failed:"),
+        ).length,
+      };
+    } catch {
+      ownerLogs = { available: false };
+    }
+    console.info("cron-restart-owner-snapshot", { elapsedMs: elapsedMs(), ...ownerLogs });
+  };
+  return {
+    trace,
+    observeRetry<T>(
+      retry: Promise<T>,
+      gateway: GatewayClient,
+      dueAtMs: number,
+      readSnapshot: () => Promise<CronRetrySnapshot>,
+    ) {
+      return observeCronRetryDeadline(
+        retry,
+        signal,
+        dueAtMs,
+        Date.now() + Math.max(0, 185_000 - elapsedMs()),
+        readSnapshot,
+        () => observeOwner(gateway),
+      );
+    },
+  };
 }
 
 /** Only complete startup records can prove cumulative pool reuse across Gateway boots. */

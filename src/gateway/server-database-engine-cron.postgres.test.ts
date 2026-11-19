@@ -31,7 +31,6 @@ import type { toCronBroadcastEvent } from "./server-cron-plugin-job.js";
 import {
   createCronRestartDiagnostics,
   expectStoredCronOneShotComplete,
-  observeCronRetryDeadline,
   readCronRetrySnapshot,
   startHeldCronRetryProvider,
   observePostgresPoolReuse,
@@ -139,6 +138,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       },
       models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
       cron: { enabled: true },
+      ...(schedulerEnabled ? { logging: { file: current.statePath("cron-diagnostic.log") } } : {}),
     };
     await current.writeConfig(config);
     // Only the child leaves test mode so it acquires the real Gateway owner lease.
@@ -434,7 +434,8 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       const summary = "Automatically retried one-shot completed.";
       const { providerUrl, requests, accepted, aborted, retryResponse } =
         await startHeldCronRetryProvider(resources, summary);
-      const { trace } = createCronRestartDiagnostics(signal, resources, () => requests.length);
+      const diagnostics = createCronRestartDiagnostics(signal, resources, () => requests.length);
+      const { trace } = diagnostics;
       trace("await-initial-gateway");
       const initial = await startCronGateway(resources, signal, providerUrl, {
         schedulerEnabled: true,
@@ -511,9 +512,9 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       expect(pending.state.nextRunAtMs).toEqual(expect.any(Number));
       expect(pending.state.consecutiveErrors).toBe(activeJob.state.consecutiveErrors);
       trace("await-retry-provider");
-      const completeRetry = await observeCronRetryDeadline(
+      const completeRetry = await diagnostics.observeRetry(
         retryResponse.promise,
-        signal,
+        restarted,
         pending.state.nextRunAtMs!,
         () => readCronRetrySnapshot(connection!, quoteIdentifier(anchor.namespace), job.id),
       );
@@ -529,12 +530,14 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         status: "running",
       });
       expect(retry.receipt_id).not.toBe(first.receipt_id);
+      // Startup may defer the retry after the earlier public read; bind its admitted slot.
+      const admitted = await restarted.request<CronJob>("cron.get", { id: job.id });
       expect(parseCronScheduledRunId(retry.receipt_id)).toEqual({
         storeKey: firstSlot!.storeKey,
         jobId: job.id,
-        scheduledSlotMs: pending.state.nextRunAtMs,
+        scheduledSlotMs: admitted.state.nextRunAtMs,
       });
-      expect(pending.state.nextRunAtMs).toBeGreaterThan(Date.parse(at));
+      expect(admitted.state.nextRunAtMs).toBeGreaterThan(Date.parse(at));
       const readHistory = () =>
         restarted.request<{ entries: CronRunLogEntry[] }>("cron.runs", { id: job.id, limit: 10 });
       const interrupted = await readHistory();
