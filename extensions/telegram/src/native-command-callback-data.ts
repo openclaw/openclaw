@@ -1,8 +1,4 @@
-import {
-  normalizeMessagePresentation,
-  resolveMessagePresentationControlValue,
-  stampAgentControls,
-} from "openclaw/plugin-sdk/interactive-runtime";
+import { stampAgentControlValue } from "openclaw/plugin-sdk/interactive-runtime";
 
 const TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX = "tgcmd:";
 const TELEGRAM_OPAQUE_CALLBACK_PREFIX = "tgcb1:";
@@ -38,16 +34,7 @@ export function parseTelegramOpaqueCallbackData(data?: string | null): string | 
 /** Re-expresses a v2026.11.5 agent envelope as the core-marked callback value it stands for. */
 export function parseTelegramAgentCallbackData(data?: string | null): string | null {
   const value = parseTelegramTypedCallbackEnvelope(TELEGRAM_AGENT_CALLBACK_PREFIX, data);
-  if (!value) {
-    return null;
-  }
-  const block = normalizeMessagePresentation(
-    stampAgentControls({
-      presentation: { blocks: [{ type: "buttons", buttons: [{ label: "-", value }] }] },
-    }).presentation,
-  )?.blocks[0];
-  const button = block?.type === "buttons" ? block.buttons[0] : undefined;
-  return (button && resolveMessagePresentationControlValue(button)) ?? null;
+  return value ? stampAgentControlValue(value) : null;
 }
 
 function parseTelegramTypedCallbackEnvelope(prefix: string, data?: string | null): string | null {

@@ -19,8 +19,13 @@ function stampAgentControl(control: unknown): unknown {
   if (!value) {
     return control;
   }
-  const stamped = { ...target, value: `${AGENT_CONTROL_MARK}${value}` };
+  const stamped = { ...target, value: stampAgentControlValue(value) };
   return action ? { ...record, action: stamped } : stamped;
+}
+
+/** Marks one callback value as the conversation agent's. */
+export function stampAgentControlValue(value: string): string {
+  return `${AGENT_CONTROL_MARK}${value}`;
 }
 
 function stampAgentControlBlock(block: unknown): unknown {

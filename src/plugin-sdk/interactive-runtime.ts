@@ -1,6 +1,10 @@
 import { reduceLegacyInteractiveReply } from "../interactive/payload.js";
 
-export { agentControlText, stampAgentControls } from "../interactive/agent-control.js";
+export {
+  agentControlText,
+  stampAgentControlValue,
+  stampAgentControls,
+} from "../interactive/agent-control.js";
 
 export {
   adaptMessagePresentationForChannel,
