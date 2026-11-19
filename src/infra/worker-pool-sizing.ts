@@ -25,7 +25,7 @@ export function resolveSqliteBrokerWorkerCount(): number {
   return 2;
 }
 
-// Store discovery and projections retain the same bounded isolate budget as other readers.
+// History and search retain the same bounded isolate budget as other readers.
 export const SESSION_TRANSCRIPT_FOREGROUND_WORKERS = resolveWorkerPoolSize("reader");
 
 // PostgreSQL history readers spend most of a request blocked on bridge replies, so CPU count

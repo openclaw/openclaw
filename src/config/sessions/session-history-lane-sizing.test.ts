@@ -46,6 +46,6 @@ it.each([
     installDatabaseEngineSelection(selection(engine));
 
     expect(historyLane.pool.getSnapshot().maxWorkers).toBe(expected);
-    expect(transcriptSearchLane.pool.getSnapshot().maxWorkers).toBe(6);
+    expect(transcriptSearchLane.pool.getSnapshot().maxWorkers).toBe(2);
   },
 );

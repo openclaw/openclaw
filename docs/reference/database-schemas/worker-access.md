@@ -1877,7 +1877,7 @@ registry hints for durable children go through the entry worker. The Gateway tru
 the child owner's selection without repeating its parent checks. A reparenting
 after the read appears on the next lookup. There is no synchronous batch fallback.
 
-Transcript search uses up to six CPU-bounded WAL readers, independently of the two-reader store lane; each isolate budgets 768 MiB including its 512 MiB old and 16 MiB young heaps, SQLite, and modules.
+Filtered SQLite transcript search generates snippets as its visibility cursor consumes ordered candidates, and retains its connection in the worker's read scope.
 Transcript search returns its read snapshot and obtains indexing readiness from
 the projection owner. It does not reread a connection revision after awaiting
 readiness; an intervening append appears on the next search. Projection rebuilds

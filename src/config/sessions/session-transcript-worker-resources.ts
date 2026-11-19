@@ -5,10 +5,7 @@ import { racePromiseWithAbortSignal } from "../../../packages/retry/src/index.js
 import { encodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import type { UsageCostWorkerDatabase } from "../../infra/session-cost-usage-worker.types.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
-import {
-  resolveWorkerComputeLimit,
-  SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
-} from "../../infra/worker-pool-sizing.js";
+import { SESSION_TRANSCRIPT_FOREGROUND_WORKERS } from "../../infra/worker-pool-sizing.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { getGatewayShutdownCleanupSignal } from "../../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -119,13 +116,10 @@ export const historyLane = registerSessionTranscriptReaderLane(
   "Session history",
   createSessionHistoryLanePool,
 );
-// WAL readers can search one database concurrently without reserving its writer.
-// Bound a six-search fan-out to six isolates: budget 768 MiB each for the
-// 512 MiB old + 16 MiB young heaps, SQLite, and loaded modules (4.5 GiB total).
-// Search readiness must also stay independent of committed-history workers.
+// Search readiness can await a host writer; it cannot occupy committed-history workers.
 export const transcriptSearchLane = createHistoryLane(
   "Session transcript search",
-  Math.min(6, resolveWorkerComputeLimit()),
+  SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
 );
 // Store discovery, projections, and maintenance share readers independently of history and search.
 export const sessionStoreLane = createHistoryLane(

@@ -1,6 +1,5 @@
 import { once } from "node:events";
 import fs from "node:fs";
-import { availableParallelism } from "node:os";
 import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -74,7 +73,7 @@ async function searchFixture(
   };
 }
 
-it("reenters the projection writer from a cold search's retained read admission", async () => {
+it("reenters the cold projection writer and keeps search independent of foreground readers", async (context) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const { storePath, database, request } = await searchFixture(
       state,
@@ -83,18 +82,37 @@ it("reenters the projection writer from a cold search's retained read admission"
       "Cold search needle",
     );
     await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
-    const reader = retainSessionHistoryWorkerDatabase(database);
-    const readStatus = (signal: AbortSignal) =>
-      projectionWriter.readSessionTranscriptIndexStatus(
-        database,
-        reader.owner.assertCurrent,
-        signal,
-      );
+    const release = createDeferred();
+    const readers = [historyLane, sessionStoreLane].map((lane) => {
+      const reader = retainSessionHistoryWorkerDatabase(database, lane);
+      const entered = createDeferred();
+      const work = reader.owner.searchTranscripts(request, async (signal) => {
+        const status = await projectionWriter.readSessionTranscriptIndexStatus(
+          database,
+          reader.owner.assertCurrent,
+          signal,
+        );
+        entered.resolve();
+        await release.promise;
+        return status;
+      });
+      void work.catch(() => {});
+      return { reader, entered: entered.promise, work };
+    });
+    let search: ReturnType<typeof searchSessionTranscripts> | undefined;
     try {
-      const result = await reader.owner.searchTranscripts(request, readStatus);
-      expect(result.hits).toMatchObject([{ messageId: "cold-needle" }]);
+      await withinTest(Promise.all(readers.map(({ entered }) => entered)), context.signal);
+      search = searchSessionTranscripts(request, database);
+      const expected = { hits: [{ messageId: "cold-needle" }], indexing: false };
+      expect(await withinTest(search, context.signal)).toMatchObject(expected);
+      release.resolve();
+      for (const { work } of readers) {
+        expect(await withinTest(work, context.signal)).toMatchObject(expected);
+      }
     } finally {
-      reader.release();
+      release.resolve();
+      await Promise.allSettled([...readers.map(({ work }) => work), ...(search ? [search] : [])]);
+      readers.forEach(({ reader }) => reader.release());
       await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
     }
   });
@@ -514,55 +532,6 @@ describe("search reader concurrency", () => {
           }
         }),
       ),
-  );
-
-  it.skipIf(availableParallelism() < 7)(
-    "admits six searches independently of foreground and projection readers",
-    async (context) =>
-      withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const { database, request } = await searchFixture(
-          state,
-          "parallel-search",
-          "needle",
-          "Parallel needle",
-        );
-        const release = createDeferred();
-        const entered = Array.from({ length: 6 }, () => createDeferred());
-        const readers = [historyLane, sessionStoreLane].map((lane) => {
-          const reader = retainSessionHistoryWorkerDatabase(database, lane);
-          const ready = createDeferred();
-          const work = reader.owner.searchTranscripts(request, async () => {
-            ready.resolve();
-            await release.promise;
-            return projectionWriter.readSessionTranscriptIndexStatus(database);
-          });
-          void work.catch(() => {});
-          return { reader, ready: ready.promise, work };
-        });
-        const searches: ReturnType<typeof searchSessionTranscripts>[] = [];
-        try {
-          await withinTest(Promise.all(readers.map(({ ready }) => ready)), context.signal);
-          searches.push(
-            ...entered.map((gate) =>
-              searchSessionTranscripts(request, database, async (keys) => {
-                gate.resolve();
-                await release.promise;
-                return keys.map(() => true);
-              }),
-            ),
-          );
-          void Promise.allSettled(searches);
-          await withinTest(Promise.all(entered.map((gate) => gate.promise)), context.signal);
-          release.resolve();
-          for (const result of await Promise.all(searches)) {
-            expect(result).toMatchObject({ hits: [{ messageId: "needle" }], indexing: false });
-          }
-        } finally {
-          release.resolve();
-          await Promise.allSettled([...readers.map(({ work }) => work), ...searches]);
-          readers.forEach(({ reader }) => reader.release());
-        }
-      }),
   );
 });
 
