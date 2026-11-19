@@ -25,14 +25,9 @@ if (
   const early = startEarlyApplicationGateway(initial);
   // Keep transport first; the scoped read and validation overlap the application graph.
   initial.prewarmChatSnapshot();
-  // Route hints fetch the renderer while the challenge/signature is pending.
-  // Cold chat evaluation overlaps the reply; New and admitted cached views
-  // must not wait for a challenge from an unreachable Gateway.
-  void (
-    early?.credentials && !early.credentials.hasWarmBoot
-      ? early.transport.client.initialConnectSent
-      : Promise.resolve()
-  )
+  // Only cold session history waits for connect dispatch; Template authentication
+  // and the application import start independently, even on an unreachable Gateway.
+  void Promise.resolve(early?.beforeRuntime)
     .then(() => import("./main.runtime.ts"))
     .then(({ startControlUi }) => startControlUi(initial, early));
 }

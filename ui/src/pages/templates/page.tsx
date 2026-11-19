@@ -1,5 +1,5 @@
 import { createMemo, onSettled, Show } from "solid-js";
-import { templateCatalogPackageNameFromPath, pathForRoute } from "../../app-route-paths.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { projectGateway } from "../../lib/reactive/application.ts";
@@ -10,6 +10,7 @@ import { TemplatesCatalogDialog } from "../agents-home/templates-catalog-dialog.
 import { PluginDetailLoadingHero } from "../plugins/detail-loading-hero.tsx";
 import { isTemplatesAvailable } from "./availability.ts";
 import { templateCreatorFlow } from "./creator-flow.ts";
+import { templateRouteSource } from "./detail-read.ts";
 import { templateDraftTargetFromSearch, type TemplateDraftTarget } from "./draft-navigation.ts";
 import type { TemplatesRouteData } from "./route.ts";
 
@@ -56,14 +57,7 @@ export function TemplatesPage(props: { routeData: TemplatesRouteData | undefined
   const source = createMemo(
     () => {
       const data = props.routeData;
-      const packageName = data
-        ? templateCatalogPackageNameFromPath(data.location.pathname, data.basePath)
-        : null;
-      if (!packageName) {
-        return null;
-      }
-      const version = new URLSearchParams(data?.location.search).get("version");
-      return { packageName, ...(version ? { version } : {}) };
+      return data ? templateRouteSource(data.location, data.basePath) : null;
     },
     {
       equals: (left, right) =>
@@ -92,6 +86,7 @@ export function TemplatesPage(props: { routeData: TemplatesRouteData | undefined
                 <TemplatesCatalogDialog
                   initialPackageName={selectedSource.packageName}
                   initialVersion={selectedSource.version}
+                  routeData={props.routeData}
                   onClose={() =>
                     context.navigate("templates", {
                       pathname: pathForRoute("templates", context.basePath),

@@ -16,7 +16,7 @@ import {
   type GatewayHelloOk,
 } from "../api/gateway.ts";
 import { CONTROL_UI_BUILD_INFO, controlUiBuildDiffersFrom } from "../build-info.ts";
-import { configuredUiDevGateway, isConfiguredUiDevGateway } from "../dev-gateway.ts";
+import { isUiDevGatewayMismatch } from "../dev-gateway.ts";
 import { t } from "../i18n/index.ts";
 import { retireStoredGoalOperations } from "../lib/chat/goal-operation-storage.ts";
 import { readConnectionAuthReason } from "../lib/connection-hints.ts";
@@ -300,7 +300,7 @@ export function createApplicationGateway(
 
   const connect = (overrides: ApplicationGatewayConnectOptions = {}) => {
     const nextGatewayUrl = overrides.gatewayUrl ?? connection.gatewayUrl;
-    if (configuredUiDevGateway() && !isConfiguredUiDevGateway(nextGatewayUrl)) {
+    if (isUiDevGatewayMismatch(nextGatewayUrl)) {
       gateway.stop();
       setSnapshot({
         phase: "offline",

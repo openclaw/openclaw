@@ -3,6 +3,7 @@ import { GatewayBrowserClient } from "../api/gateway.ts";
 import { routeIdFromPath } from "../app-route-paths.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
+import { isUiDevGatewayMismatch } from "../dev-gateway.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { chatHistoryRequestParams } from "../pages/chat/chat-history-request-params.ts";
 import { peekPrewarmedChatSnapshot } from "../pages/chat/chat-snapshot-prewarm.ts";
@@ -11,28 +12,29 @@ import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import type { prepareApplicationStartup } from "./bootstrap-connection.ts";
 import { createGatewayCredentials } from "./gateway-store.credentials.ts";
 
-export type EarlyApplicationGateway =
-  | {
-      transport: EarlyGateway;
-      credentials: ReturnType<typeof createGatewayCredentials>;
-    }
-  | {
-      transport: NonNullable<ReturnType<typeof GatewayBrowserClient.preconnect>>;
-      credentials?: never;
-    };
+export type EarlyApplicationGateway = {
+  transport: Pick<EarlyGateway, "client" | "adopt">;
+  credentials?: ReturnType<typeof createGatewayCredentials>;
+  beforeRuntime?: Promise<void>;
+};
 
 export function startEarlyApplicationGateway(
   initial: ReturnType<typeof prepareApplicationStartup>,
 ): EarlyApplicationGateway | undefined {
   const { settings, startup, applicationLocation, basePath } = initial;
-  const isNewSession = routeIdFromPath(applicationLocation.pathname, basePath) === "new-session";
   // Short references, native handoffs, and confirmation-required endpoints keep
   // their startup owner. A name-shaped literal is a guess: if route resolution
   // changes the target, the bounded handoff falls back to ordinary startup.
-  if (!initial.ownsWarmBoot || initial.hasPendingGateway || startup.nativeClient) {
+  if (
+    !initial.ownsWarmBoot ||
+    initial.hasPendingGateway ||
+    startup.hasNativeAuth ||
+    isUiDevGatewayMismatch(settings.gatewayUrl)
+  ) {
     return undefined;
   }
-  if (isNewSession) {
+  const routeId = routeIdFromPath(applicationLocation.pathname, basePath);
+  if (routeId === "new-session") {
     const transport = GatewayBrowserClient.preconnect(settings.gatewayUrl);
     if (!transport) {
       return undefined;
@@ -51,8 +53,9 @@ export function startEarlyApplicationGateway(
       },
     };
   }
-  const route = sessionRefFromPath(applicationLocation.pathname, basePath);
-  if (route?.kind !== "literal") {
+  const target = sessionRefFromPath(applicationLocation.pathname, basePath);
+  const route = target?.kind === "literal" ? target : undefined;
+  if (!route && routeId !== "templates") {
     return undefined;
   }
   const credentials = createGatewayCredentials(true);
@@ -69,6 +72,18 @@ export function startEarlyApplicationGateway(
     false,
     null,
   );
+  const options = {
+    ...connection,
+    clientName: "openclaw-control-ui",
+    clientVersion: CONTROL_UI_BUILD_INFO.version ?? "dev",
+    clientBuildId: CONTROL_UI_BUILD_INFO.buildId,
+    mode: "webchat",
+    instanceId: generateUUID(),
+  } as const;
+  if (!route) {
+    // Only the authenticated transport is shared; Template reads belong to the route.
+    return { transport: new EarlyGateway(options), credentials };
+  }
   const historyFor = (snapshot?: ChatSessionSnapshot) => {
     const {
       sessionKey: _key,
@@ -86,17 +101,11 @@ export function startEarlyApplicationGateway(
   };
   const transport = new EarlyGateway(
     {
-      ...connection,
-      clientName: "openclaw-control-ui",
-      clientVersion: CONTROL_UI_BUILD_INFO.version ?? "dev",
-      clientBuildId: CONTROL_UI_BUILD_INFO.buildId,
-      mode: "webchat",
-      instanceId: generateUUID(),
+      ...options,
       modelCatalog: { agentId: route.agentId, sessionKey: route.sessionKey },
     },
     route.sessionKey,
     connection.offlineRecoveryScope ? undefined : historyFor(),
-    window.location.href,
   );
   initial.prewarmChatSnapshot();
   const entry = peekPrewarmedChatSnapshot();
@@ -111,5 +120,9 @@ export function startEarlyApplicationGateway(
       }
     });
   }
-  return { transport, credentials };
+  return {
+    transport,
+    credentials,
+    beforeRuntime: credentials.hasWarmBoot ? undefined : transport.client.initialConnectSent,
+  };
 }

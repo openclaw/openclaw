@@ -112,7 +112,9 @@ export function resolveApplicationStartupSettings(
   const nativeAuth =
     injectedNativeAuth ??
     (nativePortGateway ? { gatewayUrl: nativePortGateway, nativeConnectAuth: true } : undefined);
-  setNativeControlHost(Boolean(nativeAuth));
+  // The injected descriptor is consumed once; a signer is optional on native handoffs.
+  const hasNativeAuth = Boolean(nativeAuth);
+  setNativeControlHost(hasNativeAuth);
   if (nativeAuth) {
     try {
       delete window["__OPENCLAW_NATIVE_CONTROL_AUTH__"];
@@ -178,6 +180,7 @@ export function resolveApplicationStartupSettings(
       pendingGatewayToken,
       pendingBootstrapToken,
       pendingBootstrapProfile,
+      hasNativeAuth,
       nativeClient,
       location,
       changed,
@@ -271,6 +274,7 @@ export function resolveApplicationStartupSettings(
     pendingGatewayToken,
     pendingBootstrapToken,
     pendingBootstrapProfile,
+    hasNativeAuth,
     nativeClient,
     location: shouldCleanUrl
       ? {

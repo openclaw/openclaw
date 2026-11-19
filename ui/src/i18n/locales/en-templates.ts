@@ -43,6 +43,7 @@ const enTemplates = {
     loading: "Loading templates…",
     empty: "No templates match your search.",
     emptyUnfiltered: "No templates yet.",
+    firstPage: "First page",
     unavailable: "Couldn’t load templates from ClawHub. Try again.",
     disabled: "Templates is turned off. Turn it on in Settings → Labs.",
     retry: "Retry",

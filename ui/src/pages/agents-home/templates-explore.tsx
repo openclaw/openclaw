@@ -35,7 +35,6 @@ import "../../styles/templates-catalog.css";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
 import {
-  readTemplatesOverview,
   searchTemplates,
   TEMPLATE_SEARCH_PAGE_SIZE,
   type TemplateCatalogEntry,
@@ -60,17 +59,6 @@ const templateCategories = [
   ["people", "templatesCatalog.categoryPeople", "users"],
   ["other", "templatesCatalog.categoryOther", "shapes"],
 ] as const satisfies readonly (readonly [string, string, IconName])[];
-const SECTION_SIZE = 4;
-const SKELETON_SECTIONS = 4;
-type TemplateCategory = (typeof templateCategories)[number];
-type TemplateSection = { category: TemplateCategory; entries: TemplateCatalogEntry[] };
-type TemplateCatalog = {
-  nextCursor?: string | null;
-  entries: TemplateCatalogEntry[];
-  featured: TemplateCatalogEntry[];
-  sections: TemplateSection[];
-};
-
 type TemplateAddProps = {
   onAdd: (entry: TemplateCatalogEntry) => void;
   addingPackageName: string | null;
@@ -141,54 +129,42 @@ const placeholderBar = (width: string) => ({
   background: `linear-gradient(var(--bg-accent), var(--bg-accent)) 0 / ${width} 12px no-repeat`,
 });
 
-/** Mirrors the loaded sections and cards so content arrives in place. */
-function TemplateCatalogSkeleton(props: { overview: boolean }) {
+/** Reserve the same grid and card geometry while a page is pending. */
+function TemplateCatalogSkeleton() {
   return (
     <div
       class="plugin-catalog-results__body"
       role="status"
       aria-label={t("templatesCatalog.loading")}
     >
-      <Repeat count={props.overview ? SKELETON_SECTIONS : 1}>
-        {() => (
-          <section
-            class={[
-              "plugin-catalog-section",
-              { "plugin-catalog-section--expandable": props.overview },
-            ]}
-            aria-hidden="true"
-          >
-            <header class="plugin-catalog-section__header">
-              <h2 style={{ width: "120px", ...placeholderBar("100%") }}>{"\u00a0"}</h2>
-            </header>
-            <div class="plugin-catalog-grid">
-              <Repeat count={props.overview ? SECTION_SIZE : TEMPLATE_SEARCH_PAGE_SIZE}>
-                {() => (
-                  <div class="agents-home__template-card oc-card" data-templates-placeholder>
-                    <div class="agents-home__template-head">
-                      <span class="agents-home__template-art" />
-                      <div class="agents-home__template-content">
-                        <div class="agents-home__template-identity">
-                          <h3 style={placeholderBar("70%")}>{"\u00a0"}</h3>
-                          <span style={placeholderBar("40%")}>{"\u00a0"}</span>
-                        </div>
-                        <p class="agents-home__template-summary">
-                          <span style={{ display: "block", ...placeholderBar("100%") }}>
-                            {"\u00a0"}
-                          </span>
-                          <span style={{ display: "block", ...placeholderBar("60%") }}>
-                            {"\u00a0"}
-                          </span>
-                        </p>
-                      </div>
+      <section class="plugin-catalog-section" aria-hidden="true">
+        <header class="plugin-catalog-section__header">
+          <h2 style={{ width: "120px", ...placeholderBar("100%") }}>{"\u00a0"}</h2>
+        </header>
+        <div class="plugin-catalog-grid">
+          <Repeat count={TEMPLATE_SEARCH_PAGE_SIZE}>
+            {() => (
+              <div class="agents-home__template-card oc-card" data-templates-placeholder>
+                <div class="agents-home__template-head">
+                  <span class="agents-home__template-art" />
+                  <div class="agents-home__template-content">
+                    <div class="agents-home__template-identity">
+                      <h3 style={placeholderBar("70%")}>{"\u00a0"}</h3>
+                      <span style={placeholderBar("40%")}>{"\u00a0"}</span>
                     </div>
+                    <p class="agents-home__template-summary">
+                      <span style={{ display: "block", ...placeholderBar("100%") }}>
+                        {"\u00a0"}
+                      </span>
+                      <span style={{ display: "block", ...placeholderBar("60%") }}>{"\u00a0"}</span>
+                    </p>
                   </div>
-                )}
-              </Repeat>
-            </div>
-          </section>
-        )}
-      </Repeat>
+                </div>
+              </div>
+            )}
+          </Repeat>
+        </div>
+      </section>
     </div>
   );
 }
@@ -330,62 +306,18 @@ export function TemplatesExplore(
               </Show>
               <Show when={request()} keyed>
                 {(current) => {
-                  const overview = !current.query.trim() && !current.category;
-                  const readCatalog = async (): Promise<TemplateCatalog> => {
+                  const result = createMemo(async () => {
                     if (current.ready) {
                       await current.ready;
                     }
                     if (!current.isCurrent()) {
-                      return { entries: [], featured: [], sections: [] };
+                      return { entries: [], nextCursor: null };
                     }
-                    if (!overview) {
-                      const page = await searchTemplates(current.scope.client, current.query, {
-                        category: current.category || undefined,
-                        cursor: current.cursors.at(-1),
-                      });
-                      return { ...page, featured: [], sections: [] };
-                    }
-                    const catalog = await readTemplatesOverview(current.scope.client, SECTION_SIZE);
-                    if (!current.isCurrent()) {
-                      return { entries: [], featured: [], sections: [] };
-                    }
-                    if (catalog) {
-                      return {
-                        entries: [],
-                        featured: catalog.featured,
-                        sections: templateCategories.slice(1).flatMap((category) => {
-                          const entries = catalog.sections.find(
-                            (section) => section.category === category[0],
-                          )?.entries;
-                          return entries?.length ? [{ category, entries }] : [];
-                        }),
-                      };
-                    }
-                    // An incomplete upstream overview retains its legacy shelves.
-                    const [featured, sections] = await Promise.all([
-                      searchTemplates(current.scope.client, "", {
-                        limit: SECTION_SIZE,
-                        featured: true,
-                      }),
-                      Promise.all(
-                        templateCategories.slice(1).map(async (category) => ({
-                          category,
-                          entries: (
-                            await searchTemplates(current.scope.client, "", {
-                              limit: SECTION_SIZE,
-                              category: category[0],
-                            })
-                          ).entries,
-                        })),
-                      ),
-                    ]);
-                    return {
-                      entries: [],
-                      featured: featured.entries,
-                      sections: sections.filter((section) => section.entries.length > 0),
-                    };
-                  };
-                  const result = createMemo(readCatalog);
+                    return searchTemplates(current.scope.client, current.query, {
+                      category: current.category || undefined,
+                      cursor: current.cursors.at(-1),
+                    });
+                  });
                   return (
                     <Errored
                       fallback={(error) => (
@@ -402,17 +334,22 @@ export function TemplatesExplore(
                           >
                             {t("templatesCatalog.retry")}
                           </button>
+                          <Show when={current.cursors.length > 0}>
+                            <button
+                              type="button"
+                              class="btn btn--sm"
+                              onClick={() => loadCatalog(current.category, current.query)}
+                            >
+                              {t("templatesCatalog.firstPage")}
+                            </button>
+                          </Show>
                         </InlineAlert>
                       )}
                     >
-                      <Loading fallback={<TemplateCatalogSkeleton overview={overview} />}>
+                      <Loading fallback={<TemplateCatalogSkeleton />}>
                         <Show
                           when={
-                            gateway.connected &&
-                            !unavailable() &&
-                            result().entries.length === 0 &&
-                            result().featured.length === 0 &&
-                            result().sections.length === 0
+                            gateway.connected && !unavailable() && result().entries.length === 0
                           }
                         >
                           <p class="agents-home__template-empty">
@@ -423,61 +360,7 @@ export function TemplatesExplore(
                             )}
                           </p>
                         </Show>
-                        <Show when={overview && result().featured.length > 0}>
-                          <CatalogDiscoverySection
-                            id="featured"
-                            title={t("templatesCatalog.featured")}
-                          >
-                            <div class="plugin-catalog-grid" data-templates-featured>
-                              <For each={result().featured} keyed={(entry) => entry.packageName}>
-                                {(entry) => (
-                                  <TemplateCard
-                                    entry={entry()}
-                                    onSelect={props.onSelect}
-                                    onAdd={props.onAdd}
-                                    addingPackageName={props.addingPackageName}
-                                    addDisabled={props.addDisabled}
-                                    addFailure={props.addFailure}
-                                  />
-                                )}
-                              </For>
-                            </div>
-                          </CatalogDiscoverySection>
-                        </Show>
-                        <Show when={overview}>
-                          <For each={result().sections} keyed={(section) => section.category[0]}>
-                            {(section) => (
-                              <CatalogDiscoverySection
-                                id={section().category[0]}
-                                title={t(section().category[1])}
-                                onViewAll={() => selectCategory(section().category[0])}
-                                viewAllLabel={t("templatesCatalog.viewAll")}
-                              >
-                                <div
-                                  class="plugin-catalog-grid"
-                                  data-templates-category={section().category[0]}
-                                >
-                                  <For
-                                    each={section().entries}
-                                    keyed={(entry) => entry.packageName}
-                                  >
-                                    {(entry) => (
-                                      <TemplateCard
-                                        entry={entry()}
-                                        onSelect={props.onSelect}
-                                        onAdd={props.onAdd}
-                                        addingPackageName={props.addingPackageName}
-                                        addDisabled={props.addDisabled}
-                                        addFailure={props.addFailure}
-                                      />
-                                    )}
-                                  </For>
-                                </div>
-                              </CatalogDiscoverySection>
-                            )}
-                          </For>
-                        </Show>
-                        <Show when={!overview && result().entries.length > 0}>
+                        <Show when={result().entries.length > 0}>
                           <CatalogDiscoverySection
                             id={current.category || "results"}
                             title={
@@ -506,9 +389,7 @@ export function TemplatesExplore(
                             </div>
                           </CatalogDiscoverySection>
                         </Show>
-                        <Show
-                          when={!overview && (current.cursors.length > 0 || result().nextCursor)}
-                        >
+                        <Show when={current.cursors.length > 0 || result().nextCursor}>
                           <nav
                             class="data-table-pagination__controls"
                             aria-label={t("templatesCatalog.results")}
@@ -524,6 +405,7 @@ export function TemplatesExplore(
                             >
                               {t("common.previous")}
                             </button>
+                            <span aria-current="page">{current.cursors.length + 1}</span>
                             <button
                               type="button"
                               disabled={!result().nextCursor}

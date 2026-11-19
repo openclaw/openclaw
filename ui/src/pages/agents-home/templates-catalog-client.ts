@@ -7,7 +7,6 @@ import type {
   ClawHubTemplateCatalogDetail,
   ClawHubTemplateCatalogEntry,
   ClawHubTemplateCatalogPreview,
-  ClawHubTemplateCatalogOverview,
 } from "../../../../src/templates/clawhub-source.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
@@ -34,7 +33,7 @@ export const TEMPLATE_SEARCH_PAGE_SIZE = 20;
 export async function searchTemplates(
   client: GatewayBrowserClient,
   query: string,
-  options: { category?: string; featured?: boolean; limit?: number; cursor?: string } = {},
+  options: { category?: string; limit?: number; cursor?: string } = {},
 ): Promise<{ entries: TemplateCatalogEntry[]; nextCursor?: string | null }> {
   const trimmed = query.trim();
   const result = await client.request<{
@@ -45,28 +44,8 @@ export async function searchTemplates(
     limit: options.limit ?? TEMPLATE_SEARCH_PAGE_SIZE,
     ...(options.cursor ? { cursor: options.cursor } : {}),
     ...(options.category ? { category: options.category } : {}),
-    ...(options.featured ? { featured: true } : {}),
   });
   return { entries: result.entries.filter(isPublicEntry), nextCursor: result.nextCursor };
-}
-
-export async function readTemplatesOverview(
-  client: GatewayBrowserClient,
-  limit: number,
-): Promise<ClawHubTemplateCatalogOverview | undefined> {
-  const result = await client.request<{ overview?: ClawHubTemplateCatalogOverview }>(
-    "templates.catalog.search",
-    { overview: true, limit },
-  );
-  return result.overview
-    ? {
-        featured: result.overview.featured.filter(isPublicEntry),
-        sections: result.overview.sections.map((section) => ({
-          category: section.category,
-          entries: section.entries.filter(isPublicEntry),
-        })),
-      }
-    : undefined;
 }
 
 export async function readTemplateDetail(

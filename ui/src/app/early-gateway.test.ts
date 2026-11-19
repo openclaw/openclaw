@@ -54,6 +54,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  document.documentElement.removeAttribute("data-openclaw-id-enabled");
+  document.documentElement.removeAttribute("data-openclaw-control-ui-base-path");
   runtime?.stop();
   early?.transport.client.stop();
   discardPrewarmedChatSnapshot();
@@ -153,37 +155,101 @@ it("closes the New connection when stop wins startup", async () => {
   expect(getLatestWebSocket().sent).toEqual([]);
 });
 
-it("rejects preconnection when the document URL changes before adoption", async () => {
-  const { application, connection } = prepareRuntime();
-  window.history.replaceState({}, "", "/about");
-  const starting = application.start();
-  await starting;
-  expect(application.context.gateway.snapshot.client).not.toBe(connection.transport.client);
-  expect(wsInstances).toHaveLength(2);
-  expect(wsInstances[0]?.readyState).toBe(3);
-});
+it.each(["/new", "/templates"])(
+  "rejects %s when the document URL changes before adoption",
+  async (pathname) => {
+    window.history.replaceState({}, "", pathname);
+    const { application, connection } = prepareRuntime();
+    window.history.replaceState({}, "", "/about");
+    const starting = application.start();
+    await starting;
+    expect(application.context.gateway.snapshot.client).not.toBe(connection.transport.client);
+    expect(wsInstances).toHaveLength(2);
+    expect(wsInstances[0]?.readyState).toBe(3);
+  },
+);
 
 it.each([
-  ["native", "/new"],
   ["confirmation", "/new"],
   ["document", "/new"],
   ["relay", "/new"],
   ["confirmation", "/dashboard/main/dashboard/proof"],
+  ["confirmation", "/templates/packages/proof"],
+  ["relay", "/templates"],
+  ["embedded", "/templates"],
 ])("keeps %s startup with its ordinary owner on %s", (boundary, pathname) => {
   window.history.replaceState({}, "", pathname);
+  if (boundary === "relay") {
+    document.documentElement.setAttribute("data-openclaw-remote-ingress", "true");
+  } else if (boundary === "embedded") {
+    document.documentElement.setAttribute("data-openclaw-id-enabled", "true");
+    document.documentElement.setAttribute("data-openclaw-control-ui-base-path", "");
+    vi.stubGlobal("__openclawTransport", { createWebSocket: vi.fn() });
+  }
   const initial = prepareApplicationStartup();
-  if (boundary === "native") {
-    initial.startup.nativeClient = { clientName: "openclaw-control-ui", mode: "webchat" };
-  } else if (boundary === "confirmation") {
+  if (boundary === "confirmation") {
     initial.hasPendingGateway = true;
   } else if (boundary === "document") {
     initial.ownsWarmBoot = false;
-  } else {
-    document.documentElement.setAttribute("data-openclaw-remote-ingress", "true");
   }
   expect(startEarlyApplicationGateway(initial)).toBeUndefined();
   expect(wsInstances).toHaveLength(0);
 });
+
+it.each([
+  ["macOS browser identity", "/templates/packages/proof", { token: null, password: null }],
+  ["iOS shared token", "/templates/packages/proof", { token: "native-test-token" }],
+  [
+    "iOS shared password",
+    "/templates/packages/proof?view=details",
+    { password: "native-test-password" },
+  ],
+  ["native signer", "/templates/packages/proof", { nativeConnectAuth: true }],
+  ["native signer", "/new", { nativeConnectAuth: true }],
+] as const)("leaves %s handoff on %s with the ordinary Gateway owner", (_, pathname, auth) => {
+  window.history.replaceState({}, "", pathname);
+  Object.defineProperty(window, "__OPENCLAW_NATIVE_CONTROL_AUTH__", {
+    configurable: true,
+    value: { gatewayUrl: "ws://127.0.0.1:18789", ...auth },
+  });
+  const initial = prepareApplicationStartup();
+  expect(window["__OPENCLAW_NATIVE_CONTROL_AUTH__"]).toBeUndefined();
+  early = startEarlyApplicationGateway(initial);
+  expect(wsInstances).toHaveLength(0);
+  expect(early).toBeUndefined();
+});
+
+it.each(["browser", "native"])(
+  "rejects a prepared %s Template target outside the configured development Gateway",
+  (host) => {
+    window.history.replaceState({}, "", "/templates/packages/proof");
+    const configureDevGateway = () =>
+      vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", {
+        gatewayUrl: "wss://configured.example",
+        proxyPath: "/dev-proxy",
+      });
+    if (host === "native") {
+      configureDevGateway();
+      window["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
+        gatewayUrl: "ws://127.0.0.1:18789",
+        token: "native-test-token",
+      };
+    }
+    const initial = prepareApplicationStartup();
+    if (host === "browser") {
+      // Browser settings normally select the dev target. Challenge transport admission
+      // with a different prepared target, without simulating a native handoff.
+      configureDevGateway();
+    }
+    expect(initial.settings.gatewayUrl).toBe("ws://127.0.0.1:18789");
+    early = startEarlyApplicationGateway(initial);
+    expect(wsInstances).toHaveLength(0);
+    runtime = bootstrapApplication(initial, early);
+    runtime.context.gateway.connect();
+    expect(runtime.context.gateway.snapshot.lastError).toContain("OPENCLAW_UI_DEV_GATEWAY_URL");
+    expect(wsInstances).toHaveLength(0);
+  },
+);
 
 it.each(["/dashboard/main", "/dashboard/main/abcdef12"])(
   "leaves non-literal dashboard route %s with its resolver",
@@ -289,6 +355,38 @@ async function connectWarmGateway() {
   return socket;
 }
 
+it.each(["/templates", "/ui/templates/packages/%40example%2Fproof"])(
+  "authenticates %s before adoption without reading Template data or chat history",
+  async (pathname) => {
+    window.history.replaceState({}, "", pathname);
+    persistSessionToken(loadSettings().gatewayUrl, "synthetic-token");
+    const initial = prepareApplicationStartup();
+    early = startEarlyApplicationGateway(initial);
+    expect(wsInstances).toHaveLength(1);
+    const socket = await connectWarmGateway();
+    expect(socket.sent.map((frame) => JSON.parse(frame))).toMatchObject([
+      {
+        method: "connect",
+        params: { auth: { token: "synthetic-token" } },
+      },
+    ]);
+    socket.emitMessage({ type: "event", event: "boot-proof", payload: 1, seq: 1 });
+    const delivered: unknown[] = [];
+    expect(
+      early!.transport.adopt({
+        url: initial.settings.gatewayUrl,
+        token: initial.settings.token,
+        onHello: () => delivered.push("hello"),
+        onEvent: (event) => delivered.push(event.payload),
+      }),
+    ).toBe(early!.transport.client);
+    await vi.advanceTimersByTimeAsync(0);
+    socket.emitMessage({ type: "event", event: "boot-proof", payload: 2, seq: 2 });
+    expect(delivered).toEqual(["hello", 1, 2]);
+    expect(wsInstances).toHaveLength(1);
+  },
+);
+
 it.each(["before", "after"])(
   "requests warm cursor history prepared %s hello before mounting the pane",
   async (timing) => {
@@ -353,10 +451,15 @@ it.each(["different route cache", "foreground handoff", "retired recovery scope"
   },
 );
 
-it("imports New without waiting for the socket to open", async () => {
-  await import("../main.ts");
-  await vi.dynamicImportSettled();
-  expect(mainRuntime.startControlUi).toHaveBeenCalledOnce();
-  expect(wsInstances).toHaveLength(1);
-  expect(getLatestWebSocket().sent).toEqual([]);
-});
+it.each(["/new", "/templates"])(
+  "imports %s without waiting for the socket to open",
+  async (path) => {
+    window.history.replaceState({}, "", path);
+    vi.resetModules();
+    await import("../main.ts");
+    await vi.dynamicImportSettled();
+    expect(mainRuntime.startControlUi).toHaveBeenCalledOnce();
+    expect(wsInstances).toHaveLength(1);
+    expect(getLatestWebSocket().sent).toEqual([]);
+  },
+);

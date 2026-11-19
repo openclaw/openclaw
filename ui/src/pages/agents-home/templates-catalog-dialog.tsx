@@ -11,6 +11,8 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { showToast } from "../../lib/toast.ts";
+import { beginTemplateDetailRead } from "../templates/detail-read.ts";
+import type { TemplatesRouteData } from "../templates/route.ts";
 import type { TemplatePluginPresentation } from "./template-plugin-icon.tsx";
 import {
   addTemplateAgent,
@@ -34,6 +36,7 @@ type TemplatesDialogProps = {
   onClose?: () => void;
   initialPackageName?: string;
   initialVersion?: string;
+  routeData?: TemplatesRouteData;
   modal?: boolean;
 };
 
@@ -97,7 +100,7 @@ class TemplatesCatalogModel {
     return packageName && version ? { packageName, version } : null;
   }
 
-  private loadDetail() {
+  private loadDetail(initial = false) {
     this.cancelDetailRead();
     const scope = this.gateway.capture();
     const packageName = this.props.initialPackageName ?? this.selected?.packageName;
@@ -116,7 +119,19 @@ class TemplatesCatalogModel {
       new Promise((resolve, reject) => {
         // Disconnect stops a pending skeleton without clearing a settled receipt or error.
         this.cancelDetailRead = () => resolve(this.detail);
-        void readTemplateDetail(scope.client, source).then(
+        const data = this.props.routeData;
+        const read = beginTemplateDetailRead(this.context.gateway, source, {
+          prepared: data?.initialDetail,
+          fresh: !initial,
+        });
+        if (data) {
+          data.initialDetail = undefined;
+        }
+        if (!read) {
+          reject(new UserFacingError(t("templatesCatalog.unavailable")));
+          return;
+        }
+        void read.result.then(
           (detail) => {
             if (this.gateway.isCurrent(scope) && revision === this.detailRevision) {
               this.selected = detail;
@@ -207,8 +222,8 @@ class TemplatesCatalogModel {
     this.riskAcknowledged = false;
   }
 
-  refresh() {
-    this.loadDetail();
+  refresh(initial: boolean) {
+    this.loadDetail(initial);
   }
 
   async addEntry(entry: TemplateCatalogEntry) {
@@ -413,7 +428,7 @@ export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
     invalidateRequests: () => {
       model.invalidateRequests();
     },
-    ensureInitialData: () => model.refresh(),
+    ensureInitialData: ({ initial }) => model.refresh(initial),
   });
   onSettled(() => {
     const stopFailures = receiveTemplateAddFailures(context, (failure) =>

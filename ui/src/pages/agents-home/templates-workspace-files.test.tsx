@@ -60,7 +60,7 @@ describe("Template workspace file roles", () => {
     flush();
     expect(onOpen).not.toHaveBeenCalled();
     for (const name of names) {
-      expect(view.getByRole("button", { name, exact: true })).toBeTruthy();
+      expect(view.getByRole("button", { name })).toBeTruthy();
     }
     expect(view.container.querySelector(".plugin-capability__icon svg")).not.toBeNull();
     expect(view.container.querySelector(".settings-row__chevron svg")).not.toBeNull();

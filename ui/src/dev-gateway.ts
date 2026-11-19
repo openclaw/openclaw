@@ -23,6 +23,10 @@ export function isConfiguredUiDevGateway(url: string): boolean {
   return URL.parse(url)?.href.replace(/\/$/u, "") === configured.gatewayUrl;
 }
 
+export function isUiDevGatewayMismatch(url: string): boolean {
+  return Boolean(configuredUiDevGateway()) && !isConfiguredUiDevGateway(url);
+}
+
 export function uiDevGatewayResourceBasePath(): string | undefined {
   const configured = configuredUiDevGateway();
   return configured

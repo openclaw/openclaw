@@ -6,8 +6,18 @@ import {
 import { defineSolidPage } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import { isTemplatesAvailable } from "./availability.ts";
+import {
+  beginTemplateDetailRead,
+  templateRouteSource,
+  type TemplateDetailRead,
+} from "./detail-read.ts";
+import { templateDraftTargetFromSearch } from "./draft-navigation.ts";
 
-export type TemplatesRouteData = { location: RouteLocation; basePath: string };
+export type TemplatesRouteData = {
+  location: RouteLocation;
+  basePath: string;
+  initialDetail?: TemplateDetailRead;
+};
 
 export const page = defineSolidPage<"templates", ApplicationContext, TemplatesRouteData>(
   "templates",
@@ -17,17 +27,31 @@ export const page = defineSolidPage<"templates", ApplicationContext, TemplatesRo
       const restored = restoreBridgedRouteLocation(location, INTERNAL_TEMPLATES_PATH_PARAM);
       return `${restored.pathname}${restored.search}:${isTemplatesAvailable(context.runtimeConfig.state)}`;
     },
-    loader: async (context, { location }) => {
+    // Returning to a release needs a fresh access check, not a cached loader receipt.
+    gcTime: 0,
+    loader: async (context, options) => {
       if (isTemplatesAvailable(context.runtimeConfig.state) === null) {
         await context.runtimeConfig.ensureDisplayLoaded();
       }
       if (isTemplatesAvailable(context.runtimeConfig.state) === false) {
         return notFound();
       }
-      return {
-        location: restoreBridgedRouteLocation(location, INTERNAL_TEMPLATES_PATH_PARAM),
-        basePath: context.basePath,
-      };
+      const location = restoreBridgedRouteLocation(options.location, INTERNAL_TEMPLATES_PATH_PARAM);
+      const data: TemplatesRouteData = { location, basePath: context.basePath };
+      // Start the admitted foreground read alongside the lazy renderer, never on a hover or draft link.
+      if (
+        options.cause === "navigation" &&
+        options.shouldRun() &&
+        !options.signal.aborted &&
+        isTemplatesAvailable(context.runtimeConfig.state) === true &&
+        !templateDraftTargetFromSearch(location.search)
+      ) {
+        const source = templateRouteSource(location, context.basePath);
+        if (source) {
+          data.initialDetail = beginTemplateDetailRead(context.gateway, source);
+        }
+      }
+      return data;
     },
   },
 );

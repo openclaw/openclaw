@@ -32,9 +32,9 @@ export class EarlyGateway {
 
   constructor(
     private readonly options: GatewayBrowserClientOptions,
-    private readonly sessionKey: string,
-    private history: GatewaySessionMessageSubscriptionOptions["initialHistory"],
-    private readonly location: string,
+    private readonly sessionKey?: string,
+    private history?: GatewaySessionMessageSubscriptionOptions["initialHistory"],
+    private readonly location = globalThis.location.href,
   ) {
     const currentOptions = () => this.owner ?? options;
     this.client = new GatewayBrowserClient({
@@ -105,13 +105,16 @@ export class EarlyGateway {
       onRequestTiming: (timing) => this.owner?.onRequestTiming?.(timing),
     });
     this.timeout = setTimeout(() => this.fallback(), MAX_BOOT_WAIT_MS);
-    boots.set(this.client, this);
+    if (sessionKey) {
+      boots.set(this.client, this);
+    }
     this.client.start();
   }
 
   startHistory(history = this.history): void {
     // A late cache read must not hold or reclaim the foreground handoff.
-    if (!history || !this.active || this.draining || this.subscription) {
+    const sessionKey = this.sessionKey;
+    if (!sessionKey || !history || !this.active || this.draining || this.subscription) {
       return;
     }
     this.history = history;
@@ -139,7 +142,7 @@ export class EarlyGateway {
           .getGatewaySessionMessageSubscriptionCoordinator(this.client, {
             keysEquivalent: areUiSessionKeysEquivalent,
           })
-          .acquire(this.sessionKey, {
+          .acquire(sessionKey, {
             initialHistory: history,
             includeApprovals: hasOperatorApprovalsAccess(hello.auth ?? null),
           });
@@ -200,6 +203,10 @@ export class EarlyGateway {
         }
       }
     });
+    // No foreground history consumer: hand events straight to the application after hello.
+    if (!this.sessionKey) {
+      this.drain();
+    }
     return this.client;
   }
 
@@ -233,7 +240,7 @@ export class EarlyGateway {
         // Stdout admission needs a current snapshot, never the early history.
         const upgraded = await runtime
           .getGatewaySessionMessageSubscriptionCoordinator(this.client)
-          .acquire(this.sessionKey, {
+          .acquire(key, {
             includeApprovals: subscription.includeApprovals,
             includeLiveToolOutput: true,
           });

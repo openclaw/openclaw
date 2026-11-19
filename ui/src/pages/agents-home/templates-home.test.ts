@@ -207,10 +207,7 @@ describe("Templates discovery", () => {
       pathname: "/templates/packages/%40openclaw%2Fworkflow-operator",
       search: "?version=1.2.0",
     });
-    expect(request).toHaveBeenCalledWith("templates.catalog.search", {
-      overview: true,
-      limit: 4,
-    });
+    expect(request).toHaveBeenCalledWith("templates.catalog.search", { limit: 20 });
   });
 
   it("updates Explore results when the search changes", async () => {
@@ -234,73 +231,148 @@ describe("Templates discovery", () => {
     await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));
   });
 
-  it("pages through ranked search results without carrying cursors to another query", async () => {
-    const { page, request } = createPage({ templatesEnabled: true });
-    await waitForSolid(() => expect(page.querySelector("[data-templates-entry]")).not.toBeNull());
+  it("can return to the first filtered page after a continuation is rejected", async () => {
+    const { page, request, setTemplatesEnabled } = createPage();
     const original = request.getMockImplementation()!;
-    const entries = Array.from({ length: 20 }, (_, index) => ({
-      ...workflowOperator,
-      packageName: "match-" + index,
-      displayName: "Match " + index,
-    }));
     request.mockImplementation((method, params, options) => {
-      if (
-        method === "templates.catalog.search" &&
-        params &&
-        typeof params === "object" &&
-        "query" in params
-      ) {
-        return "cursor" in params
-          ? { entries: [{ ...workflowOperator, displayName: "Page two" }], nextCursor: null }
-          : { entries, nextCursor: "next-match" };
+      if (method !== "templates.catalog.search") {
+        return original(method, params, options);
       }
-      return original(method, params, options);
+      if (params && typeof params === "object" && "cursor" in params) {
+        throw new Error("Expired continuation");
+      }
+      return { entries: [workflowOperator], nextCursor: "opaque-next" };
     });
-    const search = page.querySelector<HTMLInputElement>("[data-templates-search]")!;
-    const enter = (value: string) => {
-      search.value = value;
-      search.dispatchEvent(new Event("input", { bubbles: true }));
-    };
-    const button = (name: string) =>
-      [...page.querySelectorAll<HTMLButtonElement>("button")].find(
-        (node) => node.textContent === name,
+    const button = (text: string) =>
+      Array.from(page.querySelectorAll<HTMLButtonElement>("[data-templates-explore] button")).find(
+        (node) => node.textContent?.trim() === text,
       );
-    enter("match");
-    await waitForSolid(() =>
-      expect(page.querySelectorAll("[data-templates-results] article")).toHaveLength(20),
-    );
-    expect(request).toHaveBeenCalledWith("templates.catalog.search", { query: "match", limit: 20 });
-    expect(
-      request.mock.calls.some(([, args]) => args && typeof args === "object" && "cursor" in args),
-    ).toBe(false);
-    button("Next")!.click();
-    await waitForSolid(() =>
-      expect(page.querySelector("[data-templates-results]")?.textContent).toContain("Page two"),
-    );
-    expect(request).toHaveBeenCalledWith("templates.catalog.search", {
-      query: "match",
-      limit: 20,
-      cursor: "next-match",
-    });
-    expect(page.querySelectorAll("[data-templates-results] article")).toHaveLength(1);
-    expect(button("Next")).toHaveProperty("disabled", true);
-    button("Previous")!.click();
-    await waitForSolid(() =>
-      expect(page.querySelectorAll("[data-templates-results] article")).toHaveLength(20),
-    );
-    button("Next")!.click();
-    await waitForSolid(() =>
-      expect(page.querySelector("[data-templates-results]")?.textContent).toContain("Page two"),
-    );
-    enter("different");
+    setTemplatesEnabled(true);
+    await waitForSolid(() => expect(button("Next")).toBeDefined());
+    button("Research")!.click();
     await waitForSolid(() =>
       expect(request).toHaveBeenCalledWith("templates.catalog.search", {
-        query: "different",
+        category: "research",
         limit: 20,
       }),
     );
-    expect(button("Previous")).toHaveProperty("disabled", true);
+    const search = page.querySelector<HTMLInputElement>("[data-templates-search]")!;
+    search.value = "workflow";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    const first = { category: "research", query: "workflow", limit: 20 };
+    await waitForSolid(() =>
+      expect(request).toHaveBeenCalledWith("templates.catalog.search", first),
+    );
+    await waitForSolid(() => expect(button("Next")).toBeDefined());
+    button("Next")!.click();
+    await waitForSolid(() =>
+      expect(page.querySelector('[role="alert"]')?.textContent).toContain("Expired continuation"),
+    );
+    expect(button("Retry")).toBeDefined();
+    expect(button("First page")).toBeDefined();
+    button("First page")!.click();
+    await waitForSolid(() => expect(page.querySelector("[data-templates-entry]")).not.toBeNull());
+    expect(
+      request.mock.calls.findLast(([method]) => method === "templates.catalog.search"),
+    ).toEqual(["templates.catalog.search", first]);
+    expect(search.value).toBe("workflow");
   });
+
+  it.each(["directory", "search"] as const)(
+    "pages through the %s with only its returned cursor",
+    async (mode) => {
+      const { page, request, setTemplatesEnabled } = createPage();
+      const original = request.getMockImplementation()!;
+      const entries = Array.from({ length: 20 }, (_, index) => ({
+        ...workflowOperator,
+        packageName: "match-" + index,
+        displayName: "Match " + index,
+        summary: "Summary " + index,
+        ownerHandle: "maker-" + index,
+      }));
+      const continuation = "page/next+opaque==";
+      request.mockImplementation((method, params, options) => {
+        if (method === "templates.catalog.search" && params && typeof params === "object") {
+          if ("cursor" in params && params.cursor === continuation) {
+            return { entries: [workflowOperator], nextCursor: null };
+          }
+          if ("query" in params && params.query === "different") {
+            return { entries }; // A full result is not proof that another page exists.
+          }
+          if (!("query" in params) || params.query === "match") {
+            return { entries, nextCursor: continuation };
+          }
+        }
+        return original(method, params, options);
+      });
+      const reads = () => request.mock.calls.filter(([method]) => method.startsWith("templates."));
+      const button = (name: string) =>
+        [...page.querySelectorAll<HTMLButtonElement>("[data-templates-explore] nav button")].find(
+          (node) => node.textContent === name,
+        );
+      const cards = () =>
+        page.querySelectorAll("[data-templates-results] > article[data-templates-entry]");
+      setTemplatesEnabled(true);
+      await waitForSolid(() => expect(reads().length).toBeGreaterThan(0));
+      expect(reads()).toEqual([["templates.catalog.search", { limit: 20 }]]);
+      await waitForSolid(() => expect(cards()).toHaveLength(20));
+      expect(reads()).toHaveLength(1);
+      const search = page.querySelector<HTMLInputElement>("[data-templates-search]")!;
+      const enter = (value: string) => {
+        search.value = value;
+        search.dispatchEvent(new Event("input", { bubbles: true }));
+      };
+      const first = { limit: 20, ...(mode === "search" ? { query: "match" } : {}) };
+      if (mode === "search") {
+        enter("match");
+        await waitForSolid(() =>
+          expect(reads().at(-1)).toEqual(["templates.catalog.search", first]),
+        );
+        await waitForSolid(() => expect(cards()).toHaveLength(20));
+      }
+      const firstPage = () =>
+        Array.from(cards(), (card) => [
+          card.querySelector("h3")?.textContent,
+          card.querySelector(".agents-home__template-summary")?.textContent,
+          card.querySelector(".agents-home__template-identity span")?.textContent,
+        ]);
+      const expected = entries.map((row) => [row.displayName, row.summary, "@" + row.ownerHandle]);
+      expect(firstPage()).toEqual(expected);
+      expect(button("Previous")).toHaveProperty("disabled", true);
+      button("Next")!.click();
+      await waitForSolid(() => expect(cards()).toHaveLength(1));
+      expect(cards()[0]?.querySelector("h3")?.textContent).toBe("Workflow Operator");
+      expect(reads().at(-1)).toEqual([
+        "templates.catalog.search",
+        { ...first, cursor: continuation },
+      ]);
+      expect(button("Next")).toHaveProperty("disabled", true);
+      button("Previous")!.click();
+      await waitForSolid(() => expect(firstPage()).toEqual(expected));
+      expect(reads().at(-1)).toEqual(["templates.catalog.search", first]);
+      button("Next")!.click();
+      await waitForSolid(() => expect(cards()).toHaveLength(1));
+      if (mode === "search") {
+        enter("different");
+        await waitForSolid(() => expect(cards()).toHaveLength(20));
+        expect(button("Next")).toBeUndefined();
+        expect(reads().at(-1)).toEqual([
+          "templates.catalog.search",
+          { query: "different", limit: 20 },
+        ]);
+      } else {
+        [...page.querySelectorAll<HTMLButtonElement>(".plugin-catalog-chip")]
+          .find((chip) => chip.textContent === "Research")!
+          .click();
+        await waitForSolid(() => expect(cards()).toHaveLength(20));
+        expect(reads().at(-1)).toEqual([
+          "templates.catalog.search",
+          { category: "research", limit: 20 },
+        ]);
+        expect(button("Previous")).toHaveProperty("disabled", true);
+      }
+    },
+  );
 
   it("retries the selected package's detail read while retaining its route", async () => {
     const { request, setTemplatesEnabled, find } = createDetail({ templatesEnabled: false });
@@ -533,47 +605,20 @@ describe("Templates discovery", () => {
     expect(find("[data-templates-confirm] button")).toHaveProperty("disabled", false);
   });
 
-  it("falls back to legacy shelves only for an unsupported overview and retires pending probes", async () => {
-    const { page, request, setPhase } = createPage({ templatesEnabled: true });
-    await waitForSolid(() =>
-      expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1),
-    );
-    const original = request.getMockImplementation()!;
+  it("retires a pending directory read when a new search starts", async () => {
+    const { page, request, setTemplatesEnabled } = createPage();
     const retired = createDeferredCore<unknown>();
-    let overviewReads = 0;
-    request.mockImplementation((method, params, options) => {
-      if (
-        method === "templates.catalog.search" &&
-        params &&
-        typeof params === "object" &&
-        Reflect.get(params, "overview")
-      ) {
-        return ++overviewReads === 1 ? { entries: [] } : retired.promise;
-      }
-      return original(method, params, options);
-    });
-    setPhase("reconnecting");
-    flush();
-    setPhase("connected");
+    request.mockReturnValueOnce(retired.promise);
+    setTemplatesEnabled(true);
     await waitForSolid(() =>
-      expect(request).toHaveBeenCalledWith("templates.catalog.search", {
-        category: "productivity",
-        limit: 4,
-      }),
+      expect(request).toHaveBeenCalledWith("templates.catalog.search", { limit: 20 }),
     );
-    await waitForSolid(() =>
-      expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1),
-    );
-    setPhase("reconnecting");
-    flush();
-    setPhase("connected");
-    await waitForSolid(() => expect(overviewReads).toBe(2));
     const search = page.querySelector<HTMLInputElement>("[data-templates-search]")!;
     search.value = "missing";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     await waitForSolid(() => expect(page.textContent).toContain("No templates match your search."));
     const reads = request.mock.calls.length;
-    retired.resolve({ entries: [] });
+    retired.resolve({ entries: [workflowOperator], nextCursor: "retired" });
     await retired.promise;
     flush();
     expect(request.mock.calls).toHaveLength(reads);

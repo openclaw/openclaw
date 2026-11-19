@@ -1,17 +1,11 @@
 import { writeFile } from "node:fs/promises";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
-import type {
-  ClawHubTemplateCatalogDetail,
-  ClawHubTemplateCatalogEntry,
-} from "../../../../src/templates/clawhub-source.ts";
+import type { ClawHubTemplateCatalogEntry } from "../../../../src/templates/clawhub-source.ts";
 import { pathForPluginCatalogEntry } from "../../app-route-paths.ts";
-import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { iconData } from "../../components/icon-data.ts";
 import { LINK_READER_HOVERCARD_OPEN_DELAY_MS } from "../../components/link-reader-target.ts";
 import { inspection } from "../../e2e/plugins-settings-admin.test-support.ts";
-import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
-import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
@@ -23,6 +17,17 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
+import {
+  agentsList,
+  auditUrl,
+  publishedAtMs,
+  researchTemplate,
+  skillExcerpt,
+  soulExcerpt,
+  summaryFreeTemplate,
+  templateCatalogReplies,
+  workflowOperator,
+} from "./templates-catalog.e2e.test-support.ts";
 
 const proofDir = createControlUiE2eArtifactDir("templates-catalog");
 const capture = async (page: Page, name: string, content: Locator, scrollTo?: Locator) => {
@@ -50,33 +55,6 @@ const viewports = [
   { name: "laptop", width: 1366, height: 768 },
   { name: "desktop", width: 1440, height: 900 },
 ] as const;
-
-const workflowOperator = {
-  packageName: "@openclaw/workflow-operator",
-  displayName: "Workflow Operator",
-  summary: "Runs approved work across your tools.",
-  latestVersion: "1.2.0",
-  channel: "official",
-  official: true,
-  ownerHandle: "openclaw",
-  downloads: 1200,
-  installs: 200,
-  updatedAtMs: 1_790_000_000_000,
-} satisfies ClawHubTemplateCatalogEntry;
-const summaryFreeTemplate: ClawHubTemplateCatalogEntry = { ...workflowOperator };
-delete summaryFreeTemplate.summary;
-const researchTemplate = {
-  ...workflowOperator,
-  packageName: "@maker/release-scout",
-  displayName: "Release Scout",
-};
-const auditUrl = "https://clawhub.ai/openclaw/templates/workflow-operator/security-audit";
-const publishedAtMs = 1_780_000_000_000;
-const soulExcerpt = "Keep the owner informed about approved workflows. ".repeat(24);
-const skillExcerpt =
-  "Research trips and compare destinations against the approved itinerary. ".repeat(24);
-const config = { gateway: { controlUi: { experimental: { templates: true } } } };
-const agentsList = makeBootRoster({ agents: [{ id: "main", name: "Main" }] });
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -132,93 +110,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         "plugins.list",
         "plugins.catalog.get",
       ],
-      methodResponses: {
-        "plugins.catalog.get": {
-          ...inspection.catalog,
-          plugin: {
-            ...inspection.catalog.plugin,
-            local: {
-              present: false,
-              installed: false,
-              enabled: false,
-              state: "not-installed",
-              action: "install",
-            },
-          },
-        } satisfies PluginDiscoveryDetailResult,
-        "config.get": sourceConfigSnapshot(config),
-        "agents.list": agentsList,
-        "templates.catalog.search": {
-          entries: [entry],
-          overview: {
-            featured: catalogEntries,
-            sections: [{ category: "research", entries: catalogEntries }],
-          },
-        },
-        "templates.catalog.detail": {
-          detail: {
-            ...entry,
-            ...detailPublisher,
-            version: "1.2.0",
-            agentId: "workflow-operator",
-            agentName: "Workflow Operator",
-            workspaceFiles: 2,
-            skills: 1,
-            plugins: 1,
-            mcpServers: 0,
-            scheduledJobs: 0,
-            createdAtMs: publishedAtMs,
-            categories: ["research", "productivity"],
-            security: { verdict: "benign", auditUrl },
-            contents: {
-              instructions: [
-                { name: "SOUL.md", source: "workspace/SOUL.md", excerpt: soulExcerpt },
-                { name: "AGENTS.md", source: "workspace/AGENTS.md" },
-              ],
-              skills: [
-                {
-                  name: "Trip research",
-                  source: "clawhub",
-                  ref: "@openclaw/trip-research",
-                  version: "2.0.0",
-                  excerpt: skillExcerpt,
-                },
-              ],
-              integrations: [
-                {
-                  name: "@openclaw/workflow-tools",
-                  kind: "plugin",
-                  source: "clawhub",
-                  ref: "@openclaw/workflow-tools",
-                  version: "1.2.0",
-                },
-              ],
-              automations: [],
-            },
-          } satisfies ClawHubTemplateCatalogDetail,
-        },
-        "plugins.list": {
-          plugins: [
-            {
-              id: "workflow-tools",
-              name: "Workflow Tools",
-              packageName: "@openclaw/workflow-tools",
-              clawhubPackage: "@openclaw/workflow-tools",
-              version: "1.2.0",
-              installed: true,
-              enabled: true,
-              state: "enabled",
-            },
-          ],
-          diagnostics: [],
-          mutationAllowed: true,
-        },
-        "templates.add.apply": {
-          agentId: "workflow-operator",
-          status: "complete",
-          readiness: { ready: false, requirements: [{ kind: "oauth", owner: "workflows" }] },
-        },
-      },
+      methodResponses: templateCatalogReplies(entry, detailPublisher, catalogEntries),
     });
     await page.goto(`${server.baseUrl}templates`);
     return { page, gateway };
@@ -259,7 +151,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       ).toBeGreaterThanOrEqual(1024);
       await capture(page, "loading-resized-tablet", loading);
     }
-    // The first shelf and card arrive exactly where their placeholders were.
+    // The results header and first card arrive exactly where their placeholders were.
     const placeholderHeader = await loading
       .locator(".plugin-catalog-section__header")
       .first()
@@ -624,7 +516,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     await capture(page, "after-labs", row, row);
   });
 
-  it("lays out featured cards and switches category shelves to filtered results", async () => {
+  it("lays out the directory grid and switches to filtered results", async () => {
     const { page, gateway } = await fixture(
       undefined,
       undefined,
@@ -649,11 +541,8 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         },
       ],
     );
-    await page.locator("[data-templates-featured] [data-templates-entry]").first().waitFor();
-    await page
-      .locator('[data-templates-category="research"] [data-templates-entry]')
-      .first()
-      .waitFor();
+    const grid = page.locator("[data-templates-results]");
+    await grid.locator("[data-templates-entry]").first().waitFor();
     expect(
       await page
         .locator(".plugin-catalog-chips")
@@ -672,60 +561,54 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       .locator(".plugin-catalog-results__body")
       .evaluate((element) => element.getBoundingClientRect().width);
     expect(Math.abs(searchWidth - bodyWidth)).toBeLessThan(2);
-    await capture(
-      page,
-      "after-catalog",
-      page.locator("[data-templates-featured] [data-templates-entry]").first(),
-    );
+    await capture(page, "after-catalog", grid.locator("[data-templates-entry]").first());
     await page.setViewportSize({ width: 390, height: 844 });
-    await capture(page, "catalog-mobile", page.locator("[data-templates-featured]"));
+    await capture(page, "catalog-mobile", grid);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       390,
     );
     await page.setViewportSize({ width: 1440, height: 900 });
-    for (const selector of ["[data-templates-featured]", '[data-templates-category="research"]']) {
-      const cards = page.locator(`${selector} [data-templates-entry]`);
-      expect(await cards.count()).toBe(4);
-      const boxes = await cards.evaluateAll((elements) =>
-        elements.map((card) => {
-          const { x, y } = card.getBoundingClientRect();
-          return { x, y };
-        }),
-      );
-      expect(boxes[0]!.y).toBe(boxes[1]!.y);
-      expect(boxes[2]!.y).toBe(boxes[3]!.y);
-      expect(boxes[0]!.x).toBe(boxes[2]!.x);
-      expect(boxes[1]!.x).toBeGreaterThan(boxes[0]!.x);
-      expect(boxes[2]!.y).toBeGreaterThan(boxes[0]!.y);
-      const rows = await cards.evaluateAll((elements) =>
-        elements.map((card) => {
-          const art = card.querySelector(".agents-home__template-art")!;
-          const body = card.querySelector(".agents-home__template-head")!.getBoundingClientRect();
-          const image = art.getBoundingClientRect();
-          const add = card.querySelector(".agents-home__template-add")!.getBoundingClientRect();
-          const name = card.querySelector("h3")!.getBoundingClientRect();
-          const owner = card
-            .querySelector(".agents-home__template-identity span")!
-            .getBoundingClientRect();
-          return {
-            background: getComputedStyle(art).backgroundColor,
-            artworkHeight: image.height,
-            bodyHeight: body.height,
-            centerDelta: Math.abs(add.y + add.height / 2 - (body.y + body.height / 2)),
-            identityDelta: Math.abs(name.y - owner.y),
-          };
-        }),
-      );
-      for (const row of rows) {
-        expect(row.background).toBe("rgba(0, 0, 0, 0)");
-        expect(row.artworkHeight).toBe(row.bodyHeight);
-        expect(row.centerDelta).toBeLessThan(1);
-        // Different font sizes share a baseline, with a one-pixel top offset.
-        expect(row.identityDelta).toBeLessThanOrEqual(1);
-      }
+    const cards = grid.locator("[data-templates-entry]");
+    expect(await cards.count()).toBe(4);
+    const boxes = await cards.evaluateAll((elements) =>
+      elements.map((card) => {
+        const { x, y } = card.getBoundingClientRect();
+        return { x, y };
+      }),
+    );
+    expect(boxes[0]!.y).toBe(boxes[1]!.y);
+    expect(boxes[2]!.y).toBe(boxes[3]!.y);
+    expect(boxes[0]!.x).toBe(boxes[2]!.x);
+    expect(boxes[1]!.x).toBeGreaterThan(boxes[0]!.x);
+    expect(boxes[2]!.y).toBeGreaterThan(boxes[0]!.y);
+    const rows = await cards.evaluateAll((elements) =>
+      elements.map((card) => {
+        const art = card.querySelector(".agents-home__template-art")!;
+        const body = card.querySelector(".agents-home__template-head")!.getBoundingClientRect();
+        const image = art.getBoundingClientRect();
+        const add = card.querySelector(".agents-home__template-add")!.getBoundingClientRect();
+        const name = card.querySelector("h3")!.getBoundingClientRect();
+        const owner = card
+          .querySelector(".agents-home__template-identity span")!
+          .getBoundingClientRect();
+        return {
+          background: getComputedStyle(art).backgroundColor,
+          artworkHeight: image.height,
+          bodyHeight: body.height,
+          centerDelta: Math.abs(add.y + add.height / 2 - (body.y + body.height / 2)),
+          identityDelta: Math.abs(name.y - owner.y),
+        };
+      }),
+    );
+    for (const row of rows) {
+      expect(row.background).toBe("rgba(0, 0, 0, 0)");
+      expect(row.artworkHeight).toBe(row.bodyHeight);
+      expect(row.centerDelta).toBeLessThan(1);
+      // Different font sizes share a baseline, with a one-pixel top offset.
+      expect(row.identityDelta).toBeLessThanOrEqual(1);
     }
     await gateway.waitForRequest("templates.catalog.search", {
-      match: { overview: true, limit: 4 },
+      match: { limit: 20 },
     });
     expect(await gateway.getRequests("templates.catalog.search")).toHaveLength(1);
 
@@ -734,9 +617,10 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     });
     await page.getByRole("button", { name: "Research", exact: true }).click();
     await gateway.waitForRequest("templates.catalog.search", { match: { category: "research" } });
-    await page.locator("[data-templates-results] [data-templates-entry]").first().waitFor();
-    expect(await page.locator("[data-templates-featured]").count()).toBe(0);
-    const categoryCards = page.locator("[data-templates-results] [data-templates-entry]");
+    const categoryCards = page.locator(
+      '[data-catalog-section="research"] [data-templates-results] [data-templates-entry]',
+    );
+    await categoryCards.first().waitFor();
     expect(await categoryCards.count()).toBe(2);
     expect(await categoryCards.first().textContent()).toContain("Release Scout");
     expect(await categoryCards.nth(1).textContent()).toContain("Workflow Operator");
@@ -886,7 +770,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
 
   it("distinguishes an empty catalog from no matching templates", async () => {
     const { page, gateway } = await fixture();
-    await page.locator("[data-templates-featured] [data-templates-entry]").first().waitFor();
+    await page.locator("[data-templates-results] [data-templates-entry]").first().waitFor();
     await gateway.setMethodResponse("templates.catalog.search", { entries: [] });
     const search = page.getByPlaceholder("Search templates");
     await search.fill("unmatched");
