@@ -1,4 +1,4 @@
-import { symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, symlinkSync } from "node:fs";
 import { copyFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -44,6 +44,7 @@ import {
   seedRow,
   waitForRead,
 } from "./session-row-projection.read-fixture.test-support.js";
+import { withSessionRowProjectionState } from "./session-row-projection.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -669,4 +670,37 @@ it("keeps sentinel children in their physical store after a primary update", () 
     expect(snapshot(selected.storeTarget.storePath)?.childSessions).toEqual([childKey]);
     const otherPath = selected.storeTarget.storePath === primary ? secondary : primary;
     expect(snapshot(otherPath)?.childSessions).toBeUndefined();
+  }));
+
+it("reads an agentDir row through another spelling of its database file (#201423)", () =>
+  withSessionRowProjectionState(async (create, state) => {
+    // The reporter's layout: an upper-case agentDir that the lower-case default locator also
+    // reaches. Case-sensitive volumes get the second spelling through a link.
+    const agentDir = state.statePath("agents", "Worker", "agent");
+    mkdirSync(agentDir, { recursive: true });
+    if (!existsSync(state.statePath("agents", "worker"))) {
+      symlinkSync(
+        path.dirname(agentDir),
+        state.statePath("agents", "worker"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
+    const cfg: OpenClawConfig = { agents: { entries: { main: {}, worker: { agentDir } } } };
+    setRuntimeConfigSnapshot(cfg);
+    const query = {
+      agentId: "worker",
+      key: "agent:worker:subagent:child",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "worker", env: state.env }),
+    };
+    replaceSessionEntrySync(
+      { agentId: query.agentId, sessionKey: query.key, storePath: query.storePath },
+      { sessionId: "child-id", updatedAt: 1 },
+    );
+    registerOpenClawAgentDatabase({
+      agentId: "worker",
+      path: path.join(agentDir, "openclaw-agent.sqlite"),
+    });
+    const projection = await create({ cfg, modelCatalog: [] });
+    await projection.ensureMaterialized();
+    expect(projection.readCapabilityEntry(query)?.entry?.sessionId).toBe("child-id");
   }));
