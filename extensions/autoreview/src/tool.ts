@@ -447,16 +447,24 @@ export function createAutoReviewTool(context: OpenClawPluginToolContext<2>): Any
                   );
                 }
                 const spool = `${directory}/handoff.${request.run_id}.${pass}.response.json`;
-                const submitted = await python(
-                  submitResponse,
-                  [skillRoot, helper, "--native-submit", `${directory}/handoff`, spool],
-                  scope.signal,
-                  response,
-                );
-                if (submitted.code !== 0) {
-                  throw new Error(
-                    submitted.stderr || "Auto Review rejected the response submission.",
+                try {
+                  const submitted = await python(
+                    submitResponse,
+                    [skillRoot, helper, "--native-submit", `${directory}/handoff`, spool],
+                    scope.signal,
+                    response,
                   );
+                  if (submitted.code !== 0) {
+                    throw new Error(
+                      submitted.stderr || "Auto Review rejected the response submission.",
+                    );
+                  }
+                } catch (error) {
+                  // The helper owns the outcome; retiring its exchange can reject a late submit.
+                  if (!scope.signal.aborted && helperSettled.signal.aborted) {
+                    return completeResult(await helperRun!, engineFailure);
+                  }
+                  throw error;
                 }
               }
               const completed = await helperRun!;

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { assert, beforeEach, expect, it, vi } from "vitest";
@@ -46,6 +47,7 @@ let request: typeof baseRequest & Record<string, unknown>;
 let next: Record<string, unknown>;
 let result: ReturnType<typeof commandResult>;
 let helperFailure: string;
+let submissionFailure: "exit" | "throw" | undefined;
 type Response = { pass: number; status: string; output: string | null; model: string | null };
 let response: Response | undefined;
 let cwd: string | undefined;
@@ -68,6 +70,7 @@ beforeEach(() => {
   next = {};
   result = commandResult({ stdout: "complete", cleanup: "normal" });
   helperFailure = "";
+  submissionFailure = undefined;
   response = undefined;
   cwd = undefined;
   helperArgv = undefined;
@@ -104,6 +107,14 @@ beforeEach(() => {
           if (!done || response?.pass === request.passes) {
             const details = helperFailure ? {} : reportDetails(request.model);
             helper.resolve(json({ code: 1, ...details }, done ? 1 : 2, helperFailure));
+          }
+          if (submissionFailure) {
+            // Cleanup has retired the exchange before the delayed submission returns.
+            await setImmediate();
+            if (submissionFailure === "throw") {
+              throw new Error("response exchange was removed");
+            }
+            return { code: 1, stdout: "", stderr: "FileNotFoundError: response exchange" };
           }
           return { code: 0, stdout: "", stderr: "" };
         }
@@ -187,6 +198,19 @@ it.each([
 it("preserves helper diagnostics without a report", async () => {
   helperFailure = "source changed; rerun autoreview against the updated tree";
   await expect(execute()).rejects.toThrow(helperFailure);
+});
+it.each(["exit", "throw"] as const)(
+  "preserves the helper failure when late submission fails by %s",
+  async (failure) => {
+    helperFailure = "OpenClaw execution result timed out";
+    submissionFailure = failure;
+    await expect(execute()).rejects.toThrow(helperFailure);
+  },
+);
+it("preserves submission failure while the helper is still running", async () => {
+  request.passes = 2;
+  submissionFailure = "throw";
+  await expect(execute()).rejects.toThrow("response exchange was removed");
 });
 it.each(["installation", "authority"])("requires protected %s", (requirement) => {
   if (requirement === "installation") {
