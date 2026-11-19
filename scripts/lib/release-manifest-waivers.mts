@@ -1,9 +1,6 @@
 import { createReleaseEvidenceClient } from "../release-ci-summary.mjs";
 import { isRecord } from "./record-shared.mjs";
-import {
-  parseReleaseValidationWaivers,
-  RELEASE_VALIDATION_WAIVERS_PATH,
-} from "./release-validation-waivers.mjs";
+import { readReleaseValidationWaivers } from "./release-validation-waivers.mjs";
 
 // Publication admission authenticates the manifest and its exact Q before side
 // effects. Downstream policy consumers must read that Q, not their executing P.
@@ -21,12 +18,13 @@ export function readReleaseManifestWaivers(
   if (typeof manifest.workflowSha !== "string" || !/^[a-f0-9]{40}$/u.test(manifest.workflowSha)) {
     throw new Error("Release manifest is missing its exact qualification Q");
   }
-  return parseReleaseValidationWaivers(
+  const qualificationSha = manifest.workflowSha;
+  return readReleaseValidationWaivers((sourcePath) =>
     readSource
-      ? readSource(manifest.workflowSha, RELEASE_VALIDATION_WAIVERS_PATH)
+      ? readSource(qualificationSha, sourcePath)
       : createReleaseEvidenceClient("openclaw/openclaw").getWorkflowSource(
-          manifest.workflowSha,
-          RELEASE_VALIDATION_WAIVERS_PATH,
+          qualificationSha,
+          sourcePath,
         ),
   );
 }

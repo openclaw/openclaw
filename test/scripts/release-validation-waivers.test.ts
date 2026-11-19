@@ -5,12 +5,39 @@ import {
   validateReleaseManifestAdvisoryJobs,
 } from "../../scripts/full-release-validation-policy.mjs";
 import {
-  decodeReleaseValidationWaivers,
+  decodeReleaseValidationSource,
   evaluateReleaseChildPolicy,
   parseReleaseValidationWaivers,
   releaseQualificationExemptions,
+  readReleaseValidationWaivers,
+  readReleaseValidationWaiversAsync,
   validateReleaseWaiverAggregates,
 } from "../../scripts/lib/release-validation-waivers.mjs";
+
+it("preserves authenticated pre-ledger policy without hiding new ledger or transport faults", async () => {
+  const legacy = (path: string) => {
+    if (path.endsWith(".json")) {
+      throw new Error("gh: Not Found (HTTP 404)");
+    }
+    return "const RELEASE_VALIDATION_WAIVERS = [];";
+  };
+  expect(await readReleaseValidationWaiversAsync(async (path) => legacy(path))).toEqual(
+    readReleaseValidationWaivers(legacy),
+  );
+  expect(() =>
+    readReleaseValidationWaivers(() => {
+      throw new Error("HTTP 403");
+    }),
+  ).toThrow("403");
+  expect(() => readReleaseValidationWaivers(() => "corrupt JSON")).toThrow();
+  expect(() =>
+    readReleaseValidationWaivers((path) =>
+      path.endsWith(".mjs")
+        ? "import policy from './release-validation-waivers.json';"
+        : legacy(path),
+    ),
+  ).toThrow("requires its release waiver ledger");
+});
 
 const version = "2026.11.5-beta.3";
 const jobs = [
@@ -1028,12 +1055,17 @@ describe("immutable Q waiver policy", () => {
         .update(bytes)
         .digest("hex"),
     };
-    expect(decodeReleaseValidationWaivers(payload)).toEqual([]);
+    expect(
+      parseReleaseValidationWaivers(decodeReleaseValidationSource(payload, payload.path)),
+    ).toEqual([]);
     expect(() =>
-      decodeReleaseValidationWaivers({
-        ...payload,
-        content: Buffer.alloc(bytes.length).toString("base64"),
-      }),
+      decodeReleaseValidationSource(
+        {
+          ...payload,
+          content: Buffer.alloc(bytes.length).toString("base64"),
+        },
+        payload.path,
+      ),
     ).toThrow("blob mismatch");
     expect(() => parseReleaseValidationWaivers('{"schema":"unknown","waivers":[]}')).toThrow(
       "Invalid release waiver policy",

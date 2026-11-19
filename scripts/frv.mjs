@@ -60,10 +60,9 @@ import {
   selectLatestRunsPerLane,
 } from "./lib/release-priority.mjs";
 import {
-  decodeReleaseValidationWaivers,
+  decodeReleaseValidationSource,
   evaluateReleaseChildPolicy,
-  parseReleaseValidationWaivers,
-  RELEASE_VALIDATION_WAIVERS_PATH,
+  readReleaseValidationWaiversAsync,
 } from "./lib/release-validation-waivers.mjs";
 import { sleep } from "./lib/sleep.mjs";
 import { sameJobExecution } from "./npm-prepared-bundle.mjs";
@@ -1102,13 +1101,10 @@ async function readChildAttemptEvidence(child, client, options) {
 // evidence client authenticates that payload itself and returns decoded source.
 async function readReleaseWaiverPolicy(plan, client) {
   const sourceClient = client.getReleaseEvidenceClient?.() ?? client;
-  const source = await sourceClient.getWorkflowSource(
-    plan.workflowSha,
-    RELEASE_VALIDATION_WAIVERS_PATH,
-  );
-  return typeof source === "string"
-    ? parseReleaseValidationWaivers(source)
-    : decodeReleaseValidationWaivers(source);
+  return readReleaseValidationWaiversAsync(async (sourcePath) => {
+    const source = await sourceClient.getWorkflowSource(plan.workflowSha, sourcePath);
+    return typeof source === "string" ? source : decodeReleaseValidationSource(source, sourcePath);
+  });
 }
 
 export async function inspectContinuation(plan, client, options = {}) {

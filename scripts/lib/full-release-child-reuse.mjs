@@ -23,8 +23,9 @@ import {
 import { execGhRead, execGhReadAsync } from "./plain-gh.mjs";
 import { isRecord } from "./record-shared.mjs";
 import {
-  decodeReleaseValidationWaivers,
+  decodeReleaseValidationSource,
   evaluateReleaseChildPolicy,
+  readReleaseValidationWaiversAsync,
   RELEASE_VALIDATION_WAIVERS_PATH,
   validateReleaseWaiverAggregates,
 } from "./release-validation-waivers.mjs";
@@ -677,9 +678,10 @@ export async function validateReusableReleaseChild(selection, request, deps = {}
   const normalized = requestValue(request);
   const resolved = dependencies(request.repository, deps);
   if (request.policyTargetVersion) {
-    normalized.waiverPolicy = decodeReleaseValidationWaivers(
-      await resolved.github(
-        "contents/" + RELEASE_VALIDATION_WAIVERS_PATH + "?ref=" + request.workflowSha,
+    normalized.waiverPolicy = await readReleaseValidationWaiversAsync(async (sourcePath) =>
+      decodeReleaseValidationSource(
+        await resolved.github("contents/" + sourcePath + "?ref=" + request.workflowSha),
+        sourcePath,
       ),
     );
   }
@@ -691,9 +693,10 @@ export async function discoverReusableReleaseChild(request, deps = {}) {
   const normalized = requestValue(request);
   const resolved = dependencies(request.repository, deps);
   if (request.policyTargetVersion) {
-    normalized.waiverPolicy = decodeReleaseValidationWaivers(
-      await resolved.github(
-        "contents/" + RELEASE_VALIDATION_WAIVERS_PATH + "?ref=" + request.workflowSha,
+    normalized.waiverPolicy = await readReleaseValidationWaiversAsync(async (sourcePath) =>
+      decodeReleaseValidationSource(
+        await resolved.github("contents/" + sourcePath + "?ref=" + request.workflowSha),
+        sourcePath,
       ),
     );
   }

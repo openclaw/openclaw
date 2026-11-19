@@ -61,6 +61,7 @@ export function fixture(
   protectedTag = false,
   options: {
     inputs?: Record<string, string | number | boolean>;
+    preLedgerSource?: string;
     policy?: unknown;
     workflowSource?: string;
     baselinePolicySource?: string;
@@ -226,10 +227,17 @@ export function fixture(
     if (path.startsWith("contents/")) {
       const [sourcePath, sha] = path.slice(9).split("?ref=");
       const text = sources.get(sha + ":" + sourcePath);
-      if (text === undefined) {
+      if (options.preLedgerSource && sourcePath === "scripts/lib/release-validation-waivers.json") {
+        throw new Error("gh: Not Found (HTTP 404)");
+      }
+      const source =
+        sourcePath === "scripts/lib/release-validation-waivers.mjs"
+          ? options.preLedgerSource
+          : text;
+      if (source === undefined) {
         throw new Error("Unexpected source acquisition: " + path);
       }
-      const bytes = Buffer.from(text);
+      const bytes = Buffer.from(source);
       return JSON.stringify({
         type: "file",
         path: sourcePath,

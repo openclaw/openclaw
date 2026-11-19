@@ -79,7 +79,7 @@ import {
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
   evaluateReleaseChildPolicy,
-  parseReleaseValidationWaivers,
+  readReleaseValidationWaiversAsync,
   RELEASE_VALIDATION_WAIVERS_PATH,
   validateReleaseWaiverAggregates,
 } from "./lib/release-validation-waivers.mjs";
@@ -2164,6 +2164,7 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
           ".github/workflows/ci.yml",
           ".github/workflows/plugin-prerelease.yml",
           RELEASE_VALIDATION_WAIVERS_PATH,
+          "scripts/lib/release-validation-waivers.mjs",
           ".github/workflows/openclaw-release-checks.yml",
         ].includes(sourceWorkflowPath)
       ) {
@@ -3125,10 +3126,10 @@ export async function validateReleaseRunEvidence(
   });
   // The fixed child set bounds concurrent reads (at most seven). Each child
   // walks its attempts/pages serially; drain all reads before returning or failing.
-  const waiverPolicy = parseReleaseValidationWaivers(
-    await evidenceClient.getWorkflowSource(
+  const waiverPolicy = await readReleaseValidationWaiversAsync((sourcePath) =>
+    evidenceClient.getWorkflowSource(
       qualificationReuse?.qualificationSha ?? currentEvidence.manifest.workflowSha,
-      RELEASE_VALIDATION_WAIVERS_PATH,
+      sourcePath,
     ),
   );
   const childResults = await Promise.allSettled(

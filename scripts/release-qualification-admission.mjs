@@ -21,8 +21,7 @@ import {
 } from "./lib/qualification-admission-baselines.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
-  parseReleaseValidationWaivers,
-  RELEASE_VALIDATION_WAIVERS_PATH,
+  readReleaseValidationWaivers,
   releaseQualificationExemptions,
   validateQualificationExemptions,
 } from "./lib/release-validation-waivers.mjs";
@@ -606,13 +605,8 @@ export function produceQualificationAdmission({
     readSource(request.repository, request.candidateSha, "package.json", runGh),
     readSource(request.repository, request.candidateSha, QUALIFICATION_BASELINE_POLICY_PATH, runGh),
   );
-  const waiverPolicy = parseReleaseValidationWaivers(
-    readSource(
-      request.repository,
-      request.qualificationSha,
-      RELEASE_VALIDATION_WAIVERS_PATH,
-      runGh,
-    ).toString("utf8"),
+  const waiverPolicy = readReleaseValidationWaivers((sourcePath) =>
+    readSource(request.repository, request.qualificationSha, sourcePath, runGh).toString("utf8"),
   );
   const exemptions = releaseQualificationExemptions(
     baselinePolicy.candidateVersion,
@@ -913,10 +907,8 @@ function readQualificationAdmission(
       (inputs === undefined || qualificationInputsMatch(request.inputs, inputs)),
     "Qualification evidence differs from the authenticated operator request",
   );
-  const waiverPolicy = parseReleaseValidationWaivers(
-    readSource(repository, qualificationSha, RELEASE_VALIDATION_WAIVERS_PATH, runGh).toString(
-      "utf8",
-    ),
+  const waiverPolicy = readReleaseValidationWaivers((sourcePath) =>
+    readSource(repository, qualificationSha, sourcePath, runGh).toString("utf8"),
   );
   validateQualificationExemptions(
     receipt.coverage.exemptions ?? [],
