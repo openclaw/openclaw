@@ -292,11 +292,15 @@ export function prepareSessionPublicationToolListing(
           catalogMode: current.catalogMode,
         };
   if (listing !== previous) {
+    // The listing owns the publication definition; a refresh replaces it in the series pin.
+    const { name, description, parameters } = listing;
     params.state.pendingToolSurface = {
       routeKey: params.routeKey,
       historyId,
       toolPolicy: params.toolPolicy,
-      tools: known?.tools ?? [],
+      tools: known?.tools?.map((tool) =>
+        tool.name === name ? { name, description, parameters } : tool,
+      ),
       publicationListing: listing,
     };
   }
@@ -323,45 +327,31 @@ export function prepareSessionPublicationToolListing(
 }
 
 /**
- * The session pins every tool definition it has sent, so a turn that builds fewer
- * tools keeps the provider prefix: retained definitions refuse their calls. New or
- * changed definitions extend the pin once and are written with the next checkpoint.
+ * The series' first request pins its tool set and every definition. Later turns send
+ * the pin whatever started them: a tool the turn did not build stays listed and refuses
+ * its calls, and a tool the pin lacks waits for the next series. Live facts, such as the
+ * connected computer, reach the model in tool results, never in the definition.
  */
 export function prepareSessionToolSurface(params: ToolSurfaceInput): AnyAgentTool[] {
   const { known, historyId } = resolveSessionToolSurface(params);
-  const pinned = new Map(known?.tools.map((tool) => [tool.name, tool]));
-  // Sibling guidance in a description follows the tools a turn built; the pin keeps
-  // the session's wording while the parameters match.
-  let changed = !known;
-  const tools = params.tools.map((tool) => {
-    const pin = pinned.get(tool.name);
-    // Computer discovery supplies live execution facts, not a new session definition.
-    if (pin && tool.name === "computer") {
-      return copyAgentToolMetadata(tool, { ...tool, ...pin });
-    }
-    if (changed && pin?.description === tool.description) {
-      return tool;
-    }
-    const sameParameters = pin && sameToolParameters(pin.parameters, tool.parameters);
-    changed ||= !sameParameters;
-    return sameParameters && pin.description !== tool.description
-      ? copyAgentToolMetadata(tool, { ...tool, description: pin.description })
-      : tool;
-  });
-  const built = new Set(tools.map((tool) => tool.name));
-  const retained = [...pinned.values()].filter((tool) => !built.has(tool.name));
-  if (changed) {
-    const current = tools.map(describeSessionToolDefinition);
+  let pinned = known?.tools;
+  if (!pinned) {
+    pinned = params.tools
+      .map(describeSessionToolDefinition)
+      .toSorted((a, b) => a.name.localeCompare(b.name));
     params.state.pendingToolSurface = {
       routeKey: params.routeKey,
       historyId,
       toolPolicy: params.toolPolicy,
       publicationListing: known?.publicationListing,
-      // oxlint-disable-next-line unicorn/no-array-sort -- The combined definitions array is private.
-      tools: [...current, ...retained].sort((a, b) => a.name.localeCompare(b.name)),
+      tools: pinned,
     };
   }
-  return [...tools, ...retained.map(refusePinnedTool)];
+  const built = new Map(params.tools.map((tool) => [tool.name, tool]));
+  return pinned.map((pin) => {
+    const tool = built.get(pin.name);
+    return tool ? copyAgentToolMetadata(tool, { ...tool, ...pin }) : refusePinnedTool(pin);
+  });
 }
 
 function refusePinnedTool(tool: ToolDefinition): AnyAgentTool {

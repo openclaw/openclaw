@@ -254,6 +254,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       attempt.config?.tools,
       attempt.config?.agents?.entries?.[sessionAgentId]?.tools,
       attempt.config?.plugins,
+      attempt.config?.mcp,
       attempt.config?.desktop,
       readGitHubPublicationToolSelection(attempt.config ?? {}),
     ]),

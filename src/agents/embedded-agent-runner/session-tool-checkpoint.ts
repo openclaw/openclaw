@@ -12,7 +12,8 @@ export type ToolSurface = {
   historyId: string | null;
   /** Digest of the tool policy config; a policy change starts a new pin. */
   toolPolicy: string;
-  tools: ToolDefinition[];
+  /** Absent until the series' first request pins its tools; a listing can precede it. */
+  tools?: ToolDefinition[];
   publicationListing?: PublicationListing;
 };
 

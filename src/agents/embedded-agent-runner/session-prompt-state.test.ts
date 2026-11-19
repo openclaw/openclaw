@@ -1,6 +1,5 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
-import * as normalization from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { projectAgentToolDefinition } from "../prepared-tool-definition.js";
 import { canonicalizeSessionEntry } from "../sessions/session-manager-persistence-entry.js";
@@ -521,7 +520,7 @@ describe("session tool surface", () => {
     const pin = (name: string, description: string, schema = parameters) => {
       fixture.reload();
       surface([tool(name, description, schema)]);
-      return fixture.state.pendingToolSurface!.tools[0]!;
+      return fixture.state.pendingToolSurface!.tools![0]!;
     };
     const first = pin("read", "Read a file 🦞\ud800");
     expect(pin("read", "Read a file 🦞\ud800")).toBe(first);
@@ -598,11 +597,11 @@ describe("session tool surface", () => {
     expect(JSON.stringify(refused.content)).toContain("gateway is not available in this turn");
   });
 
-  it("preserves pins across prompt admission and checkpoints, and extends restored pins", async () => {
+  it("preserves pins across prompt admission and checkpoints, and holds restored pins", async () => {
     const entries: SessionEntry[] = [];
     surface([tool("read"), tool("gateway")]);
     await retireSessionSystemPrompt(fixture.state, routeKey, () => undefined);
-    expect(fixture.state.pendingToolSurface?.tools.map((entry) => entry.name)).toEqual([
+    expect(fixture.state.pendingToolSurface?.tools?.map((entry) => entry.name)).toEqual([
       "gateway",
       "read",
     ]);
@@ -614,11 +613,38 @@ describe("session tool surface", () => {
     await persist(entries, "Base.\n\n## Skills\nrefreshed");
     fixture.reload();
     expect(names(surface([tool("read")], entries))).toEqual(["gateway", "read"]);
-    const extended = surface([tool("read"), tool("heartbeat_respond")], entries);
-    expect(names(extended)).toEqual(["gateway", "heartbeat_respond", "read"]);
-    expect(fixture.state.pendingToolSurface?.tools.map((entry) => entry.name)).toEqual([
+    expect(names(surface([tool("read"), tool("heartbeat_respond")], entries))).toEqual([
       "gateway",
-      "heartbeat_respond",
+      "read",
+    ]);
+    expect(fixture.state.pendingToolSurface).toBeUndefined();
+  });
+
+  it("holds the series tool set and definitions when a cron turn builds more tools", async () => {
+    const entries: SessionEntry[] = [];
+    const userTurn = surface([tool("read"), tool("message")]);
+    await persist(entries);
+    const nodeComputer = createComputerTool({
+      pairedNodeComputerUse: { actions: ["screenshot", "list_windows"] },
+    });
+    const changedRead = tool("read", "read v2", { type: "object", properties: {} });
+    const cronTurn = surface([changedRead, tool("message"), nodeComputer], entries);
+    expect(definitions(cronTurn)).toEqual(definitions(userTurn));
+    expect(fixture.state.pendingToolSurface).toBeUndefined();
+    const read = cronTurn.find((entry) => entry.name === "read")!;
+    expect(JSON.stringify((await read.execute("x", {})).content)).toContain("read ran");
+  });
+
+  it("starts a pin when neither the session state nor the checkpoint has one", async () => {
+    const entries: SessionEntry[] = [];
+    await persist(entries);
+    expect(entries[0]).not.toHaveProperty("data.tools");
+    fixture.reload();
+    expect(names(surface([tool("read"), tool("message")], entries))).toEqual(["message", "read"]);
+    await persist(entries);
+    fixture.reload();
+    expect(names(surface([tool("read"), tool("message"), tool("computer")], entries))).toEqual([
+      "message",
       "read",
     ]);
   });
@@ -642,7 +668,7 @@ describe("session tool surface", () => {
     fixture.reload();
     expect(fixture.prepare("Base.", entries).restart).toBe(false);
     expect(surface([tool("read")], entries).map((entry) => entry.name)).toEqual(["read"]);
-    expect(fixture.state.pendingToolSurface?.tools.map((entry) => entry.name)).toEqual(["read"]);
+    expect(fixture.state.pendingToolSurface?.tools?.map((entry) => entry.name)).toEqual(["read"]);
   });
 
   it("drops pinned tools when the tool policy changes", () => {
@@ -662,56 +688,10 @@ describe("session tool surface", () => {
   it("keeps the pinned description when only sibling guidance changes", async () => {
     surface([tool("exec", "Run commands. No sleep loops; use automations."), tool("automations")]);
     const eventTurn = surface([tool("exec", "Run commands.")]);
-    expect(eventTurn.find((entry) => entry.name === "exec")?.description).toBe(
-      "Run commands. No sleep loops; use automations.",
-    );
-    expect(JSON.stringify((await eventTurn[0]!.execute("x", {})).content)).toContain("exec ran");
+    const exec = eventTurn.find((entry) => entry.name === "exec")!;
+    expect(exec.description).toBe("Run commands. No sleep loops; use automations.");
+    expect(JSON.stringify((await exec.execute("x", {})).content)).toContain("exec ran");
   });
-
-  it("sends changed parameters and descriptions as built", () => {
-    const description = "read v2";
-    surface([tool("read")]);
-    const changed = surface([
-      { ...tool("read", description), parameters: { type: "object", properties: {} } },
-    ] as AnyAgentTool[]);
-    expect(changed.map((entry) => entry.description)).toEqual([description]);
-    expect(fixture.state.pendingToolSurface?.tools).toEqual(definitions(changed));
-  });
-
-  it.each([false, true])(
-    "reuses published schema facts while preserving pin equality (restored=%s)",
-    async (restored) => {
-      const entries: SessionEntry[] = [];
-      const original = publishRuntimeToolInputSchema({
-        type: "object",
-        properties: { read: { type: "string" } },
-      }).schema;
-      const reordered = publishRuntimeToolInputSchema({
-        properties: { read: { type: "string" } },
-        type: "object",
-      }).schema;
-      const changed = publishRuntimeToolInputSchema({
-        type: "object",
-        properties: { read: { type: "number" } },
-      }).schema;
-      surface([tool("read", "Pinned description", original)]);
-      await persist(entries);
-      if (restored) {
-        fixture.reload();
-      }
-      using stringify = vi.spyOn(normalization, "stableStringify");
-      const unchanged = surface([tool("read", "New guidance", reordered)], entries);
-      expect(unchanged[0]?.description).toBe("Pinned description");
-      expect(fixture.state.pendingToolSurface).toBeUndefined();
-      surface([tool("read", "New guidance", reordered)], entries);
-      expect(stringify).toHaveBeenCalledTimes(restored ? 3 : 2);
-      stringify.mockClear();
-      const replacement = surface([tool("read", "Changed schema", changed)], entries);
-      expect(replacement[0]?.description).toBe("Changed schema");
-      expect(fixture.state.pendingToolSurface?.tools).toEqual(definitions(replacement));
-      expect(stringify).toHaveBeenCalledTimes(restored ? 2 : 1);
-    },
-  );
 });
 
 describe("embedded session active project keys", () => {
