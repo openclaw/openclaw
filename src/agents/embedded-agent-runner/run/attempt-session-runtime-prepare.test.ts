@@ -517,7 +517,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       };
       Object.assign(fixture.input.toolBase, {
         toolSearchCatalogRef: catalogRef,
-        toolSearchControlsEnabledForRun: true,
+        fixedListing: true,
       });
       const refreshTools = vi.fn();
       Object.assign(fixture.agentSession, { refreshTools });
