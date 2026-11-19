@@ -98,11 +98,14 @@ describe("generated SQLite schema catalogs", () => {
     expect(readGeneratedSqliteCatalog(predecessor39)).toBeDefined();
   });
 
+  // Continuation (karmaterminal): the fork's state schema also carries the continuation tables, so
+  // each historical projection hashes differently from upstream's. The browser-to-deferred runtime
+  // below is byte-identical to the runtime of bc7e568a, the pure candidate's preceding build.
   it.each([
-    [false, false, "40222aeec53b8897045719a8d38a4b0658ffd1d21d4fd0fef11458c48ed5625b"],
-    [false, true, "5ed7c4627eed8b68ddfcf5b4ffbd98c2085cc17c1ab55a1d69f07aee108f202d"],
-    [true, false, "41b7ccaf89f2ce0b2e8898c714693b62ccdeba93e7eea48612a2783d77a97f28"],
-    [true, true, "126f5f0137d7c19fb0907ad7f763a83d4b675d38190526623081dff1dad6ab99"],
+    [false, false, "687760588dc693e66cb48d950a4ae8b51417eb03e2452885cea613f4f51988d1"],
+    [false, true, "a3bcac79284646968953a403e67220f39e42de8820b8d567050a07cc3675719c"],
+    [true, false, "764748c089a87d796b6e56f2004a2db9b36327efa5b6acd6e5ca617878f7a96d"],
+    [true, true, "576c513fad56bbc76b30c02526f93ba2ca987c86d3ba68f179e5a8764ceb7a3d"],
   ] as const)("retains the pre-browser-request runtime projection %s/%s", (lazy, journal, hash) => {
     const options = {
       includeVersionLazyAdditiveTables: lazy,
@@ -119,11 +122,11 @@ describe("generated SQLite schema catalogs", () => {
   });
 
   it.each([
-    [undefined, "f32dcffad8239a4de64de63074202b82a2a8b8671148ade2a5bf66a296a24c94"],
-    [[false, false], "1e2662ff71a59cc056f70d661bddb4c6c0e86b36c4151490343ffd787b15891a"],
-    [[false, true], "a65a121da4de231f2d96dcf4503136c5f7cc2f80e54aa9d630fb2e5a9de9a97a"],
-    [[true, false], "a99f466c73b07f39b54a6711d7e5df7767e45c7c9b2a45943ed96726ba8f4608"],
-    [[true, true], "269874b20b213faf7f8c8ecb6cc4c759853ffd1d63b5f6a395180667ffb2a9b3"],
+    [undefined, "366afdc558c9d87ea9673c7d73b91272aa98725439858610dace8ea6ece15deb"],
+    [[false, false], "c176dae2ea8e1ba6422d6b5611736afeb9b16be8a3489e39a1d961027524d34e"],
+    [[false, true], "f1162d0c39e8451d2460b7ff6ed8ec7435e05def696b909a0882be4a43dd6f27"],
+    [[true, false], "fae5baec48054d5067c84636cfa282848043ff315f885529b4e277fb6cc6f785"],
+    [[true, true], "3e6714720e0ddf6518ca2b8caa7a95723be61b8ce1e1ce63f727c2a3d29080dc"],
   ] as const)(
     "keeps the pre-provision-source catalog readable after a build swap (%s)",
     (flags, hash) => {
@@ -151,7 +154,7 @@ describe("generated SQLite schema catalogs", () => {
       ),
     );
     expect(createHash("sha256").update(historical).digest("hex")).toBe(
-      "d99906589af97e0bc4e77af6f5e155e6eb689abfde8ef42d8534862f0c0f4d7d",
+      "dcde1d20a7336914b9d4362632eb6da03a83cccf7aa67ade676dd9d83e7a1fa3",
     );
     expect(historical).toContain("CREATE TABLE IF NOT EXISTS device_pairing_browser_requests");
     expect(readGeneratedSqliteCatalog(historical)).toBeDefined();
