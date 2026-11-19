@@ -636,18 +636,23 @@ describe("IMAP watcher protocol boundary", () => {
   });
 
   it("coalesces a wakeup that arrives during an active sweep", async () => {
-    const { server, dispatch, waitForCursor } = await startWatcher();
+    const { server, context, dispatch, waitForCursor } = await startWatcher();
     const { promise: fetchGate, resolve: releaseFetch } = createDeferred<void>();
+    const { promise: bodyGate, resolve: releaseBody } = createDeferred<void>();
     server.fetchGate = fetchGate;
     server.append(mailText("First"));
-    await vi.waitFor(() =>
-      expect(server.commands.some((command) => /UID FETCH/u.test(command))).toBe(true),
-    );
+    await server.waitForCommand((command) => /UID FETCH/u.test(command));
     server.append(mailText("Second"));
-    server.fetchGate = undefined;
+    server.fetchGate = bodyGate;
     releaseFetch();
+    await server.waitForCommand((command) => command.includes("BODY"));
+    for (const socket of server.sockets) {
+      socket.write("* 1 FETCH (FLAGS (\\Seen))\r\n");
+    }
+    releaseBody();
     await waitForCursor(3, 5_000);
     expectDispatch(dispatch, 2, "hook:imap:inbox:17:3");
+    expect(context.logger.warn).not.toHaveBeenCalled();
   });
 
   it("re-baselines a rotated UIDVALIDITY without replaying existing mail", async () => {
