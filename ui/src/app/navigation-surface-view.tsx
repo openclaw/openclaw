@@ -65,6 +65,8 @@ export function FloatingUpdateCard(props: FloatingUpdateCardProps) {
                 left: "50%",
                 translate: "-50% 0",
                 "max-width": "min(520px, calc(100vw - 24px))",
+                background: "var(--popover)",
+                "box-shadow": "var(--shadow-md)",
               }}
               action={
                 <button type="button" class="btn btn--sm" onClick={() => void props.onRefresh()}>

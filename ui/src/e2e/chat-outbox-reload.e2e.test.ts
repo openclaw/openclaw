@@ -51,7 +51,7 @@ suite.define(() => {
         await page.getByText(file.name, { exact: true }).first().waitFor();
         // The refresh notice chunks are old-build assets this tab has not requested yet too.
         const oldAssets =
-          /\/assets\/(?:private-composer-recovery-content|sidebar-update-card)-[^/]+\.(?:js|css)(?:\?.*)?$/u;
+          /\/assets\/(?:private-composer-recovery-content|sidebar-update-runtime|sidebar-notification-card|en-update-actions)-[^/]+\.(?:js|css)(?:\?.*)?$/u;
         expect(
           await page.evaluate(() =>
             performance
