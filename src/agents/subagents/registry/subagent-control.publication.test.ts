@@ -40,7 +40,10 @@ import {
   persistRegistryFixture,
   loadSubagentRegistryFromSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
-import { retainedOperatorFixture } from "./subagent-registry.completed-followup-authority.test-support.js";
+import {
+  operatorFixture,
+  retainedOperatorFixture,
+} from "./subagent-registry.completed-followup-authority.test-support.js";
 import {
   adoptPausedSubagentRunForFollowUp,
   registerSubagentRun,
@@ -286,6 +289,59 @@ it.each(["registration", "adoption"] as const)(
       taskRunId: mode === "adoption" ? "paused-publication" : runId,
     });
     expect(readSession(storePath, childSessionKey)?.entry).toEqual(sessionBefore);
+  },
+);
+
+it.each(["live", "missing", "revoked"] as const)(
+  "adopts paused follow-up with usable custody after %s original authority",
+  async (state) => {
+    const { childSessionKey, sessionEntry } = await writeRegistrationSession("custody-followup");
+    const original = operatorFixture("original-custody");
+    const followup = operatorFixture("followup-custody", true, original.context);
+    const runAs = <T>(owner: typeof original, work: () => T) =>
+      withPluginRuntimeGatewayRequestScope({ ...owner, isWebchatConnect: () => false }, work);
+    await runAs(original, () =>
+      registerSubagentRun({
+        runId: "paused-custody",
+        childSessionKey,
+        childAgentId: "main",
+        sessionEntry,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "original task",
+        cleanup: "keep",
+        expectsCompletionMessage: true,
+      }),
+    );
+    const paused = structuredClone(expectDefined(subagentRuns.get("paused-custody"), "paused run"));
+    paused.pauseReason = "sessions_yield";
+    paused.execution = { ...paused.execution, status: "terminal", endedAt: Date.now() };
+    subagentRuns.set(paused.runId, paused);
+    persistRegistryFixture(subagentRuns, [paused.runId]);
+    if (state === "missing") {
+      subagentRuns.releaseCompletionAuthority(paused);
+    } else if (state === "revoked") {
+      original.revoked.abort(new Error("original authority revoked"));
+    }
+    expect(
+      await runAs(followup, () =>
+        adoptPausedSubagentRunForFollowUp({
+          childSessionKey,
+          childAgentId: "main",
+          runId: "adopted-custody",
+          task: "follow-up task",
+        }),
+      ),
+    ).toBe(true);
+    const adopted = expectDefined(subagentRuns.get("adopted-custody"), "adopted run");
+    expect(
+      subagentRuns.runWithCompletionAuthority(
+        adopted,
+        () =>
+          getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority?.profileId,
+        { requireRetainedAuthority: true },
+      ),
+    ).toBe((state === "live" ? original : followup).client.authenticatedUserProfile?.profileId);
   },
 );
 

@@ -184,6 +184,9 @@ async function prepareSessionPrincipalRunAccess(params: {
         ...params,
         assertCurrent: () => params.assertCurrent?.(),
       });
+      if (params.preserveRecordedSource && !recorded) {
+        throw new Error("Session principal has no recorded operator source; start a new request.");
+      }
     }
     const scopes = readScopes();
     const access = resolveGatewayOperatorAccessAuthority(params.profileId, getConfig(), {

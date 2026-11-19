@@ -225,7 +225,9 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     let refreshCompletionAuthority: true | undefined;
     try {
       // A surviving requester owns the whole cohort, including this successor.
-      subagentRuns.runWithCompletionAuthority(paused, () => undefined);
+      subagentRuns.runWithCompletionAuthority(paused, () => undefined, {
+        requireRetainedAuthority: true,
+      });
     } catch {
       refreshCompletionAuthority = true;
     }

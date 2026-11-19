@@ -98,11 +98,6 @@ it("preserves recorded permission ceilings and revocation when restart restores 
       device: pairedOperator(),
       scopes: ["operator.write"],
     });
-    await replaceSessionEntry(fixture.target, {
-      ...fixture.entry,
-      operatorSources: { [profile.id]: fixture.snapshot },
-    });
-
     const admit = () =>
       prepareSessionPrincipalRunAuthority({
         context: fixture.context,
@@ -111,6 +106,19 @@ it("preserves recorded permission ceilings and revocation when restart restores 
         sessionPrincipal: true,
         preserveRecordedSource: true,
       });
+    // A current admin role cannot replace absent or evicted source evidence.
+    const missingSource = await admit().then(
+      (unexpected) => {
+        unexpected.release();
+        return "admitted without recorded evidence";
+      },
+      (error: unknown) => String(error),
+    );
+    expect(missingSource).toContain("recorded operator source");
+    await replaceSessionEntry(fixture.target, {
+      ...fixture.entry,
+      operatorSources: { [profile.id]: fixture.snapshot },
+    });
     const admitted = await admit();
     try {
       expect(admitted.authority.scopes).toEqual(["operator.write"]);
