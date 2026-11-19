@@ -1,0 +1,2 @@
+# Extract the terminal diagnostic matrix without changing its cases or assertions.
+35

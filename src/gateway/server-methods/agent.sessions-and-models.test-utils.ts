@@ -58,6 +58,7 @@ import {
   seedPersistedSubagentRunForAgentTest,
   withPluginSubagentTestState,
 } from "./agent.spawned-child.test-support.js";
+import { terminalDiagnosticScenarios } from "./agent.terminal-diagnostics.test-support.js";
 import {
   createElevatedExecApprovalFixture,
   mockTelegramSessionEntry,
@@ -648,71 +649,61 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it.each([
-    {
-      name: "resolved failure",
-      timeout: false,
-      recordedError: undefined,
-      expectedError: "Provider rejected this request.",
-    },
-    {
-      name: "resolved timeout",
-      timeout: true,
-      recordedError: undefined,
-      expectedError: "Request timed out before a response was generated.",
-    },
-    {
-      name: "producer lifecycle guidance",
-      timeout: false,
-      recordedError: "Reconnect the selected provider, then try again.",
-      expectedError: "Reconnect the selected provider, then try again.",
-    },
-  ])("retains the $name diagnostic on the terminal outcome", async (scenario) => {
-    const root = sessionDirs.make();
-    useTestStateDir(root);
-    primeMainAgentRun();
-    const runId = `task-diagnostic-${scenario.name}`;
-    mocks.agentCommand.mockResolvedValueOnce(
-      recordAgentRunTerminalOutcome(
-        {
-          payloads: [],
-          meta: {
-            durationMs: 1,
-            error: {
-              kind: "incomplete_turn",
-              message: scenario.recordedError ? "Agent run failed" : scenario.expectedError,
+  it.each(terminalDiagnosticScenarios)(
+    "retains the $name diagnostic on the terminal outcome",
+    async (scenario) => {
+      const root = sessionDirs.make();
+      useTestStateDir(root);
+      primeMainAgentRun();
+      const runId = `task-diagnostic-${scenario.name}`;
+      mocks.agentCommand.mockResolvedValueOnce(
+        recordAgentRunTerminalOutcome(
+          {
+            payloads: [],
+            meta: {
+              durationMs: 1,
+              error: {
+                kind: "incomplete_turn",
+                message: scenario.recordedError ? "Agent run failed" : scenario.expectedError,
+              },
+              ...(scenario.timeout
+                ? { timeoutPhase: "provider", providerStarted: true }
+                : { stopReason: "error" }),
             },
-            ...(scenario.timeout
-              ? { timeoutPhase: "provider", providerStarted: true }
-              : { stopReason: "error" }),
           },
+          "failed",
+          scenario.recordedError,
+        ),
+      );
+      const onSettled = vi.fn(() => true);
+      await dispatchAgentRunFromGateway({
+        admittedRunEntry: undefined,
+        ingressOpts: {
+          message: "Run this request.",
+          sessionKey: "agent:main:main",
+          allowModelOverride: false,
         },
-        "failed",
-        scenario.recordedError,
-      ),
-    );
-    const onSettled = vi.fn(() => true);
-    await dispatchAgentRunFromGateway({
-      admittedRunEntry: undefined,
-      ingressOpts: {
-        message: "Run this request.",
-        sessionKey: "agent:main:main",
-        allowModelOverride: false,
-      },
-      runId,
-      dedupeKeys: [],
-      abortController: new AbortController(),
-      cleanupAbortController: vi.fn(),
-      io: createAgentTurnIo(vi.fn()),
-      context: makeContext(),
-      onSettled,
-    });
-    expect(onSettled).toHaveBeenCalledWith(
-      expect.objectContaining({
-        terminalOutcome: expect.objectContaining({ error: scenario.expectedError }),
-      }),
-    );
-  });
+        runId,
+        dedupeKeys: [`agent:${runId}`],
+        abortController: new AbortController(),
+        cleanupAbortController: vi.fn(),
+        io: createAgentTurnIo(vi.fn()),
+        context: makeContext(),
+        onSettled,
+      });
+      expect(onSettled).toHaveBeenCalledWith(
+        expect.objectContaining({
+          terminalOutcome: expect.objectContaining({ error: scenario.expectedError }),
+        }),
+      );
+      await expect(
+        waitForAgentJob({ runId, source: "agent", timeoutMs: 0 }),
+      ).resolves.toMatchObject({
+        status: scenario.timeout ? "timeout" : "error",
+        error: scenario.expectedWaitError,
+      });
+    },
+  );
 
   it.each([
     {
