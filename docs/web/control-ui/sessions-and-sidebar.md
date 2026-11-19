@@ -57,6 +57,7 @@ beside **Filter & sort**, and opens New session for the selected agent; in team 
 choose an agent from its menu first. Command-palette search sits below the three view buttons.
 Search failures show **Couldn’t search sessions. Try again.**, rather than an empty result.
 If message search is unavailable, the palette still shows matching session titles and details.
+Middle-click a search result, or use Cmd+click on Mac or Ctrl+click on Windows and Linux, to open its destination in a new browser tab without closing the palette.
 Use the list's collapse button to hide it, or press ⌘B on
 Mac or Ctrl+B on Windows/Linux. Clicks use the normal sidebar animation; the
 keyboard shortcut opens or closes navigation immediately. Reduced-motion preferences
@@ -287,7 +288,7 @@ Enter opens the typed path; use Up or Down first to open a highlighted folder.
 Tab completes a folder name. If the starting workspace does not exist yet, Browse
 opens the home folder. Errors for paths you enter remain visible.
 
-For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, thinking, and fast-mode choices. New sessions restore the last fast-mode choice, including an explicit off choice, for supported providers. The new-session picker also shows recent projects and folders derived only from sessions created by that profile. These conveniences follow the person across browsers; they do not grant access to a project or path.
+For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, thinking, and fast-mode choices. New sessions restore the last fast-mode choice, including an explicit off choice, for supported providers. The new-session picker also shows up to five recent places, including the agent workspace, derived only from sessions created by that profile. Helper sessions that an agent spawns are left out, so their task checkouts do not appear as recents. These conveniences follow the person across browsers; they do not grant access to a project or path.
 
 For a selected project, **Checkout** uses the Gateway's availability decision for
 the chosen agent. If Current checkout is unavailable and a managed checkout is

@@ -69,6 +69,11 @@ import type {
 
 type TurnResult = SqliteExpectedSessionTranscriptTurnResult | { kind: "restore-cold-transcript" };
 
+// The shared fulfillment handler cannot retain a completed turn's lexical environment.
+function sessionTurnSucceeded(value: SqliteExpectedSessionTranscriptTurnResult) {
+  return { ok: true as const, value };
+}
+
 export async function appendSessionTurnInWorker(
   requested: ResolvedTranscriptScope,
   requestedOptions: SqliteSessionTurnOptions,
@@ -671,10 +676,7 @@ export async function appendSessionTurnInWorker(
         return rebound;
       }
     }
-  })().then(
-    (value) => ({ ok: true as const, value }),
-    (error: unknown) => ({ ok: false as const, error }),
-  );
+  })().then(sessionTurnSucceeded, (error: unknown) => ({ ok: false as const, error }));
   using settlementPhase = observeDiagnosticsTimelinePhases("persist.turn.completion");
   const completions = await Promise.allSettled(committedCompletions);
   const completionErrors = completions.flatMap((completion) =>

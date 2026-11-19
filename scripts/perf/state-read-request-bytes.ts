@@ -5,9 +5,13 @@
  *   node scripts/perf/state-read-request-bytes.ts --baseline /path/base.ts
  * Use --environment full150 for the counterfactual unprojected environment.
  * Use --engine unconfigured to check reads before engine selection is installed.
+ * --shape session-list measures payload-free session-list prerequisites;
+ * --shape shared-facts measures a cold 5,000-row selector batch (2,000 requests).
+ * These source-derived shapes are separate controls, not a production frequency mix.
  * Actual readers capture only state directory and supervisor mode from that input.
- * Every run checks 100,000 exact charges before timing another 100,000 fresh
- * request contexts. CPU is main-thread CPU; allocation is V8 cumulative bytes.
+ * Every run checks exact charges before timing the same number of fresh contexts
+ * (100,000 normally, 2,000 for shared facts). CPU is main-thread CPU; allocation
+ * is V8 cumulative bytes.
  */
 import assert from "node:assert/strict";
 import { loadavg } from "node:os";
@@ -23,11 +27,13 @@ const { values } = parseArgs({
     module: { type: "string" },
     environment: { type: "string", default: "captured" },
     engine: { type: "string", default: "sqlite" },
+    shape: { type: "string", default: "mixed" },
   },
 });
 assert(values.baseline, "--baseline must name the original request module");
 assert(["captured", "full150"].includes(values.environment));
 assert(["sqlite", "unconfigured"].includes(values.engine));
+assert(["mixed", "session-list", "shared-facts"].includes(values.shape));
 const baseline: typeof import("../../src/state/openclaw-state-read-request.js") = await import(
   pathToFileURL(values.baseline).href
 );
@@ -65,7 +71,7 @@ const selection: DatabaseEngineSelection = Object.freeze({
     "package-activation": "sqlite",
   }),
 });
-const commands: OpenClawStateReadRequest["command"][] = [
+let commands: OpenClawStateReadRequest["command"][] = [
   { type: "machineState.read", input: { key: "synthetic/key/中🦞" } },
   { type: "backup.runs" },
   { type: "operatorApprovals.pendingSnapshot", input: { cursor: "synthetic/cursor" } },
@@ -75,6 +81,35 @@ const commands: OpenClawStateReadRequest["command"][] = [
     conflictBindings: [],
   },
 ];
+if (values.shape === "session-list") {
+  commands = [
+    { type: "admit" },
+    { type: "subagents.sessionList" },
+    { type: "sessionGroups.snapshot" },
+    { type: "userProfiles.catalog" },
+  ];
+} else if (values.shape === "shared-facts") {
+  commands = [
+    {
+      type: "sessionRows.sharedFacts",
+      entries: Array.from({ length: 5000 }, (_, index) => ({
+        acp: {
+          keys: [`agent:synthetic:session-${index}`],
+          entry: {
+            sessionId: `session-${index}`,
+            lifecycleRevision: "00000000-0000-4000-8000-000000000001",
+            sessionStartedAt: 1,
+          },
+        },
+        repositoryWorkspace: {
+          agentId: "synthetic",
+          sessionKey: `agent:synthetic:session-${index}`,
+          workspaceId: `workspace-${index}`,
+        },
+      })),
+    },
+  ];
+}
 function request(index: number): OpenClawStateReadRequest {
   return {
     context: {
@@ -90,7 +125,7 @@ function request(index: number): OpenClawStateReadRequest {
     command: commands[index % commands.length]!,
   };
 }
-const iterations = 100_000;
+const iterations = values.shape === "shared-facts" ? 2000 : 100_000;
 for (let index = 0; index < iterations; index++) {
   const input = request(index);
   assert.equal(candidate.requestBytes(input), baseline.requestBytes(input));
@@ -110,6 +145,7 @@ console.log(
   JSON.stringify({
     environment: values.environment,
     engine: values.engine,
+    shape: values.shape,
     iterations,
     byteExactRequests: iterations,
     bytes,

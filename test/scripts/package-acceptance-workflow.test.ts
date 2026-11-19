@@ -2815,7 +2815,7 @@ type WorkflowJob = {
   "runs-on"?: string;
   strategy?: {
     "fail-fast"?: boolean;
-    "max-parallel"?: number;
+    "max-parallel"?: number | string;
     matrix?: {
       include?: WorkflowMatrixEntry[];
       lane?: string;
@@ -2841,7 +2841,7 @@ type Workflow = {
   on?: {
     schedule?: Array<{ cron?: string }>;
     workflow_call?: {
-      inputs?: Record<string, unknown>;
+      inputs?: Record<string, { default?: boolean | number | string }>;
     };
     workflow_dispatch?: {
       inputs?: Record<string, unknown>;
@@ -10017,9 +10017,41 @@ describe("package artifact reuse", () => {
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE:
         "${{ needs.validate_selected_ref.outputs.upgrade_baseline_scope }}",
     });
-    expect(workflowJob(LIVE_E2E_WORKFLOW, "validate_docker_lanes").strategy?.["max-parallel"]).toBe(
-      32,
-    );
+    const maxParallel = workflowJob(LIVE_E2E_WORKFLOW, "validate_docker_lanes").strategy?.[
+      "max-parallel"
+    ];
+    const hostedDefault = reusable.on?.workflow_call?.inputs?.use_github_hosted_runners?.default;
+    for (const [overrides, packagePresent, expected] of [
+      [{}, "true", 48],
+      [{ use_github_hosted_runners: false }, "true", 32],
+      [{ runner_group: "release-runners" }, "true", 32],
+      [{}, "false", 32],
+      [{ docker_lanes: "live-models" }, "true", 32],
+      [{ docker_lanes: "update-migration" }, "true", 32],
+      [{ docker_lanes: "published-upgrade-survivor update-migration" }, "true", 32],
+      [{ published_upgrade_survivor_scenarios: "" }, "true", 32],
+    ] as const) {
+      expect(
+        typeof maxParallel === "number"
+          ? maxParallel
+          : evaluateWorkflowExpression(maxParallel, {
+              eventName: "workflow_dispatch",
+              repository: "openclaw/openclaw",
+              runAttempt: 1,
+              inputs: {
+                use_github_hosted_runners: hostedDefault,
+                runner_group: "",
+                docker_lanes: "update-restart-auth,published-upgrade-survivor,plugin-update",
+                published_upgrade_survivor_scenarios: "reported-issues",
+                ...overrides,
+              },
+              additionalNeeds: {
+                validate_selected_ref: { outputs: { package_artifact_present: packagePresent } },
+              },
+            }),
+        JSON.stringify({ overrides, packagePresent }),
+      ).toBe(expected);
+    }
     expect(workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "docker_acceptance").with).toMatchObject({
       published_upgrade_survivor_baseline_scope:
         "${{ needs.resolve_package.outputs.published_upgrade_survivor_baseline_scope }}",

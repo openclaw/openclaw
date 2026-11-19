@@ -20,7 +20,12 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionEntryWithTranscript } from "./session-accessor.entry-mutation.js";
-import { loadSessionEntry } from "./session-accessor.js";
+import {
+  appendTranscriptMessageSync,
+  loadSessionEntry,
+  readSessionTranscriptMessageEvents,
+  waitForSessionTranscriptProjection,
+} from "./session-accessor.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import {
   deleteSessionEntryRows,
@@ -561,6 +566,26 @@ it("shares committed facts across released handles and retires them for writes a
     hydrate({ ...fixture, replica: restarted }, "restarted");
     expect(restarted.read()?.version.epoch).toBe("restarted");
   }, "agent:main:matrix:group:!Room:server");
+});
+
+it("leaves reset-window history presence to the history reader", async ({ fixture }) => {
+  const target = { ...fixture.scope, sessionId: "replica-session" };
+  expect(
+    appendTranscriptMessageSync(target, {
+      eventId: "saved",
+      message: { role: "user", content: "Before reset" },
+    }).ok,
+  ).toBe(true);
+  hydrate(fixture);
+  const rowTarget = { path: fixture.database.path, sessionKey: fixture.scope.sessionKey };
+  expect(readSessionActorRowFacts(rowTarget)?.transcriptHasMessages).toBe(true);
+  expect(
+    appendTranscriptEventSync(target, { type: "reset", id: "reset", parentId: "saved" }).ok,
+  ).toBe(true);
+  await waitForSessionTranscriptProjection(target);
+  expect(readSessionTranscriptMessageEvents(target)).toEqual([]);
+  hydrate(fixture);
+  expect(readSessionActorRowFacts(rowTarget)?.transcriptHasMessages).toBeUndefined();
 });
 
 it("retains session entry facts across tool-usage-only commits", ({ fixture }) => {

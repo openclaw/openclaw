@@ -4,7 +4,6 @@ import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import {
   expectCurrent,
-  expectRevoked,
   restoreFixture,
   withRecovery,
 } from "./operator-run-recovery.test-support.js";
@@ -17,7 +16,7 @@ describe("native UI operator recovery", () => {
     "openclaw-ios",
     "openclaw-android",
   ] as const)(
-    "restores automation admin delegation for %s without borrowing browser identity and fences revocation",
+    "keeps admitted %s delegation after revocation and refuses the next restoration",
     (id) =>
       withRecovery(
         async (fixture) => {
@@ -29,7 +28,9 @@ describe("native UI operator recovery", () => {
             (await rotateDeviceToken({ deviceId: "recovery-device", role: "operator" })).ok,
           ).toBe(true);
           invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
-          expectRevoked(restored.authority);
+          expectCurrent(restored.authority);
+          expect(restored.authority.reauthorize).toThrow();
+          expectCurrent(restored.authority);
           await expect(fixture.restore()).rejects.toThrow();
         },
         { clientInfo: { id, mode: "ui" } },

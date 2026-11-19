@@ -431,15 +431,17 @@ jobs:
           persist-credentials: false
           sparse-checkout: scripts
 
-      - name: Download full release validation manifest
+      - name: Acquire authenticated publication manifest
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ inputs.full_release_validation_run_attempt }}
-          path: full-release-validation
-          repository: ${{ github.repository }}
-          run-id: ${{ inputs.full_release_validation_run_id }}
-          github-token: ${{ github.token }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
+          PUBLICATION_MANIFEST_DIR: full-release-validation
+        run: |
+          set -euo pipefail
+          mkdir -p "${PUBLICATION_MANIFEST_DIR}"
+          node trusted-workflow/scripts/release-ci-summary.mjs --acquire-publication-manifest "${FULL_RELEASE_VALIDATION_RUN_ID}" --repo "${GITHUB_REPOSITORY}" --expected-run-attempts-json "$(printf '{"%s":%s}' "${FULL_RELEASE_VALIDATION_RUN_ID}" "${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}")" > "${PUBLICATION_MANIFEST_DIR}/full-release-validation-manifest.json"
 
       - name: Verify full release validation evidence
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}

@@ -256,7 +256,8 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
     const sessionKeyRaw = form.sessionKey.trim();
     const sessionKey = sessionKeyRaw || (editingJob?.sessionKey ? null : undefined);
     const job: Record<string, unknown> = {
-      name: form.name.trim(),
+      // Without a name, cron.add names a new automation from its prompt and an edit keeps the old one.
+      name: form.name.trim() || undefined,
       description: form.description.trim(),
       agentId: agentId === null ? null : agentId || undefined,
       sessionKey,

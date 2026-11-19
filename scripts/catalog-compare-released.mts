@@ -111,21 +111,21 @@ function officialProviders(dir: string, version: string): string[] {
   ].toSorted((a, b) => a.localeCompare(b));
 }
 
-// A cached install is trusted only when its marker accounts for every provider the
-// release lists and every installed plugin is at the release version.
+function installedVersion(dir: string, name: string): string | undefined {
+  const manifest = path.join(dir, "node_modules", name, "package.json");
+  return (JSON.parse(fs.readFileSync(manifest, "utf8")) as { version?: string }).version;
+}
+
+// A cached install is trusted only when openclaw and every installed plugin are at the
+// release version and its marker accounts for every provider the release lists.
 function cachedInstall(dir: string, version: string): Install | undefined {
   try {
     const marker = JSON.parse(fs.readFileSync(path.join(dir, ".installed"), "utf8")) as Marker;
     const accounted = [...marker.plugins, ...marker.omitted].toSorted((a, b) => a.localeCompare(b));
     const complete =
+      installedVersion(dir, "openclaw") === version &&
       JSON.stringify(accounted) === JSON.stringify(officialProviders(dir, version)) &&
-      marker.plugins.every((name) => {
-        const manifest = path.join(dir, "node_modules", name, "package.json");
-        return (
-          (JSON.parse(fs.readFileSync(manifest, "utf8")) as { version?: string }).version ===
-          version
-        );
-      });
+      marker.plugins.every((name) => installedVersion(dir, name) === version);
     return complete ? { dir, omitted: marker.omitted } : undefined;
   } catch {
     return undefined;
@@ -156,13 +156,21 @@ async function installRelease(version: string): Promise<Install> {
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "package.json"), '{ "private": true }\n');
-  const install = ["install", "--ignore-scripts", "--no-audit", "--no-fund"];
+  // Plugins name openclaw as a peer. npm would otherwise move the root openclaw to any
+  // version that satisfies both ranges, as it did when the 2026.10.33 plugins shipped
+  // `openclaw >=2026.11.4` and the 2026.10.33 install became 2026.11.5. OpenClaw's own
+  // plugin installs also pass --legacy-peer-deps (src/infra/safe-package-install.ts).
+  const install = ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--legacy-peer-deps"];
   await npm([...install, `openclaw@${version}`], dir);
   const names = officialProviders(dir, version);
   const published = await Promise.all(names.map((name) => isPublished(name, version)));
   const plugins = names.filter((_, index) => published[index]);
   const omitted = names.filter((_, index) => !published[index]);
   await npm([...install, ...plugins.map((name) => `${name}@${version}`)], dir);
+  const installed = installedVersion(dir, "openclaw");
+  if (installed !== version) {
+    throw new Error(`openclaw@${version}: npm installed openclaw@${installed} in ${dir}`);
+  }
   const marker: Marker = { plugins, omitted };
   fs.writeFileSync(path.join(dir, ".installed"), JSON.stringify(marker, null, 2));
   return { dir, omitted };

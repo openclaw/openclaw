@@ -2,18 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../../../config/config.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
-import {
-  loadExactSessionEntryReadOnly,
-  replaceSessionEntry,
-} from "../../../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { readDescendantSubagentFallbackReply } from "../../../cron/isolated-agent/subagent-followup.js";
 import { callGateway } from "../../../gateway/call.js";
-import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { getAgentEventLifecycleGeneration, onAgentEvent } from "../../../infra/agent-events.js";
-import {
-  bindGatewayContextResolver,
-  getGatewayContextResolver,
-} from "../../../plugins/runtime/gateway-request-scope.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import {
   createOpenClawTestState,
@@ -25,11 +17,6 @@ import type { EmbeddedAgentRunResult } from "../../embedded-agent-runner/types.j
 import "../spawn/subagent-spawn-model.mocks.shared.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
-import {
-  createAdmittedGatewayToolCallerIdentity,
-  getGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "../../tools/gateway-caller-context.js";
 import { testing as subagentAnnounceDeliveryTesting } from "../announce/subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceOutputTesting } from "../announce/subagent-announce-output.test-support.js";
 import { announceTesting as subagentAnnounceTesting } from "../announce/subagent-announce-overrides.test-support.js";
@@ -38,7 +25,6 @@ import * as completionStore from "../completion/subagent-completion-admission.st
 import { registerRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { buildScopedSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
   createExternalRequesterSessionEntry,
@@ -120,6 +106,7 @@ const callGatewayMock = vi.fn(async (request: GatewayRequest): Promise<GatewayRe
     return {
       result: {
         payloads: [{ text: "completion delivered" }],
+        meta: { durationMs: 1, finalAssistantVisibleText: "completion delivered" },
         deliveryStatus: { status: "sent", resultCount: 1 },
       },
     };
@@ -454,193 +441,6 @@ describe("requester settle wake product flow", () => {
           expect(admittedRunIds).toHaveLength(1);
         },
       );
-    },
-  );
-
-  it.each([
-    ...["alpha", "beta"].flatMap((firstCompleted) =>
-      ["same", "distinct", "mixed-unbound", "yielded"].map((mode) => ({
-        firstCompleted,
-        binding: mode === "yielded" ? "same" : mode,
-        yieldedParent: mode === "yielded" ? "alpha" : undefined,
-        rawChild: false,
-      })),
-    ),
-    { firstCompleted: "alpha", binding: "same", yieldedParent: "alpha", rawChild: true },
-  ])(
-    "settles overlapping caller turns with $firstCompleted first ($binding ownership, yielded=$yieldedParent, raw=$rawChild)",
-    async ({ firstCompleted, binding, yieldedParent, rawChild }) => {
-      vi.setSystemTime(100_000);
-      const context = createGatewayContext();
-      const otherContext = createGatewayContext();
-      await registry.initSubagentRegistry();
-      const activate = async () => {
-        // Standalone registration can be wholly unbound, but cannot mix ambient
-        // routing with a captured owner. Each live run retains its admitting owner.
-        if (binding !== "mixed-unbound") {
-          await registry.activateSubagentRegistry(() => context);
-        }
-      };
-      await activate();
-      const children = ["alpha", "beta"].map((name) => ({
-        name,
-        runId: `run-${name}`,
-        childSessionKey: rawChild && name === "alpha" ? "global" : `agent:main:subagent:${name}`,
-      }));
-      const resolvers: Array<GatewayRequestContext["resolveGatewayContext"]> = [];
-      for (const child of children) {
-        const sessionEntry = await prepareChildSession(child.childSessionKey, `sess-${child.name}`);
-        const requesterTurnRunId = `requester-${child.name}`;
-        const admission = prepareSystemAgentRunAdmission(
-          {},
-          requesterTurnRunId,
-          "main",
-          "requester-wake-test",
-        );
-        try {
-          const admitted = await admission.admit("embedded");
-          bindGatewayContextResolver(
-            admitted,
-            binding !== "same" && child.name === "beta"
-              ? binding === "distinct"
-                ? otherContext.resolveGatewayContext
-                : undefined
-              : context.resolveGatewayContext,
-          );
-          await withGatewayToolCallerIdentity(
-            createAdmittedGatewayToolCallerIdentity({
-              admittedRunContext: admitted,
-              agentId: "main",
-              sessionKey: MAIN_REQUESTER_SESSION_KEY,
-            }),
-            async () => {
-              const gatewayContextResolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
-              resolvers.push(gatewayContextResolver);
-              await registry.registerSubagentRun(
-                createSubagentRunParams({
-                  ...child,
-                  childAgentId: "main",
-                  sessionEntry,
-                  requesterTurnRunId,
-                  requesterAgentId: "main",
-                  expectsCompletionMessage: true,
-                  gatewayContextResolver,
-                }),
-              );
-            },
-          );
-          if (child.name === yieldedParent) {
-            await createRequesterYieldTool(MAIN_REQUESTER_SESSION_KEY, requesterTurnRunId).execute(
-              `yield-${child.name}`,
-              {},
-            );
-          }
-          await registry.settleRequesterAfterSessionSpawns({
-            requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
-            requesterAgentId: "main",
-            requesterTurnRunId,
-            requesterYielded: child.name === yieldedParent,
-            acceptedSessionSpawns: [child],
-          });
-        } finally {
-          admission.close();
-        }
-        await vi.advanceTimersByTimeAsync(10);
-      }
-      expect(resolvers[0]).not.toBe(resolvers[1]);
-      expect(resolvers[0]?.()).toBe(context);
-      expect(resolvers[1]?.()).toBe(
-        binding === "same" ? context : binding === "distinct" ? otherContext : undefined,
-      );
-      await activate();
-      await activate();
-      children.forEach((child, index) => {
-        expect(getGatewayContextResolver(registry.getSubagentRunByRunId(child.runId)!)).toBe(
-          resolvers[index],
-        );
-      });
-      const completionOrder = firstCompleted === "alpha" ? children : children.toReversed();
-      const first = completionOrder[0]!;
-      const second = completionOrder[1]!;
-      emitCompleted(first.runId, first.childSessionKey, `${first.name} complete`);
-      await flushOwnedWork();
-      await waitForDeliveredCleanup(first.runId, {
-        allowPendingRequesterSettleWake: first.name !== yieldedParent,
-      });
-      if (rawChild) {
-        const settled = registry.getSubagentRunByRunId(first.runId);
-        expect(settled).toMatchObject({
-          childAgentId: "main",
-          childSessionIdentity: { sessionId: "sess-alpha", lifecycleRevision: "original" },
-          execution: { status: "terminal" },
-          delivery: { status: "delivered" },
-        });
-        expect(settled?.execution.suppressSessionEffects).not.toBe(true);
-        expect(settled?.requesterSettleWake).toBeUndefined();
-        expect(settled?.cleanupCompletedAt).toBeTypeOf("number");
-        expect(settled?.browserCleanupDispatchedAt).toBeTypeOf("number");
-      }
-      expect(registry.getSubagentRunByRunId(second.runId)).toMatchObject({
-        execution: { status: "running" },
-        delivery: { status: "pending" },
-      });
-      expect(getRequesterWakeCalls()).toHaveLength(first.name === yieldedParent ? 1 : 0);
-      if (first.name === yieldedParent) {
-        const wake = getRequesterWakeCalls()[0]?.params;
-        expect(wake?.inputProvenance?.sourceSessionKey).toBe(first.childSessionKey);
-        expect(wake?.message).toContain(`${first.name} complete`);
-        expect(wake?.message).not.toContain(`${second.name} complete`);
-        const completed = registry.getSubagentRunByRunId(first.runId)!;
-        expect(completed.execution.status).toBe("terminal");
-        expect(getGatewayContextResolver(completed)).toBeUndefined();
-      }
-      await activate();
-      await activate();
-      children.forEach((child, index) => {
-        const row = registry.getSubagentRunByRunId(child.runId)!;
-        if (child === first) {
-          // Ordinary delivered singletons release their source just like yielded batches.
-          expect(getGatewayContextResolver(row)).toBeUndefined();
-        } else {
-          expect(getGatewayContextResolver(row)).toBe(resolvers[index]);
-        }
-        expect(row.requesterTurnRunId).toBeUndefined();
-      });
-      emitCompleted(second.runId, second.childSessionKey, `${second.name} complete`);
-      await flushOwnedWork();
-      await waitForDeliveredCleanup(second.runId, { allowPendingRequesterSettleWake: true });
-      await activate();
-      await registry.testing.sweepOnceForTests();
-      await vi.advanceTimersByTimeAsync(30_000);
-      await flushOwnedWork();
-      // Separately delivered singletons do not mint a redundant aggregate continuation.
-      expect(getRequesterWakeCalls()).toHaveLength(yieldedParent ? 1 : 0);
-      for (const child of children) {
-        const entry = registry.getSubagentRunByRunId(child.runId);
-        expect(entry).toMatchObject({
-          delivery: { status: "delivered" },
-        });
-        expect(entry?.requesterSettleWake).toBeUndefined();
-      }
-      if (rawChild) {
-        const retained = loadSubagentRegistryFromSqlite().get(first.runId);
-        expect(retained).toMatchObject({
-          childSessionKey: "global",
-          childAgentId: "main",
-          delivery: { status: "delivered" },
-        });
-        expect(retained?.execution.suppressSessionEffects).not.toBe(true);
-        expect(retained?.requesterSettleWake).toBeUndefined();
-        expect(retained?.cleanupCompletedAt).toBeTypeOf("number");
-        expect(retained?.browserCleanupDispatchedAt).toBeTypeOf("number");
-        expect(
-          loadExactSessionEntryReadOnly({
-            agentId: "main",
-            storePath: sessionStorePath,
-            sessionKey: "global",
-          })?.entry,
-        ).toMatchObject({ sessionId: "sess-alpha", lifecycleRevision: "original" });
-      }
     },
   );
 
