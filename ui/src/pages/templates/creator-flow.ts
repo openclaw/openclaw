@@ -317,6 +317,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
         if (this.seenRevision !== null) {
           this.choices = null;
           this.reviewCurrent = false;
+          this.changed();
         }
         this.seenRevision = draft.revision;
         if (hasCompleteScope(draft.content)) {

@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser, type Page } from "playwright";
@@ -6,8 +6,10 @@ import { expect, inject, it } from "vitest";
 import type { OpenClawTestInstance } from "../../../../test/helpers/openclaw-test-instance.ts";
 import { createDarkDesktopControlUiContextOptions } from "../../e2e/control-ui-browser-options.test-support.ts";
 import { seedSidebarSettings } from "../../e2e/sidebar-contract.test-support.ts";
+import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { getControlUiContextHandle } from "../../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -387,6 +389,44 @@ it.skipIf(!chromiumAvailable).each([
       await card.getByRole("button", { name: "Back to contents", exact: true }).click();
       await card.getByRole("button", { name: "Back to Template", exact: true }).click();
       expect(await gateway.getRequests("templates.drafts.review")).toHaveLength(1);
+      if (width === 1440) {
+        const reads = (await gateway.getRequests("templates.drafts.read")).length;
+        await gateway.setMethodResponse("templates.drafts.read", {
+          revision: "c".repeat(64),
+          content: JSON.stringify({ scope: { ...scope, authority: "" } }),
+        });
+        await expect
+          .poll(async () => (await gateway.getRequests("templates.drafts.read")).length)
+          .toBeGreaterThan(reads);
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          const proof = createControlUiE2eArtifactDir("template-stale-review");
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            card,
+            [card.getByRole("heading", { name: "Release Brief", exact: true })],
+            { animations: "disabled", elements: [card] },
+          );
+          await writeFile(path.join(proof, "stale-review.png"), frame.png);
+          await writeFile(path.join(proof, "stale-review-card.png"), frame.elements[0]!.png);
+          console.log("TEMPLATE_STALE_REVIEW_PROOF", proof);
+        }
+        expect(await card.getByRole("button", { name: "Publish", exact: true }).isDisabled()).toBe(
+          true,
+        );
+        await card.getByRole("button", { name: "Refresh review", exact: true }).waitFor();
+        expect(await gateway.getRequests("templates.drafts.review")).toHaveLength(1);
+        await gateway.setMethodResponse("templates.drafts.review", {
+          ...reviewed,
+          revision: "d".repeat(64),
+        });
+        await gateway.setMethodResponse("templates.drafts.read", {
+          revision: "d".repeat(64),
+          content: JSON.stringify({ scope }),
+        });
+        await expect
+          .poll(async () => card.getByRole("button", { name: "Publish", exact: true }).isEnabled())
+          .toBe(true);
+      }
       expect(await gateway.getRequests("templates.drafts.publish")).toHaveLength(0);
       await gateway.deferNext("templates.drafts.publish");
       await card.getByRole("button", { name: "Publish", exact: true }).click();
