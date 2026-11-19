@@ -288,7 +288,11 @@ export async function compileNativeProject({
  * 4.3 GiB above the single-threaded pass (8.4 vs 6.1 GiB in its cgroup) and was OOM-killed in
  * an 8 GiB container that the single-threaded pass completes in. The build's memory owner
  * (tsdown-build) sizes this process's heap from the memory it can use and grants its uncapped
- * default heap only when that memory is ample, so that heap limit is the admission fact here.
+ * default heap only when that memory is ample, so that heap limit is the admission fact here,
+ * the same one it uses to run two runtime builds at once. Its Windows default and any run
+ * outside it (a bare tsdown, a non-V8 runtime) stay below the limit and emit single-threaded;
+ * an explicit OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB at or above it asserts ample memory.
+ * heap_size_limit adds V8's young generation, about 96 MiB at this size.
  */
 const PARALLEL_EMIT_MIN_HEAP_LIMIT_BYTES = 12_288 * 1024 * 1024;
 

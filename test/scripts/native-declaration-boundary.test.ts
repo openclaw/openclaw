@@ -209,77 +209,84 @@ it.each([
 
 // The emitting process's heap limit is the build memory owner's admission fact: only its
 // uncapped default admits the parallel pass, whose native memory the heap does not bound.
-it.skipIf(process.platform === "win32").each([
-  ["single-threaded without stable type ordering", undefined, 12_288, true],
-  ["single-threaded with stable type ordering under a capped heap", true, 7_424, true],
-  ["parallel with stable type ordering and the uncapped build heap", true, 12_288, false],
-] as const)(
-  "emits identical inferred declarations and maps across fresh %s compiler processes",
-  (_mode, stableTypeOrdering, heapMb, singleThreaded) => {
-    const root = tempRoot("determinism");
-    const fixture = createNativeFixture(root);
+it("emits identical declarations in fresh processes and goes parallel only on the uncapped build heap", () => {
+  const root = tempRoot("determinism");
+  const fixture = createNativeFixture(root);
+  const observeThreading = process.platform !== "win32";
+  const configs = path.join(root, "compiler-configs.log");
+  if (observeThreading) {
     // Record each config the compiler is given, then run the real compiler.
     const real = `${fixture.native}.real`;
-    const configs = path.join(root, "compiler-configs.log");
     fs.renameSync(fixture.native, real);
     fs.writeFileSync(
       fixture.native,
       `#!/bin/sh\nprev=\nfor arg; do [ "$prev" = -p ] && { cat "$arg"; echo; } >> '${configs}'; prev=$arg; done\nexec '${real}' "$@"\n`,
       { mode: 0o755 },
     );
-    const modules = Array.from({ length: 16 }, (_, index) => `result-${index}`);
+  }
+  const modules = Array.from({ length: 16 }, (_, index) => `result-${index}`);
+  fixture.write({
+    "src/index.ts": modules.map((name) => `export * from "./${name}.js";`).join("\n"),
+  });
+  for (const [index, name] of modules.entries()) {
+    const result =
+      index % 2 ? '{ kind: "value", value } as const' : '{ kind: "value" as const, value }';
     fixture.write({
-      "src/index.ts": modules.map((name) => `export * from "./${name}.js";`).join("\n"),
-    });
-    for (const [index, name] of modules.entries()) {
-      const result =
-        index % 2 ? '{ kind: "value", value } as const' : '{ kind: "value" as const, value }';
-      fixture.write({
-        [`src/${name}.ts`]: `export function result${index}<T>(ready: boolean, value: T) {
+      [`src/${name}.ts`]: `export function result${index}<T>(ready: boolean, value: T) {
         return ready ? ${result} : { kind: "unavailable" as const };
       }`,
-      });
+    });
+  }
+  const compile = (stableTypeOrdering: boolean, heapMb: number) => {
+    fs.rmSync(configs, { force: true });
+    // Node, not the test runtime: the heap limit is a V8 fact.
+    const result = spawnSync(
+      resolveTestNodeExecPath(),
+      [
+        `--max-old-space-size=${heapMb}`,
+        ...createNodeEvalArgs(
+          `import path from "node:path";
+          import { emitNativeDeclarations } from ${JSON.stringify(new URL("../../scripts/lib/native-declaration-emitter.mts", import.meta.url).href)};
+          const root = ${JSON.stringify(root)};
+          const emitted = await emitNativeDeclarations({
+            cwd: root, compilerRoot: root, configFile: path.join(root, "tsconfig.json"),
+            roots: [path.join(root, "src/index.ts")],
+            compilerOptions: ${JSON.stringify(stableTypeOrdering ? { stableTypeOrdering } : {})},
+          });
+          console.log(JSON.stringify({ declarations: [...emitted.declarations], inputs: emitted.inputs }));`,
+          { imports: [import.meta.resolve("tsx")] },
+        ),
+      ],
+      { encoding: "utf8", timeout: 60_000 },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    const emitted = JSON.parse(result.stdout) as { declarations: unknown[]; inputs: string[] };
+    expect(emitted.declarations).toHaveLength(modules.length + 1);
+    if (observeThreading) {
+      const leaves = fs
+        .readFileSync(configs, "utf8")
+        .split("\n")
+        .filter((line) => line.includes('"emitDeclarationOnly":true'))
+        .map((line) => JSON.parse(line) as { compilerOptions: { singleThreaded?: boolean } });
+      expect(leaves).toHaveLength(1);
+      return { emitted, singleThreaded: leaves[0]?.compilerOptions.singleThreaded === true };
     }
-    const compile = () => {
-      // Node, not the test runtime: the heap limit is a V8 fact.
-      const result = spawnSync(
-        resolveTestNodeExecPath(),
-        [
-          `--max-old-space-size=${heapMb}`,
-          ...createNodeEvalArgs(
-            `import path from "node:path";
-            import { emitNativeDeclarations } from ${JSON.stringify(new URL("../../scripts/lib/native-declaration-emitter.mts", import.meta.url).href)};
-            const root = ${JSON.stringify(root)};
-            const emitted = await emitNativeDeclarations({
-              cwd: root, compilerRoot: root, configFile: path.join(root, "tsconfig.json"),
-              roots: [path.join(root, "src/index.ts")],
-              compilerOptions: ${JSON.stringify(stableTypeOrdering ? { stableTypeOrdering } : {})},
-            });
-            console.log(JSON.stringify({ declarations: [...emitted.declarations], inputs: emitted.inputs }));`,
-            { imports: [import.meta.resolve("tsx")] },
-          ),
-        ],
-        { encoding: "utf8", timeout: 60_000 },
-      );
-      expect(result.error, result.stderr).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
-      return JSON.parse(result.stdout) as { declarations: unknown[]; inputs: string[] };
-    };
-    const first = compile();
-    const second = compile();
-    expect(first.declarations).toHaveLength(modules.length + 1);
-    expect(second).toEqual(first);
-    const leafConfigs = fs
-      .readFileSync(configs, "utf8")
-      .split("\n")
-      .filter((line) => line.includes('"emitDeclarationOnly":true'))
-      .map((line) => JSON.parse(line) as { compilerOptions: { singleThreaded?: boolean } });
-    expect(leafConfigs).toHaveLength(2);
-    for (const leaf of leafConfigs) {
-      expect(leaf.compilerOptions.singleThreaded === true).toBe(singleThreaded);
-    }
-  },
-);
+    return { emitted };
+  };
+  const threaded = (singleThreaded: boolean) => (observeThreading ? { singleThreaded } : {});
+  const plain = compile(false, 12_288);
+  expect(plain).toMatchObject(threaded(true));
+  expect(compile(false, 12_288)).toEqual(plain);
+  const capped = compile(true, 7_424);
+  expect(capped).toMatchObject(threaded(true));
+  expect(compile(true, 7_424)).toEqual(capped);
+  const uncapped = compile(true, 12_288);
+  expect(uncapped).toMatchObject(threaded(false));
+  expect(compile(true, 12_288)).toEqual(uncapped);
+  // Either mode of the stable-ordering pass is byte-identical, so the choice is memory only.
+  expect(uncapped.emitted).toEqual(capped.emitted);
+});
 
 it("keeps optional SDK relative imports inside a checkout nested in a parent install", async () => {
   const ancestor = tempRoot("optional-imports");
