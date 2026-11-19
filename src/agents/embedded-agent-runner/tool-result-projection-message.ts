@@ -25,14 +25,13 @@ function mergeProjectedToolResultMessage(
   const projectedText = projectedContent.flatMap((block) =>
     isRecord(block) && block.type === "text" && typeof block.text === "string" ? [block.text] : [],
   );
-  const currentText = getToolResultTextBlocks(message);
-  if (sourceHash && hashToolResultText(currentText) !== sourceHash) {
+  if (sourceHash && hashToolResultText(message) !== sourceHash) {
     return message;
   }
   if (cacheTtl) {
     return { ...message, content: projectedContent };
   }
-  if (currentText.length !== projectedText.length) {
+  if (getToolResultTextBlocks(message).length !== projectedText.length) {
     return message;
   }
   let textIndex = 0;

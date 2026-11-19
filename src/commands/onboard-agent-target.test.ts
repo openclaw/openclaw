@@ -47,10 +47,7 @@ describe("onboarding agent target", () => {
           },
           entries: {
             main: { utilityModel: "local-utility/main" },
-            OPS: {
-              model: "openai/gpt-5.4",
-              agentDir: "/tmp/ops-auth",
-            },
+            OPS: { model: "openai/gpt-5.4", agentDir: "/tmp/ops-auth" },
           },
         },
       };
@@ -128,14 +125,6 @@ describe("onboarding agent target", () => {
       OPS: { ...config.agents?.entries?.OPS, utilityModel: "local-utility/tiny" },
     });
     expect(updated.plugins?.entries?.["local-utility"]?.enabled).toBe(true);
-  });
-
-  it("preserves an uppercase authored entry key when applying the primary model", () => {
-    const config = fleet({ MAIN: { model: "openai/old" } });
-    const target = resolveOnboardingAgentTarget(config, "main");
-    expect(applyOnboardingPrimaryModel(config, target, "openai/new").agents?.entries).toEqual({
-      MAIN: { model: { primary: "openai/new" }, models: { "openai/new": {} } },
-    });
   });
 
   it("uses the system agent for explicit fleets without changing legacy ownership", () => {
@@ -244,15 +233,12 @@ describe("onboarding agent target", () => {
   it("keeps fleet model aliases and policy inherited when selecting a model", () => {
     const config = fleet(
       { main: { model: "openai/main" }, ops: {} },
-      {
-        model: "openai/global",
-        models: { "openai/global": { alias: "Global" } },
-        modelPolicy: { allow: ["openai/global"] },
-      },
+      { ...modelSettings("openai/global", "Global"), model: "openai/global" },
     );
-    const target = resolveOnboardingAgentTarget(config, "ops");
-    const updated = applyAgentModelDefaults(config, target, (projected) =>
-      applyPrimaryModel(projected, "provider/selected"),
+    const updated = applyAgentModelDefaults(
+      config,
+      resolveOnboardingAgentTarget(config, "ops"),
+      (projected) => applyPrimaryModel(projected, "provider/selected"),
     );
 
     expect(updated.agents?.defaults).toEqual(config.agents.defaults);

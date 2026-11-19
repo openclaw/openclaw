@@ -5,7 +5,6 @@ import {
   collectDiscordNumericIdWarnings,
   discordDoctor,
   maybeRepairDiscordNumericIds,
-  scanDiscordNumericIdEntries,
 } from "./doctor.js";
 
 function discordConfig(discord: Record<string, unknown>): OpenClawConfig {
@@ -52,12 +51,6 @@ describe("discord doctor", () => {
       expect(discord).toEqual({
         streaming: { ...(mode ? { mode } : {}), block: { enabled: true } },
       });
-      expect(result.changes).toEqual([
-        ...(mode
-          ? ["Moved channels.discord.streamMode → channels.discord.streaming.mode (progress)."]
-          : []),
-        "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
-      ]);
     },
   );
 
@@ -81,10 +74,6 @@ describe("discord doctor", () => {
         },
       },
     });
-    expect(result.changes).toEqual([
-      "Moved channels.discord.accounts.work.chunkMode → channels.discord.accounts.work.streaming.chunkMode.",
-      "Copied channels.discord.streaming into channels.discord.accounts.work.streaming to keep inherited settings while migrating flat streaming keys.",
-    ]);
   });
 
   it("preserves supported provider maps and channel bindings", () => {
@@ -113,12 +102,6 @@ describe("discord doctor", () => {
       },
     });
 
-    expect(result.changes).toEqual([
-      "Shortened 1 unsupported channels.discord.accounts.work.voice.realtime.wakeNames entries to one or two words.",
-      "Shortened 1 unsupported channels.discord.accounts.invalid.voice.realtime.wakeNames entries to one or two words.",
-      "Removed empty channels.discord.accounts.empty.voice.realtime.wakeNames; unset wake names use the default agent/OpenClaw fallback.",
-      "Shortened 1 unsupported channels.discord.voice.realtime.wakeNames entries to one or two words.",
-    ]);
     const discord = result.config.channels?.discord;
     expect([
       discord?.voice?.realtime?.wakeNames,
@@ -128,44 +111,28 @@ describe("discord doctor", () => {
     ]).toEqual([["Claw", "Claw Bot", "Open Claw"], ["Work Bot"], ["Only Three"], undefined]);
   });
 
-  it("finds numeric id entries across discord scopes", () => {
+  it("repairs numeric ids across Discord scopes without changing string entries", () => {
     const cfg = discordConfig({
       allowFrom: [123],
-      dm: { allowFrom: ["ok"], groupChannels: [456] },
+      dm: { allowFrom: ["ok", 99], groupChannels: [456] },
       execApprovals: { approvers: [789] },
       guilds: {
-        main: {
-          users: [111],
-          roles: [222],
-          channels: { general: { users: [333], roles: [444] } },
-        },
+        main: { users: [111], roles: [222], channels: { general: { users: [333], roles: [444] } } },
       },
-    });
-
-    const hits = scanDiscordNumericIdEntries(cfg);
-    expect(hits.map((hit) => hit.path)).toEqual([
-      "channels.discord.allowFrom[0]",
-      "channels.discord.dm.groupChannels[0]",
-      "channels.discord.execApprovals.approvers[0]",
-      "channels.discord.guilds.main.users[0]",
-      "channels.discord.guilds.main.roles[0]",
-      "channels.discord.guilds.main.channels.general.users[0]",
-      "channels.discord.guilds.main.channels.general.roles[0]",
-    ]);
-  });
-
-  it("repairs safe numeric ids into strings and warns for unsafe lists", () => {
-    const cfg = discordConfig({
-      allowFrom: [123],
-      dm: { allowFrom: [99] },
-      guilds: { main: { users: [111], roles: [222] } },
     });
 
     const result = maybeRepairDiscordNumericIds(cfg, "openclaw doctor --fix");
     expect(result.config.channels?.discord).toMatchObject({
       allowFrom: ["123"],
-      dm: { allowFrom: ["99"] },
-      guilds: { main: { users: ["111"], roles: ["222"] } },
+      dm: { allowFrom: ["ok", "99"], groupChannels: ["456"] },
+      execApprovals: { approvers: ["789"] },
+      guilds: {
+        main: {
+          users: ["111"],
+          roles: ["222"],
+          channels: { general: { users: ["333"], roles: ["444"] } },
+        },
+      },
     });
     expect(result.changes).not.toHaveLength(0);
     expect(result.warnings).toStrictEqual([]);

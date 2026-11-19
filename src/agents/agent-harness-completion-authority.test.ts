@@ -42,11 +42,12 @@ import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js
 afterEach(() => resetGatewayWorkAdmission());
 
 const requesterSessionKey = "agent:main:main";
-function gateway() {
+function gateway(sessionKey = requesterSessionKey) {
   const context = createContext();
   const resolver = () => context;
   context.resolveGatewayContext = resolver;
-  return { context, resolver };
+  const scope = makeScope({ requesterSessionKey: sessionKey, gatewayContextResolver: resolver });
+  return { context, resolver, scope };
 }
 function requester(state: OpenClawTestState) {
   const target = {
@@ -58,9 +59,8 @@ function requester(state: OpenClawTestState) {
 }
 function operatorFixture(profileName: string) {
   setRuntimeConfigSnapshot({});
-  const { context, resolver } = gateway();
+  const { context, resolver, scope } = gateway();
   const client = createOperatorClient({ profileName, scopes: ["operator.write"] });
-  const scope = makeScope({ requesterSessionKey, gatewayContextResolver: resolver });
   const capture = () =>
     withPluginRuntimeGatewayRequestScope(
       { client, context, resolveGatewayContext: resolver, isWebchatConnect: () => false },
@@ -72,13 +72,15 @@ function operatorFixture(profileName: string) {
 it.each(["current", "missing-requester", "requester-closed", "connection-closed"] as const)(
   "settles memory requester root custody when %s",
   async (outcome) => {
-    const { context, resolver } = gateway();
+    const sessionKey = "agent:main:dashboard:incognito-completion";
+    const { context, scope } = gateway(
+      outcome === "missing-requester" ? `${sessionKey}-missing` : sessionKey,
+    );
     const work = new AsyncWorkScope();
     context.trackExecution = (run) => work.track(run);
     if (outcome === "connection-closed") {
       await work.drain();
     }
-    const sessionKey = "agent:main:dashboard:incognito-completion";
     const owner = createMemorySessionActorOwner({
       agentId: "main",
       path: "/synthetic/completion-custody",
@@ -100,10 +102,6 @@ it.each(["current", "missing-requester", "requester-closed", "connection-closed"
           authority,
         );
       }
-      const scope = makeScope({
-        requesterSessionKey: outcome === "missing-requester" ? `${sessionKey}-missing` : sessionKey,
-        gatewayContextResolver: resolver,
-      });
       const pending = root.run(() =>
         runWithSessionActorStorage({ actor, authority, agentId: "main", path: owner.path }, () =>
           captureCustody(scope),
@@ -254,7 +252,7 @@ it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as 
       setRuntimeConfigSnapshot({});
       const childSessionKey = "native:child";
       const announceId = "native:parent:child:succeeded";
-      const { context, resolver: resolveGatewayContext } = gateway();
+      const { context, resolver: resolveGatewayContext, scope } = gateway();
       context.dedupe.set(`agent:${buildAnnounceIdempotencyKey(announceId)}`, {
         ts: Date.now(),
         ok: true,
@@ -266,10 +264,6 @@ it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as 
       });
       const replaceRequester = requester(state);
       await replaceRequester("parent-session");
-      const scope = makeScope({
-        requesterSessionKey,
-        gatewayContextResolver: resolveGatewayContext,
-      });
       const ready = createDeferredCore();
       let retired = false;
       let delivery: Promise<AgentHarnessCompletionDelivery> | undefined;
@@ -290,9 +284,8 @@ it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as 
             custody = parentCustody?.retain();
             parentCustody?.release();
             // Native monitor callbacks retain this async context after the parent yields.
-            delivery = (async () => {
-              await ready.promise;
-              return await deliverCompletion({
+            delivery = ready.promise.then(() =>
+              deliverCompletion({
                 scope,
                 isSourceSessionAdmissionAllowed: () => custody?.isCurrent() ?? !retired,
                 completionCustody: callerState === "uncaptured" ? undefined : custody,
@@ -301,8 +294,8 @@ it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as 
                 announceId,
                 status: "succeeded",
                 result: "Child result",
-              });
-            })();
+              }),
+            );
           },
         ),
       );

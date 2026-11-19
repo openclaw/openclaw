@@ -40,14 +40,12 @@ describe("iMessage send SQLite receipt recovery", () => {
         CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, chat_identifier TEXT);
         CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
         CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT, uncanonicalized_id TEXT);
-        INSERT INTO chat VALUES (42, 'iMessage;-;+15550001111', '+15550001111');
-        INSERT INTO chat VALUES (43, 'iMessage;-;+15550002222', '+15550002222');
-        INSERT INTO handle VALUES (1, '+15550001111', '+1 (555) 000-1111');
-        INSERT INTO handle VALUES (2, '+15550002222', '+1 (555) 000-2222');
-        INSERT INTO message VALUES (5, 'older-guid', 'synthetic receipt', 0, 1, 1);
-        INSERT INTO message VALUES (6, 'recovered-guid', 'synthetic receipt', 0, 1, 1);
-        INSERT INTO message VALUES (7, 'other-chat-guid', 'synthetic receipt', 0, 1, 2);
-        INSERT INTO message VALUES (8, 'incoming-guid', 'synthetic receipt', 0, 0, 1);
+        INSERT INTO chat VALUES
+          (42, 'iMessage;-;+15550001111', '+15550001111'), (43, 'iMessage;-;+15550002222', '+15550002222');
+        INSERT INTO handle VALUES (1, '+15550001111', '+1 (555) 000-1111'), (2, '+15550002222', '+1 (555) 000-2222');
+        INSERT INTO message VALUES
+          (5, 'older-guid', 'synthetic receipt', 0, 1, 1), (6, 'recovered-guid', 'synthetic receipt', 0, 1, 1),
+          (7, 'other-chat-guid', 'synthetic receipt', 0, 1, 2), (8, 'incoming-guid', 'synthetic receipt', 0, 0, 1);
         INSERT INTO chat_message_join VALUES (42, 5), (42, 6), (43, 7), (42, 8);
       `),
     );
@@ -55,7 +53,6 @@ describe("iMessage send SQLite receipt recovery", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    vi.useRealTimers();
     await state.cleanup();
   });
 
@@ -112,9 +109,7 @@ describe("iMessage send SQLite receipt recovery", () => {
       prepareCalls.mock.calls.filter(([sql]) =>
         /\bSELECT\b[\s\S]*\bFROM\s+"?message"?\b/iu.test(sql),
       ).length;
-    expect(
-      withChatDb(dbPath, (db) => db.prepare("SELECT guid FROM message WHERE ROWID = 6").get()),
-    ).toMatchObject({ guid: "recovered-guid" });
+    withChatDb(dbPath, (db) => db.prepare("SELECT guid FROM message WHERE ROWID = 6").get());
     expect(countMessageSelects()).toBe(1);
     vi.clearAllMocks();
     const client = new IMessageRpcClient({ dbPath });

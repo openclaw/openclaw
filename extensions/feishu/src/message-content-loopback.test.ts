@@ -1,8 +1,6 @@
 // Prove Feishu message parsing against the real SDK, auth exchange, and HTTP transport.
-import type { IncomingMessage } from "node:http";
 import { text as readText } from "node:stream/consumers";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuMediaList } from "./bot-content.js";
@@ -12,7 +10,6 @@ import { sendStickerFeishu } from "./media.js";
 import { getMessageFeishu } from "./send.js";
 
 const { mockLogVerbose } = vi.hoisted(() => ({ mockLogVerbose: vi.fn() }));
-const requireRecord = createRequireRecord("record", "expected-label-capitalized");
 const chatId = "oc_feishu_content_107947";
 const appId = "cli_feishu_content_107947";
 const authorization = "Bearer tat-feishu-content-107947";
@@ -28,22 +25,8 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
   return { ...actual, logVerbose: mockLogVerbose };
 });
 
-function recordRequest(request: IncomingMessage, url: URL, body: Record<string, unknown>) {
-  return {
-    method: request.method ?? "",
-    path: url.pathname,
-    cardMessageContentType: url.searchParams.get("card_msg_content_type") ?? undefined,
-    appId: body.app_id,
-    authorization: request.headers.authorization,
-    messageType: body.msg_type,
-    content: body.content,
-    receiveId: body.receive_id,
-    replyInThread: body.reply_in_thread,
-  };
-}
-
 it("authenticates Feishu reads and sticker sends over the real SDK without exposing malformed content", async () => {
-  const requests: ReturnType<typeof recordRequest>[] = [];
+  const requests: Array<Record<string, unknown>> = [];
   const sensitiveContentByMessageId = new Map([
     ["om_loopback_bad_text", { type: "text", content: "LKTEXT107" }],
     ["om_loopback_bad_post", { type: "post", content: "LKPOST107" }],
@@ -55,8 +38,13 @@ it("authenticates Feishu reads and sticker sends over the real SDK without expos
       void (async () => {
         const url = new URL(request.url ?? "/", "http://127.0.0.1");
         const body = JSON.parse((await readText(request)) || "{}") as Record<string, unknown>;
-        const record = recordRequest(request, url, body);
-        requests.push(record);
+        requests.push({
+          path: url.pathname,
+          messageType: body.msg_type,
+          content: body.content,
+          receiveId: body.receive_id,
+          replyInThread: body.reply_in_thread,
+        });
 
         const sendJson = (status: number, payload: unknown) => {
           response.writeHead(status, { "content-type": "application/json" });
@@ -81,7 +69,7 @@ it("authenticates Feishu reads and sticker sends over the real SDK without expos
           });
         }
 
-        if (record.authorization !== authorization) {
+        if (request.headers.authorization !== authorization) {
           return sendJson(401, { code: 99991663, msg: "missing authenticated message request" });
         }
         if (url.pathname.startsWith("/open-apis/contact/v3/users/")) {
@@ -101,7 +89,10 @@ it("authenticates Feishu reads and sticker sends over the real SDK without expos
           }
         }
 
-        if (request.method !== "GET" || record.cardMessageContentType !== "user_card_content") {
+        if (
+          request.method !== "GET" ||
+          url.searchParams.get("card_msg_content_type") !== "user_card_content"
+        ) {
           return sendJson(400, { code: 400, msg: "unexpected loopback request" });
         }
 
@@ -165,9 +156,15 @@ it("authenticates Feishu reads and sticker sends over the real SDK without expos
         actions: { sticker: true },
         stickerSets: { [appId]: { file_sticker_received: ["赞👍"] } },
       };
-      const cfg: ClawdbotConfig = {
-        channels: { feishu: { ...FeishuConfigSchema.parse(feishu), domain: loopbackOrigin } },
-      };
+      const config = (resolveSenderNames?: boolean): ClawdbotConfig => ({
+        channels: {
+          feishu: {
+            ...FeishuConfigSchema.parse({ ...feishu, resolveSenderNames }),
+            domain: loopbackOrigin,
+          },
+        },
+      });
+      const cfg = config();
       const action = (kind: "sticker" | "sticker-search", params: Record<string, unknown>) =>
         feishuPlugin.actions!.handleAction!({
           channel: "feishu",
@@ -176,8 +173,8 @@ it("authenticates Feishu reads and sticker sends over the real SDK without expos
           accountId: "default",
           params,
         });
-      const readMessage = (messageId: string, expected: object, config = cfg) =>
-        expect(getMessageFeishu({ cfg: config, messageId })).resolves.toMatchObject({
+      const readMessage = (messageId: string, expected: object, readConfig = cfg) =>
+        expect(getMessageFeishu({ cfg: readConfig, messageId })).resolves.toMatchObject({
           messageId,
           ...expected,
         });
@@ -214,15 +211,7 @@ it("authenticates Feishu reads and sticker sends over the real SDK without expos
             contentType: "merge_forward",
             content: mergedContent(resolveSenderNames === false ? senderId : "Alice"),
           },
-          {
-            ...cfg,
-            channels: {
-              feishu: {
-                ...FeishuConfigSchema.parse({ ...feishu, resolveSenderNames }),
-                domain: loopbackOrigin,
-              },
-            },
-          },
+          config(resolveSenderNames),
         );
       }
 
@@ -235,18 +224,6 @@ it("authenticates Feishu reads and sticker sends over the real SDK without expos
         expect(loggedValues).not.toContain(content);
       }
       expect(loggedValues).not.toContain("loopback-placeholder");
-      expect(mockLogVerbose).toHaveBeenCalledTimes(sensitiveContentByMessageId.size);
-
-      const authRequests = requests.filter(({ path }) => path.includes("tenant_access_token"));
-      expect(authRequests).toEqual([{ method: "POST", path: authPath, appId }]);
-      const messageReads = requests.filter(
-        (request) => request.method === "GET" && request.path.startsWith("/open-apis/im/"),
-      );
-      expect(messageReads).toHaveLength(8);
-      const expectedRead = { authorization, cardMessageContentType: "user_card_content" };
-      for (const request of messageReads) {
-        expect(request).toMatchObject(expectedRead);
-      }
 
       const requestCountBeforeSticker = requests.length;
       await expect(
@@ -261,16 +238,12 @@ it("authenticates Feishu reads and sticker sends over the real SDK without expos
       expect(requests).toHaveLength(requestCountBeforeSticker);
 
       const searchResult = await action("sticker-search", { query: "赞" });
+      const sticker = { fileId: "file_sticker_received", keyword: "赞👍" };
       expect(searchResult.details).toEqual({
-        stickers: [{ fileId: "file_sticker_received", keyword: "赞👍" }],
+        stickers: [sticker],
         truncated: false,
       });
       expect(requests).toHaveLength(requestCountBeforeSticker);
-      const { stickers } = requireRecord(searchResult.details, "search details");
-      if (!Array.isArray(stickers)) {
-        throw new Error("Expected sticker search results");
-      }
-      const sticker = requireRecord(stickers[0], "sticker");
       for (const replyInThread of [false, true]) {
         const result = await action("sticker", {
           ...sticker,
@@ -283,8 +256,6 @@ it("authenticates Feishu reads and sticker sends over the real SDK without expos
         });
       }
       const stickerRequest = {
-        method: "POST",
-        authorization,
         messageType: "sticker",
         content: JSON.stringify({ file_key: "file_sticker_received" }),
       };

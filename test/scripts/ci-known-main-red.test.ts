@@ -455,20 +455,57 @@ describe("main failure attribution", () => {
 });
 
 describe("known hourly main failures", () => {
-  it("keeps one complete failure signature when the shard runner replays diagnostics", () => {
-    const log = `${report()}\n${[
-      "[shard-failure:gateway] FAILED (exit 1)",
-      `[shard-failure:gateway:tail] FAIL gateway ${file} > ${title}`,
-      "[shard-failure:gateway:tail] AssertionError: expected true to be false",
-      "[shard-failure:gateway:tail] Test Files 1 failed (1)",
-      "[shard-failure:gateway:tail] Tests 1 failed | 2 passed (3)",
-      "[shard-failure:gateway:tail] [test] FAILED (exit 1)",
-    ].join("\n")}`;
-    expect(parseNodeFailureReport(log, true)).toEqual([
-      { kind: "vitest", file, test: `${title} :: AssertionError: expected true to be false` },
-    ]);
-    expect(extractNodeFailedTests(log)).toEqual([{ file, tests: [title] }]);
+  it.each([
+    ["complete mixed invocations", "", 2, 1],
+    ["failed-only terminal count", "", 1, 0],
+    ["missing passing summary", "Tests 2 passed (2)", 2, 0],
+    ["extra failure", "Error: cleanup failed", 2, 0],
+  ])("checks %s against total completed invocations", (_name, mutation, completed, count) => {
+    const passing = [
+      "[test] starting test/vitest/vitest.process.config.ts",
+      "Test Files 1 passed (1)",
+      "Tests 2 passed (2)",
+    ]
+      .filter((line) => line !== mutation)
+      .concat(mutation.startsWith("Error:") ? [mutation] : [])
+      .map((line) => `[shard:gateway] ${line}`)
+      .join("\n");
+    const log = report().replace(
+      "[shard:gateway] [test] failed 1 Vitest shard in 7s",
+      `${passing}\n[shard:gateway] [test] failed ${completed} Vitest shards in 7s`,
+    );
+    expect(parseNodeFailureReport(log, true)).toHaveLength(count);
   });
+
+  it.each([
+    ["[test] inner parallelism 1", 1],
+    ["[test] inner parallelism unknown", 0],
+    ["Error: worker failed", 0],
+  ])("checks pre-invocation telemetry without hiding errors: %s", (telemetry, count) => {
+    const log = report().replace(
+      "[shard:gateway] begin",
+      `[shard:gateway] ${telemetry}\n[shard:gateway] begin`,
+    );
+    expect(parseNodeFailureReport(log, true)).toHaveLength(count);
+  });
+
+  it.each(["", ":42", ":42:3"])(
+    "keeps replayed failure attribution with location %j",
+    (location) => {
+      const log = `${report().replace(`${file} >`, `${file}${location} >`)}\n${[
+        "[shard-failure:gateway] FAILED (exit 1)",
+        `[shard-failure:gateway:tail] FAIL gateway ${file} > ${title}`,
+        "[shard-failure:gateway:tail] AssertionError: expected true to be false",
+        "[shard-failure:gateway:tail] Test Files 1 failed (1)",
+        "[shard-failure:gateway:tail] Tests 1 failed | 2 passed (3)",
+        "[shard-failure:gateway:tail] [test] FAILED (exit 1)",
+      ].join("\n")}`;
+      expect(parseNodeFailureReport(log, true)).toEqual([
+        { kind: "vitest", file, test: `${title} :: AssertionError: expected true to be false` },
+      ]);
+      expect(extractNodeFailedTests(log)).toEqual([{ file, tests: [title] }]);
+    },
+  );
 
   it.each([false, true])(
     "keeps report attribution separate from gate eligibility (changed=%s)",

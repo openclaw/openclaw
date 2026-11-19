@@ -41,6 +41,8 @@ vi.mock("./shell-snapshot.js", async (importOriginal) => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const python3 = resolveExecutablePath("python3", { useCache: false });
+const nodeOnPath = resolveExecutablePath("node", { useCache: false });
+const nodeBinary = nodeOnPath ? fs.realpathSync(nodeOnPath) : "";
 
 describe.skipIf(process.platform === "win32")("gateway execution authorization boundary", () => {
   let root: string;
@@ -72,6 +74,7 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     resetProcessRegistryForTests();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
   function tool(
     autoReviewer: ExecAutoReviewer,
@@ -120,6 +123,149 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
       return { ok: true };
     });
   }
+
+  it("does not dispatch a dynamic predicate without approval", async () => {
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+      agents: {},
+    });
+    const review = reviewer();
+    await expect(
+      tool(review, "allowlist").execute("dynamic-predicate", {
+        command: String.raw`test $'\0\''?v benign`,
+      }),
+    ).rejects.toThrow("exec denied: allowlist miss");
+
+    expect(review).not.toHaveBeenCalled();
+    expect(boundary.spawn).not.toHaveBeenCalled();
+  });
+
+  it.each(["/bin/bash", "/usr/bin/false"])(
+    "executes a safe-bin pipeline without synchronous probes (SHELL=%s)",
+    async (shell) => {
+      vi.stubEnv("SHELL", shell);
+      const syncCalls: string[] = [];
+      const ownerCall = (method: string) => {
+        if (
+          /\/(?:exec-safe-bin-trust|exec-command-resolution|executable-path|system-run-(?:cwd-binding|file-snapshot|mutable-file-(?:operand|policy)|approval-binding))\.(?:ts|js):/.test(
+            new Error().stack ?? "",
+          )
+        ) {
+          syncCalls.push(method);
+        }
+      };
+      const statSync = fs.statSync;
+      const accessSync = fs.accessSync;
+      const realpathSync = fs.realpathSync;
+      vi.spyOn(fs, "statSync").mockImplementation((file, options) => {
+        ownerCall("stat");
+        return statSync(file, options);
+      });
+      vi.spyOn(fs, "accessSync").mockImplementation((file, mode) => {
+        ownerCall("access");
+        return accessSync(file, mode);
+      });
+      vi.spyOn(fs, "realpathSync").mockImplementation((file, options) => {
+        ownerCall("realpath");
+        return realpathSync(file, options);
+      });
+      const exec = createExecTool({
+        agentId: "main",
+        host: "gateway",
+        mode: "allowlist",
+        safeBins: ["wc"],
+        cwd: root,
+        notifyOnExit: false,
+      });
+      const result = await exec.execute("safe-bin-pipeline", {
+        command: "pwd | wc -l",
+      });
+      expect(result.details).toMatchObject({
+        status: "completed",
+        exitCode: 0,
+        aggregated: expect.stringMatching(/^\s*1\s*$/),
+      });
+      expect(boundary.spawn).toHaveBeenCalledTimes(1);
+      expect(callGatewayTool).not.toHaveBeenCalled();
+      expect(syncCalls).toEqual([]);
+    },
+  );
+
+  it("gates encoded arithmetic before spawning while literal builtins still run", async () => {
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+      agents: {},
+    });
+    const exec = tool(reviewer(), "allowlist");
+    const control = await exec.execute("literal-builtin", { command: ": benign; pwd" });
+    expect(control.details.status).toBe("completed");
+    expect(control.details).toMatchObject({ exitCode: 0, aggregated: root });
+    expect(boundary.spawn.mock.calls.length).toBe(1);
+    boundary.spawn.mockClear();
+    const marker = path.join(root, "arithmetic-marker");
+    for (const command of [
+      String.raw`: "$[ x[$'\x24\x28touch ${marker};printf 0\x29'] ]"`,
+      String.raw`: "$(( x[$'\044\050touch ${marker};printf 0\051'] ))"`,
+    ]) {
+      await expect(exec.execute("arithmetic-builtin", { command })).rejects.toThrow(
+        /allowlist|approval/i,
+      );
+      expect(boundary.spawn.mock.calls.length).toBe(0);
+      expect(fs.existsSync(marker)).toBe(false);
+    }
+  });
+
+  it("executes static assignments and blocks recursive assignments before process creation", async () => {
+    const echoPath = fs.realpathSync("/bin/echo");
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
+      agents: { main: { allowlist: [{ pattern: echoPath }] } },
+    });
+    const review = reviewer();
+
+    const allowed = await tool(review, "allowlist").execute("static-assignment", {
+      command: `STATIC=value; ${echoPath} static-ok`,
+    });
+    if (allowed.details.status !== "completed") {
+      throw new Error(`Unexpected exec status: ${allowed.details.status}`);
+    }
+    expect(allowed.details.exitCode).toBe(0);
+    expect(allowed.details.aggregated).toBe("static-ok");
+    expect(boundary.spawn).toHaveBeenCalledOnce();
+    expect(review).not.toHaveBeenCalled();
+    expect(callGatewayTool).not.toHaveBeenCalled();
+
+    const expectBlocked = async (id: string, command: string, marker: string) => {
+      boundary.spawn.mockClear();
+      const denied = await tool(review, "ask").execute(id, { command });
+      expect(denied.details.status).toBe("failed");
+      expect(boundary.spawn).not.toHaveBeenCalled();
+      expect(fs.existsSync(marker)).toBe(false);
+      expect(review).not.toHaveBeenCalled();
+      expect(callGatewayTool).not.toHaveBeenCalled();
+    };
+    const scalarMarker = path.join(root, "recursive-scalar-assignment-ran");
+    await expectBlocked(
+      "recursive-scalar-assignment",
+      `y='a[$(touch ${JSON.stringify(scalarMarker)})]'; x=$((y)); ${echoPath} unsafe`,
+      scalarMarker,
+    );
+    const compoundMarker = path.join(root, "recursive-compound-assignment-ran");
+    await expectBlocked(
+      "recursive-compound-assignment",
+      `y='a[$(touch ${JSON.stringify(compoundMarker)})]'; x=([y]=1); ${echoPath} unsafe`,
+      compoundMarker,
+    );
+    const compoundAppendMarker = path.join(root, "recursive-compound-append-ran");
+    await expectBlocked(
+      "recursive-compound-append-assignment",
+      `y='a[$(touch ${JSON.stringify(compoundAppendMarker)})]'; x=([y]+=1); ${echoPath} unsafe`,
+      compoundAppendMarker,
+    );
+  });
 
   for (const shell of ["/bin/bash", "/bin/zsh"]) {
     it.skipIf(!fs.existsSync(shell))(
@@ -229,6 +375,39 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
       }
       expect(result.details.exitCode).toBe(0);
       expect(result.details.aggregated).toBe("venv-package-loaded approved.txt");
+    },
+  );
+
+  it.each([
+    ["missing name", "missing-exec-fixture", true],
+    ["missing absolute path", "{root}/missing-exec-fixture", true],
+    ["resolution error", "{root}/loop", true],
+    ["resolved without a grant", "/bin/ls", false],
+    ["satisfied builtin before a missing command", "cd . && missing-exec-fixture", true],
+    ["satisfied builtin before an ungranted command", "cd . && /bin/ls", false],
+    ["prompt-only wrapper", "env -S missing-exec-fixture", false],
+  ] as const)(
+    "explains Gateway executable lookup denials: %s",
+    async (_name, command, unresolved) => {
+      fs.symlinkSync("loop", path.join(root, "loop"));
+      saveExecApprovals({
+        version: 1,
+        defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+        agents: {},
+      });
+      const review = reviewer();
+      await expect(
+        tool(review, "allowlist").execute("lookup-denial", {
+          command: command.replace("{root}", root),
+        }),
+      ).rejects.toThrow(
+        unresolved
+          ? "exec denied: executable could not be resolved; check command spelling and Gateway PATH or use an absolute executable path"
+          : "exec denied: allowlist miss",
+      );
+      expect(boundary.spawn).not.toHaveBeenCalled();
+      expect(review).not.toHaveBeenCalled();
+      expect(callGatewayTool).not.toHaveBeenCalled();
     },
   );
 
@@ -352,4 +531,107 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
       }
     },
   );
+
+  // A program file started from a shell chain: the command text does not show what runs.
+  describe.skipIf(path.basename(nodeBinary) !== "node")("opaque interpreter programs", () => {
+    // The base refused each command as a "complex interpreter invocation".
+    const command = "echo start && node main.js";
+    const unbindableCommands = (dir: string) => [
+      `cd ${JSON.stringify(dir)} && node main.js`,
+      "cat main.js | node",
+    ];
+    beforeEach(() => {
+      fs.writeFileSync(path.join(root, "main.js"), 'process.stdout.write("program-ran");\n');
+    });
+    function setApprovals(security: "full" | "allowlist") {
+      saveExecApprovals({
+        version: 1,
+        defaults: {
+          security,
+          ask: security === "full" ? "off" : "on-miss",
+          askFallback: "deny",
+        },
+        agents:
+          security === "allowlist"
+            ? {
+                main: {
+                  allowlist: ["/bin/cat", "/bin/echo"]
+                    .map((bin) => ({ pattern: fs.realpathSync(bin) }))
+                    .concat({ pattern: nodeBinary }),
+                },
+              }
+            : {},
+      });
+    }
+    function programTool(mode: "full" | "ask" | "auto", autoReviewer?: ExecAutoReviewer) {
+      return createExecTool({
+        agentId: "main",
+        host: "gateway",
+        mode,
+        pathPrepend: [path.dirname(nodeBinary)],
+        safeBins: [],
+        autoReviewer,
+        cwd: root,
+        runId: "opaque-program-run",
+        // Full mode has no channel: such runs keep the model's per-call ask (subagent launches).
+        messageProvider: mode === "full" ? undefined : "webchat",
+        notifyOnExit: false,
+      });
+    }
+    function expectProgramRan(
+      result: Awaited<ReturnType<ReturnType<typeof programTool>["execute"]>>,
+    ) {
+      if (result.details.status !== "completed") {
+        throw new Error(`Unexpected exec status: ${result.details.status}`);
+      }
+      expect(result.details.exitCode).toBe(0);
+      expect(result.details.aggregated).toMatch(/program-ran$/);
+    }
+
+    it.each([
+      ["without a per-call ask", {}],
+      ["when the call asks for approvals", { ask: "on-miss" }],
+    ])("runs under full/off %s", async (_name, extra) => {
+      setApprovals("full");
+      const exec = programTool("full");
+      for (const each of [command, ...unbindableCommands(root)]) {
+        expectProgramRan(await exec.execute("opaque-full", { command: each, ...extra }));
+      }
+      expect(callGatewayTool).not.toHaveBeenCalled();
+    });
+
+    it("requests approval instead of refusing under an asking policy", async () => {
+      setApprovals("allowlist");
+      const exec = programTool("ask");
+      // Control: the same allowlisted program runs without approval when the command shows it.
+      expectProgramRan(await exec.execute("visible-program", { command: "node main.js" }));
+      expect(callGatewayTool).not.toHaveBeenCalled();
+      approve("allow-once");
+      const result = await exec.execute("opaque-ask", { command });
+      expect(vi.mocked(callGatewayTool).mock.calls.map(([method]) => method)).toContain(
+        "exec.approval.request",
+      );
+      expectProgramRan(result);
+    });
+
+    it("runs allowlisted programs under an asking policy when approval cannot bind them", async () => {
+      setApprovals("allowlist");
+      const exec = programTool("ask");
+      for (const each of unbindableCommands(root)) {
+        expectProgramRan(await exec.execute("opaque-ask-unbindable", { command: each }));
+      }
+      expect(callGatewayTool).not.toHaveBeenCalled();
+    });
+
+    it("sends the program to the auto-reviewer as an allowlist miss", async () => {
+      setApprovals("allowlist");
+      const review = reviewer();
+      expectProgramRan(await programTool("auto", review).execute("opaque-auto", { command }));
+      expect(review).toHaveBeenCalledOnce();
+      expect(review.mock.calls[0]?.[0]).toMatchObject({
+        reason: "allowlist-miss",
+        analysis: { parsed: true, allowlistMatched: true },
+      });
+    });
+  });
 });

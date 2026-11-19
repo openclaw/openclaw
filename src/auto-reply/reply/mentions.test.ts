@@ -84,6 +84,16 @@ it.each<MentionCase>([
   }
 });
 
+it("keeps a slash command's line breaks and indentation when it strips mentions", () => {
+  const cfg = { messages: { groupChat: { mentionPatterns: ["@openclaw"] } } };
+  expect(stripMentions("@openclaw /loop 1h check these:\n- CI on main\n  - lint", {}, cfg)).toBe(
+    "/loop 1h check these:\n- CI on main\n  - lint",
+  );
+  expect(stripMentions("@openclaw   what changed\n since   yesterday?", {}, cfg)).toBe(
+    "what changed since yesterday?",
+  );
+});
+
 it("keeps explicit configured patterns on their existing regex flags", () => {
   const regexes = buildMentionRegexes({
     messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },

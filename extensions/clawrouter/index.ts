@@ -1,7 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { ModelInferenceCapabilitiesSchema } from "openclaw/plugin-sdk/decisions";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import type { ModelRequestHeaders } from "openclaw/plugin-sdk/llm";
 import type {
@@ -19,6 +18,8 @@ import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-str
 import {
   createAnthropicThinkingPrefillPayloadWrapper,
   createOpenAIHostedWebSearchWrapper,
+  mapAssistantMessageStream,
+  transformProviderStreamMessages,
   wrapProviderPayloadHook,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
@@ -41,12 +42,14 @@ import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normal
 import { clawrouterMediaUnderstandingProvider } from "./audio-transcription.js";
 import { normalizeClawRouterApiBaseUrl, normalizeClawRouterRootUrl } from "./base-url.js";
 import { buildClawRouterDecisionProvider } from "./decision-provider.js";
+import { clawrouterEmbeddingProvider } from "./embedding-provider.js";
 import { buildClawRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { listClawRouterImageModelCatalog } from "./image-model-catalog.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { parseClawRouterPool, type ClawRouterPoolResult } from "./pool.js";
 import {
   buildClawRouterProviderConfig,
+  decisionCapabilities,
   CLAWROUTER_REASONING_EFFORT_LEVELS,
   normalizeClawRouterReasoningEfforts,
   normalizeClawRouterResolvedModel,
@@ -60,17 +63,12 @@ import {
 } from "./provider-policy-api.js";
 import { buildClawRouterSpeechProvider } from "./speech-provider.js";
 import { fetchClawRouterUsage } from "./usage.js";
+import { createClawRouterWebSearchProvider } from "./web-search-provider.js";
 
 const PERPLEXITY_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "patternProperties",
   "additionalProperties",
 ]);
-
-const decisionCapabilities = ModelInferenceCapabilitiesSchema.parse(
-  manifest.modelCatalog.providers.clawrouter.models.find(
-    (model) => model.id === "openai/gpt-6-luna",
-  )?.inference,
-);
 
 const ENV_API_KEY_MARKER = "CLAWROUTER_API_KEY";
 const ATTRIBUTION_VALUE_MAX_LENGTH = 256;
@@ -162,6 +160,9 @@ function setHeaderDefault(
 }
 
 const openAiServiceTier = buildProviderStreamFamilyHooks("openai-responses-service-tier");
+const mistralReplay = buildProviderReplayFamilyHooks({ family: "mistral" });
+const cohereCompatibility = buildProviderStreamFamilyHooks("cohere-compatibility");
+const xaiReasoning = buildProviderStreamFamilyHooks("xai-responses-reasoning");
 const log = createSubsystemLogger("clawrouter-stream");
 
 function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
@@ -177,7 +178,14 @@ function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
     );
   });
   const routedStream: StreamFn = (model, context, options) => {
-    const underlying = model.api === "anthropic-messages" ? claudeStream : streamFn;
+    const underlying =
+      model.api === "anthropic-messages"
+        ? claudeStream
+        : model.api === "openai-completions" && model.id.startsWith("cohere/")
+          ? (cohereCompatibility.wrapStreamFn?.({ ...ctx, streamFn }) ?? streamFn)
+          : model.api === "openai-responses" && model.id.startsWith("xai/")
+            ? (xaiReasoning.wrapStreamFn?.({ ...ctx, streamFn }) ?? streamFn)
+            : streamFn;
     const apiKey = options?.apiKey?.trim();
     const dispatchKey = apiKey && apiKey !== ENV_API_KEY_MARKER ? apiKey : undefined;
     const preparedModel = prepareClawRouterRequestModel(model);
@@ -241,7 +249,17 @@ function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
           },
         }) ?? underlying)
       : underlying;
-    return stream({ ...preparedModel, headers }, context, options);
+    const response = stream({ ...preparedModel, headers }, context, options);
+    if (preparedModel.id === model.id) {
+      return response;
+    }
+    // Upstream IDs belong on the wire; session state needs the resolvable catalog ID.
+    // Keep responseModel intact so genuine upstream reroutes remain observable.
+    return mapAssistantMessageStream(response, (output) =>
+      transformProviderStreamMessages(output, (message) => {
+        message.model = model.id;
+      }),
+    );
   };
   // Evaluate catalog facts before dispatch removes private route metadata.
   return createOpenAIHostedWebSearchWrapper(
@@ -440,6 +458,8 @@ export default defineSingleProviderPluginEntry({
   manifest,
   register(api) {
     api.registerSpeechProvider(buildClawRouterSpeechProvider);
+    api.registerEmbeddingProvider(clawrouterEmbeddingProvider);
+    api.registerWebSearchProvider(createClawRouterWebSearchProvider());
     api.registerMediaUnderstandingProvider(clawrouterMediaUnderstandingProvider);
     api.registerDecisionProvider(buildClawRouterDecisionProvider());
     api.registerImageGenerationProvider(buildClawRouterImageGenerationProvider());
@@ -550,6 +570,13 @@ export default defineSingleProviderPluginEntry({
     return {
       label: "ClawRouter",
       docsPath: "/providers/clawrouter",
+      // The session's empty upstream grant cannot recover by retrying the shared router key.
+      classifyFailoverReason: ({ provider, status, errorMessage }) =>
+        provider?.trim().toLowerCase() === PROVIDER_ID &&
+        status === 400 &&
+        /\bcredit balance is too low\b/i.test(errorMessage)
+          ? "route_unavailable"
+          : undefined,
       manifestAuth: {
         hint: "Credential-scoped access to approved models and budgets",
         noteTitle: "ClawRouter",
@@ -655,6 +682,9 @@ export default defineSingleProviderPluginEntry({
         wrapClawRouterProviderStream({ ...ctx, nativeWebSearchAllowedByToolPolicy: false }),
       wrapStreamFn: wrapClawRouterProviderStream,
       buildReplayPolicy: (ctx) => {
+        if (ctx.modelApi === "openai-completions" && ctx.modelId?.startsWith("mistral/")) {
+          return mistralReplay.buildReplayPolicy?.(ctx);
+        }
         if (ctx.modelApi === "anthropic-messages") {
           return anthropicReplay.buildReplayPolicy?.(ctx);
         }

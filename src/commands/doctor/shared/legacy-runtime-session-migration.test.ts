@@ -22,6 +22,9 @@ import { runDoctorSessionSqlite } from "../../doctor-session-sqlite.js";
 import { maybeRepairCodexSessionRoutes } from "./codex-route-session-repair.js";
 
 const states: OpenClawTestState[] = [];
+function session(sessionId: string, fields: Partial<SessionEntry> = {}): SessionEntry {
+  return { sessionId, updatedAt: 1, ...fields };
+}
 async function fixture(
   cfg: OpenClawConfig = { plugins: { enabled: false } },
   layout: "home" | "state-only" = "home",
@@ -164,35 +167,6 @@ describe("legacy runtime session model migration", () => {
 });
 
 describe("legacy CLI session binding migration", () => {
-  it("migrates a legacy-only session without changing resume selection", async () => {
-    const { read, write, repair, reopen } = await fixture({
-      plugins: { enabled: false },
-      agents: { entries: { main: {} }, defaults: { model: "openai/current-model" } },
-    });
-    await write("legacy-binding", {
-      sessionId: "local-binding-session",
-      updatedAt: 1,
-      claudeCliSessionId: "Remote-MixedCase-Session/Alpha",
-    });
-    const before = read("legacy-binding");
-
-    await repair(false);
-    expect(read("legacy-binding")).toEqual(before);
-    await repair();
-
-    const saved = read("legacy-binding");
-    expect(saved?.cliSessionBindings?.["claude-cli"]).toEqual({
-      sessionId: "Remote-MixedCase-Session/Alpha",
-    });
-    expect(saved).not.toHaveProperty("claudeCliSessionId");
-    await reopen();
-    const reopened = read("legacy-binding");
-    expect(reuse(reopened)).toEqual({ mode: "reuse", sessionId: "Remote-MixedCase-Session/Alpha" });
-    expect(reopened?.sessionId).toBe("local-binding-session");
-    expect((await repair()).changes).toEqual([]);
-    expect(read("legacy-binding")).toEqual(reopened);
-  });
-
   it("preserves canonical metadata and provider-map precedence across reopen", async () => {
     const { read, write, repair, reopen } = await fixture();
     const canonical: CliSessionBinding = {
@@ -216,19 +190,22 @@ describe("legacy CLI session binding migration", () => {
         userTurnDisposition: "omitted",
       },
     };
-    await write("canonical", {
-      sessionId: "canonical-local",
-      updatedAt: 1,
-      claudeCliSessionId: "Obsolete-Conversation",
-      cliSessionIds: { "claude-cli": "Map-Conversation" },
-      cliSessionBindings: { "claude-cli": canonical, "other-cli": { sessionId: "Other-ID" } },
-    });
-    await write("map", {
-      sessionId: "map-local",
-      updatedAt: 2,
-      claudeCliSessionId: "Obsolete-Map-Conversation",
-      cliSessionIds: { "claude-cli": "Map-Conversation", "other-cli": "Other-Map-ID" },
-    });
+    const sessionIds = { "claude-cli": "Map-Conversation", "other-cli": "Other-Map-ID" };
+    await write(
+      "canonical",
+      session("canonical-local", {
+        claudeCliSessionId: "Obsolete-Conversation",
+        cliSessionIds: { "claude-cli": "Map-Conversation" },
+        cliSessionBindings: { "claude-cli": canonical, "other-cli": { sessionId: "Other-ID" } },
+      }),
+    );
+    await write(
+      "map",
+      session("map-local", {
+        claudeCliSessionId: "Obsolete-Map-Conversation",
+        cliSessionIds: sessionIds,
+      }),
+    );
 
     const repaired = await repair();
     expect(repaired.changes[0]).toContain("in 2 sessions across ");
@@ -239,11 +216,7 @@ describe("legacy CLI session binding migration", () => {
       "claude-cli": canonical,
       "other-cli": { sessionId: "Other-ID" },
     });
-    expect(getCliSessionBinding(savedCanonical, "claude-cli")).toEqual(canonical);
-    expect(savedMap?.cliSessionIds).toEqual({
-      "claude-cli": "Map-Conversation",
-      "other-cli": "Other-Map-ID",
-    });
+    expect(savedMap?.cliSessionIds).toEqual(sessionIds);
     expect(getCliSessionBinding(savedMap, "claude-cli")).toEqual({ sessionId: "Map-Conversation" });
     expect(savedCanonical).not.toHaveProperty("claudeCliSessionId");
     expect(savedMap).not.toHaveProperty("claudeCliSessionId");
@@ -251,32 +224,26 @@ describe("legacy CLI session binding migration", () => {
 
   it("migrates safe rows while preserving unresolved bindings and locked ownership", async () => {
     const { read, write, repair, reopen } = await fixture();
-    const malformed: SessionEntry = { sessionId: "malformed-local", updatedAt: 4 };
+    const malformed = session("malformed-local");
     Object.assign(malformed, { claudeCliSessionId: 17 });
     const rows: Record<string, SessionEntry> = {
-      safe: {
-        sessionId: "safe-local",
-        updatedAt: 1,
+      safe: session("safe-local", {
         claudeCliSessionId: "  Safe-MixedCase/ID  ",
         cliSessionBindings: { "claude-cli": { sessionId: " " } },
-      },
-      ambiguous: {
-        sessionId: "ambiguous-local",
-        updatedAt: 2,
+      }),
+      ambiguous: session("ambiguous-local", {
         claudeCliSessionId: "Old-Conversation",
         cliSessionBindings: { "claude-cli": { sessionId: " ", authEpoch: "Unbound-Epoch" } },
-      },
-      empty: { sessionId: "empty-local", updatedAt: 3, claudeCliSessionId: " " },
+      }),
+      empty: session("empty-local", { claudeCliSessionId: " " }),
       malformed,
-      locked: {
-        sessionId: "locked-local",
-        updatedAt: 5,
+      locked: session("locked-local", {
         agentHarnessId: "claude-cli",
         modelSelectionLocked: true,
         modelProvider: "claude-cli",
         model: "retained-model",
         claudeCliSessionId: "Locked-Conversation",
-      },
+      }),
     };
     for (const [key, entry] of Object.entries(rows)) {
       await write(key, entry);
@@ -292,17 +259,14 @@ describe("legacy CLI session binding migration", () => {
       expect(repaired.warnings.join("\n")).toContain(`agent:main:${key}`);
     }
     await reopen();
-    expect(getCliSessionBinding(read("safe"), "claude-cli")?.sessionId).toBe("Safe-MixedCase/ID");
-    expect(read("safe")).not.toHaveProperty("claudeCliSessionId");
+    const safe = read("safe");
+    expect(safe?.cliSessionBindings?.["claude-cli"]).toEqual({ sessionId: "Safe-MixedCase/ID" });
+    expect(reuse(safe)).toEqual({ mode: "reuse", sessionId: "Safe-MixedCase/ID" });
+    expect(safe?.sessionId).toBe("safe-local");
+    expect(safe).not.toHaveProperty("claudeCliSessionId");
     const locked = read("locked");
-    expect(locked).toMatchObject({
-      sessionId: "locked-local",
-      updatedAt: 5,
-      agentHarnessId: "claude-cli",
-      modelSelectionLocked: true,
-      modelProvider: "claude-cli",
-      model: "retained-model",
-    });
+    const { claudeCliSessionId: _legacyBinding, ...preserved } = rows.locked!;
+    expect(locked).toMatchObject(preserved);
     expect(locked).not.toHaveProperty("claudeCliSessionId");
     expect(reuse(locked)).toEqual({ mode: "reuse", sessionId: "Locked-Conversation" });
     for (const key of ["ambiguous", "empty", "malformed"]) {

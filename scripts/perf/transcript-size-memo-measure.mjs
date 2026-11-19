@@ -1,16 +1,21 @@
 // Owner-only sizing/accounting proof; no Gateway, database, or LRU timing claim.
+// node --expose-gc scripts/perf/transcript-size-memo-measure.mjs OWNER.ts cpu entries
+// Repeat with allocation; omit entries for copy-on-write transcript appends.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { stripTypeScriptTypes } from "node:module";
 import { getHeapSnapshot } from "node:v8";
-import { runInNewContext } from "node:vm";
+import { runInThisContext } from "node:vm";
 
-const [ownerFile, mode = "table"] = process.argv.slice(2);
+const [ownerFile, mode = "table", workload = "transcripts"] = process.argv.slice(2);
 assert(
-  ownerFile && ["table", "cpu", "allocation"].includes(mode),
-  "usage: node --expose-gc scripts/perf/transcript-size-memo-measure.mjs OWNER.ts [table|cpu|allocation]",
+  ownerFile &&
+    ["table", "cpu", "allocation"].includes(mode) &&
+    ["transcripts", "entries"].includes(workload) &&
+    (workload === "transcripts" || mode !== "table"),
+  "usage: node --expose-gc scripts/perf/transcript-size-memo-measure.mjs OWNER.ts [table|cpu|allocation] [transcripts|entries]",
 );
 assert(globalThis.gc, "--expose-gc is required");
 const source = readFileSync(ownerFile, "utf8");
@@ -29,16 +34,18 @@ class CountedWeakMap extends WeakMap {
     return super.set(key, value);
   }
 }
-const owner = runInNewContext(
+// Keep fixtures and callbacks in the production realm; scope the extracted owner privately.
+const owner = runInThisContext(
   stripTypeScriptTypes(`
+(function (WeakMap) {
 ${between("const transcriptSizes =", "const pool =")}
 const pool = { snapshots: 0, bytes: 0 };
 function touch() {}
 ${between("function retainTranscript(", "/** The caller already borrowed")}
-({ retainTranscript, transcriptSizes, estimateReplicaBytes });
+return { retainTranscript, transcriptSizes, estimateReplicaBytes };
+})
 `),
-  { WeakMap: mode === "table" ? CountedWeakMap : WeakMap },
-);
+)(mode === "table" ? CountedWeakMap : WeakMap);
 function row(rawSeq) {
   return {
     rawSeq,
@@ -84,6 +91,7 @@ function transcript(rows, sessionId = "synthetic") {
 const cell = { bytes: 0, transcriptBytes: 0 };
 const report = {
   mode,
+  workload,
   node: process.version,
   sourceSha256: createHash("sha256").update(source).digest("hex"),
 };
@@ -144,13 +152,55 @@ if (mode === "table") {
     estimatedBytes,
   });
 } else {
-  const fixtures = Array.from({ length: 100 }, () => {
-    const rows = Array.from({ length: 256 }, (_, i) => row(i));
-    return Array.from({ length: 129 }, (_, i) => transcript(rows.slice(0, 128 + i)));
-  });
+  const entryFixtures = Array.from({ length: 128 }, (_entry, index) => ({
+    sessionKey: `agent:synthetic:session-${index}`,
+    entry: {
+      sessionId: `session-${index}`,
+      updatedAt: 1,
+      label: `Synthetic completed subagent ${index}`,
+      skillsSnapshot: {
+        prompt: "Synthetic skill instructions. ".repeat(512),
+        skills: Array.from({ length: 40 }, (_skill, skill) => ({
+          name: `skill-${skill}`,
+          description: "Synthetic skill",
+          filePath: `/synthetic/skill-${skill}/SKILL.md`,
+        })),
+      },
+      pluginExtensions: Object.fromEntries(
+        Array.from({ length: 40 }, (_plugin, plugin) => [
+          `plugin-${plugin}`,
+          { enabled: true, tags: ["synthetic", "completed"], settings: { limit: 8 } },
+        ]),
+      ),
+    },
+    snapshots: "full",
+    dependencySessionIds: [`session-${index}`],
+    writeToken: "synthetic:1",
+  }));
+  // Entry publications are deeply frozen before production byte accounting.
+  function freezeFixture(value) {
+    if (value && typeof value === "object") {
+      for (const child of Object.values(value)) {
+        freezeFixture(child);
+      }
+      Object.freeze(value);
+    }
+  }
+  entryFixtures.forEach(freezeFixture);
+  const fixtures =
+    workload === "entries"
+      ? []
+      : Array.from({ length: 100 }, () => {
+          const rows = Array.from({ length: 256 }, (_, i) => row(i));
+          return Array.from({ length: 129 }, (_, i) => transcript(rows.slice(0, 128 + i)));
+        });
   // Warm the code on disjoint rows; fixture construction is outside measurement.
   for (let i = 0; i < 1000; i++) {
-    owner.retainTranscript(cell, transcript([row(i)]));
+    if (workload === "entries") {
+      owner.estimateReplicaBytes(entryFixtures[i % entryFixtures.length]);
+    } else {
+      owner.retainTranscript(cell, transcript([row(i)]));
+    }
   }
   // Seed each memo before timing so every measured retain appends exactly one row.
   for (const sequence of fixtures) {
@@ -169,6 +219,13 @@ if (mode === "table") {
   const cpu = process.cpuUsage();
   const start = performance.now();
   let calls = 0;
+  let estimatedBytes = 0;
+  if (workload === "entries") {
+    for (let i = 0; i < 5000; i++) {
+      estimatedBytes += owner.estimateReplicaBytes(entryFixtures[i % entryFixtures.length]);
+      calls++;
+    }
+  }
   for (const sequence of fixtures) {
     for (const fixture of sequence) {
       owner.retainTranscript(cell, fixture);
@@ -182,6 +239,7 @@ if (mode === "table") {
     cpuMs: (used.user + used.system) / 1000,
     wallMs,
     finalBytes: cell.transcriptBytes,
+    estimatedBytes,
   });
   if (mode === "allocation") {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");

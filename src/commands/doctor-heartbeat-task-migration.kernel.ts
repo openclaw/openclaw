@@ -9,17 +9,14 @@ import {
 } from "../cron/proactive-job-receipt.kernel.js";
 import type { CronJobScratchState } from "../cron/scratch-contract.js";
 import { computeJobNextRunAtMs } from "../cron/service/jobs-scheduling.js";
-import { cronStoreKey } from "../cron/store/key.js";
 import {
   assertCronStoreCanPersist,
   loadedCronStoreFromRows,
   loadCronRows,
   upsertCronJobRow,
 } from "../cron/store/row-codec.js";
-import {
-  loadCronRuntimeAuthorities,
-  replaceCronRuntimeAuthorityRows,
-} from "../cron/store/runtime-authority-store.js";
+import { loadCronRuntimeAuthorities } from "../cron/store/runtime-authority-store.js";
+import { replaceCronRuntimeAuthorityRows } from "../cron/store/save.kernel.js";
 import { getCronStoreKysely } from "../cron/store/schema.js";
 import type { CronStoredJob as CronJob } from "../cron/types.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
@@ -216,7 +213,7 @@ export function loadHeartbeatTaskPlanningSnapshot(
   db: EngineConnection,
   storePath: string,
 ): CronPlanningSnapshot {
-  const rows = loadCronRows(db, cronStoreKey(storePath));
+  const rows = loadCronRows(db, storePath);
   const sortOrderByJobId = new Map(rows.map((row) => [row.job_id, row.sort_order] as const));
   return {
     jobs: loadedCronStoreFromRows(rows).store.jobs,
@@ -253,7 +250,7 @@ export function commitHeartbeatTaskMigrationInDatabase(params: {
   nowMs: number;
   plan: AgentTaskMigrationPlan;
 }): MigrationCommitResult {
-  const storeKey = cronStoreKey(params.storePath);
+  const storeKey = params.storePath;
   const { db } = params;
   if (readScratchRevision(db, storeKey, params.plan.monitor.id) !== params.plan.scratchRevision) {
     return { ok: false, reason: "revision-conflict" } as const;

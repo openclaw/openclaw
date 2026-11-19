@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
-import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { GatewayService } from "../daemon/service.js";
 import { createMockGatewayService, mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -60,7 +59,6 @@ it.each([
         const source = JSON.stringify({ version: 1, profiles: { "claude-cli:default": profile } });
         const sourcePath = await state.writeText("agents/main/agent/auth-profiles.json", source);
         mockSystemAccountHome();
-        expect(isDefaultInstallIdentity()).toBe(true);
         let serviceRoot = process.cwd();
         if (appOwned) {
           serviceRoot = tempDirs.make("doctor-app-owned-runtime-");

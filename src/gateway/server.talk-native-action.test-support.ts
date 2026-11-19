@@ -23,8 +23,8 @@ import {
 import * as callerContext from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { createTalkClientAgentConsultRunner } from "./talk/client-agent-consult.js";
-import { resolveTalkAgentConsultAuthority } from "./talk/client-gateway-control.js";
 import { retainTalkClientRunAuthority } from "./talk/client-run-authority.js";
+import { resolveTalkAgentConsultAuthority } from "./talk/client-tool-authority.js";
 import { readLegacyVoiceBinding } from "./talk/handlers/client-legacy-voice-bindings.js";
 import { prepareTalkSessionTarget } from "./talk/session-target.js";
 import {
@@ -312,8 +312,8 @@ export async function runTalkCallerReplay({
       expect(result).toMatchObject({
         ok: false,
         error: {
-          code: "UNAVAILABLE",
-          message: "Realtime agent consult completed before the tool result subscription started.",
+          code: "INVALID_REQUEST",
+          details: { reason: "chat-input-cancelled", endCause: "failed" },
         },
       });
       await expectEffects(dispatches, effectText);

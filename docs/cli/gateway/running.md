@@ -150,7 +150,7 @@ openclaw gateway auth-token --show
 
 The command resolves `gateway.auth.token`, `OPENCLAW_GATEWAY_TOKEN`, and configured SecretRefs, then prints only the token. It requires an interactive terminal and refuses redirected or piped output so the credential does not silently enter command logs. Treat the terminal output as a secret.
 
-If no persistent token is configured, run `openclaw doctor --generate-gateway-token`, restart the Gateway, and then rerun the command. Generic `openclaw config get` output remains redacted, including `--json`.
+If no persistent token is configured, run `openclaw doctor --generate-gateway-token`, restart the Gateway, and then rerun the command. On Windows PowerShell, a Restricted execution policy blocks npm's `openclaw.ps1` shim before Doctor starts; use [npm's `openclaw.cmd`](/platforms/windows#powershell-execution-policy) instead of changing the execution policy. Generic `openclaw config get` output remains redacted, including `--json`.
 
 ## Recover an unverifiable state lock
 
@@ -179,3 +179,12 @@ automatically. The explicit command is needed for crashed owners whose death
 cannot be verified from the new process, including containers with separate PID
 namespaces. `openclaw gateway recover-lock --json` exposes the inspection and
 confirmation command for operator tooling.
+
+Recovery supports SQLite global state and the selected PostgreSQL state family.
+For PostgreSQL, inspection binds the original local anchor, remote store UUID and
+namespace, and complete Gateway-owner lease record. Confirmation clears only that
+unchanged lease under native custody and a bounded PostgreSQL transaction; it
+does not migrate schemas or remove agent data. An unavailable store, incompatible
+lease table, changed anchor or renewed lease remains refused. Inspection may read
+a different application schema version through its verified stable lease contract;
+confirmation requires this binary's current GLOBAL schema version before any cleanup.

@@ -3,14 +3,17 @@ import {
   isNativeHookRelayBridgeStaleRegistrationError,
   renderNativeHookRelayUnavailableResponse,
 } from "../agents/harness/native-hook-relay-client.js";
+import { NATIVE_HOOK_INEXACT_NUMBER_PATHS_FIELD } from "../agents/harness/native-hook-relay-constants.js";
 import { invokeRemoteNativeHookRelay } from "../agents/harness/native-hook-relay-remote-client.js";
 import type { NativeHookRelayProcessResponse } from "../agents/harness/native-hook-relay-types.js";
+import { isJsonObject } from "../agents/harness/native-hook-relay-utils.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 
 const MAX_NATIVE_HOOK_STDIN_BYTES = 1024 * 1024;
+const MAX_INEXACT_NUMBER_PATHS_LENGTH = 64 * 1024;
 
 /** User-facing flags for the native hook relay command. */
 export type NativeHookRelayCliOptions = Partial<
@@ -61,7 +64,13 @@ export async function runNativeHookRelayCliFromArgv(argv: string[]): Promise<num
   return await runNativeHookRelayCli(opts);
 }
 
-/** Run one native hook relay invocation from stdin JSON to stdout/stderr response streams. */
+/**
+ * Run one native hook relay invocation from stdin JSON to stdout/stderr response streams.
+ *
+ * Codex starts its hook timeout before spawning this process and treats a hook it
+ * kills as non-blocking. The deadline therefore counts from process start
+ * (`performance.now()` origin), so slow startup still leaves time to refuse.
+ */
 export async function runNativeHookRelayCli(opts: NativeHookRelayCliOptions): Promise<number> {
   const { stdin, stdout, stderr } = process;
   const provider = readRequiredOption(opts.provider, "provider");
@@ -99,13 +108,20 @@ export async function runNativeHookRelayCli(opts: NativeHookRelayCliOptions): Pr
     let rawPayload: unknown;
     try {
       const rawInput = await readStreamText(stdin, MAX_NATIVE_HOOK_STDIN_BYTES, deadline);
-      rawPayload = rawInput.trim() ? JSON.parse(rawInput) : null;
+      if (!rawInput.trim()) {
+        rawPayload = null;
+      } else {
+        rawPayload =
+          event === "pre_tool_use" ? parsePreToolUseStdin(rawInput) : JSON.parse(rawInput);
+      }
     } catch (error) {
       if (isNativeHookRelayDeadlineError(error)) {
         return timedOut(error);
       }
       writeText(stderr, formatRelayCliError("failed to read native hook input", error));
-      return 1;
+      return unavailable(
+        "Native hook input could not be read; shorten or split tool input and retry",
+      );
     }
 
     try {
@@ -170,6 +186,47 @@ export async function runNativeHookRelayCli(opts: NativeHookRelayCliOptions): Pr
   }
 }
 
+/**
+ * Codex forwards the model's number text verbatim, and JSON.parse is the first
+ * lossy step. Only here can a rewrite still learn which tool arguments would
+ * change if it re-serialized them.
+ */
+function parsePreToolUseStdin(rawInput: string): unknown {
+  const inexactKeys = new Map<object, Set<string>>();
+  const payload: unknown = JSON.parse(
+    rawInput,
+    function (this: object, key, value: unknown, context?: { source?: string }) {
+      if (typeof value === "number" && context?.source !== JSON.stringify(value)) {
+        inexactKeys.set(this, (inexactKeys.get(this) ?? new Set()).add(key));
+      }
+      return value;
+    },
+  );
+  if (!isJsonObject(payload)) {
+    return payload;
+  }
+  const paths: string[][] = [];
+  const collectPaths = (value: unknown, path: string[]) => {
+    if (value === null || typeof value !== "object") {
+      return;
+    }
+    for (const [key, child] of Object.entries(value)) {
+      if (inexactKeys.get(value)?.has(key)) {
+        paths.push([...path, key]);
+      } else {
+        collectPaths(child, [...path, key]);
+      }
+    }
+  };
+  collectPaths(payload.tool_input, []);
+  const serializedPaths = JSON.stringify(paths);
+  return {
+    ...payload,
+    [NATIVE_HOOK_INEXACT_NUMBER_PATHS_FIELD]:
+      serializedPaths.length <= MAX_INEXACT_NUMBER_PATHS_LENGTH ? serializedPaths : null,
+  };
+}
+
 async function callGatewayLazy<T = Record<string, unknown>>(opts: CallGatewayOptions): Promise<T> {
   const { callGateway } = await import("../gateway/call.js");
   return await callGateway<T>(opts);
@@ -229,13 +286,15 @@ function formatRelayCliError(prefix: string, error: unknown): string {
 
 function createNativeHookRelayDeadline(timeoutMs: number) {
   const controller = new AbortController();
+  // performance.now() counts from process start, where Codex's hook timeout began.
+  const expiresAtMs = timeoutMs;
   const timer = setSafeTimeout(
     () => controller.abort(new NativeHookRelayDeadlineError(timeoutMs)),
-    timeoutMs,
+    expiresAtMs - performance.now(),
   );
   timer.unref?.();
   return {
-    expiresAtMs: performance.now() + timeoutMs,
+    expiresAtMs,
     signal: controller.signal,
     timeoutMs,
     dispose: () => clearTimeout(timer),

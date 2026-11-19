@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { sanitizeTerminalText, terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
@@ -21,6 +21,7 @@ import {
   isImplicitLocalGatewayTarget,
 } from "../gateway/call.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
 import { resolveSessionDisplayModelRef } from "./sessions-display-model.js";
@@ -118,16 +119,16 @@ function renderAppliedResult(
         runtime.log("");
       }
       if (summaries.length > 1) {
-        runtime.log(`Agent: ${summary.agentId}`);
+        runtime.log(terminalText`Agent: ${summary.agentId}`);
       }
-      runtime.log(`Session store: ${summary.storePath}`);
+      runtime.log(terminalText`Session store: ${summary.storePath}`);
       runtime.log(`Applied maintenance. Current entries: ${summary.appliedCount ?? 0}`);
       if (summary.unreferencedArtifacts?.removedFiles) {
         runtime.log(`Pruned unreferenced artifacts: ${summary.unreferencedArtifacts.removedFiles}`);
       }
     }
     if (partialError) {
-      runtime.error(`[error] ${partialError.message}`);
+      runtime.error(terminalText`[error] ${partialError.message}`);
     }
   }
   if (partialError) {
@@ -138,6 +139,7 @@ function renderAppliedResult(
 async function maybeRunGatewayCleanup(
   opts: SessionsCleanupOptions,
   cfg: OpenClawConfig,
+  signal: AbortSignal | undefined,
 ): Promise<{ delegated: true; result: SessionsCleanupResult } | { delegated: false }> {
   if (opts.store !== undefined || opts.dryRun) {
     // Explicit store paths and dry-runs stay local; sessions.cleanup takes no store param.
@@ -153,6 +155,7 @@ async function maybeRunGatewayCleanup(
       method: "sessions.cleanup",
       // Maintenance can outlive passive reads; keep the connection's startup deadline.
       timeoutMs: null,
+      signal,
       params: {
         agent: opts.agent,
         allAgents: opts.allAgents,
@@ -167,6 +170,9 @@ async function maybeRunGatewayCleanup(
     });
     return { delegated: true, result };
   } catch (error) {
+    // A Ctrl+C cancels the pending cleanup; keep the canonical abort outcome instead
+    // of reporting the gateway as unreachable and running local cleanup.
+    signal?.throwIfAborted();
     if (resolveGatewayMutationFallback({ error, localTarget }) === "unreachable") {
       return { delegated: false };
     }
@@ -179,8 +185,9 @@ async function maybeRunGatewayCleanup(
 
 /** Runs session cleanup, optionally using the live gateway for active stores. */
 export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runtime: RuntimeEnv) {
+  const signal = getAsyncWorkSignal();
   const cfg = await captureRuntimeConfigAsyncReader()();
-  const gatewayCleanup = await maybeRunGatewayCleanup(opts, cfg);
+  const gatewayCleanup = await maybeRunGatewayCleanup(opts, cfg, signal);
   if (gatewayCleanup.delegated) {
     // The Gateway owns this path. Preserve its syntax because resolving a remote
     // Windows path on a POSIX client (or vice versa) would fabricate a local path.
@@ -224,9 +231,9 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
         agentId: storeSummary.agentId,
       }).path;
       if (showAgentHeader) {
-        runtime.log(`Agent: ${storeSummary.agentId}`);
+        runtime.log(terminalText`Agent: ${storeSummary.agentId}`);
       }
-      runtime.log(`Session store: ${displayStorePath}`);
+      runtime.log(terminalText`Session store: ${displayStorePath}`);
       runtime.log(`Maintenance mode: ${storeSummary.mode}`);
       runtime.log(
         `Entries: ${storeSummary.beforeCount} -> ${storeSummary.afterCount} (remove ${storeSummary.beforeCount - storeSummary.afterCount})`,

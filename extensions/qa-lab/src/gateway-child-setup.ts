@@ -32,7 +32,7 @@ import {
   type QaCliBackendAuthMode,
 } from "./providers/env.js";
 import { DEFAULT_QA_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
-import { readQaLiveProviderConfigOverrides } from "./providers/live-config.js";
+import { readQaLiveProviderConfig } from "./providers/live-config.js";
 import {
   QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV,
   QA_LIVE_SETUP_TOKEN_VALUE_ENV,
@@ -93,6 +93,8 @@ export type QaGatewayChildParams = {
   onListening?: (context: QaGatewayChildListeningContext) => Promise<void> | void;
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
   runtimeEnvPatch?: NodeJS.ProcessEnv;
+  /** Use password authentication for fixture RPCs when default token auth is overridden. */
+  rpcPassword?: string;
   runtimePreloads?: readonly string[];
 };
 
@@ -170,6 +172,19 @@ export async function prepareQaGatewayChild(
     params.command ??
     (params.useRepoCli ? resolveQaGatewayChildCommand(params.repoRoot) : undefined);
   const usesPackagedCandidate = gatewayCommand?.usePackagedPlugins === true;
+  const runtimeEntry = (
+    gatewayCommand?.processBoundary?.runtimeArgsPrefix ?? gatewayCommand?.argsPrefix
+  )?.at(-1);
+  const runtimeEntryPath = runtimeEntry
+    ? path.resolve(gatewayCommand?.cwd ?? runtimeCwd, runtimeEntry)
+    : undefined;
+  const usesCurrentRuntime = [
+    "openclaw.mjs",
+    "scripts/run-node.mjs",
+    "src/entry.ts",
+    "dist/index.mjs",
+    "dist/index.js",
+  ].some((relativePath) => runtimeEntryPath === path.join(params.repoRoot, relativePath));
   const gatewayExecutablePath = gatewayCommand?.executablePath;
   const gatewayArgsPrefix = gatewayCommand?.argsPrefix ?? [];
   const gatewayArgsSuffix = gatewayCommand?.argsSuffix ?? [];
@@ -225,9 +240,10 @@ export async function prepareQaGatewayChild(
           )
           .filter((providerId): providerId is string => Boolean(providerId))
       : [];
-  const liveProviderConfigs = await readQaLiveProviderConfigOverrides({
-    providerIds: liveProviderIds,
-  });
+  const { providers: liveProviderConfigs, secrets: liveSecretsConfig } =
+    await readQaLiveProviderConfig({
+      providerIds: liveProviderIds,
+    });
   const liveOwnerPluginIds =
     liveProviderIds.length > 0
       ? await resolveQaOwnerPluginIdsForProviderIds({
@@ -275,6 +291,9 @@ export async function prepareQaGatewayChild(
     });
   const buildStagedGatewayConfig = async (gatewayPort: number) => {
     let cfg = buildGatewayConfig(gatewayPort);
+    if (liveSecretsConfig) {
+      cfg = { ...cfg, secrets: liveSecretsConfig };
+    }
     cfg = await stageQaLiveApiKeyProfiles({
       cfg,
       stateDir,
@@ -562,7 +581,9 @@ export async function prepareQaGatewayChild(
       await closeQaRuntimeStores(tempRoot);
       lifetime.assertOpen();
 
-      if (usesPackagedCandidate && gatewayCommand) {
+      // Current fresh fixtures use ordinary startup admission. Released packages
+      // retain their explicit upgrade/repair path; never auto-accept plugins at startup.
+      if (usesPackagedCandidate && gatewayCommand && !usesCurrentRuntime) {
         const command = {
           lifetime,
           executablePath: gatewayCommand.executablePath,

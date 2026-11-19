@@ -6,7 +6,6 @@ import {
   prepareTelegramAccount,
   readTelegramUpdateOffset,
   writeTelegramUpdateOffset,
-  type TelegramAccountRotationInfo,
 } from "./update-offset-store.js";
 
 describe("deleteTelegramUpdateOffset", () => {
@@ -16,42 +15,36 @@ describe("deleteTelegramUpdateOffset", () => {
   });
   const writeOffset = (updateId: number, botToken?: string) =>
     writeTelegramUpdateOffset({ accountId: "default", updateId, botToken });
+  const readOffset = (botToken?: string) => readTelegramUpdateOffset({ botToken });
+  const prepare = (accountId = "default") =>
+    prepareTelegramAccount({ accountId, botToken: "222222:fixture", onRotationDetected() {} });
   const state = (lastUpdateId: unknown, botId: string | null) => ({
     version: 3,
     lastUpdateId,
     botId,
     tokenFingerprint: null,
   });
-
-  async function expectRotation(botToken: string, expected: TelegramAccountRotationInfo) {
-    const onRotationDetected = vi.fn();
-    const offset = await readTelegramUpdateOffset({
-      accountId: "default",
-      botToken,
-      onRotationDetected,
+  function failStore(method: "register" | "lookup", message: string) {
+    fixture.install({
+      ...fixture.open(),
+      async [method]() {
+        throw new Error(message);
+      },
     });
-    expect(offset).toBeNull();
-    expect(onRotationDetected.mock.calls).toEqual([[expected]]);
   }
 
   it("only removes the targeted account offset, leaving others intact", async () => {
-    await writeTelegramUpdateOffset({ accountId: "default", updateId: 100 });
+    await writeOffset(100);
     await writeTelegramUpdateOffset({ accountId: "alerts", updateId: 200 });
 
     await deleteTelegramUpdateOffset({ accountId: "default" });
 
-    expect(await readTelegramUpdateOffset({ accountId: "default" })).toBeNull();
+    expect(await readOffset()).toBeNull();
     expect(await readTelegramUpdateOffset({ accountId: "alerts" })).toBe(200);
   });
 
   it("surfaces plugin-state write failures", async () => {
-    fixture.install({
-      ...fixture.open(),
-      async register() {
-        throw new Error("store write failed");
-      },
-    });
-
+    failStore("register", "store write failed");
     await expect(writeOffset(808)).rejects.toThrow("store write failed");
   });
 
@@ -65,30 +58,24 @@ describe("deleteTelegramUpdateOffset", () => {
     async (reason, previous, token, id, previousBotId, currentBotId) => {
       if (typeof previous === "string") {
         await writeOffset(id, previous);
-        expect(await readTelegramUpdateOffset({ botToken: previous })).toBe(id);
+        expect(await readOffset(previous)).toBe(id);
       } else {
         await fixture.store.register("default", previous);
       }
-      await expectRotation(token, { reason, previousBotId, currentBotId, staleLastUpdateId: id });
+      const onRotationDetected = vi.fn();
+      expect(await readTelegramUpdateOffset({ botToken: token, onRotationDetected })).toBeNull();
+      expect(onRotationDetected.mock.calls).toEqual([
+        [{ reason, previousBotId, currentBotId, staleLastUpdateId: id }],
+      ]);
     },
   );
 
   it("tolerates read-only lookup failures but refuses account preparation without identity", async () => {
-    fixture.install({
-      ...fixture.open(),
-      async lookup() {
-        throw new Error("store unavailable");
-      },
-    });
-
+    failStore("lookup", "store unavailable");
     expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBeNull();
-    await expect(
-      prepareTelegramAccount({
-        accountId: "primary",
-        botToken: "111111:fixture",
-        onRotationDetected: () => {},
-      }),
-    ).rejects.toThrow(/account "primary".*restart.*store unavailable/);
+    await expect(prepare("primary")).rejects.toThrow(
+      /account "primary".*restart.*store unavailable/,
+    );
   });
 
   it("awaits rotation cleanup before returning", async () => {
@@ -108,12 +95,9 @@ describe("deleteTelegramUpdateOffset", () => {
     expect(cleaned).toBe(true);
   });
 
-  it("ignores invalid persisted update IDs from plugin-state", async () => {
-    await fixture.store.register("default", state(-1, "111111"));
-    expect(await readTelegramUpdateOffset({ accountId: "default" })).toBeNull();
-
-    await fixture.store.register("default", state("not-a-number", "111111"));
-    expect(await readTelegramUpdateOffset({ accountId: "default" })).toBeNull();
+  it.each([-1, "not-a-number"])("ignores invalid persisted update ID %j", async (id) => {
+    await fixture.store.register("default", state(id, "111111"));
+    expect(await readOffset()).toBeNull();
   });
 
   it.each([1, 2])("requires Doctor before reading or preparing a v%s offset", async (version) => {
@@ -123,14 +107,8 @@ describe("deleteTelegramUpdateOffset", () => {
       ...(version === 2 ? { botId: "111111" } : {}),
     };
     await fixture.store.register("default", original);
-    await expect(readTelegramUpdateOffset({})).rejects.toThrow("openclaw doctor --fix");
-    await expect(
-      prepareTelegramAccount({
-        accountId: "default",
-        botToken: "222222:fixture",
-        onRotationDetected() {},
-      }),
-    ).rejects.toThrow("openclaw doctor --fix");
+    await expect(readOffset()).rejects.toThrow("openclaw doctor --fix");
+    await expect(prepare()).rejects.toThrow("openclaw doctor --fix");
     expect(await fixture.store.lookup("default")).toEqual(original);
   });
 

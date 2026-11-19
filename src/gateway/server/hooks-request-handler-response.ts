@@ -27,8 +27,10 @@ export async function settleFanOutDispatches(
   );
   let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<typeof FAN_OUT_PENDING>((resolve) => {
-    deadlineTimer = setTimeout(() => resolve(FAN_OUT_PENDING), HOOK_FAN_OUT_RESPONSE_DEADLINE_MS);
-    deadlineTimer.unref?.();
+    deadlineTimer = setTimeout(
+      () => resolve(FAN_OUT_PENDING),
+      HOOK_FAN_OUT_RESPONSE_DEADLINE_MS,
+    ).unref();
   });
   try {
     return await Promise.all(guarded.map((dispatch) => Promise.race([dispatch, deadline])));

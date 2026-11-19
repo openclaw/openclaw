@@ -94,9 +94,32 @@ it("publishes initialization once and rolls back a later refused append without 
     };
     const sql = trackSqliteStatementExecutions(
       f.database.db,
-      ["window", "header", "boundaryWindow", "metadata", "boundaryCount", "payload"],
+      [
+        "window",
+        "header",
+        "boundaryWindow",
+        "metadata",
+        "boundaryCount",
+        "payload",
+        "payloadWrite",
+        "identityWrite",
+        "activeWrite",
+        "indexWrite",
+      ],
       (query) => {
         const q = query.replace(/\s+/g, " ").toLowerCase();
+        if (q.startsWith('insert into "transcript_events"')) {
+          return "payloadWrite";
+        }
+        if (q.startsWith('insert into "transcript_event_identities"')) {
+          return "identityWrite";
+        }
+        if (q.startsWith('insert into "session_transcript_active_events"')) {
+          return "activeWrite";
+        }
+        if (/^(insert into|update) "session_transcript_index_state"/.test(q)) {
+          return "indexWrite";
+        }
         if (q.startsWith('update "session_windows"') && q.includes('"transcript_updated_at" =')) {
           return "window";
         }
@@ -127,7 +150,7 @@ it("publishes initialization once and rolls back a later refused append without 
         }
         if (
           q.startsWith('select "seq",') &&
-          q.includes(' as "event_json" from "transcript_events"') &&
+          q.includes('"event_json", "event_zstd", "event_utf8_bytes" from "transcript_events"') &&
           q.includes('and "seq" in')
         ) {
           return "payload";
@@ -135,8 +158,10 @@ it("publishes initialization once and rolls back a later refused append without 
         return null;
       },
     );
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
     try {
       const result = f.mutate(command);
+      clock.mockRestore();
       delete f.hooks.admit;
       assert(result.kind === "committed");
       expect(sql.counts).toEqual({
@@ -146,6 +171,10 @@ it("publishes initialization once and rolls back a later refused append without 
         metadata: 0,
         boundaryCount: 0,
         payload: 1,
+        payloadWrite: 1,
+        identityWrite: 1,
+        activeWrite: 1,
+        indexWrite: 1,
       });
       expect(sql.rowCounts.payload).toBe(3);
       expect(observations).toBeGreaterThan(0);
@@ -154,8 +183,8 @@ it("publishes initialization once and rolls back a later refused append without 
       assert(append.header?.snapshot.ok);
       expect(append.header.snapshot.value.after.rawSeq).toBe(0);
       expect(append.value.snapshot.value.before).toEqual(append.header.snapshot.value.after);
-      expect(append.header.snapshot.value.after.updatedAt).toBeLessThan(
-        result.receipt.transcript.after.updatedAt!,
+      expect(result.receipt.transcript.after.updatedAt).toBe(
+        append.header.snapshot.value.after.updatedAt! + 2,
       );
       expect(append.value.snapshot.value.after).toEqual(result.receipt.transcript.after);
       expect(watermark()).toEqual({
@@ -197,6 +226,7 @@ it("publishes initialization once and rolls back a later refused append without 
       await f.reopenDatabase();
       expect(f.read().transcript).toEqual(before.transcript);
     } finally {
+      clock.mockRestore();
       delete f.hooks.admit;
       reader.close();
       sql.restore();

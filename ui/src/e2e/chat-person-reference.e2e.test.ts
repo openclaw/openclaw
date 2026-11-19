@@ -1,8 +1,8 @@
-import { readFileSync } from "node:fs";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
 import type { UsersListResult } from "../../../packages/gateway-protocol/src/schema/users.js";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -47,10 +47,10 @@ const directory: UsersListResult = {
 async function routeAvatars(page: Page, requests: string[]) {
   await page.route("**/api/users/**/avatar*", (route) => {
     requests.push(route.request().url());
-    return route.fulfill({
-      contentType: "image/png",
-      body: readFileSync("ui/public/apple-touch-icon.png"),
-    });
+    if (new URL(route.request().url()).pathname === "/api/users/profile-missing/avatar") {
+      return route.fulfill({ status: 404 });
+    }
+    return route.fulfill({ path: "ui/public/apple-touch-icon.png" });
   });
 }
 const referenceBounds = (references: Locator) =>
@@ -74,6 +74,49 @@ async function personPage(page: Page, scenario: Parameters<typeof installMockGat
     composer: page.locator(".agent-chat__composer-combobox textarea"),
   };
 }
+
+const welcomeText = "@josh invited you, @Sam.";
+/** The restricted role Visitor Access grants: session scopes, no people directory. */
+const guestWelcome = {
+  operatorScopes: ["operator.sessions.write"],
+  presenceUsers: [
+    {
+      self: true,
+      id: "profile-sam",
+      identity: { type: "profile" as const, id: "profile-sam" },
+      name: "Sam",
+    },
+  ],
+  featureMethods: [...defaultControlUiFeatureMethods, "users.mentionable"],
+  historyMessages: [
+    {
+      role: "assistant",
+      content: welcomeText,
+      timestamp: 1,
+      __openclaw: {
+        id: "welcome-message",
+        humanMentions: [
+          { profileId: "profile-josh", start: 0, end: 5 },
+          { profileId: "profile-sam", start: 19, end: 23 },
+        ],
+      },
+    },
+  ],
+  methodResponses: {
+    "users.mentionable": {
+      users: [
+        { profileId: "profile-joshua", displayName: "Joshua", online: false },
+        {
+          profileId: "profile-josh",
+          displayName: "Josh",
+          avatarUrl: "/api/users/profile-josh/avatar?v=4",
+          online: true,
+        },
+      ],
+      truncated: false,
+    },
+  },
+} satisfies Parameters<typeof installMockGateway>[1];
 
 async function alignMentions(page: Page, viewport: { scale: number; font: string }) {
   const avatarRequests: string[] = [];
@@ -132,10 +175,12 @@ async function alignMentions(page: Page, viewport: { scale: number; font: string
   await expect
     .poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth))
     .toBeGreaterThan(0);
-  expect(await references.nth(1).locator("img").count()).toBe(0);
-  expect(avatarRequests.map((url) => new URL(url).pathname + new URL(url).search)).toEqual([
-    "/api/users/profile-photo/avatar?v=2",
-  ]);
+  const missingAvatar = references.nth(1).locator(".markdown-person-reference__avatar.is-fallback");
+  await browserExpect(missingAvatar).toHaveAttribute("data-initials", "FN");
+  await browserExpect(missingAvatar.locator("img")).toBeHidden();
+  expect(
+    avatarRequests.map((url) => new URL(url).pathname + new URL(url).search).toSorted(),
+  ).toEqual(["/api/users/profile-missing/avatar?v=2", "/api/users/profile-photo/avatar?v=2"]);
   expect(await referenceBounds(references)).toEqual(before);
   expect(await geometry()).toEqual([[], []]);
   expect(await references.allTextContents()).toEqual([label, label]);
@@ -194,15 +239,16 @@ async function sharePersonActivity(page: Page) {
         user,
         deviceFamily: "iPad",
         platform: "iPadOS",
-        timeZone: "Europe/Paris",
+        timeZone: "Pacific/Chatham",
         onlineSince: person.onlineSince,
         lastActivityAt: now,
         watchedSessions: [watched],
       },
     ],
   });
-  await expect.poll(() => card.textContent()).toContain("Europe/Paris");
-  expect(await card.textContent()).not.toContain("Europe/London");
+  await expect
+    .poll(() => card.locator(".person-activity-card__clock").getAttribute("title"))
+    .toBe("Pacific/Chatham");
   await card.getByRole("link", { name: /Release checklist/ }).focus();
   await gateway.emitGatewayEvent("presence", { presence: [] });
   await expect.poll(() => card.textContent()).toContain("Offline");
@@ -287,6 +333,87 @@ async function openPersonCard(page: Page, input: "keyboard" | "mouse" | "touch")
 }
 
 suite.define(() => {
+  it("renders the inviter photo in a fresh guest welcome before opening a person card", () =>
+    withPage(
+      async (page) => {
+        const avatarRequests: string[] = [];
+        let photoWidth = 64;
+        await page.route("**/api/users/**/avatar*", (route) => {
+          const url = route.request().url();
+          avatarRequests.push(url);
+          if (new URL(url).pathname !== "/api/users/profile-avery/avatar") {
+            return route.fulfill({ status: url.includes("missing") ? 404 : 503 });
+          }
+          return route.fulfill({
+            contentType: "image/svg+xml",
+            body:
+              '<svg xmlns="http://www.w3.org/2000/svg" width="' +
+              photoWidth +
+              '" height="64" viewBox="0 0 64 64"><rect width="64" height="64" rx="32" fill="#527866"/><circle cx="32" cy="24" r="12" fill="#f5d6b5"/><path d="M10 64c0-30 44-30 44 0" fill="#e3b367"/></svg>',
+          });
+        });
+        const welcome =
+          "Welcome to OpenClaw, Sam.\n\n@Avery Chen invited you. Your guest access does not expire.\n\nThis is your own session with Main.";
+        const { gateway, reference: references } = await personPage(page, {
+          ...guestWelcome,
+          historyMessages: [
+            {
+              role: "assistant",
+              content: welcome,
+              timestamp: 1,
+              __openclaw: {
+                id: "guest-welcome",
+                humanMentions: [{ profileId: "profile-avery", start: 27, end: 38 }],
+              },
+            },
+            ...["missing", "error"].map((kind) => ({
+              role: "assistant",
+              content: "@Avery Chen can also help with your review.",
+              timestamp: 2,
+              __openclaw: {
+                id: kind,
+                humanMentions: [{ profileId: "profile-" + kind, start: 0, end: 11 }],
+              },
+            })),
+          ],
+        });
+        const reference = references.first();
+        await browserExpect(reference).toHaveText("@Avery Chen");
+        const image = reference.locator("img");
+        await expect
+          .poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth))
+          .toBeGreaterThan(0);
+        await browserExpect(image).toHaveCount(1);
+        expect(avatarRequests.map((url) => new URL(url).pathname)).toContain(
+          "/api/users/profile-avery/avatar",
+        );
+        expect(await gateway.getRequests("users.list")).toHaveLength(0);
+        expect(await gateway.getRequests("users.mentionable")).toHaveLength(0);
+        photoWidth = 65;
+        await page.reload();
+        await expect
+          .poll(() =>
+            reference
+              .first()
+              .locator("img")
+              .evaluate((img: HTMLImageElement) => img.naturalWidth),
+          )
+          .toBe(65);
+        for (const index of [1, 2]) {
+          await browserExpect(
+            references.nth(index).locator(".markdown-person-reference__avatar"),
+          ).toHaveAttribute("data-avatar-state", "failed");
+          await browserExpect(
+            references.nth(index).locator(".markdown-person-reference__avatar"),
+          ).toHaveAttribute("data-initials", "AC");
+          await browserExpect(references.nth(index).locator("img")).toBeHidden();
+        }
+        expect(await gateway.getRequests("users.list")).toHaveLength(0);
+        expect(await gateway.getRequests("users.mentionable")).toHaveLength(0);
+      },
+      { viewport: { width: 1180, height: 800 }, colorScheme: "dark" },
+    ));
+
   it.each([
     { width: 1280, colorScheme: "light" as const, scale: 1, font: "var(--font-body)" },
     { width: 390, colorScheme: "dark" as const, scale: 1.5, font: "Georgia, serif" },
@@ -360,6 +487,37 @@ suite.define(() => {
       await card.waitFor({ state: "detached" });
       await gateway.resolveDeferred("users.list", directory);
       expect(await card.count()).toBe(0);
+    }));
+
+  it("resolves a guest's mentions from the session roster without the people directory", () =>
+    withPage(async (page) => {
+      const avatarRequests: string[] = [];
+      await routeAvatars(page, avatarRequests);
+      const { gateway, reference, card, heading } = await personPage(page, guestWelcome);
+      await page.locator(".chat-bubble").filter({ hasText: welcomeText }).waitFor();
+      await browserExpect(reference).toHaveCount(2);
+      await reference.first().focus();
+      await browserExpect(heading).toHaveText("Josh");
+      await expect
+        .poll(() => card.locator("img").evaluate((img: HTMLImageElement) => img.naturalWidth))
+        .toBeGreaterThan(0);
+      expect(await card.textContent()).not.toContain("Could not load people");
+      const roster = await gateway.getRequests("users.mentionable");
+      expect(roster.map((request) => request.params)).toEqual([
+        { sessionKey: "agent:main:main", query: "josh" },
+      ]);
+      await reference.first().press("Escape");
+      await card.waitFor({ state: "detached" });
+
+      await reference.nth(1).focus();
+      await browserExpect(heading).toHaveText("Sam");
+      expect(await card.textContent()).not.toContain("Could not load people");
+      expect(await card.getByRole("link", { name: "View activity" }).count()).toBe(1);
+      await reference.nth(1).press("Escape");
+      await reference.first().focus();
+      await browserExpect(heading).toHaveText("Josh");
+      expect(await gateway.getRequests("users.mentionable")).toHaveLength(1);
+      expect(await gateway.getRequests("users.list")).toHaveLength(0);
     }));
 
   it("keeps missing identities unresolved without guessing from labels", () =>

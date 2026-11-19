@@ -292,6 +292,7 @@ test("sessions.create maps worktree options and preserves a nested dot-prefixed 
         repoRoot,
       }),
       materialized: true,
+      sourceRoot: repoRoot,
     });
   try {
     const created = await createSession({
@@ -355,7 +356,7 @@ test("sessions.create maps an admin-selected worktree cwd", async () => {
   await createSessionStoreDir();
   const createSpy = vi
     .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
-    .mockResolvedValue({ record, materialized: true });
+    .mockResolvedValue({ record, materialized: true, sourceRoot: selectedWorkspace });
   const findSpy = vi.spyOn(registryReads, "readSessionWorktreeBinding").mockResolvedValue(record);
   try {
     const created = await createSession({ key, worktree: true, cwd: selectedWorkspace });

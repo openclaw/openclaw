@@ -11,7 +11,7 @@ import {
   detachActiveEmbeddedRun as clearNative,
 } from "../../embedded-agent-runner/runs.js";
 
-const producers = new Map<EmbeddedAgentQueueHandle, { finish(): void; settled: Promise<void> }>();
+const producers = new Map<EmbeddedAgentQueueHandle, { finish(): Promise<void> }>();
 
 type OperationIdentity = Pick<
   Parameters<typeof createReplyOperation>[0],
@@ -76,9 +76,7 @@ export async function detachActiveEmbeddedRun(
   handle: EmbeddedAgentQueueHandle,
   _sessionKey: string,
 ) {
-  const producer = producers.get(handle);
-  producer?.finish();
-  await producer?.settled;
+  await producers.get(handle)?.finish();
 }
 
 /** Own a real producer so Stop joins its completion, not a fabricated abort receipt. */
@@ -92,8 +90,9 @@ export function startControlProducer(
   const operation = operationFor({ sessionKey, sessionId, agentId: "main" }, storePath);
   const cancelled = createDeferred();
   const cancel = vi.fn(() => cancelled.resolve());
-  operation.attachBackend({ kind: "embedded", runId, isStreaming: () => true, cancel });
-  const { settled } = ownProducer(
+  const backend = { kind: "embedded" as const, runId, isStreaming: () => true, cancel };
+  operation.attachBackend(backend);
+  const producer = ownProducer(
     async (finished) => {
       if (await Promise.race([cancelled.promise.then(() => true), finished.then(() => false)])) {
         await onCancel();
@@ -101,5 +100,5 @@ export function startControlProducer(
     },
     () => operation.complete(),
   );
-  return { operation, cancel, settled };
+  return { operation, backend, cancel, ...producer };
 }

@@ -53,6 +53,7 @@ import {
   createAssistant,
   createAssistantResultStream,
   createTestSession,
+  mockToolTurn,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
   testModel,
@@ -99,16 +100,6 @@ afterEach(() => {
   resetDiagnosticRunActivityForTest();
   resetSecretRedactionRegistryForTest();
 });
-
-function mockToolTurn(content: AssistantMessage["content"]) {
-  streamMocks.streamSimple
-    .mockImplementationOnce((model: Model) =>
-      createAssistantResultStream(createAssistant(model, content, "toolUse")),
-    )
-    .mockImplementation((model: Model) =>
-      createAssistantResultStream(createAssistant(model, "Done.")),
-    );
-}
 
 function createSourceSession(
   sessionManager: SessionManager,
@@ -189,7 +180,7 @@ it.each(sourceCases)(
     const config = { logging: { redactPatterns: ["fixture-custom-source-value"] } };
     const { dir, scope, manager, tools } = await createSessionFixture("source-projection", config);
     registerSecretValueForRedaction(registeredLiteral);
-    guardSessionManager(manager, { config, allowedToolNames: ["exec", "wait"] });
+    guardSessionManager(manager, { config });
     const originalArgs = {
       ...args,
       title: "Calculate",
@@ -291,7 +282,7 @@ it.each(["message_end", "before_message_write"] as const)(
     if (hook === "before_message_write") {
       installWriteHook((message) => ({ message: replace(message) }));
     }
-    guardSessionManager(manager, { config: {}, allowedToolNames: ["exec", "wait"] });
+    guardSessionManager(manager, { config: {} });
     const { session } = await createSourceSession(manager, tools, { resourceLoader });
     for (const nextAction of ["mutate", "replace", "remove", "collision"]) {
       action = nextAction;
@@ -333,7 +324,7 @@ it("preserves mixed tool arguments through a reentrant direct SQLite append", as
       reentrant = outcome.ok ? outcome.value?.message : undefined;
     }
   });
-  guardSessionManager(manager, { config: {}, allowedToolNames: ["exec", "wait", "other"] });
+  guardSessionManager(manager, { config: {} });
   const otherParameters = Type.Object({ code: Type.String() });
   const other: ToolDefinition<typeof otherParameters> = {
     name: "other",
@@ -359,8 +350,13 @@ it("preserves mixed tool arguments through a reentrant direct SQLite append", as
     { toolCallId: "mixed_code", details: { value: 42 } },
     { toolCallId: "mixed_other", details: { receivedOriginal: true } },
   ]);
+  // The answered unavailable call stays in history, as the live provider context sent it.
   expect(reentrant).toMatchObject({
-    content: [{ arguments: { code: source } }, { arguments: { code: source } }],
+    content: [
+      { id: "mixed_rejected", name: "unavailable" },
+      { arguments: { code: source } },
+      { arguments: { code: source } },
+    ],
   });
   const stored = manager
     .getEntries()
@@ -374,6 +370,7 @@ it("preserves mixed tool arguments through a reentrant direct SQLite append", as
   expect(stored[1]).toMatchObject({
     message: {
       content: [
+        { id: "mixed_rejected", name: "unavailable" },
         { id: "mixed_code", arguments: { code: source } },
         { id: "mixed_other", arguments: { code: source } },
       ],
@@ -392,7 +389,7 @@ it("preserves source across reused managers and ordinary append batches", async 
     execute: async () => ({ content: [{ type: "text", text: source }], details: {} }),
   };
   for (const mode of ["code", "shell", "code"] as const) {
-    guardSessionManager(manager, { config: {}, allowedToolNames: ["exec", "wait"], runId: mode });
+    guardSessionManager(manager, { config: {}, runId: mode });
     mockToolTurn([toolCall("reused_id", mode === "code" ? codeArgs() : { command: source })]);
     const { session } = await createSourceSession(manager, tools, {
       customTools: mode === "code" ? toToolDefinitions(tools) : [shell],
@@ -486,7 +483,6 @@ describe("provider source fidelity", () => {
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       const sessionManager = guardSessionManager(await SessionManager.openAsync(scope, cwd), {
         config: {},
-        allowedToolNames: ["read"],
       });
       const resourceLoader = new DefaultResourceLoader({
         cwd,

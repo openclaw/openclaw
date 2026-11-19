@@ -1,4 +1,4 @@
-import { symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, symlinkSync } from "node:fs";
 import { copyFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -44,6 +44,7 @@ import {
   seedRow,
   waitForRead,
 } from "./session-row-projection.read-fixture.test-support.js";
+import { withSessionRowProjectionState } from "./session-row-projection.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -104,8 +105,8 @@ function holdStoreRead(afterRead = false) {
 
 it.for(["publication", "source", "dispose"] as const)(
   "fences cold store admission across a delayed worker reply: %s",
-  async (change, { signal }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  (change, { signal }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg: OpenClawConfig = { agents: { entries: { main: {}, late: {} } } };
       setRuntimeConfigSnapshot(cfg);
       const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
@@ -157,14 +158,11 @@ it.for(["publication", "source", "dispose"] as const)(
           expect(projection.capture(query)).toBeUndefined();
         }
       }
-    });
-  },
+    }),
 );
 
-it("reconciles a resident reset while a topology store snapshot awaits its worker", async ({
-  signal,
-}) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("reconciles a resident reset while a topology store snapshot awaits its worker", ({ signal }) =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -221,8 +219,7 @@ it("reconciles a resident reset while a topology store snapshot awaits its worke
       label: publishedEntry.label,
     });
     expect(projection.isCurrent(captured!)).toBe(false);
-  });
-});
+  }));
 
 function holdTopologyRead() {
   const entered = createDeferredCore();
@@ -241,8 +238,8 @@ function holdTopologyRead() {
   return { entered, release };
 }
 
-it("publishes an initially unseen retired-agent event from its default store", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("publishes an initially unseen retired-agent event from its default store", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
       agents: { entries: { main: {} } },
       session: { store: path.join(state.root, "configured", "{agentId}", "sessions.json") },
@@ -279,13 +276,12 @@ it("publishes an initially unseen retired-agent event from its default store", a
       new Set(["subscriber"]),
       expect.anything(),
     );
-  });
-});
+  }));
 
-it("admits a committed update without host SQL while a marker awaits prepared membership", async ({
+it("admits a committed update without host SQL while a marker awaits prepared membership", ({
   signal,
-}) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+}) =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = { agents: { entries: { main: {}, late: {} } } };
     setRuntimeConfigSnapshot(cfg);
     const known = { agentId: "main", sessionKey: "agent:main:known" };
@@ -372,8 +368,7 @@ it("admits a committed update without host SQL while a marker awaits prepared me
       await settled;
       projection.dispose();
     }
-  });
-});
+  }));
 
 it.for([
   { kind: "lifecycle", change: "same-id-reset" },
@@ -384,8 +379,8 @@ it.for([
   { kind: "marker", change: "alias-reset" },
 ] as const)(
   "refreshes current facts without retargeting unknown $kind payloads across $change",
-  async ({ kind, change }, { signal }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  ({ kind, change }, { signal }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       let cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(cfg);
       const projection = await createSessionRowProjection({
@@ -509,14 +504,13 @@ it.for([
         expect(payload.displayName).not.toBe("Old event display");
         expect(payload.parentSessionKey).not.toBe("agent:main:old-parent");
       }
-    });
-  },
+    }),
 );
 
 it.for(["dispose", "source", "owner close"] as const)(
   "does not publish a topology snapshot after its %s changes while reading",
-  async (change, { signal }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  (change, { signal }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg: OpenClawConfig = {
         agents: { entries: { main: { identity: { name: "Original" } } } },
       };
@@ -583,14 +577,13 @@ it.for(["dispose", "source", "owner close"] as const)(
         expect(projection.capture(query)).toBeUndefined();
         expect(projection.selectEntries()).toEqual([]);
       }
-    });
-  },
+    }),
 );
 
 it.for(["chat.startup", "sessions.resolve"] as const)(
   "revalidates request authority after %s topology readiness",
-  async (method, { signal }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  (method, { signal }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = { agents: { entries: { main: {} } } };
       const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
       const context = bindSessionRowProjection(requestContext(cfg), () => projection);
@@ -635,12 +628,11 @@ it.for(["chat.startup", "sessions.resolve"] as const)(
       release.resolve();
       expect(await settled).toEqual([{ status: "rejected", reason: revoked }]);
       expect(respond).not.toHaveBeenCalled();
-    });
-  },
+    }),
 );
 
-it("keeps sentinel children in their physical store after a primary update", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("keeps sentinel children in their physical store after a primary update", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg = {
       agents: { entries: { main: {} } },
       session: { scope: "global" as const },
@@ -678,5 +670,37 @@ it("keeps sentinel children in their physical store after a primary update", asy
     expect(snapshot(selected.storeTarget.storePath)?.childSessions).toEqual([childKey]);
     const otherPath = selected.storeTarget.storePath === primary ? secondary : primary;
     expect(snapshot(otherPath)?.childSessions).toBeUndefined();
-  });
-});
+  }));
+
+it("reads an agentDir row through another spelling of its database file (#201423)", () =>
+  withSessionRowProjectionState(async (create, state) => {
+    // The reporter's layout: an upper-case agentDir that the lower-case default locator also
+    // reaches. Case-sensitive volumes get the second spelling through a link.
+    const agentDir = state.statePath("agents", "Worker", "agent");
+    mkdirSync(agentDir, { recursive: true });
+    if (!existsSync(state.statePath("agents", "worker"))) {
+      symlinkSync(
+        path.dirname(agentDir),
+        state.statePath("agents", "worker"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
+    const cfg: OpenClawConfig = { agents: { entries: { main: {}, worker: { agentDir } } } };
+    setRuntimeConfigSnapshot(cfg);
+    const query = {
+      agentId: "worker",
+      key: "agent:worker:subagent:child",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "worker", env: state.env }),
+    };
+    replaceSessionEntrySync(
+      { agentId: query.agentId, sessionKey: query.key, storePath: query.storePath },
+      { sessionId: "child-id", updatedAt: 1 },
+    );
+    registerOpenClawAgentDatabase({
+      agentId: "worker",
+      path: path.join(agentDir, "openclaw-agent.sqlite"),
+    });
+    const projection = await create({ cfg, modelCatalog: [] });
+    await projection.ensureMaterialized();
+    expect(projection.readCapabilityEntry(query)?.entry?.sessionId).toBe("child-id");
+  }));

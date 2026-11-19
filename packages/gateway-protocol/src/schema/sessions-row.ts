@@ -23,6 +23,13 @@ export const SessionDeviceFolderSchema = closedObject({
   path: Type.String({ minLength: 1, maxLength: 4096 }),
 });
 
+export const CyberAccessProgramSchema = Type.Union([
+  Type.Literal("standard"),
+  Type.Literal("daybreak_blue"),
+  Type.Literal("daybreak_red"),
+]);
+export type CyberAccessProgram = Static<typeof CyberAccessProgramSchema>;
+
 export const SessionPermissionModeSchema = Type.Union([
   Type.Literal("read-only"),
   Type.Literal("guarded"),
@@ -120,6 +127,8 @@ export const SessionRowSchema = Type.Object(
     /** Response-local indexes into the list's sharedFacts; expand before merging rows. */
     sharedFacts: Type.Optional(Type.Array(Type.Integer({ minimum: 0 }))),
     sessionId: Type.Optional(Type.String()),
+    /** Saved transcript messages exist; omission means the history fact is not yet known. */
+    hasMessages: Type.Optional(Type.Boolean()),
     /** Incarnation revision for invalidating session-scoped client caches after resets. */
     lifecycleRevision: Type.Optional(NonEmptyString),
     /** Opaque saved model-selection inputs, unaffected by activity or display updates. */
@@ -190,13 +199,13 @@ export const SessionRowSchema = Type.Object(
     lastActivityAt: Type.Optional(Type.Number()),
     lastInteractionAt: Type.Optional(Type.Number()),
     status: Type.Optional(SessionRunStatusSchema),
+    /** Running background exec processes; absent when none remain. */
+    backgroundProcessCount: Type.Optional(Type.Integer({ minimum: 1 })),
     lastRunError: Type.Optional(Type.String()),
     suppressErrorNotice: Type.Optional(Type.Boolean()),
     providerReview: Type.Optional(SessionProviderReviewProjectionSchema),
     /** Exact run that produced the latest terminal lifecycle projection. */
     lastRunId: Type.Optional(NonEmptyString),
-    restartRecoveryStatus: Type.Optional(Type.Literal("tombstoned")),
-    restartRecoveryCycleId: Type.Optional(NonEmptyString),
     activeLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.String()),
     parentSessionKey: Type.Optional(Type.String()),
@@ -237,6 +246,7 @@ export const SessionRowSchema = Type.Object(
     projectId: Type.Optional(Type.String()),
     /** Persisted task cwd or spawned workspace; no filesystem resolution is implied. */
     workspaceDir: Type.Optional(Type.String()),
+    cyberAccessProgram: Type.Optional(CyberAccessProgramSchema),
     permissionMode: Type.Optional(SessionPermissionModeSchema),
     communication: Type.Optional(SessionCommunicationPolicySchema),
     effectiveCommunication: Type.Optional(EffectiveSessionCommunicationPolicySchema),
@@ -259,7 +269,9 @@ export const SessionRowSchema = Type.Object(
       ]),
     ),
     /** Immutable presentation surface; independent of creation provenance. */
-    createdSurface: Type.Optional(Type.Literal("plugin-dock")),
+    createdSurface: Type.Optional(
+      Type.Union([Type.Literal("plugin-dock"), Type.Literal("github-publication")]),
+    ),
     createdActor: Type.Optional(SessionCreatedActorSchema),
     owner: Type.Optional(SessionOwnerSchema),
     participants: Type.Optional(
@@ -273,6 +285,8 @@ export const SessionRowSchema = Type.Object(
     sharingRole: Type.Optional(SessionSharingRoleSchema),
     /** Recipient-local send admission; null explicitly clears a previous restriction. */
     sendDisabledReason: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    /** Recipient-local workspace admission; null clears a previous read restriction. */
+    workspaceReadDisabledReason: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     createdAt: Type.Optional(Type.Number()),
     forkSource: Type.Optional(
       Type.Object({

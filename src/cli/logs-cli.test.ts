@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { expectText } from "../test-utils/text-assertions.js";
 import { formatCliFailureLines } from "./failure-output.js";
 import {
   buildGatewayConnectionDetails,
@@ -66,15 +67,6 @@ function expectJournalArgs(call: number, args: string[]) {
     expect.arrayContaining(args),
     expect.any(Object),
   );
-}
-
-function expectText(text: string, includes: string[], excludes: string[] = []) {
-  for (const value of includes) {
-    expect(text).toContain(value);
-  }
-  for (const value of excludes) {
-    expect(text).not.toContain(value);
-  }
 }
 
 async function run(args: string[] = [], failure = false) {

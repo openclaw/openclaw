@@ -10,8 +10,9 @@ import {
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerGitHubLaunchBinding } from "../worker/launch-descriptor.js";
-import type { PublicationSessionIdentity } from "./github-publication-availability.js";
+import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 import type { SelectionRow } from "./session-row-projection-record.js";
 import { prepareGitHubPublicationFact } from "./worker-environments/worker-github-binding.js";
 
@@ -41,13 +42,32 @@ export function startGitHubPublicationDiscovery(params: {
 }) {
   const inOwner = AsyncLocalStorage.snapshot();
   const scheduler = params.scheduler.scope();
-  const sessions = new LruCache<{
+  type SessionEntry = {
     session: PublicationSessionIdentity;
     binding?: string;
     incognito?: Pick<CapturedSessionActorStorageOwner, "owner" | "agentId" | "path">;
     fact: PublicationFact;
     refreshAfterMs: number;
-  }>(256);
+  };
+  const sessions = new LruCache<SessionEntry>(256);
+  // Preparation reads share target discovery admission with foreground turns, and a config
+  // change refreshes every remembered session: prepare one session at a time.
+  let queue: Promise<void> | undefined;
+  let preparing: { key: string; entry: SessionEntry; release: () => void } | undefined;
+  const isCurrent = (key: string, entry: SessionEntry) =>
+    !scheduler.signal.aborted && sessions.peek(key) === entry;
+  const store = (key: string, entry?: SessionEntry) => {
+    if (entry) {
+      sessions.set(key, entry);
+    } else {
+      sessions.delete(key);
+    }
+    // Replacement, removal and eviction free the queue; the stale result never publishes.
+    if (preparing && !isCurrent(preparing.key, preparing.entry)) {
+      preparing.release();
+      preparing = undefined;
+    }
+  };
   const keyOf = (session: PublicationSessionIdentity) =>
     `${session.agentId}\0${session.sessionKey}`;
   const refresh = (key: string, retireCredentials = false) => {
@@ -55,21 +75,43 @@ export function startGitHubPublicationDiscovery(params: {
     if (!previous || scheduler.signal.aborted) {
       return undefined;
     }
-    const current = {
+    const current: SessionEntry = {
       ...previous,
       fact: retireCredentials ? { available: previous.fact.available } : previous.fact,
       refreshAfterMs: scheduler.now() + PUBLICATION_FACT_MAX_AGE_MS,
     };
-    sessions.set(key, current);
+    store(key, current);
     inOwner(() =>
       scheduler.schedule({
         id: `github-publication:${key}`,
         delayMs: 0,
         run: async () => {
+          const previousTurn = queue;
+          const turn = createDeferredCore();
+          queue = turn.promise;
+          using _ = {
+            [Symbol.dispose]: () => {
+              if (preparing?.entry === current) {
+                preparing = undefined;
+              }
+              if (queue === turn.promise) {
+                queue = undefined;
+              }
+              turn.resolve();
+            },
+          };
+          if (previousTurn) {
+            await previousTurn;
+            // Work superseded while queued skips its preparation.
+            if (!isCurrent(key, current)) {
+              return;
+            }
+          }
+          preparing = { key, entry: current, release: turn.resolve };
           const prepare = () =>
             prepareGitHubPublicationFact({
               ...current.session,
-              assertCurrent: () => !scheduler.signal.aborted && sessions.peek(key) === current,
+              assertCurrent: () => isCurrent(key, current),
             });
           let fact: PublicationFact | undefined;
           if (current.incognito) {
@@ -102,7 +144,7 @@ export function startGitHubPublicationDiscovery(params: {
           } else {
             fact = await prepare();
           }
-          if (!scheduler.signal.aborted && sessions.peek(key) === current) {
+          if (isCurrent(key, current)) {
             current.fact = fact ?? unavailable;
           }
         },
@@ -123,7 +165,7 @@ export function startGitHubPublicationDiscovery(params: {
         fact: unavailable,
         refreshAfterMs: 0,
       };
-      sessions.set(key, current);
+      store(key, current);
       refresh(key);
     } else if (current.refreshAfterMs <= scheduler.now()) {
       // Idle sessions need no polling; an expired credential cannot authorize a new launch.
@@ -159,7 +201,7 @@ export function startGitHubPublicationDiscovery(params: {
     }
     if (!row.entry.repositoryWorkspaceId && !row.entry.worktree?.id) {
       // Resident absence retires pending facts; explicit demand can still prepare an unknown target.
-      sessions.delete(key);
+      store(key);
       return;
     }
     const binding = JSON.stringify([
@@ -168,7 +210,7 @@ export function startGitHubPublicationDiscovery(params: {
       row.entry.repositoryWorkspaceId,
     ]);
     if (previous.session.sessionId !== session.sessionId || previous.binding !== binding) {
-      sessions.set(key, { session, binding, fact: unavailable, refreshAfterMs: 0 });
+      store(key, { session, binding, fact: unavailable, refreshAfterMs: 0 });
       refresh(key);
     }
   };
@@ -178,6 +220,7 @@ export function startGitHubPublicationDiscovery(params: {
     }
   });
   return {
+    name: "github-publication-discovery",
     stop: async () => {
       scheduler.beginClose();
       githubIdentityChanges.onChange = undefined;

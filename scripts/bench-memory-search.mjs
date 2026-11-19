@@ -135,7 +135,13 @@ try {
   db = openEngineStore({
     anchor,
     input: { connection, schemaPrefix: "pgmemsearch" },
-    schema: { id: "memory", version: 1, postgres: memoryDDL, sqlite: "" },
+    schema: {
+      id: "memory",
+      version: 1,
+      postgres: memoryDDL,
+      sqlite: "",
+      postgresVectorSearchVersion: 2,
+    },
     openSqlite() {
       throw new Error("PG required");
     },

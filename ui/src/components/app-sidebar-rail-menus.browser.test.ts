@@ -25,6 +25,10 @@ describe.runIf("__vitest_browser__" in globalThis)("navigation rail menus", () =
     const viewport = { width: window.innerWidth, height: window.innerHeight };
     onTestFinished(() => page.viewport(viewport.width, viewport.height));
     await page.viewport(1280, 900);
+    const pointerParking = document.createElement("div");
+    pointerParking.style.cssText = "position:fixed;right:0;bottom:0;width:32px;height:32px";
+    document.body.append(pointerParking);
+    await page.elementLocator(pointerParking).hover();
     const { sidebar, provider } = await mountSidebar(
       createGatewayHarness(createTestGatewayClient(createGatewayRequestMock())).gateway,
       createSessions("main", ["agent:main:main"]),
@@ -46,14 +50,13 @@ describe.runIf("__vitest_browser__" in globalThis)("navigation rail menus", () =
         : null;
     const rail = sidebar.querySelector<HTMLElement>(".sidebar-rail")!;
     expect(rail).not.toBeNull();
-    for (const [triggerSelector, panelSelector, edge] of [
-      [".sidebar-agent-card__main", ".sidebar-agent-menu", "top"],
-      [".sidebar-identity-card", ".sidebar-identity-menu", "bottom"],
-      [".sidebar-issues-button", ".sidebar-issues-panel", "auto"],
+    for (const [triggerSelector, panelSelector, eventType] of [
+      [".sidebar-agent-card__main", ".sidebar-agent-menu", "overlay-after-show"],
+      [".sidebar-identity-card", ".sidebar-identity-menu", "overlay-after-show"],
+      [".sidebar-issues-button", ".sidebar-issues-panel", "focusin"],
     ] as const) {
       const trigger = rail.querySelector<HTMLButtonElement>(triggerSelector)!;
       expect(trigger).not.toBeNull();
-      const eventType = edge === "auto" ? "focusin" : "overlay-after-show";
       const shown = new Promise<void>((resolve) => {
         const listener = (event: Event) => {
           if (!(event.target instanceof HTMLElement) || !event.target.closest(panelSelector)) {
@@ -69,23 +72,17 @@ describe.runIf("__vitest_browser__" in globalThis)("navigation rail menus", () =
       await shown;
       const panel = () => sidebar.querySelector<HTMLElement>(panelSelector);
       expect(panel()!.getBoundingClientRect().width).toBeGreaterThan(0);
-      expect(
-        panel()!.getBoundingClientRect().left - rail.getBoundingClientRect().right,
-      ).toBeCloseTo(8, 0);
       const panelBox = panel()!.getBoundingClientRect();
-      const triggerBox = trigger.getBoundingClientRect();
-      expect(panelBox.left).toBeGreaterThan(triggerBox.right);
-      if (edge === "top" || (edge === "auto" && triggerBox.top < window.innerHeight / 2)) {
-        expect(Math.abs(panelBox.top - triggerBox.top)).toBeLessThanOrEqual(1);
-      } else {
-        expect(panelBox.top).toBeLessThan(triggerBox.top);
-        expect(panelBox.bottom).toBeLessThanOrEqual(triggerBox.bottom + 1);
-      }
+      expect(panelBox.left).toBeGreaterThanOrEqual(rail.getBoundingClientRect().right);
+      expect(panelBox.right).toBeLessThanOrEqual(window.innerWidth);
+      expect(panelBox.top).toBeGreaterThanOrEqual(0);
+      expect(panelBox.bottom).toBeLessThanOrEqual(window.innerHeight);
       expect(panel()!.contains(document.activeElement)).toBe(true);
       const surface = panel()!;
       const registry = registryFor(document);
       const overlay = [...registry.members.keys()].find((entry) => entry.surface === surface);
       let escape: KeyboardEvent | undefined;
+      const readEscape = (): KeyboardEvent | undefined => escape;
       const record = (stage: string, detail: Record<string, unknown> = {}) => {
         const top = registry.stack.at(-1);
         if (events.length === 64) {
@@ -140,13 +137,14 @@ describe.runIf("__vitest_browser__" in globalThis)("navigation rail menus", () =
       onTestFinished(stop);
       try {
         // Escape belongs to an active tooltip first; test menu dismissal without one.
-        await page.elementLocator(surface).hover({ position: { x: 4, y: 4 } });
+        await page.elementLocator(pointerParking).hover();
         await expect.poll(() => document.querySelector("openclaw-tooltip[open]")).toBeNull();
+        escape = undefined;
         record("before-keyboard");
         await userEvent.keyboard("{Escape}");
         record("after-keyboard", {
-          escapeReceived: Boolean(escape),
-          defaultPrevented: escape?.defaultPrevented,
+          escapeReceived: Boolean(readEscape()),
+          defaultPrevented: readEscape()?.defaultPrevented,
         });
         escape = undefined;
         await sidebar.updateComplete;

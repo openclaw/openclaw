@@ -1,15 +1,15 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { isEmbeddedStandaloneModule } from "../../cli-invocation.mjs";
+import { isEmbeddedStandaloneModule, resolveStandaloneSidecarRoot } from "../../cli-invocation.mjs";
 import { createRuntimeProcessScriptFile } from "../../runtime-process-scripts.generated.mjs";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import {
-  createSealedRuntimeProcessEntrypoints,
   runtimeProcessDeployEntryFileName,
   runtimeProcessExternalPackageEntrypoints,
   runtimeProcessScriptEntrypoints,
   type runtimeProcessDeployManifest,
-  type runtimeProcessSealedManifest,
+  runtimeProcessSealedManifest,
+  createRuntimeProcessEntrypoints,
 } from "./runtime-process-manifest.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
@@ -21,6 +21,20 @@ type RuntimeScriptFileEntrypointName = {
     ? Name
     : never;
 }[keyof RuntimeScriptEntrypoints];
+
+export function createSealedRuntimeProcessEntrypoints(
+  group: keyof typeof runtimeProcessSealedManifest,
+  currentModuleUrl: string,
+) {
+  const runtimeEntries = new Map(Object.entries(createRuntimeProcessEntrypoints(currentModuleUrl)));
+  return runtimeProcessSealedManifest[group].entries.map(([name, entry]) => ({
+    name,
+    url: new URL(
+      `./${runtimeEntries.get(entry)?.distWorkerPath ?? `${entry}.mjs`}`,
+      currentModuleUrl,
+    ),
+  }));
+}
 
 const sealedEntrypoints = new Map<RuntimeProcessEntrypointName, URL>();
 
@@ -58,7 +72,7 @@ export function resolveRuntimeScriptEntrypointUrl(
   return pathToFileURL(path.join(directory, runtimeProcessScriptEntrypoints[name].fileName));
 }
 
-/** Embedded self children use the image dispatcher; foreign runtimes need a real file. */
+/** Standalone images use declared child entries; ordinary runtimes need a physical script. */
 export function prepareRuntimeProcessScriptInvocation(
   name: Parameters<typeof createRuntimeProcessScriptFile>[0],
   execPath: string,
@@ -69,6 +83,13 @@ export function prepareRuntimeProcessScriptInvocation(
     const url = resolveRuntimeProcessEntrypointUrl(entry.runtimeEntrypoint);
     if (isEmbeddedStandaloneModule(url.href)) {
       return { argv: [execPath, ...resolveRuntimeWorkerArgv(url, execPath)], dispose() {} };
+    }
+  }
+  if ("runtimeEntrypoint" in entry) {
+    const root = resolveStandaloneSidecarRoot(execPath);
+    if (root !== undefined) {
+      const child = runtimeProcessEntrypoints[entry.runtimeEntrypoint];
+      return { argv: [execPath, path.join(root, "dist", child.distWorkerPath)], dispose() {} };
     }
   }
   const file = createRuntimeProcessScriptFile(name, options);

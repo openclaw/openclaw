@@ -7,9 +7,9 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-brid
 import { createDesktopFullscreen, type DesktopFullscreen } from "../desktop-fullscreen.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
 import { nativeDockPanelCss as dockStyles } from "../dock-panel-styles.ts";
-import { Icon } from "../solid/icon.tsx";
-import "../tooltip.ts";
+import { IconButton } from "../solid/icon-button.tsx";
 import { StrokeIcon } from "../solid/stroke-icon.tsx";
+import "../tooltip.ts";
 import { createDesktopAppLauncher } from "./desktop-app-launcher.ts";
 import { DesktopAudioControl, DesktopAudioNotice } from "./desktop-audio-view.tsx";
 import { createDesktopAudio } from "./desktop-audio.ts";
@@ -35,6 +35,7 @@ import {
   type DesktopPictureInPicture,
 } from "./desktop-picture-in-picture.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
+import sessionPanelRailStyles from "../../styles/session-panel-rail.css?inline";
 import desktopStyles from "./desktop-panel.css?inline";
 
 type Methods = { handleToggleRequest(event: Event): void };
@@ -73,7 +74,7 @@ export const DesktopPanel = defineSolidBridge<DesktopPanelInputs, Methods>(
     const state = projectOwner(panel, (owner) => owner);
     return (
       <>
-        <style>{`${dockStyles}\n${desktopStyles}`}</style>
+        <style>{`${dockStyles}\n${sessionPanelRailStyles}\n${desktopStyles}`}</style>
         {inputs.available &&
           (inputs.documentMode || inputs.embedded || state.read().dockLayout.open) && (
             <DesktopPresentation view={state.read().view} presentation={inputs.presentation} />
@@ -132,20 +133,15 @@ function FullscreenButton(props: { controller: DesktopFullscreen }) {
           : "desktop.fullscreenUnavailable",
     );
   return (
-    <openclaw-tooltip prop:content={label()}>
-      <button
-        class="bp-icon desktop-fullscreen-button"
-        type="button"
-        aria-label={label()}
-        aria-pressed={props.controller.active() ? "true" : "false"}
-        aria-disabled={props.controller.supported() ? "false" : "true"}
-        onClick={(event) => void props.controller.toggle(event.currentTarget)}
-      >
-        <span class="desktop-fullscreen-icon" aria-hidden="true">
-          <Icon name={props.controller.active() ? "minimize" : "maximize"} />
-        </span>
-      </button>
-    </openclaw-tooltip>
+    <IconButton
+      size={28}
+      class="rail-header__action bp-icon desktop-fullscreen-button"
+      label={label()}
+      icon={props.controller.active() ? "minimize" : "maximize"}
+      pressed={props.controller.active()}
+      aria-disabled={props.controller.supported() ? "false" : "true"}
+      onClick={(event) => void props.controller.toggle(event.currentTarget)}
+    />
   );
 }
 

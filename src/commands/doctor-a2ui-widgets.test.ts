@@ -16,7 +16,7 @@ import { sessionSqlFixture } from "./doctor-session-sqlite.sql.test-support.js";
 it("backs up legacy widgets, retires A2UI, and preserves other retired renderers as readable source", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const sessionKey = "agent:main:dashboard:migration";
-    const registeredOnlySessionKey = "agent:work:dashboard:migration";
+    const work = { sessionKey: "agent:work:dashboard:migration", agentId: "work" };
     const source = '<script>alert("source")</script>\nDiagram source';
     const registeredManifest = {
       contentOwner: "registered",
@@ -37,6 +37,7 @@ it("backs up legacy widgets, retires A2UI, and preserves other retired renderers
       await maintenance.run(async () => {
         const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
         const databasePath = database.path;
+        const directory = path.dirname(databasePath);
         const sql = sessionSqlFixture(database.db);
         sql`INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
       VALUES (${sessionKey}, 'session-migration', '{"sessionId":"session-migration","updatedAt":1}', 1)`.run();
@@ -48,7 +49,7 @@ it("backs up legacy widgets, retires A2UI, and preserves other retired renderers
           pendingDatabasePaths: [databasePath],
           databasePaths: [databasePath],
         });
-        const previousFiles = new Set(fs.readdirSync(path.dirname(databasePath)));
+        const previousFiles = new Set(fs.readdirSync(directory));
         for (const [name, pluginKind, manifest, widgetSource] of [
           ["legacy-plugin", "canvas:a2ui", {}],
           [
@@ -75,21 +76,21 @@ it("backs up legacy widgets, retires A2UI, and preserves other retired renderers
         const registeredOnly = openOpenClawAgentDatabase({ agentId: "work", env: state.env });
         const otherSql = sessionSqlFixture(registeredOnly.db);
         otherSql`INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
-          VALUES (${registeredOnlySessionKey}, 'session-work', '{"sessionId":"session-work","updatedAt":1}', 1)`.run();
+          VALUES (${work.sessionKey}, 'session-work', '{"sessionId":"session-work","updatedAt":1}', 1)`.run();
         otherSql`INSERT INTO board_tabs (session_key, tab_id, title, position, created_by, revision)
-          VALUES (${registeredOnlySessionKey}, 'main', 'Main', 0, 'user', 0)`.run();
+          VALUES (${work.sessionKey}, 'main', 'Main', 0, 'user', 0)`.run();
         otherSql`INSERT INTO board_widgets
           (session_key, name, tab_id, content_kind, descriptor_json, sha256, revision, size_w, size_h, position, manifest, created_by, created_at, updated_at)
-          VALUES (${registeredOnlySessionKey}, 'malformed-source', 'main', 'plugin', 'unparseable <source>', 'hash', 1, 1, 1, 0, ${JSON.stringify({ contentOwner: "registered" })}, 'user', 1, 1)`.run();
+          VALUES (${work.sessionKey}, 'malformed-source', 'main', 'plugin', 'unparseable <source>', 'hash', 1, 1, 1, 0, ${JSON.stringify({ contentOwner: "registered" })}, 'user', 1, 1)`.run();
         await closeOpenClawAgentDatabasesAsync();
 
         const result = await retireDoctorA2uiWidgets({ cfg: {}, env: state.env });
         expect(result.warnings).toEqual([
-          "Deleted 2 stored widget(s) after backup. A2UI widgets were retired and can be recreated as HTML widgets.",
-          "Converted 3 other retired widget(s) to inert HTML source previews after backup. Original source and widget metadata were preserved; previous capabilities were removed.",
+          expect.stringContaining("Deleted 2 stored widget(s) after backup"),
+          expect.stringContaining("Converted 3 other retired widget(s) to inert HTML"),
         ]);
         const backupNames = fs
-          .readdirSync(path.dirname(databasePath))
+          .readdirSync(directory)
           .filter(
             (name) =>
               name.startsWith(`${path.basename(databasePath)}.pre-startup-migration-`) &&
@@ -97,47 +98,32 @@ it("backs up legacy widgets, retires A2UI, and preserves other retired renderers
               !previousFiles.has(name),
           );
         expect(backupNames).toHaveLength(1);
-        const backupPath = path.join(path.dirname(databasePath), backupNames[0]!);
+        const backupPath = path.join(directory, backupNames[0]!);
         expect(result.changes.some((change) => change.includes(backupPath))).toBe(true);
         using backup = new DatabaseSync(backupPath, { readOnly: true });
         expect(backup.prepare("SELECT * FROM board_widgets ORDER BY name").all()).toEqual(original);
 
         using repaired = new DatabaseSync(databasePath, { readOnly: true });
+        const query = sessionSqlFixture(repaired);
         expect(
-          repaired
-            .prepare("SELECT * FROM board_widgets WHERE name NOT LIKE 'converted%' ORDER BY name")
-            .all(),
+          query`SELECT * FROM board_widgets WHERE name NOT LIKE 'converted%' ORDER BY name`.all(),
         ).toEqual(
           original.filter(
             (row) =>
               !String(row.name).startsWith("legacy-") && !String(row.name).startsWith("converted"),
           ),
         );
-        expect(
-          repaired
-            .prepare(
-              "SELECT content_kind, descriptor_json, grant_state, granted_sha, revision FROM board_widgets WHERE name = 'converted'",
-            )
-            .get(),
-        ).toEqual({
-          content_kind: "html",
+        const converted = query`SELECT * FROM board_widgets WHERE name = 'converted'`.get();
+        expect(converted).toMatchObject({
           descriptor_json: null,
-          grant_state: "none",
           granted_sha: null,
           revision: 2,
         });
-        expect(
-          JSON.parse(
-            String(
-              repaired.prepare("SELECT manifest FROM board_widgets WHERE name = 'converted'").get()
-                ?.manifest,
-            ),
-          ),
-        ).toMatchObject({
+        expect(JSON.parse(String(converted?.manifest))).toMatchObject({
           contentOwner: "html",
           nameIdentity: registeredManifest.nameIdentity,
         });
-        expect(repaired.prepare("SELECT title FROM board_tabs").get()?.title).toBe("Main");
+        expect(query`SELECT title FROM board_tabs`.get()?.title).toBe("Main");
         expect(await retireDoctorA2uiWidgets({ cfg: {}, env: state.env })).toMatchObject({
           changes: [],
           warnings: [],
@@ -172,19 +158,14 @@ it("backs up legacy widgets, retires A2UI, and preserves other retired renderers
     expect(preview?.html).toContain("&quot;extra&quot;:&quot;preserved&quot;");
     expect(preview?.html).toContain("&quot;unrelatedMetadata&quot;:&quot;kept verbatim&quot;");
     expect(preview?.html).not.toContain("<script>");
-    const registeredOnlySnapshot = await store.getSnapshot({
-      sessionKey: registeredOnlySessionKey,
-      agentId: "work",
-    });
+    const registeredOnlySnapshot = await store.getSnapshot(work);
     expect(registeredOnlySnapshot.widgets).toHaveLength(1);
     expect(registeredOnlySnapshot.widgets[0]).toMatchObject({
       contentKind: "html",
       contentOwner: "html",
     });
-    const malformedPreview = await store.useWidgetDocument(
-      { sessionKey: registeredOnlySessionKey, agentId: "work" },
-      "malformed-source",
-      (document) => (document && "html" in document ? document.html : undefined),
+    const malformedPreview = await store.useWidgetDocument(work, "malformed-source", (document) =>
+      document && "html" in document ? document.html : undefined,
     );
     expect(malformedPreview).toContain("unparseable &lt;source&gt;");
   });

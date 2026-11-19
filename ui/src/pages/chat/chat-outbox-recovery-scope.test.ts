@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { makeChatHost, requestCalls, requireRecord } from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
@@ -12,7 +12,18 @@ import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
 
-function useMemoryOnlyStorage() {
+function reopen(host: ReturnType<typeof makeChatHost>, connectionEpoch = host.connectionEpoch) {
+  const reopened = makeChatHost({
+    client: host.client,
+    connected: true,
+    sessionKey: host.sessionKey,
+    currentSessionId: host.currentSessionId,
+    connectionEpoch,
+  });
+  onTestFinished(chatOutboxOwner(reopened).subscribe(reopened));
+  return reopened;
+}
+function sendingHost(chatMessage: string, send: (params: unknown) => unknown) {
   vi.useFakeTimers();
   onTestFinished(() => {
     vi.useRealTimers();
@@ -20,31 +31,30 @@ function useMemoryOnlyStorage() {
   vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
     throw new Error("quota");
   });
-}
-
-async function retainMemoryOnlySend() {
-  useMemoryOnlyStorage();
-  let attempts = 0;
   const host = makeChatHost({
     sessionKey: "agent:main:retained",
     currentSessionId: "original-physical-session",
-    chatMessage: "Synthetic retained input",
-    requestHandlers: {
-      "chat.send": (params: unknown) => {
-        if (++attempts === 1) {
-          host.connected = false;
-          throw new GatewayProtocolRequestTimeoutError({
-            method: "chat.send",
-            timeoutMs: 30_000,
-            requestSent: true,
-          });
-        }
-        return { runId: requireRecord(params, "replayed send").idempotencyKey, status: "ok" };
-      },
-    },
+    chatMessage,
+    requestHandlers: { "chat.send": send },
   });
   const unsubscribe = chatOutboxOwner(host).subscribe(host);
   onTestFinished(unsubscribe);
+  return { host, unsubscribe };
+}
+
+async function retainMemoryOnlySend() {
+  let attempts = 0;
+  const { host, unsubscribe } = sendingHost("Synthetic retained input", (params) => {
+    if (++attempts === 1) {
+      host.connected = false;
+      throw new GatewayProtocolRequestTimeoutError({
+        method: "chat.send",
+        timeoutMs: 30_000,
+        requestSent: true,
+      });
+    }
+    return { runId: requireRecord(params, "replayed send").idempotencyKey, status: "ok" };
+  });
   await handleSendChat(host);
   markQueuedChatSendsWaitingForReconnect(host);
   const firstSend = requestCalls(host.request, "chat.send")[0]?.[1];
@@ -57,83 +67,48 @@ async function retainMemoryOnlySend() {
   return { host, firstSend, unsubscribe };
 }
 
-it.each([false, true])(
-  "replays a memory-only send after same-account recovery (intermediate hello=%s)",
-  async (intermediateHello) => {
-    const { host, firstSend } = await retainMemoryOnlySend();
-    const recoveryReady = vi.spyOn(host.client!, "recoveryScopeReady", "get");
-    host.connectionEpoch += 1;
-    host.connected = true;
-    if (intermediateHello) {
-      recoveryReady.mockReturnValue(false);
-      await resumeStoredChatOutboxes(host);
-      expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
+it.each(["retained", "recreated"] as const)(
+  "replays a memory-only send after recovery in a %s pane",
+  async (pane) => {
+    const { host, firstSend, unsubscribe } = await retainMemoryOnlySend();
+    if (pane === "recreated") {
+      unsubscribe();
     }
+    const target = pane === "recreated" ? reopen(host) : host;
+    const recoveryReady = vi.spyOn(host.client!, "recoveryScopeReady", "get");
+    target.connectionEpoch += 1;
+    target.connected = true;
+    expect(target.chatQueue).toMatchObject([
+      { text: "Synthetic retained input", sendState: "waiting-reconnect" },
+    ]);
+    recoveryReady.mockReturnValue(false);
+    await resumeStoredChatOutboxes(target);
+    expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
     recoveryReady.mockReturnValue(true);
-    await resumeStoredChatOutboxes(host);
+    await resumeStoredChatOutboxes(target);
 
     const sends = requestCalls(host.request, "chat.send");
     expect(sends).toHaveLength(2);
     expect(sends[1]?.[1]).toEqual(firstSend);
-    expect(host.chatQueue).toEqual([]);
+    expect(target.chatQueue).toEqual([]);
   },
 );
-
-it("replays a memory-only send after its conversation pane is recreated", async () => {
-  const { host, firstSend, unsubscribe } = await retainMemoryOnlySend();
-  unsubscribe();
-  const reopened = makeChatHost({
-    client: host.client,
-    connected: true,
-    sessionKey: host.sessionKey,
-    currentSessionId: host.currentSessionId,
-    connectionEpoch: host.connectionEpoch + 1,
-  });
-  onTestFinished(chatOutboxOwner(reopened).subscribe(reopened));
-
-  expect(reopened.chatQueue).toMatchObject([
-    { text: "Synthetic retained input", sendState: "waiting-reconnect" },
-  ]);
-  await resumeStoredChatOutboxes(reopened);
-
-  const sends = requestCalls(host.request, "chat.send");
-  expect(sends).toHaveLength(2);
-  expect(sends[1]?.[1]).toEqual(firstSend);
-  expect(reopened.chatQueue).toEqual([]);
-});
 
 it.each(["acknowledged", "rejected"] as const)(
   "publishes a late %s memory-only send to its recreated pane",
   async (outcome) => {
-    useMemoryOnlyStorage();
     const response = Promise.withResolvers<unknown>();
     const started = Promise.withResolvers<string>();
-    const host = makeChatHost({
-      sessionKey: "agent:main:retained",
-      currentSessionId: "original-physical-session",
-      chatMessage: "Synthetic in-flight input",
-      requestHandlers: {
-        "chat.send": (params: unknown) => {
-          const runId = String(requireRecord(params, "original send").idempotencyKey);
-          started.resolve(runId);
-          return response.promise;
-        },
-      },
+    const { host, unsubscribe } = sendingHost("Synthetic in-flight input", (params) => {
+      const runId = String(requireRecord(params, "original send").idempotencyKey);
+      started.resolve(runId);
+      return response.promise;
     });
-    const unsubscribe = chatOutboxOwner(host).subscribe(host);
-    onTestFinished(unsubscribe);
     const sending = handleSendChat(host);
     const runId = await started.promise;
     chatOutboxOwner(host).admissions.cancelRequests(host);
     unsubscribe();
-    const reopened = makeChatHost({
-      client: host.client,
-      connected: true,
-      sessionKey: host.sessionKey,
-      currentSessionId: host.currentSessionId,
-      connectionEpoch: host.connectionEpoch,
-    });
-    onTestFinished(chatOutboxOwner(reopened).subscribe(reopened));
+    const reopened = reopen(host);
 
     try {
       expect(reopened.chatQueue).toMatchObject([
@@ -148,13 +123,17 @@ it.each(["acknowledged", "rejected"] as const)(
       }
       await sending;
 
-      if (outcome === "rejected") {
-        expect(reopened.chatQueue).toMatchObject([
-          { text: "Synthetic in-flight input", sendState: "failed", sendError: "Rejected input" },
-        ]);
-      } else {
-        expect(reopened.chatQueue).toEqual([]);
-      }
+      expect(reopened.chatQueue).toMatchObject(
+        outcome === "rejected"
+          ? [
+              {
+                text: "Synthetic in-flight input",
+                sendState: "failed",
+                sendError: "Rejected input",
+              },
+            ]
+          : [],
+      );
     } finally {
       response.resolve({ runId, status: "ok", messageSeq: 1 });
       await sending;

@@ -52,26 +52,17 @@ async function validateConsentUploadUrl(url: string): Promise<void> {
   }
 }
 
-interface FileConsentCardParams {
+/**
+ * Build a FileConsentCard attachment for requesting upload permission.
+ * Use this for files >= 4MB in personal (1:1) chats.
+ */
+export function buildFileConsentCard(params: {
   filename: string;
   description?: string;
   sizeInBytes: number;
   /** Custom context data to include in the card (passed back in the invoke) */
   context?: Record<string, unknown>;
-}
-
-interface FileInfoCardParams {
-  filename: string;
-  contentUrl: string;
-  uniqueId: string;
-  fileType: string;
-}
-
-/**
- * Build a FileConsentCard attachment for requesting upload permission.
- * Use this for files >= 4MB in personal (1:1) chats.
- */
-export function buildFileConsentCard(params: FileConsentCardParams) {
+}) {
   return {
     contentType: "application/vnd.microsoft.teams.card.file.consent",
     name: params.filename,
@@ -88,7 +79,12 @@ export function buildFileConsentCard(params: FileConsentCardParams) {
  * Build a FileInfoCard attachment for confirming upload completion.
  * Send this after successfully uploading the file to the consent URL.
  */
-export function buildFileInfoCard(params: FileInfoCardParams) {
+export function buildFileInfoCard(params: {
+  filename: string;
+  contentUrl: string;
+  uniqueId: string;
+  fileType: string;
+}) {
   return {
     contentType: "application/vnd.microsoft.teams.card.file.info",
     contentUrl: params.contentUrl,
@@ -108,16 +104,11 @@ interface FileConsentUploadInfo {
   fileType: string;
 }
 
-interface FileConsentResponse {
+export function parseFileConsentInvoke(activity: { name?: string; value?: unknown }): {
   action: "accept" | "decline";
   uploadInfo?: FileConsentUploadInfo;
   context?: Record<string, unknown>;
-}
-
-export function parseFileConsentInvoke(activity: {
-  name?: string;
-  value?: unknown;
-}): FileConsentResponse | null {
+} | null {
   if (activity.name !== "fileConsent/invoke") {
     return null;
   }

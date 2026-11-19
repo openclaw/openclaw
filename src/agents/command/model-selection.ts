@@ -46,6 +46,7 @@ import {
 import { isStoredCredentialCompatibleWithAuthProvider } from "../auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../auth-profiles/session-override.js";
 import { ensureAuthProfileStoreAsync } from "../auth-profiles/store-runtime.js";
+import { assertModelSupportsChat } from "../failover/error.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js";
 import { findModelInCatalog } from "../model-catalog-lookup.js";
@@ -195,7 +196,15 @@ export async function resolveEmbeddedModelSelection(params: {
         selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
       }).updated;
     let entryUpdated = hasLegacyAutoFallbackWithoutOrigin(entry) && resetToDefaultModel();
-    const repaired = repairProviderWrappedModelOverride({ entry, defaultProvider, defaultModel });
+    const repaired = repairProviderWrappedModelOverride({
+      entry,
+      defaultProvider,
+      defaultModel,
+      // A selectable cataloged or configured route is a deliberate pick, not a lost wrapper.
+      isKnownRoute: (ref) =>
+        visibilityPolicy.allows(ref) &&
+        Boolean(findModelInCatalog(visibilityPolicy.catalog, ref.provider, ref.model)),
+    });
     entryUpdated ||= repaired.updated;
     const directOverride = resolveDirectStoredModelOverride({
       sessionEntry: entry,
@@ -208,6 +217,17 @@ export async function resolveEmbeddedModelSelection(params: {
         provider: directOverride.provider ?? defaultProvider,
         model: directOverride.model,
       };
+      if (!hasExplicitRunOverride) {
+        // A capability change must fail the turn without erasing the user's pin.
+        assertModelSupportsChat(
+          findModelInCatalog(
+            visibilityPolicy.catalog,
+            normalizedOverride.provider,
+            normalizedOverride.model,
+          )?.inference?.chat,
+          normalizedOverride,
+        );
+      }
       if (!hasSessionAutoModelSelection(entry) && !visibilityPolicy.allows(normalizedOverride)) {
         const updated = resetToDefaultModel();
         entryUpdated ||= updated;

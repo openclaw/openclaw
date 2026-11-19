@@ -312,26 +312,6 @@ function resolveManagedAttachmentAvailability(
   return current ?? { status: "checking" };
 }
 
-function retryManagedAttachmentAvailability(
-  attachment: AttachmentItem["attachment"],
-  onMediaChange: (() => void) | undefined,
-  connectionEpoch: number | undefined,
-): void {
-  if (!attachment.artifactId || !isManagedOutgoingMediaSource(attachment.url)) {
-    return;
-  }
-  const resource = observeChatMediaResource<ManagedAttachmentAvailability>(
-    "managed-media",
-    `${connectionEpoch ?? 0}::${resolveManagedOutgoingMediaSessionKey(attachment.url)}::${attachment.artifactId}`,
-    onMediaChange,
-    attachment.url,
-  );
-  resource.value = undefined;
-  resource.retryAttempted = false;
-  notifyChatMediaResourceSubscribers(resource);
-  onMediaChange?.();
-}
-
 export function resolveAttachmentSource(
   attachment: AttachmentItem["attachment"],
   options: ImageRenderOptions,
@@ -370,7 +350,21 @@ export function resolveAttachmentSource(
         managedAvailability.status === "unavailable" &&
         attachment.artifactId &&
         resolveArtifactDownload
-          ? () => retryManagedAttachmentAvailability(attachment, onMediaChange, connectionEpoch)
+          ? (): void => {
+              if (!attachment.artifactId || !isManagedOutgoingMediaSource(attachment.url)) {
+                return;
+              }
+              const resource = observeChatMediaResource<ManagedAttachmentAvailability>(
+                "managed-media",
+                `${connectionEpoch ?? 0}::${resolveManagedOutgoingMediaSessionKey(attachment.url)}::${attachment.artifactId}`,
+                onMediaChange,
+                attachment.url,
+              );
+              resource.value = undefined;
+              resource.retryAttempted = false;
+              notifyChatMediaResourceSubscribers(resource);
+              onMediaChange?.();
+            }
           : undefined,
     };
   }
@@ -389,7 +383,12 @@ export function resolveAttachmentSource(
   if (!src) {
     return { status: "checking" as const, reason: undefined, onRetry: undefined };
   }
-  const playback = assistantAvailability.playback ?? attachment.playback ?? "native";
+  // A busy Gateway inspector publishes managed media without playback metadata; the playback
+  // route inspects on demand and serves the original bytes when no rendition is needed.
+  const playback =
+    assistantAvailability.playback ??
+    attachment.playback ??
+    (isManagedOutgoingMediaSource(attachment.url) ? "transcode" : "native");
   return {
     status: "available" as const,
     source: {

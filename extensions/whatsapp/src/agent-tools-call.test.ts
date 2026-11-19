@@ -7,7 +7,6 @@ import type {
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-// WhatsApp call tool tests cover requester binding, audio framing, and process cleanup.
 import { commandResult } from "../../test-support/command-result.test-support.js";
 import { registerWhatsAppCallTool } from "./agent-tools-call.js";
 
@@ -91,6 +90,14 @@ describe("WhatsApp call tool", () => {
   let rootDir: string;
   let stateDir: string;
 
+  async function call(params?: Parameters<typeof createApi>[0], context = createContext()) {
+    await fs.writeFile(path.join(stateDir, "wa-voip.db"), "sqlite");
+    return resolveRegisteredCallTool(createApi(params), context)?.execute("call", {
+      action: "call",
+      message: "Hello",
+    });
+  }
+
   beforeEach(async () => {
     runtimeContextMocks.controllers.clear();
     defaultDependencyMocks.binaryFound = true;
@@ -107,21 +114,14 @@ describe("WhatsApp call tool", () => {
   it("is opt-in and available only for a trusted WhatsApp requester", () => {
     const api = createApi();
 
-    expect(resolveRegisteredCallTool(api, createContext({ config: {} }))).toBeNull();
-    expect(
-      resolveRegisteredCallTool(
-        api,
-        createContext({
-          config: { channels: { whatsapp: { actions: { calls: false } } } },
-        }),
-      ),
-    ).toBeNull();
-    expect(
-      resolveRegisteredCallTool(api, createContext({ messageChannel: "telegram" })),
-    ).toBeNull();
-    expect(
-      resolveRegisteredCallTool(api, createContext({ requesterSenderId: undefined })),
-    ).toBeNull();
+    for (const context of [
+      { config: {} },
+      { config: { channels: { whatsapp: { actions: { calls: false } } } } },
+      { messageChannel: "telegram" },
+      { requesterSenderId: undefined },
+    ]) {
+      expect(resolveRegisteredCallTool(api, createContext(context))).toBeNull();
+    }
     expect(resolveRegisteredCallTool(api, createContext())?.name).toBe("whatsapp_call");
   });
 
@@ -188,10 +188,9 @@ describe("WhatsApp call tool", () => {
   });
 
   it("resolves a requester LID through the active WhatsApp account", async () => {
-    await fs.writeFile(path.join(stateDir, "wa-voip.db"), "sqlite");
-    const runCommand = vi.fn(async () =>
-      commandResult(),
-    ) as OpenClawPluginApi["runtime"]["system"]["runCommandWithTimeout"];
+    const runCommand = vi.fn<OpenClawPluginApi["runtime"]["system"]["runCommandWithTimeout"]>(
+      async () => commandResult(),
+    );
     runtimeContextMocks.controllers.set("default", {
       getActiveListener: () => null,
       getCurrentSock: () => ({
@@ -204,32 +203,22 @@ describe("WhatsApp call tool", () => {
       getSelfIdentity: () => null,
     });
 
-    const tool = resolveRegisteredCallTool(
-      createApi({ runCommand }),
-      createContext({ requesterSenderId: "123456789@lid" }),
-    );
     await expect(
-      tool?.execute("call-lid", { action: "call", message: "Hello" }),
+      call({ runCommand }, createContext({ requesterSenderId: "123456789@lid" })),
     ).resolves.toBeDefined();
-    expect(vi.mocked(runCommand).mock.calls[0]?.[0]).toContain("+15551234567");
+    expect(runCommand.mock.calls[0]?.[0]).toContain("+15551234567");
   });
 
   it("rejects calling the linked WhatsApp identity itself", async () => {
-    await fs.writeFile(path.join(stateDir, "wa-voip.db"), "sqlite");
     runtimeContextMocks.controllers.set("default", {
       getActiveListener: () => null,
       getCurrentSock: () => null,
       getSelfIdentity: () => ({ e164: "+15551234567" }),
     });
-    const tool = resolveRegisteredCallTool(createApi(), createContext());
-
-    await expect(tool?.execute("call-self", { action: "call", message: "Hello" })).rejects.toThrow(
-      "WhatsApp cannot call the linked account itself",
-    );
+    await expect(call()).rejects.toThrow("WhatsApp cannot call the linked account itself");
   });
 
   it("rejects an early MeowCaller failure and removes the temporary audio", async () => {
-    await fs.writeFile(path.join(stateDir, "wa-voip.db"), "sqlite");
     let audioPath: string | undefined;
     const runCommand = vi.fn(async (argv: string[]) => {
       audioPath = argv.at(-1);
@@ -238,9 +227,7 @@ describe("WhatsApp call tool", () => {
         code: 1,
       });
     }) as OpenClawPluginApi["runtime"]["system"]["runCommandWithTimeout"];
-    const tool = resolveRegisteredCallTool(createApi({ runCommand }), createContext());
-
-    await expect(tool?.execute("call-3", { action: "call", message: "Hello" })).rejects.toThrow(
+    await expect(call({ runCommand })).rejects.toThrow(
       "MeowCaller did not complete the call (code 1)",
     );
     expect(audioPath).toBeDefined();
@@ -248,7 +235,6 @@ describe("WhatsApp call tool", () => {
   });
 
   it("does not report success when MeowCaller times out", async () => {
-    await fs.writeFile(path.join(stateDir, "wa-voip.db"), "sqlite");
     const runCommand = vi.fn(async () =>
       commandResult({
         code: 124,
@@ -257,25 +243,22 @@ describe("WhatsApp call tool", () => {
         termination: "timeout" as const,
       }),
     ) as OpenClawPluginApi["runtime"]["system"]["runCommandWithTimeout"];
-    const tool = resolveRegisteredCallTool(createApi({ runCommand }), createContext());
-
-    await expect(
-      tool?.execute("call-unpaired", { action: "call", message: "Hello" }),
-    ).rejects.toThrow("MeowCaller exceeded the bounded WhatsApp call window");
+    await expect(call({ runCommand })).rejects.toThrow(
+      "MeowCaller exceeded the bounded WhatsApp call window",
+    );
   });
 
   it.each(["ulaw_8000", "raw-8khz-8bit-mono-mulaw"])(
     "decodes %s telephony audio through the registered tool",
     async (outputFormat) => {
-      await fs.writeFile(path.join(stateDir, "wa-voip.db"), "sqlite");
       const runCommand = vi.fn(async (argv: string[]) => {
         const wav = await fs.readFile(argv.at(-1) ?? "");
         expect(wav.subarray(44).length).toBe(4);
         expect(wav.readInt16LE(44)).toBe(0);
         return commandResult();
       }) as OpenClawPluginApi["runtime"]["system"]["runCommandWithTimeout"];
-      const tool = resolveRegisteredCallTool(
-        createApi({
+      await expect(
+        call({
           runCommand,
           speech: {
             audioBuffer: Buffer.from([0xff, 0x7f]),
@@ -283,11 +266,6 @@ describe("WhatsApp call tool", () => {
             sampleRate: 8_000,
           },
         }),
-        createContext(),
-      );
-
-      await expect(
-        tool?.execute("call-ulaw", { action: "call", message: "Hello" }),
       ).resolves.toBeDefined();
     },
   );
@@ -313,11 +291,6 @@ describe("WhatsApp call tool", () => {
       message: "60-second WhatsApp call limit",
     },
   ])("rejects $name through the registered tool", async ({ speech, message }) => {
-    await fs.writeFile(path.join(stateDir, "wa-voip.db"), "sqlite");
-    const tool = resolveRegisteredCallTool(createApi({ speech }), createContext());
-
-    await expect(
-      tool?.execute("call-invalid", { action: "call", message: "Hello" }),
-    ).rejects.toThrow(message);
+    await expect(call({ speech })).rejects.toThrow(message);
   });
 });

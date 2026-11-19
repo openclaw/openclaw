@@ -1,4 +1,3 @@
-import { readClawSecondaryReferenceTables } from "../claws/provenance-secondary-references.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -7,6 +6,7 @@ import {
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { readTemplateSecondaryReferenceTables } from "../templates/provenance-secondary-references.js";
 import type { AgentDeletionJournalAuthority } from "./agent-deletion-journal.types.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import { ensureAgentDeletionJournalPhaseSchema } from "./openclaw-state-db-schema-additive.js";
@@ -42,20 +42,20 @@ export function readAgentDeletionJournalAuthorityInDatabase(
   };
 }
 
-export function hasClawDeletionOwnership(
+export function hasTemplateDeletionOwnership(
   database: Pick<OpenClawStateDatabase, "db">,
   agentId: string,
 ): boolean {
   const db = getNodeSqliteKysely<DB>(database.db);
   return (
-    (["claw_installs", "claw_workspace_files"] as const).some(
+    (["template_installs", "template_workspace_files"] as const).some(
       (table) =>
         tableExists(database.db, table) &&
         executeSqliteQueryTakeFirstSync(
           database.db,
           db.selectFrom(table).select("agent_id").where("agent_id", "=", agentId).limit(1),
         ) !== undefined,
-    ) || readClawSecondaryReferenceTables(database.db, agentId).length > 0
+    ) || readTemplateSecondaryReferenceTables(database.db, agentId).length > 0
   );
 }
 

@@ -76,13 +76,6 @@ it("rejects the protocol's malformed-timestamp signal", async () => {
   );
 });
 
-it("keeps the local-clock fallback for callers that received no challenge", async () => {
-  const { lifecycle } = fixture();
-  const plan = await lifecycle.buildPlan(planOptions);
-
-  expect(plan.device?.signedAt).toBe(123);
-});
-
 it("uses only the preferred bootstrap credential and never persists it", async () => {
   const { lifecycle, sign, store } = fixture();
   const plan = await lifecycle.buildPlan({
@@ -99,6 +92,7 @@ it("uses only the preferred bootstrap credential and never persists it", async (
     token: undefined,
     password: undefined,
   });
+  expect(plan.device?.signedAt).toBe(123);
   expect(plan.selectedAuth.signatureToken).toBe("test-bootstrap-token");
   expect(sign).toHaveBeenCalledWith(
     "v3|device|openclaw-browser-copilot|ui|operator|operator.read,operator.write|123|test-bootstrap-token|nonce|chrome|extension",

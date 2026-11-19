@@ -12,6 +12,7 @@ import * as managedBinary from "./crabbox-managed-binary.js";
 import { crabboxState } from "./crabbox-state.test-support.js";
 import {
   warmImage,
+  warmAllocation,
   warmRecord,
   warmStore,
   captureOperation,
@@ -100,7 +101,7 @@ describe("Crabbox worker doctor", () => {
               target: "sandbox",
               ocPath: "plugins.entries.crabbox.config.sandbox.binary",
               message: expect.stringContaining("Crabbox sandbox uses outdated Crabbox 0.76.0"),
-              requirement: "Crabbox 0.79.2 or newer",
+              requirement: outdated.requirement,
             }
           : kind === "wsl2"
             ? { ...outdated, target: "worker" }
@@ -226,6 +227,21 @@ describe("Crabbox warm-image doctor", () => {
                   : {}),
               });
       }
+      if (operation === "retire") {
+        record.allocations = {
+          cbx_choice_holder: warmAllocation({
+            kind: "checkpoint",
+            checkpointId: "chk_predecessor",
+          }),
+          cbx_generation_holder: warmAllocation(
+            { kind: "cold" },
+            {
+              imageGeneration: { checkpointId: "chk_predecessor", createdAtMs: 1 },
+            },
+          ),
+          cbx_unrelated: warmAllocation(),
+        };
+      }
       store.register("profile", record);
       const probe = vi.spyOn(managedBinary, "probeCrabboxVersion");
       const command = vi
@@ -257,6 +273,12 @@ describe("Crabbox warm-image doctor", () => {
           "capture attempts are skipped until `warmImages.refreshAfter`",
           "supports native checkpoints",
         ]);
+      } else if (operation === "retire") {
+        expectText(
+          findings[0]?.message,
+          ["cbx_choice_holder", "cbx_generation_holder"],
+          ["cbx_unrelated"],
+        );
       } else if (operation === "uncertain") {
         expectText(findings[0]?.fixHint, ["chk_interrupted_a", "chk_interrupted_b"]);
         expect(findings[0]?.fixHint).toContain(
@@ -339,6 +361,27 @@ describe("Crabbox setup secret migration", () => {
       expectText(result.warnings?.join(" "), [problem, "allowed hosts"]);
     },
   );
+
+  it("explains reserved-name recovery before inspecting the store", async () => {
+    const inspect = vi.fn(async () => {
+      throw new Error("Reserved names must be rejected before store inspection");
+    });
+    const check = captureCrabboxDoctorCheck(CRABBOX_SETUP_SECRETS_CHECK_ID, inspect);
+    const ctx = context({
+      setup: "use $OPENCLAW_CW_TS_AUTHKEY",
+      setupEnv: ["OPENCLAW_CW_TS_AUTHKEY"],
+    });
+    const before = structuredClone(ctx.cfg);
+    const findings = await check.detect(ctx);
+    const result = await check.repair!(ctx, findings);
+
+    expect(inspect).not.toHaveBeenCalled();
+    expect(findings).toMatchObject([{ message: expect.stringContaining("reserved") }]);
+    expectText(findings[0]?.fixHint, ["setupSecrets", "setup command", "store IDs", "setupEnv"]);
+    expectText(result.warnings?.join(" "), ["reserved", "setup command", "store IDs"]);
+    expect(result).toMatchObject({ status: "skipped", config: before, changes: [] });
+    expect(ctx.cfg).toEqual(before);
+  });
 
   it.each(["conflicting", "compatible"])("preserves %s mappings during migration", async (kind) => {
     const conflict = kind === "conflicting";

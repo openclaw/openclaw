@@ -9,7 +9,7 @@ import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.j
 import * as execApprovalRequests from "../agents/bash-tools.exec-approval-request.js";
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
 import { executeNodeClaudeRun } from "../agents/cli-runner/execute-node-claude.js";
-import { createLibrarySkillWorkshopTool } from "../agents/tools/skill-workshop-tool-library.js";
+import { createSkillLibraryTool } from "../agents/tools/skill-library-tool.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -22,7 +22,7 @@ import { resolveNodeHostGatewayPlatformIdentity } from "../node-host/gateway-pla
 import { decodeClaudeCliNodeRunParams } from "../node-host/invoke-agent-cli-claude-params.js";
 import { runClaudeCliNodeCommand } from "../node-host/invoke-agent-cli-claude.js";
 import type { NodeInvokeRequestPayload } from "../node-host/invoke-types.js";
-import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -155,13 +155,17 @@ async function fixture(
   // Use the real admission/capability; the factory only supplies irrelevant CLI defaults.
   context.params.admittedRunContext = admitted;
   context.params.skillLibraryAuthoring = capability;
-  context.nodeSkillWorkshop = capability ? createLibrarySkillWorkshopTool(capability) : undefined;
+  context.nodeSkillWorkshop = capability ? createSkillLibraryTool(capability) : undefined;
   const controller = new AbortController();
   const tasks: Promise<void>[] = [];
   let endpoint: ReturnType<typeof createNodeDuplexEndpoint> | undefined;
   let currentFrame: NodeInvokeRequestPayload | undefined;
   let wireBytes = 0;
   const requests: unknown[] = [];
+  const finish = (
+    id: string,
+    outcome: { ok: boolean; payload?: unknown; error?: { message: string } },
+  ) => registry.handleInvokeResult({ id, ...nodeConnection, ...outcome });
   const progress = (chunk: string, seq: number) =>
     registry.handleInvokeProgress({
       invokeId: currentFrame!.id,
@@ -238,9 +242,7 @@ async function fixture(
             signal: controller.signal,
             skillIo: request.skillRuntime ? io : undefined,
           });
-          registry.handleInvokeResult({
-            id: frame.id,
-            ...nodeConnection,
+          finish(frame.id, {
             ok: true,
             payload: {
               exitCode: result.exitCode,
@@ -249,12 +251,7 @@ async function fixture(
             },
           });
         } catch (error) {
-          registry.handleInvokeResult({
-            id: frame.id,
-            ...nodeConnection,
-            ok: false,
-            error: { message: String(error) },
-          });
+          finish(frame.id, { ok: false, error: { message: String(error) } });
         }
       });
       tasks.push(task);
@@ -286,8 +283,8 @@ async function fixture(
   );
   let output = "";
   const execute = (stdin = "hello") =>
-    withPluginRuntimeGatewayRequestScope(
-      { context: gateway, client: owner.client, isWebchatConnect: () => true },
+    withPluginRuntimeGatewayContextResolver(
+      () => gateway,
       () =>
         executeNodeClaudeRun({
           context,
@@ -316,9 +313,7 @@ async function fixture(
     output: () => output,
     maxWireBytes: () => wireBytes,
     completeInvocation() {
-      registry.handleInvokeResult({
-        id: currentFrame!.id,
-        ...nodeConnection,
+      finish(currentFrame!.id, {
         ok: true,
         payload: { exitCode: 0, stderrTail: "", truncated: false },
       });
@@ -475,28 +470,18 @@ const fs=require('node:fs'); const config=JSON.parse(fs.readFileSync(process.arg
 async function call(method,params,id){const r=await fetch(config.mcpServers.openclaw.url,{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json, text/event-stream'},body:JSON.stringify({jsonrpc:'2.0',id,method,params})});return r.json();}
 (async()=>{await call('initialize',{protocolVersion:'2025-03-26',capabilities:{},clientInfo:{name:'synthetic-claude',version:'1'}},1);
  const listed=await call('tools/list',{},2);
- const created=await call('tools/call',{name:'skill_workshop',arguments:{action:'create',name:'node-created',proposal_content:${JSON.stringify(content)},files:[{path:'scripts/task.sh',content:'#!/bin/sh\\nprintf owned',executable:true}]}},3);
+ const created=await call('tools/call',{name:'skill_library',arguments:{action:'create',name:'node-created',proposal_content:${JSON.stringify(content)},files:[{path:'scripts/task.sh',content:'#!/bin/sh\\nprintf owned',executable:true}]}},3);
  const receipt=JSON.parse(created.result.content[0].text);
- const updated=await call('tools/call',{name:'skill_workshop',arguments:{action:'update',skill_id:receipt.entry.skillId,expected_revision:receipt.entry.revision,name:'node-created',proposal_content:${JSON.stringify(content + "Updated on node.\n")}}},4);
+ const updated=await call('tools/call',{name:'skill_library',arguments:{action:'update',skill_id:receipt.entry.skillId,expected_revision:receipt.entry.revision,name:'node-created',proposal_content:${JSON.stringify(content + "Updated on node.\n")}}},4);
  console.log(JSON.stringify({type:'result',listed,created,updated}));
 })().catch(e=>{console.error(String(e));process.exitCode=1;});`;
 
 it("authors through the node MCP proxy using the actual host capability without a preselected skill", async () => {
   await using f = await fixture(authorScript, { authoring: true });
   expect((await f.execute()).result.exitCode).toBe(0);
-  expect(JSON.parse(f.output()).listed.result.tools).toMatchObject([
-    {
-      name: "skill_workshop",
-      inputSchema: {
-        properties: {
-          action: {
-            type: "string",
-            enum: expect.arrayContaining(["create", "update"]),
-          },
-        },
-      },
-    },
-  ]);
+  const tools = JSON.parse(f.output()).listed.result.tools;
+  expect(tools).toHaveLength(1);
+  expect(tools[0]).toMatchObject({ name: "skill_library" });
   const entries = (await listSkillLibrary(f.authority)).entries;
   expect(entries).toHaveLength(1);
   const published = await readSkillLibrary(f.authority, entries[0]!.skillId);

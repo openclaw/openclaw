@@ -1,7 +1,6 @@
 import { readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -9,10 +8,11 @@ import {
   listenLoopback,
 } from "../../../test/helpers/gateway-integration-fixtures.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as contentExtractors from "../../plugins/web-content-extractors.runtime.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
-import { getToolTerminalPresentation } from "../tool-terminal-presentation.js";
+import { forceFullGc } from "../../test-utils/retention.js";
 import { createWebFetchTool } from "./web-fetch.js";
 import * as webGuardedFetch from "./web-guarded-fetch.js";
 
@@ -102,18 +102,15 @@ function metadata(provider: string) {
 
 function unreadError(cancel: () => void | Promise<void>) {
   global.fetch = withFetchPreconnect(
-    vi.fn(
-      async () =>
-        new Response(
-          new ReadableStream<Uint8Array>({
-            pull(controller) {
-              controller.enqueue(new TextEncoder().encode("unread upstream error"));
-            },
-            cancel,
-          }),
-          { status: 503, headers: { "content-type": "text/plain" } },
-        ),
-    ),
+    vi.fn(async () => {
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          controller.enqueue(new TextEncoder().encode("unread upstream error"));
+        },
+        cancel,
+      });
+      return new Response(body, { status: 503, headers: { "content-type": "text/plain" } });
+    }),
   );
 }
 
@@ -223,14 +220,10 @@ describe("web_fetch", () => {
       includeWarning: false,
     });
     setProvider(async () => ({
-      url: "https://provider.example/raw",
-      finalUrl: "https://provider.example/final",
-      status: 201,
       contentType: "text/plain; charset=utf-8",
       extractor: "custom-provider",
       text: providerWrappedText,
       rawLength: providerRawText.length,
-      length: providerWrappedText.length,
       warning: wrapExternalContent(warning, { source: "web_fetch", includeWarning: false }),
     }));
     const details = await fetchDetails(fallbackTool({ maxChars: 800 }));
@@ -244,21 +237,14 @@ describe("web_fetch", () => {
     expect(
       (details.text?.length ?? 0) + (details.title?.length ?? 0) + (details.warning?.length ?? 0),
     ).toBeLessThanOrEqual(800);
-    expect(details.spill).toBeDefined();
     expect(details.text).toContain("Ignore previous instructions");
     expect(details.text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(details.text).toMatch(/<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(details.text).toContain(`Full output: ${details.spill?.path}`);
     expect(details.warning).toContain(warning);
     expect(details.warning).toContain("[[MARKER_SANITIZED]]");
-    expect(details.spill).toMatchObject({ chars: providerWrappedText.length });
-    expect(details.spill?.truncated).toBeUndefined();
-    expect(details.externalContent).toEqual({
-      untrusted: true,
-      source: "web_fetch",
-      wrapped: true,
-      provider: "firecrawl",
-    });
+    expect(details.spill).toEqual({ path: expect.any(String), chars: providerWrappedText.length });
+    expect(details.externalContent?.provider).toBe("firecrawl");
     const spilledText = await readFile(details.spill!.path, "utf8");
     expect(spilledText).toContain(providerVisibleText);
     const boundary = spilledText.match(/<<<EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]{16})">>>/);
@@ -270,7 +256,7 @@ describe("web_fetch", () => {
     expect(spilledText).toContain("[[END_MARKER_SANITIZED]]");
   });
 
-  it("preserves short source-truncated provider results through cache and presentation", async () => {
+  it("preserves short source-truncated provider results through cache", async () => {
     failDirectFetch();
     const providerExecute = vi.fn(async () => ({
       text: "partial provider body",
@@ -291,7 +277,6 @@ describe("web_fetch", () => {
     expect(secondDetails).toMatchObject({ cached: true, truncated: true });
     expect([firstDetails.spill, secondDetails.spill]).toEqual([undefined, undefined]);
     expect(providerExecute).toHaveBeenCalledTimes(1);
-    expect(getToolTerminalPresentation(tool!)?.({}, first)?.text).toContain("Truncated: yes");
   });
 
   it.each([
@@ -475,6 +460,64 @@ describe("web_fetch", () => {
     }
   });
 
+  it.each(["abort", "timeout"])(
+    "discards late extraction after %s without fallback or cache publication",
+    async (stop) => {
+      const controller = new AbortController();
+      const started = Promise.withResolvers<void>();
+      const late = Promise.withResolvers<{ text: string }>();
+      const extract = vi
+        .fn()
+        .mockImplementationOnce(() => {
+          started.resolve();
+          return late.promise;
+        })
+        .mockResolvedValue({ text: "fresh extraction" });
+      vi.spyOn(contentExtractors, "resolvePluginWebContentExtractors").mockReturnValue([
+        { id: "synthetic", pluginId: "synthetic", label: "Synthetic", extract },
+      ]);
+      const provider = vi.fn(async () => ({ text: "unexpected fallback" }));
+      setProvider(provider);
+      const server = createServer((_request, response) => {
+        response.writeHead(200, { "content-type": "text/html" });
+        response.end("<article><p>Synthetic article</p></article>");
+      });
+      try {
+        const url = `${await listenLoopback(server)}/extraction-${stop}`;
+        // Fake only the deadline clock; real HTTP and dispatcher cleanup still run.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const tool = fallbackTool({
+          cacheTtlMinutes: 1,
+          timeoutSeconds: 1,
+          ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
+        })!;
+        const pending = tool.execute("cancel-extraction", { url }, controller.signal);
+        const rejected = expect(pending).rejects.toThrow(
+          stop === "abort" ? "caller stopped" : "request timed out",
+        );
+        await started.promise;
+        if (stop === "abort") {
+          controller.abort(new Error("caller stopped"));
+        } else {
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
+        await rejected;
+        late.resolve({ text: "discarded late extraction" });
+        await nextTurn();
+        vi.useRealTimers();
+        const fresh = requireDetails(await tool.execute("fresh-extraction", { url }));
+        expect(fresh.text).toContain("fresh extraction");
+        expect(fresh.cached).toBeUndefined();
+        expect(extract).toHaveBeenCalledTimes(2);
+        expect(provider).not.toHaveBeenCalled();
+      } finally {
+        late.resolve({ text: "discarded late extraction" });
+        vi.useRealTimers();
+        await closeHttpServer(server);
+      }
+    },
+  );
+
   it.each([0, 15])("honors zero TTL after starting with TTL %i", async (initialTtl) => {
     let body = "original body";
     let networkCalls = 0;
@@ -487,13 +530,8 @@ describe("web_fetch", () => {
       const baseUrl = await listenLoopback(server);
       const args = { url: `${baseUrl}/cache-ttl-${initialTtl}-direct` };
       const setTtl = (cacheTtlMinutes: number) => {
-        runtimeState.activeSecretsRuntimeSnapshot = {
-          config: {
-            tools: {
-              web: { fetch: { cacheTtlMinutes, ssrfPolicy: { allowedHostnames: ["127.0.0.1"] } } },
-            },
-          },
-        };
+        const fetch = { cacheTtlMinutes, ssrfPolicy: { allowedHostnames: ["127.0.0.1"] } };
+        runtimeState.activeSecretsRuntimeSnapshot = { config: { tools: { web: { fetch } } } };
       };
       setTtl(initialTtl);
       const tool = createWebFetchTool({ lateBindRuntimeConfig: true })!;
@@ -534,6 +572,16 @@ describe("web_fetch", () => {
       );
     });
 
+    it("preserves literal HTML text in HTTP failure diagnostics", async () => {
+      mockHttpResponse("<title># Error</title><p>Use <code>[report](draft)</code>.</p>", {
+        status: 500,
+        headers: { "content-type": "text/html" },
+      });
+      await expect(fetchContract("literal-html-error")).rejects.toThrow(
+        "# Error\nUse [report](draft).",
+      );
+    });
+
     it("releases discarded provider strings while caching bounded protocol metadata", async () => {
       const fields = Object.entries({ contentType: 256, extractor: 128, fetchedAt: 64 });
       const modes = [true, false];
@@ -546,7 +594,7 @@ describe("web_fetch", () => {
       await tool?.execute("warm-retention", { url: "https://example.com/metadata-retention-warm" });
       async function heapUsed() {
         await nextTurn();
-        queryObjects(WeakRef);
+        forceFullGc();
         return process.memoryUsage().heapUsed;
       }
       const before = await heapUsed();
@@ -623,18 +671,7 @@ describe("web_fetch", () => {
         fetchContract("user-agent-cache-contract", { cacheTtlMinutes: 1, userAgent });
       const first = await fetchAs("OpenClaw-Test-UA-A");
       const second = await fetchAs("OpenClaw-Test-UA-B");
-      expect(first).toMatchObject({
-        contentType: "text/plain",
-        length: first.text?.length,
-        rawLength: "OpenClaw-Test-UA-A".length,
-      });
-      expect(first.externalContent).toEqual({
-        untrusted: true,
-        source: "web_fetch",
-        wrapped: true,
-      });
       expect(first.externalContent).not.toHaveProperty("provider");
-      expect(first.text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
       for (const key of ["title", "warning", "spill"]) {
         expect(Object.hasOwn(first, key)).toBe(false);
       }

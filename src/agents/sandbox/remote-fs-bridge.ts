@@ -4,6 +4,7 @@ import {
   GUEST_FILESYSTEM_READ_NOT_FOUND_EXIT_CODE,
 } from "@openclaw/fs-safe/guest";
 import { parseDirectoryEntries, type DirectoryEntry } from "../../infra/directory-entries.js";
+import { FsSafeError } from "../../infra/fs-safe.js";
 import type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
@@ -14,6 +15,8 @@ import {
   buildPinnedMutationArgs,
   PINNED_MUTATION_ACTION_LABELS,
   SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL,
+  SANDBOX_PINNED_READ_PYTHON_SHELL_LITERAL,
+  SANDBOX_PINNED_READ_TOO_LARGE_EXIT_CODE,
 } from "./fs-bridge-mutation-helper.js";
 import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
 import {
@@ -140,6 +143,9 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       throw Object.assign(new Error(`Sandbox file not found: ${target.containerPath}`), {
         code: "ENOENT",
       });
+    }
+    if (result.code === SANDBOX_PINNED_READ_TOO_LARGE_EXIT_CODE) {
+      throw new FsSafeError("too-large", "Sandbox file exceeds the bounded read limit.");
     }
     if (result.code !== 0) {
       throw new Error(
@@ -723,12 +729,14 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     signal?: AbortSignal;
     allowFailure?: boolean;
   }): Promise<SandboxBackendCommandResult> {
+    const pythonScript =
+      params.args[0] === "read"
+        ? SANDBOX_PINNED_READ_PYTHON_SHELL_LITERAL
+        : SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL;
     return await this.runtime.runRemoteShellScript({
-      script: [
-        "set -eu",
-        `python_script=${SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL}`,
-        'python3 -c "$python_script" "$@"',
-      ].join("\n"),
+      script: ["set -eu", `python_script=${pythonScript}`, 'python3 -c "$python_script" "$@"'].join(
+        "\n",
+      ),
       ...params,
     });
   }

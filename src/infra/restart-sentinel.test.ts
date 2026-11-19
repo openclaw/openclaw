@@ -86,7 +86,6 @@ vi.mock("./sqlite-worker-store.js", async (importOriginal) => {
   };
 });
 
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -94,11 +93,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+import { createPackageReleasePrefixFixture } from "./package-release-slot.test-support.js";
 import {
   readRestartSentinelRowSync,
   writeRestartSentinelRowSync,
@@ -129,8 +124,6 @@ beforeEach(() => {
   admission.beforeGrant = undefined;
 });
 
-type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
-
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
     await closeStateDatabaseForTest();
@@ -141,11 +134,7 @@ const stateDir = tempDirs.make("openclaw-sentinel-");
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  const { db } = openOpenClawStateDatabase();
-  executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db).deleteFrom("gateway_restart_sentinel"),
-  );
+  sentinelDb().exec("DELETE FROM gateway_restart_sentinel");
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -198,17 +187,15 @@ async function expectPayload(payload: Partial<Parameters<typeof writeRestartSent
   await expect(readRestartSentinel()).resolves.toMatchObject({ version: 1, payload });
 }
 
-function sentinelTable() {
-  const { db } = openOpenClawStateDatabase();
-  return { db, table: getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db) };
+// Fixture SQL deliberately seeds invalid or historical rows outside the sentinel writer.
+function sentinelDb() {
+  return openOpenClawStateDatabase().db;
 }
 
 function readSentinelRow(key = "current") {
-  const { db, table } = sentinelTable();
-  return executeSqliteQueryTakeFirstSync(
-    db,
-    table.selectFrom("gateway_restart_sentinel").selectAll().where("sentinel_key", "=", key),
-  );
+  return sentinelDb()
+    .prepare("SELECT * FROM gateway_restart_sentinel WHERE sentinel_key = ?")
+    .get(key);
 }
 
 function readSentinelRevisionFloor() {
@@ -216,11 +203,7 @@ function readSentinelRevisionFloor() {
 }
 
 function deleteSentinelRevisionFloor() {
-  const { db, table } = sentinelTable();
-  executeSqliteQuerySync(
-    db,
-    table.deleteFrom("gateway_restart_sentinel").where("sentinel_key", "=", "revision-floor"),
-  );
+  sentinelDb().exec("DELETE FROM gateway_restart_sentinel WHERE sentinel_key = 'revision-floor'");
 }
 
 function updateSentinelRow(
@@ -234,11 +217,12 @@ function updateSentinelRow(
     updated_at_ms: number;
   }>,
 ) {
-  const { db, table } = sentinelTable();
-  executeSqliteQuerySync(
-    db,
-    table.updateTable("gateway_restart_sentinel").set(values).where("sentinel_key", "=", "current"),
-  );
+  const entries = Object.entries(values);
+  sentinelDb()
+    .prepare(
+      `UPDATE gateway_restart_sentinel SET ${entries.map(([column]) => `"${column}" = ?`).join(", ")} WHERE sentinel_key = 'current'`,
+    )
+    .run(...entries.map(([, value]) => value));
 }
 
 describe("restart sentinel", () => {
@@ -396,12 +380,9 @@ describe("restart sentinel", () => {
       } else if (state === "replaced") {
         await writeRestartSentinel({ ...restartPayload(2), message: "replacement" });
       }
-      const { db, table } = sentinelTable();
+      const db = sentinelDb();
       const rows = () =>
-        executeSqliteQuerySync(
-          db,
-          table.selectFrom("gateway_restart_sentinel").selectAll().orderBy("sentinel_key"),
-        ).rows;
+        db.prepare("SELECT * FROM gateway_restart_sentinel ORDER BY sentinel_key").all();
       const before = rows();
       const payload = updatePayload({ status: "error", ts: 2 });
       const write = () =>
@@ -415,23 +396,20 @@ describe("restart sentinel", () => {
               )
             : writeRestartSentinelRowIfRevisionSync(transactionDb, payload, null),
         );
-      const clock = vi.spyOn(Date, "now").mockReturnValue(first.revision - 1);
-      try {
-        const written = write();
-        if (state === "missing") {
-          expect(written).toMatchObject({ payload, revision: first.revision + 1 });
-          expect(readRestartSentinelRowSync(db)).toEqual({ kind: "valid", sentinel: written });
-          expect(readSentinelRevisionFloor()).toBe(first.revision + 1);
-        } else {
-          expect(written).toBeNull();
-          expect(rows()).toEqual(before);
-        }
-        const settled = rows();
-        expect(write()).toBeNull();
-        expect(rows()).toEqual(settled);
-      } finally {
-        clock.mockRestore();
+      using clock = vi.spyOn(Date, "now");
+      clock.mockReturnValue(first.revision - 1);
+      const written = write();
+      if (state === "missing") {
+        expect(written).toMatchObject({ payload, revision: first.revision + 1 });
+        expect(readRestartSentinelRowSync(db)).toEqual({ kind: "valid", sentinel: written });
+        expect(readSentinelRevisionFloor()).toBe(first.revision + 1);
+      } else {
+        expect(written).toBeNull();
+        expect(rows()).toEqual(before);
       }
+      const settled = rows();
+      expect(write()).toBeNull();
+      expect(rows()).toEqual(settled);
     },
   );
 
@@ -503,26 +481,20 @@ describe("restart sentinel", () => {
   });
 
   it("finalizes only the captured database when the environment changes during its read", async () => {
-    const originalEnv = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-sentinel-original-") };
-    const replacementEnv = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-sentinel-replacement-") };
-    openOpenClawStateDatabase({ env: originalEnv });
-    openOpenClawStateDatabase({ env: replacementEnv });
     const payload = updatePayload({ ts: 1, stats: { after: { version: "before" } } });
-    const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
-    let original: ReturnType<typeof writeRestartSentinelRowSync>;
-    let replacement: ReturnType<typeof writeRestartSentinelRowSync>;
-    try {
-      original = runOpenClawStateWriteTransaction(
-        ({ db }) => writeRestartSentinelRowSync(db, { ...payload, message: "original" }),
-        { env: originalEnv },
+    function seed(message: string) {
+      const env = { OPENCLAW_STATE_DIR: tempDirs.make(`openclaw-sentinel-${message}-`) };
+      openOpenClawStateDatabase({ env });
+      using clock = vi.spyOn(Date, "now");
+      clock.mockReturnValue(1000);
+      const sentinel = runOpenClawStateWriteTransaction(
+        ({ db }) => writeRestartSentinelRowSync(db, { ...payload, message }),
+        { env },
       );
-      replacement = runOpenClawStateWriteTransaction(
-        ({ db }) => writeRestartSentinelRowSync(db, { ...payload, message: "replacement" }),
-        { env: replacementEnv },
-      );
-    } finally {
-      clock.mockRestore();
+      return { env, sentinel };
     }
+    const { env: originalEnv, sentinel: original } = seed("original");
+    const { env: replacementEnv, sentinel: replacement } = seed("replacement");
     expect(original.revision).toBe(replacement.revision);
 
     await withEnvAsync(originalEnv, async () => {
@@ -548,21 +520,16 @@ describe("restart sentinel", () => {
   });
 
   it.each([false, true])("finalizes the running version (already current: %s)", async (current) => {
-    const ts = Date.now();
-    await writeRestartSentinel(
-      updatePayload({
-        ts,
-        stats: { after: { version: current ? "actual-version" : "expected-version" } },
-      }),
-    );
+    const payload = updatePayload({
+      stats: { after: { version: current ? "actual-version" : "expected-version" } },
+    });
+    await writeRestartSentinel(payload);
     const finalized = await finalizeUpdateRestartSentinelRunningVersion("actual-version");
     if (current) {
       expect(finalized).toBeNull();
     }
     await expectPayload({
-      kind: "update",
-      status: "ok",
-      ts,
+      ...payload,
       stats: { after: { version: "actual-version" } },
     });
   });
@@ -652,6 +619,30 @@ describe("restart sentinel", () => {
       await finalizeGit(commit);
       await expectPayload({ status: "error", stats: { reason } });
       await expect(readVerifiedGitUpdateReceipt()).resolves.toBeNull();
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "verifies a package restart from the release its link selects, and only that release",
+    async () => {
+      const releases = createPackageReleasePrefixFixture(tempDirs.make("openclaw-release-root-"));
+      const previous = releases.addRelease("r1", "2026.11.3");
+      const selected = releases.addRelease("r2", "2026.12.1");
+      releases.linkTo("r2");
+      const write = () =>
+        writeRestartSentinel(
+          updatePayload({
+            stats: { mode: "npm", root: releases.slot, after: { version: "expected-version" } },
+          }),
+        );
+      // A restarted Gateway discovers its root by real path: the selected release.
+      await write();
+      await finalizeUpdateRestartSentinelRunningVersion("2026.12.1", process.env, "", selected);
+      await expectPayload({ status: "ok", stats: { root: releases.slot } });
+      // A Gateway still running the release the link no longer names is another installation.
+      await write();
+      await finalizeUpdateRestartSentinelRunningVersion("2026.11.3", process.env, "", previous);
+      await expectPayload({ status: "error", stats: { reason: "restart-root-mismatch" } });
     },
   );
 

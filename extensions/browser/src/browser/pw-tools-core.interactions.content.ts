@@ -39,7 +39,6 @@ import { normalizeTimeoutMs } from "./pw-tools-core.shared.js";
 import { runPageEmulationTransition } from "./pw-tools-core.state.js";
 import {
   ANNOTATION_MAX_LABELS_DEFAULT,
-  type AnnotationItem,
   buildOverlayClearScript,
   buildOverlayInjectionScript,
   type CoordinateSpace,
@@ -172,14 +171,16 @@ export async function waitForViaPlaywright(
         }
         throwIfInteractionAborted(opts.signal);
         await waitFor(
-          page.waitForFunction(
-            evaluateBrowserWaitPredicate,
-            {
-              document: documentHandle,
-              source: predicateSource,
-            } satisfies BrowserWaitPredicateState,
-            { timeout },
-          ),
+          page
+            .waitForFunction(
+              evaluateBrowserWaitPredicate,
+              {
+                document: documentHandle,
+                source: predicateSource,
+              } satisfies BrowserWaitPredicateState,
+              { timeout },
+            )
+            .then((result) => result.dispose()),
         );
       } finally {
         await documentHandle.dispose();
@@ -204,6 +205,8 @@ type ScreenshotOptions = {
   type?: "png" | "jpeg";
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** Effective launch mode recorded on the owned Chrome process, when known. */
+  headless?: boolean;
 };
 
 async function runScreenshotOperation<T>(
@@ -241,6 +244,11 @@ async function capturePageScreenshot(
   opts.signal?.throwIfAborted();
   if (locator && opts.fullPage) {
     throw new Error("fullPage is not supported for element screenshots");
+  }
+  // Headless background tabs never produce a frame, so the native capture would
+  // never settle and keep this page's transition queue busy. Match the raw CDP path.
+  if (opts.headless !== false) {
+    await page.bringToFront().catch(() => {});
   }
   const type = opts.type ?? "png";
   const emulation = ensurePageState(page).emulation;
@@ -348,15 +356,7 @@ export async function screenshotWithLabelsViaPlaywright(opts: LabeledScreenshotO
   );
 }
 
-async function screenshotWithLabelsOnPage(
-  page: Page,
-  opts: LabeledScreenshotOptions,
-): Promise<{
-  buffer: Buffer;
-  labels: number;
-  skipped: number;
-  annotations: AnnotationItem[];
-}> {
+async function screenshotWithLabelsOnPage(page: Page, opts: LabeledScreenshotOptions) {
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
   const refKey = normalizeOptionalString(opts.ref);
   const elementSelector = normalizeOptionalString(opts.element);

@@ -30,6 +30,7 @@ import * as childRuntime from "../../infra/child-runtime-viability.js";
 import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { expectObjectFields as expectRecordFields } from "../../test-utils/mock-call-assertions.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setGatewayDedupeEntry, waitForAgentJob } from "../agent-turn/agent-job.js";
 import { dropPreSessionStartAnnouncePairs } from "../chat-display-projection.history.js";
@@ -75,17 +76,6 @@ vi.mock("../../status/summary.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
   prepareStatusSummary: vi.fn().mockResolvedValue({ publish: () => ({ summary: { ok: true } }) }),
 }));
-
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
   const call = mock.mock.calls[callIndex];
@@ -676,7 +666,7 @@ describe("projectChatDisplayMessages", () => {
     { type: "text", text: "The agent run failed before producing a reply." },
   ];
   const networkFailureText =
-    "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+    "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.";
   const networkFailureContent = (reply?: string, type = "text") => [
     { type, text: [networkFailureText, reply].filter(Boolean).join("\n\n") },
   ];
@@ -1906,26 +1896,13 @@ describe("exec approval handlers", () => {
     });
   });
 
-  it("does not count iOS push delivery to hidden approval targets as a route", async (testContext) => {
-    const iosPushDelivery = createIosPushDelivery(
-      vi.fn(
-        async (
-          _request: unknown,
-          opts?: {
-            isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
-          },
-        ) =>
-          opts?.isTargetVisible?.({
-            deviceId: "device-other",
-            scopes: ["operator.approvals"],
-          }) ?? true,
-      ),
-    );
+  it("expires when the iOS push owner reports no delivery route", async (testContext) => {
+    const iosPushDelivery = createIosPushDelivery(vi.fn(async () => false));
     const fixture = await createForwardingExecApprovalFixture(testContext, { iosPushDelivery });
     return await fixture.run(async () => {
       const { manager, respond } = fixture;
       const expireSpy = vi.spyOn(manager, "expire");
-      const id = "approval-ios-hidden-push";
+      const id = "approval-ios-undelivered-push";
       await requestExecApproval({
         ...fixture,
         client: createExecApprovalClient({
@@ -2184,8 +2161,8 @@ describe("gateway healthHandlers.health cache freshness", () => {
 
   beforeEach(async () => {
     const runtimeSpy = vi
-      .spyOn(childRuntime, "readChildRuntimeViability")
-      .mockReturnValue(healthyChildRuntime);
+      .spyOn(childRuntime, "prepareChildRuntimeViability")
+      .mockResolvedValue({ publish: () => healthyChildRuntime });
     restoreChildRuntime = () => runtimeSpy.mockRestore();
     restoreContextEngineRegistryState = captureContextEngineRegistryStateForTests();
     await registerLegacyContextEngine();

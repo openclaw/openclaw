@@ -3,7 +3,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { prepareSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
 import { clearRuntimeAuthProfileStoreSnapshotCore } from "../../agents/auth-profiles/runtime-snapshots.js";
 import * as authStore from "../../agents/auth-profiles/store.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { buildModelAliasIndex } from "../../agents/model-selection-shared.js";
 import { createFixtureRouteModels } from "../../agents/test-helpers/model-fallback-config-fixture.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -233,28 +233,23 @@ describe("applyResetModelOverride", () => {
       await writeCredential("minimax");
       const agentDir = state.agentDir();
       clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
-      const synchronousRead = vi
-        .spyOn(authStore, "findPersistedAuthProfileCredential")
-        .mockImplementation(() => {
-          throw new Error("synchronous credential read during model selection");
-        });
-      try {
-        const fixture = createResetFixture({
-          authProfileOverride: profileId,
-          authProfileOverrideSource: "user",
-        });
-        const reset = () => apply(fixture, { agentDir, bodyStripped: "minimax/m2.7 summarize" });
+      using _ = vi.spyOn(authStore, "findPersistedAuthProfileCredential").mockImplementation(() => {
+        throw new Error("synchronous credential read during model selection");
+      });
 
-        await reset();
-        expect(fixture.sessionEntry.authProfileOverride).toBe(profileId);
+      const fixture = createResetFixture({
+        authProfileOverride: profileId,
+        authProfileOverrideSource: "user",
+      });
+      const reset = () => apply(fixture, { agentDir, bodyStripped: "minimax/m2.7 summarize" });
 
-        await writeCredential("openai");
-        await reset();
-        expect(fixture.sessionEntry.authProfileOverride).toBeUndefined();
-        expect(fixture.sessionEntry.authProfileOverrideSource).toBeUndefined();
-      } finally {
-        synchronousRead.mockRestore();
-      }
+      await reset();
+      expect(fixture.sessionEntry.authProfileOverride).toBe(profileId);
+
+      await writeCredential("openai");
+      await reset();
+      expect(fixture.sessionEntry.authProfileOverride).toBeUndefined();
+      expect(fixture.sessionEntry.authProfileOverrideSource).toBeUndefined();
     });
   });
 

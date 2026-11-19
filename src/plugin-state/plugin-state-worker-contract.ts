@@ -29,6 +29,10 @@ type Key = Namespace & { key: string };
 type Register = Omit<PluginStateRegisterEntryParams, "createdAtMs">;
 
 export type PluginStateWorkerRequests = {
+  "pluginState.loadNamespace": {
+    input: Namespace & { maxBytes: number };
+    output: PluginStateReadRow[] | undefined;
+  };
   "pluginState.executeOperation": {
     input: PluginStateOperationInput;
     output: PluginStateOperationResult;
@@ -116,9 +120,11 @@ export type PluginStateReadCommand = SqliteWorkerCommand<
   Pick<PluginStateWorkerOperations, PluginStateReadType>
 >;
 export type PluginStateReadResult = {
-  type: PluginStateReadType;
-  result: PluginStateWorkerOperations[PluginStateReadType]["output"];
-};
+  [Type in PluginStateReadType]: {
+    type: Type;
+    result: PluginStateWorkerOperations[Type]["output"];
+  };
+}[PluginStateReadType];
 
 export function isPluginStateReadCommand(command: {
   type: PropertyKey;
@@ -147,6 +153,7 @@ function writeFailure<
 }
 
 export const pluginStateWorkerOperations = {
+  "pluginState.loadNamespace": readFailure("entries", "Failed to load plugin state namespace."),
   "pluginState.executeOperation": writeFailure(
     "register",
     "Failed to execute plugin state operation.",

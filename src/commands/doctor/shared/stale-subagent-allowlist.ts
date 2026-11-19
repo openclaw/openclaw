@@ -12,38 +12,6 @@ type StaleSubagentAllowlistHit = {
   normalizedAgentId: string;
 };
 
-function collectStaleAllowlistEntries(params: {
-  allowAgents: unknown;
-  pathLabel: string;
-  configuredTargetIds: ReadonlySet<string>;
-}): StaleSubagentAllowlistHit[] {
-  if (!Array.isArray(params.allowAgents)) {
-    return [];
-  }
-  const hits: StaleSubagentAllowlistHit[] = [];
-  const seen = new Set<string>();
-  for (const entry of params.allowAgents) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const trimmed = entry.trim();
-    if (!trimmed || trimmed === "*") {
-      continue;
-    }
-    const normalizedAgentId = normalizeAgentId(trimmed);
-    if (params.configuredTargetIds.has(normalizedAgentId) || seen.has(normalizedAgentId)) {
-      continue;
-    }
-    seen.add(normalizedAgentId);
-    hits.push({
-      pathLabel: params.pathLabel,
-      agentId: trimmed,
-      normalizedAgentId,
-    });
-  }
-  return hits;
-}
-
 function listSubagentAllowlists(cfg: OpenClawConfig) {
   return [
     { agent: cfg.agents?.defaults, path: "agents.defaults" },
@@ -60,13 +28,34 @@ export function scanStaleSubagentAllowlistReferences(
   cfg: OpenClawConfig,
 ): StaleSubagentAllowlistHit[] {
   const configuredTargetIds = resolveConfiguredAcpSubagentTargetIds(cfg);
-  return listSubagentAllowlists(cfg).flatMap(({ subagents, pathLabel }) =>
-    collectStaleAllowlistEntries({
-      allowAgents: subagents.allowAgents,
-      pathLabel,
-      configuredTargetIds,
-    }),
-  );
+  return listSubagentAllowlists(cfg).flatMap(({ subagents, pathLabel }) => {
+    const allowAgents = subagents.allowAgents;
+    if (!Array.isArray(allowAgents)) {
+      return [];
+    }
+    const hits: StaleSubagentAllowlistHit[] = [];
+    const seen = new Set<string>();
+    for (const entry of allowAgents) {
+      if (typeof entry !== "string") {
+        continue;
+      }
+      const trimmed = entry.trim();
+      if (!trimmed || trimmed === "*") {
+        continue;
+      }
+      const normalizedAgentId = normalizeAgentId(trimmed);
+      if (configuredTargetIds.has(normalizedAgentId) || seen.has(normalizedAgentId)) {
+        continue;
+      }
+      seen.add(normalizedAgentId);
+      hits.push({
+        pathLabel,
+        agentId: trimmed,
+        normalizedAgentId,
+      });
+    }
+    return hits;
+  });
 }
 
 export function collectStaleSubagentAllowlistWarnings(params: {

@@ -1,11 +1,8 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { Command } from "commander";
-import type {
-  ProviderAuthMethodNonInteractiveContext,
-  ProviderPlugin,
-} from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import type { ProviderAuthMethodNonInteractiveContext } from "openclaw/plugin-sdk/plugin-entry";
+import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import { DEFAULT_LLAMA_CPP_EMBEDDING_MODEL } from "./defaults.js";
@@ -33,10 +30,8 @@ function setupContext(): ProviderAuthMethodNonInteractiveContext {
 }
 
 async function setup(ctx: ProviderAuthMethodNonInteractiveContext) {
-  const providers: ProviderPlugin[] = [];
-  plugin.register(
-    createTestPluginApi({ registerProvider: (provider) => providers.push(provider) }),
-  );
+  const { api, providers } = createCapturedPluginRegistration({ id: "test-plugin" });
+  plugin.register(api);
   const method = providers
     .find((provider) => provider.id === "llama-cpp")
     ?.auth.find((entry) => entry.id === "local");

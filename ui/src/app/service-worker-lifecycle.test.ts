@@ -297,7 +297,7 @@ describe("Control UI service worker notification scope", () => {
     },
   );
 
-  it("preserves a quiet shared tag for approval terminal replacements", async () => {
+  it("requests sound while preserving quiet same-tag approval replacements", async () => {
     const worker = createNotificationServiceWorker(nestedScope, []);
     const tag = "openclaw-approval-exec:replacement";
 
@@ -314,8 +314,8 @@ describe("Control UI service worker notification scope", () => {
       renotify: false,
     });
 
-    expect(requested.options).toMatchObject({ tag, renotify: false });
-    expect(terminal.options).toMatchObject({ tag, renotify: false });
+    expect(requested.options).toMatchObject({ tag, renotify: false, silent: false });
+    expect(terminal.options).toMatchObject({ tag, renotify: false, silent: false });
   });
 });
 

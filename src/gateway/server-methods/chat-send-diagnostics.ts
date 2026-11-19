@@ -1,5 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { createQueuedDiagnosticPhaseEmitter } from "../../infra/diagnostic-events.js";
+import type { AdmissionDiagnostics } from "../../infra/diagnostics-timeline.js";
+import { formatAdmissionDiagnostics } from "../../process/command-lane-diagnostics.js";
 import { createPhaseTimings } from "./phase-timings.js";
 
 const PHASES = [
@@ -17,9 +19,12 @@ const PHASES = [
   "effects",
   "response",
   "dispatch",
+  "run",
 ] as const;
 type ChatSendPhase = (typeof PHASES)[number] | `detail.${string}`;
 type PostAckStage = "startup" | "steer" | "queued";
+const DEPENDENCY_RETIRE_VERIFY =
+  "attempt.setup.sandbox.workspace_selection.prepare.reconcile.dependency.retire.verify";
 
 export type ChatSendDiagnostics = ReturnType<typeof startChatSendDiagnostics>;
 
@@ -44,19 +49,38 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
   const emit = createQueuedDiagnosticPhaseEmitter();
   const timing = createPhaseTimings<ChatSendPhase>();
   const { totals } = timing;
+  let dispatchScope: ReturnType<typeof timing.scope> | undefined;
   let stage: "request" | PostAckStage = "request";
   let startedAt = performance.now();
   let acknowledgedMs: number | undefined;
+  let dependencyRetireVerifyAttempts = 0;
+  let admissionState: AdmissionDiagnostics | undefined;
+  let laneMs = 0,
+    writerMs = 0,
+    placementMs = 0;
   let finished = false;
+  let identity: { sessionId: string; runId: string } | undefined;
 
   const report = () => {
     const now = performance.now();
     timing.flush(now);
     const elapsedMs = now - startedAt;
-    const endedAt = Date.now();
+    const slow = elapsedMs >= 1_000;
+    if (!slow && !emit) {
+      totals.clear();
+      dependencyRetireVerifyAttempts = 0;
+      admissionState = undefined;
+      laneMs = writerMs = placementMs = 0;
+      startedAt = now;
+      return elapsedMs;
+    }
+    const endedAt = emit ? Date.now() : 0;
     try {
-      let message = `slow chat send ${Math.round(elapsedMs)}ms stage=${stage}`;
-      if (acknowledgedMs !== undefined) {
+      let message = slow ? `slow chat send ${Math.round(elapsedMs)}ms stage=${stage}` : "";
+      if (slow && identity) {
+        message += ` sessionId=${identity.sessionId} runId=${identity.runId}`;
+      }
+      if (slow && acknowledgedMs !== undefined) {
         message += ` ack=${Math.round(acknowledgedMs)}ms`;
       }
       for (const phase of [
@@ -72,17 +96,28 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
           startedAt: endedAt - elapsedMs,
           endedAt,
           durationMs,
-          details: { stage },
+          details: { stage, ...identity },
         });
-        message += ` ${phase}=${Math.round(durationMs)}ms`;
+        if (slow) {
+          message += ` ${phase}=${Math.round(durationMs)}ms`;
+        }
       }
-      if (elapsedMs >= 1_000) {
+      if (slow) {
+        if (dependencyRetireVerifyAttempts) {
+          message += ` detail.${DEPENDENCY_RETIRE_VERIFY}.attempts=${dependencyRetireVerifyAttempts}`;
+        }
+        if (admissionState) {
+          message += ` ${formatAdmissionDiagnostics({ ...admissionState, laneMs, writerMs, placementMs })}`;
+        }
         log.info(message);
       }
     } catch {
       // Diagnostic failures must not change acknowledgement or dispatch outcomes.
     }
     totals.clear();
+    dependencyRetireVerifyAttempts = 0;
+    admissionState = undefined;
+    laneMs = writerMs = placementMs = 0;
     startedAt = now;
     return elapsedMs;
   };
@@ -103,22 +138,67 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
       timing.close();
     }
   };
-  const scope = (phase: ChatSendPhase) => (finished ? undefined : timing.scope(phase));
+  const scope = (phase: ChatSendPhase) => {
+    const current = finished ? undefined : timing.scope(phase);
+    if (phase === "dispatch") {
+      dispatchScope = current;
+    }
+    return current;
+  };
   return {
+    setRunIdentity(sessionId: string, runId: string) {
+      identity = { sessionId, runId };
+    },
     scope,
     observeSpan: (
       name: string,
       attributes: Record<string, unknown> | undefined,
       durationMs?: number,
+      admission?: AdmissionDiagnostics,
     ) => {
-      const spanName = name === "agent.prepare" ? attributes?.stage : name;
-      if (typeof spanName !== "string" || finished) {
+      if (finished) {
         return undefined;
+      }
+      if (admission) {
+        if (name === "laneMs") {
+          laneMs += durationMs!;
+        }
+        if (name === "writerMs") {
+          writerMs += durationMs!;
+        }
+        if (name === "placementMs") {
+          placementMs += durationMs!;
+        }
+        admissionState = admission;
+        return undefined;
+      }
+      const spanName = name === "agent.prepare" ? attributes?.stage : name;
+      if (typeof spanName !== "string") {
+        return undefined;
+      }
+      if (
+        stage === "startup" &&
+        spanName.startsWith("reply.admission.") &&
+        spanName.endsWith("_wait")
+      ) {
+        stage = "queued";
       }
       const phase = `detail.${spanName}` as const;
       if (durationMs !== undefined) {
         totals.set(phase, (totals.get(phase) ?? 0) + durationMs);
         return undefined;
+      }
+      if (spanName === DEPENDENCY_RETIRE_VERIFY) {
+        dependencyRetireVerifyAttempts++;
+      }
+      if (spanName === "reply.run_prepared_reply") {
+        // Steering can await a whole prepared reply without the startup callback.
+        dispatchScope?.mark("run");
+        const detail = scope(phase);
+        return () => {
+          detail?.finish();
+          dispatchScope?.mark("dispatch");
+        };
       }
       return scope(phase)?.finish;
     },

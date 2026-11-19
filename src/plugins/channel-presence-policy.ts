@@ -261,12 +261,31 @@ export function resolveConfiguredChannelPresencePolicy(
 async function resolveConfiguredChannelPresencePolicyAsync(
   params: ConfiguredChannelPresencePolicyParams,
 ): Promise<ConfiguredChannelPresencePolicyEntry[]> {
+  const manifestRecords = loadInstalledChannelManifestRecords(params);
+  const rootConfig = params.activationSourceConfig ?? params.config;
+  const normalizedConfig = normalizePluginsConfig(rootConfig.plugins);
+  const disabledChannels = new Set(listExplicitlyDisabledChannelIdsForConfig(params.config));
+  // Read-only callers need effective channels, not saved-auth evidence for blocked owners.
+  const persistedAuthChannelIds = new Set(
+    manifestRecords.flatMap((plugin) =>
+      normalizeChannelIds(plugin.channels).filter(
+        (channelId) =>
+          !disabledChannels.has(channelId) &&
+          isChannelPluginEligibleForScopedOwnership({
+            plugin,
+            channelId,
+            normalizedConfig,
+            rootConfig,
+          }),
+      ),
+    ),
+  );
   return resolveChannelPresencePolicyFromSignals(
-    params,
+    { ...params, manifestRecords },
     await listPotentialConfiguredChannelPresenceSignalsAsync(
       params.config,
       params.env ?? process.env,
-      channelPresenceOptions(params),
+      { ...channelPresenceOptions(params), persistedAuthChannelIds },
     ),
   );
 }
@@ -532,13 +551,6 @@ export function listConfiguredChannelIdsForReadOnlyScope(
     .map((entry) => entry.channelId);
 }
 
-/** True when read-only scoped discovery has any effective configured channel. */
-export function hasConfiguredChannelsForReadOnlyScope(
-  params: Parameters<typeof resolveConfiguredChannelPresencePolicy>[0],
-): boolean {
-  return resolveConfiguredChannelPresencePolicy(params).some((entry) => entry.effective);
-}
-
 export async function listConfiguredChannelIdsForReadOnlyScopeAsync(
   params: ConfiguredChannelPresencePolicyParams,
 ): Promise<string[]> {
@@ -547,6 +559,7 @@ export async function listConfiguredChannelIdsForReadOnlyScopeAsync(
     .map((entry) => entry.channelId);
 }
 
+/** True when read-only scoped discovery has any effective configured channel. */
 export async function hasConfiguredChannelsForReadOnlyScopeAsync(
   params: ConfiguredChannelPresencePolicyParams,
 ): Promise<boolean> {

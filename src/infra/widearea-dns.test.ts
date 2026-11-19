@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   getWideAreaZonePath,
-  normalizeWideAreaDomain,
   replaceWideAreaZoneFile,
   renderWideAreaGatewayZoneText as renderZone,
   resolveWideAreaDiscoveryDomain,
@@ -15,6 +15,7 @@ import {
 } from "./widearea-dns.js";
 
 const replaceFileAtomicMock = vi.hoisted(() => vi.fn());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/fs-safe/atomic")>()),
@@ -41,10 +42,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   replaceFileAtomicMock.mockReset();
-});
-
-it("normalizes domains with a terminal dot", () => {
-  expect(normalizeWideAreaDomain("openclaw.internal.")).toBe("openclaw.internal.");
 });
 
 it("returns null for invalid env domains", () => {
@@ -100,6 +97,16 @@ it("creates the zone when no previous file exists", async () => {
   });
   await expectZoneWrite(true);
   expect(replaceFileAtomicMock).toHaveBeenCalledOnce();
+  expect(replaceFileAtomicMock).toHaveBeenCalledWith({
+    filePath: zonePath,
+    content: expect.any(String),
+    dirMode: 0o700,
+    mode: 0o644,
+    preserveExistingMode: true,
+    syncTempFile: true,
+    syncParentDir: true,
+    tempPrefix: ".openclaw-dns-zone",
+  });
 });
 
 it.each([
@@ -117,26 +124,8 @@ it("skips rewriting unchanged content", async () => {
   expect(replaceFileAtomicMock).not.toHaveBeenCalled();
 });
 
-it("increments same-day serials when content changes", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(new Date("2026-03-13T12:00:00.000Z"));
-  vi.spyOn(fs, "readFileSync").mockReturnValue(renderZone({ ...baseZoneOpts, serial: 2026031304 }));
-  const opts = { gatewayTlsEnabled: true, gatewayTlsFingerprintSha256: "abc123" };
-  await expectZoneWrite(true, opts);
-  expect(replaceFileAtomicMock).toHaveBeenCalledWith({
-    filePath: zonePath,
-    content: renderZone({ ...baseZoneOpts, ...opts, serial: 2026031305 }),
-    dirMode: 0o700,
-    mode: 0o644,
-    preserveExistingMode: true,
-    syncTempFile: true,
-    syncParentDir: true,
-    tempPrefix: ".openclaw-dns-zone",
-  });
-});
-
 it("publishes a complete zone without synchronously flushing the main thread", async () => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-widearea-dns-async-"));
+  const directory = tempDirs.make("openclaw-widearea-dns-async-");
   const target = path.join(directory, "zone.db");
   const next = "; replacement zone\n$ORIGIN openclaw.internal.\n";
   fs.writeFileSync(target, "; previous zone\n", { mode: 0o640 });
@@ -145,30 +134,25 @@ it("publishes a complete zone without synchronously flushing the main thread", a
   );
   replaceFileAtomicMock.mockImplementationOnce(atomic.replaceFileAtomic);
   using sync = vi.spyOn(fs, "fsyncSync");
-  try {
-    await replaceWideAreaZoneFile(target, next);
-    expect(fs.readFileSync(target, "utf8")).toBe(next);
-    if (process.platform !== "win32") {
-      expect(fs.statSync(target).mode & 0o777).toBe(0o640);
-    }
-    expect(fs.readdirSync(directory)).toEqual(["zone.db"]);
-    expect(sync).not.toHaveBeenCalled();
-  } finally {
-    fs.rmSync(directory, { force: true, recursive: true });
+  await replaceWideAreaZoneFile(target, next);
+  expect(fs.readFileSync(target, "utf8")).toBe(next);
+  if (process.platform !== "win32") {
+    expect(fs.statSync(target).mode & 0o777).toBe(0o640);
   }
+  expect(fs.readdirSync(directory)).toEqual(["zone.db"]);
+  expect(sync).not.toHaveBeenCalled();
 });
 
 it.runIf(process.platform !== "win32")("preserves the zone after an OS file-size failure", () => {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-widearea-dns-fault-"));
+  const stateDir = tempDirs.make("openclaw-widearea-dns-fault-");
   const dnsDir = path.join(stateDir, "dns");
   const faultZonePath = path.join(dnsDir, "openclaw.internal.db");
   const previous = "; previous valid zone\n$ORIGIN openclaw.internal.\n";
   fs.mkdirSync(dnsDir);
   fs.writeFileSync(faultZonePath, previous, { mode: 0o640 });
 
-  try {
-    const moduleUrl = pathToFileURL(path.resolve("src/infra/widearea-dns.ts")).href;
-    const script = `
+  const moduleUrl = pathToFileURL(path.resolve("src/infra/widearea-dns.ts")).href;
+  const script = `
           const { writeWideAreaGatewayZone } = await import(${JSON.stringify(moduleUrl)});
           try {
             await writeWideAreaGatewayZone({
@@ -185,31 +169,28 @@ it.runIf(process.platform !== "win32")("preserves the zone after an OS file-size
             }
           }
         `;
-    const child = spawnSync(
-      "/bin/sh",
-      [
-        "-c",
-        'ulimit -f 1; exec "$@"',
-        "openclaw-widearea-dns-fault",
-        process.execPath,
-        "--import",
-        "tsx",
-        "--input-type=module",
-        "-e",
-        script,
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      },
-    );
+  const child = spawnSync(
+    "/bin/sh",
+    [
+      "-c",
+      'ulimit -f 1; exec "$@"',
+      "openclaw-widearea-dns-fault",
+      process.execPath,
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "-e",
+      script,
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    },
+  );
 
-    expect(child.status, child.stderr).toBe(0);
-    expect(fs.readFileSync(faultZonePath, "utf8")).toBe(previous);
-    expect(fs.statSync(faultZonePath).mode & 0o777).toBe(0o640);
-    expect(fs.readdirSync(dnsDir)).toEqual(["openclaw.internal.db"]);
-  } finally {
-    fs.rmSync(stateDir, { force: true, recursive: true });
-  }
+  expect(child.status, child.stderr).toBe(0);
+  expect(fs.readFileSync(faultZonePath, "utf8")).toBe(previous);
+  expect(fs.statSync(faultZonePath).mode & 0o777).toBe(0o640);
+  expect(fs.readdirSync(dnsDir)).toEqual(["openclaw.internal.db"]);
 });

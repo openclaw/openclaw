@@ -1,20 +1,13 @@
 /** @jsxImportSource @solidjs/web */
 import { asDateTimestampMs } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createMemo, For } from "solid-js";
-import { icons } from "../../components/icons.tsx";
+import { createMemo, For, Show } from "solid-js";
 import { t } from "../../i18n/index.ts";
 import type { createElementRefs } from "../../lib/element-refs.ts";
 import { getCardAlerts, visibleCardAlerts } from "../../lib/workboard/card-alerts.ts";
 import { getWorkboardDependencyState } from "../../lib/workboard/card-state.ts";
 import { getWorkboardLifecycle } from "../../lib/workboard/lifecycle.ts";
 import type { WorkboardCard } from "../../lib/workboard/types.ts";
-import {
-  getCardActionState,
-  CardAction,
-  CardMoveControl,
-  OpenSessionCardAction,
-  StartExecutionButton,
-} from "./view-card-actions.tsx";
+import { getCardActionState, CardMoveControl } from "./view-card-actions.tsx";
 import {
   CardAlertView,
   CardUpdatedTime,
@@ -24,8 +17,8 @@ import {
   CardSession,
 } from "./view-card-content.tsx";
 import { openCardDetails, workboardCardDetailDrawerId } from "./view-card-details.tsx";
-import type { WorkboardProps } from "./view-helpers.tsx";
-import { closeWorkboardPopoverOnAction, workboardPopoverRef } from "./view-popover.ts";
+import { equalCardActions, WorkboardCardMenuTrigger } from "./view-card-menu.tsx";
+import { workboardViewState, type WorkboardProps } from "./view-helpers.tsx";
 import { getSessionStatus } from "./view-session-status.tsx";
 function isCardActionTarget(event: Event): boolean {
   return event.target instanceof Element
@@ -39,13 +32,19 @@ export function WorkboardCardView(input: {
   surface: WorkboardCardSurface;
   cardRefs?: ReturnType<typeof createElementRefs<HTMLElement>>;
 }) {
-  const action = createMemo(() => {
-    void input.workboard.revision;
-    return getCardActionState(input.workboard, input.card);
-  });
+  const state = workboardViewState(() => input.workboard);
+  const action = createMemo(
+    () => {
+      void input.workboard.revision;
+      return getCardActionState(input.workboard, input.card);
+    },
+    {
+      equals: equalCardActions,
+    },
+  );
   const widget = createMemo(() => input.surface === "widget");
   const dependencies = createMemo(() =>
-    getWorkboardDependencyState(input.card, action().state.cards, !action().state.nextCursor),
+    getWorkboardDependencyState(input.card, state().cards, !state().nextCursor),
   );
   const lifecycle = createMemo(() =>
     getWorkboardLifecycle(input.card, input.workboard.sessions, input.workboard.sessionResolution),
@@ -65,7 +64,7 @@ export function WorkboardCardView(input: {
     ),
   );
   const showDetails = () => {
-    openCardDetails(action().state, input.card);
+    openCardDetails(state(), input.card);
     input.workboard.onRequestUpdate?.();
   };
   const MoveAction = () => (
@@ -82,116 +81,34 @@ export function WorkboardCardView(input: {
       ) : null}
     </>
   );
-  const selected = createMemo(() => action().state.selectedCardIds.has(input.card.id));
+  const selected = createMemo(() => state().selectedCardIds.has(input.card.id));
+  const dragged = createMemo(() => state().draggedCardId === input.card.id);
+  const detailOpen = createMemo(() => state().detailCardId === input.card.id);
+  const draggable = createMemo(
+    () => action().writable && !action().archived && !state().dispatching && !state().nextCursor,
+  );
   const alertDescriptionId = createMemo(
     () => `workboard-card-alert-${input.surface}-${input.card.id}`,
   );
   const selectable = createMemo(() => !widget() && action().writable && !action().archived);
-  const selectionMode = createMemo(() => selectable() && action().state.selectedCardIds.size > 0);
+  const selectionMode = createMemo(() => selectable() && state().selectedCardIds.size > 0);
   const toggleSelection = () => {
-    if (!selectable() || action().busy || action().state.dispatching) {
+    if (!selectable() || action().busy || state().dispatching) {
       return;
     }
-    if (action().state.selectedCardIds.has(input.card.id)) {
-      action().state.selectedCardIds.delete(input.card.id);
+    if (state().selectedCardIds.has(input.card.id)) {
+      state().selectedCardIds.delete(input.card.id);
     } else {
-      action().state.selectedCardIds.add(input.card.id);
+      state().selectedCardIds.add(input.card.id);
     }
     input.workboard.onRequestUpdate?.();
   };
   const ActionsMenu = () => (
-    <>
-      {!widget() && (action().writable || action().linkedSessionKey) ? (
-        <div class="workboard-card__action-menu">
-          <button
-            type="button"
-            class="workboard-card__menu-trigger"
-            aria-label={t("workboard.cardActions")}
-            aria-haspopup="dialog"
-            aria-expanded="false"
-            popovertarget={`workboard-card-menu-${input.card.id}`}
-          >
-            {icons.moreHorizontal}
-          </button>
-          <div
-            id={`workboard-card-menu-${input.card.id}`}
-            popover="auto"
-            role="dialog"
-            aria-label={t("workboard.cardActions")}
-            class="workboard-card__action-menu-panel"
-            ref={workboardPopoverRef("end")}
-            onClick={closeWorkboardPopoverOnAction}
-          >
-            <div class="workboard-card__menu-group">
-              <button
-                class="btn"
-                type="button"
-                aria-label={t("workboard.viewDetails")}
-                aria-haspopup="dialog"
-                aria-expanded={action().state.detailCardId === input.card.id ? "true" : "false"}
-                aria-controls={workboardCardDetailDrawerId}
-                onClick={showDetails}
-              >
-                {icons.eye}
-                <span>{t("workboard.viewDetails")}</span>
-              </button>{" "}
-              {action().writable && !action().archived ? (
-                <CardAction kind="edit" workboard={input.workboard} card={input.card} />
-              ) : null}
-            </div>
-            {action().showStartControls ||
-            action().sessionTarget ||
-            (action().writable && action().linkedSessionKey && action().live) ? (
-              <div class="workboard-card__menu-group">
-                {action().showStartControls ? (
-                  <StartExecutionButton
-                    workboard={input.workboard}
-                    card={input.card}
-                    engine={null}
-                    mode="autonomous"
-                  />
-                ) : null}{" "}
-                <OpenSessionCardAction
-                  workboard={input.workboard}
-                  session={action().sessionTarget}
-                />{" "}
-                {action().writable && action().linkedSessionKey && action().live ? (
-                  <CardAction
-                    kind="stop"
-                    workboard={input.workboard}
-                    card={input.card}
-                    busy={action().busy}
-                  />
-                ) : null}
-              </div>
-            ) : null}
-            {!(!action().archived && (action().writable || widget())) ? null : (
-              <div class="workboard-card__menu-status">
-                <span>{t("workboard.moveTo")}</span>
-                <MoveAction />
-              </div>
-            )}
-            {action().writable ? (
-              <div class="workboard-card__menu-group">
-                <CardAction
-                  kind="archive"
-                  workboard={input.workboard}
-                  card={input.card}
-                  busy={action().busy}
-                  archived={action().archived}
-                />{" "}
-                <CardAction
-                  kind="delete"
-                  workboard={input.workboard}
-                  card={input.card}
-                  busy={action().busy}
-                />
-              </div>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
-    </>
+    <Show when={!widget() && (action().writable || action().linkedSessionKey)}>
+      <div class="workboard-card__action-menu">
+        <WorkboardCardMenuTrigger cardId={input.card.id} />
+      </div>
+    </Show>
   );
   const ListContents = () => (
     <>
@@ -271,7 +188,7 @@ export function WorkboardCardView(input: {
         `priority-${input.card.priority}`,
         action().busy ? "workboard-card--busy" : "",
         action().archived ? "workboard-card--archived" : "",
-        action().state.draggedCardId === input.card.id ? "workboard-card--dragging" : "",
+        dragged() ? "workboard-card--dragging" : "",
         selected() ? "workboard-card--selected" : "",
         widget() ? "workboard-card--widget" : "workboard-card--openable",
       ]}
@@ -288,22 +205,9 @@ export function WorkboardCardView(input: {
             })
       }
       aria-haspopup={widget() || selectionMode() ? undefined : "dialog"}
-      aria-expanded={
-        widget() || selectionMode()
-          ? undefined
-          : action().state.detailCardId === input.card.id
-            ? "true"
-            : "false"
-      }
+      aria-expanded={widget() || selectionMode() ? undefined : detailOpen() ? "true" : "false"}
       aria-controls={widget() || selectionMode() ? undefined : workboardCardDetailDrawerId}
-      draggable={
-        action().writable &&
-        !action().archived &&
-        !action().state.dispatching &&
-        !action().state.nextCursor
-          ? "true"
-          : "false"
-      }
+      draggable={draggable() ? "true" : "false"}
       onMouseDown={(event) => {
         if (event.button === 0 && event.shiftKey && selectable() && !isCardActionTarget(event)) {
           event.preventDefault();
@@ -331,18 +235,13 @@ export function WorkboardCardView(input: {
         event.preventDefault();
       }}
       onDragStart={(event) => {
-        if (
-          !action().writable ||
-          action().archived ||
-          action().state.dispatching ||
-          action().state.nextCursor
-        ) {
+        if (!action().writable || action().archived || state().dispatching || state().nextCursor) {
           event.preventDefault();
           return;
         }
-        action().state.draggedCardId = input.card.id;
-        action().state.dragOverStatus = null;
-        action().state.dragBeforeCardId = null;
+        state().draggedCardId = input.card.id;
+        state().dragOverStatus = null;
+        state().dragBeforeCardId = null;
         if (event.dataTransfer) {
           event.dataTransfer.effectAllowed = "move";
           event.dataTransfer.setData("text/plain", input.card.id);
@@ -357,9 +256,9 @@ export function WorkboardCardView(input: {
         input.workboard.onRequestUpdate?.();
       }}
       onDragEnd={() => {
-        action().state.draggedCardId = null;
-        action().state.dragOverStatus = null;
-        action().state.dragBeforeCardId = null;
+        state().draggedCardId = null;
+        state().dragOverStatus = null;
+        state().dragBeforeCardId = null;
         input.workboard.onRequestUpdate?.();
       }}
     >

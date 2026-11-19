@@ -4,7 +4,7 @@ import {
   normalizeCapabilityProviderId as normalizeSpeechProviderId,
 } from "../plugins/provider-registry-shared.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-import type { SpeechProviderId } from "./provider-types.js";
+import type { SpeechProviderId } from "./tts-runtime-types.js";
 
 /** Resolver contract for configured speech provider discovery and lookup. */
 export type SpeechProviderRegistryResolver = {

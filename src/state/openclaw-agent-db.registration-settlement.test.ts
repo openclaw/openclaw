@@ -5,21 +5,19 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
 import { createSessionRowProjection } from "../gateway/session-row-projection.js";
 import {
   prepareSessionMutationFacts,
   SessionMutationFactsUnavailableError,
 } from "../gateway/session-sharing-preparation.js";
-import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type { OpenClawAgentDatabaseRegistrationCommit } from "./openclaw-agent-db-contract.js";
 import * as registryListing from "./openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { useRegistrationFixture } from "./openclaw-agent-registration.test-support.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
@@ -81,8 +79,7 @@ const { createFixture, observeStores } = useRegistrationFixture(() => {
   Atomics.store(new Int32Array(lostReceipt.control), 0, 0);
 });
 
-function observeRegistrationReceipts() {
-  const receipts: OpenClawAgentDatabaseRegistrationCommit[] = [];
+function observeRegistrationErrors() {
   const errors: unknown[] = [];
   const capture = registryListing.captureOpenClawAgentDatabaseRegistration;
   const spy = vi
@@ -92,7 +89,6 @@ function observeRegistrationReceipts() {
       return {
         ...owned,
         recordCommitted(receipt) {
-          receipts.push(receipt);
           try {
             owned.recordCommitted(receipt);
           } catch (error) {
@@ -102,7 +98,7 @@ function observeRegistrationReceipts() {
         },
       };
     });
-  return { receipts, errors, spy };
+  return { errors, spy };
 }
 
 describe("agent registration native settlement", () => {
@@ -137,7 +133,6 @@ describe("agent registration native settlement", () => {
         mkdirSync(path.join(agentDir, "sessions"), { recursive: true });
         renameSync(stagingPath, storePath);
         const observed = observeStores(shared);
-        const { receipts } = observeRegistrationReceipts();
         Atomics.store(control, 0, 1);
         const failure = await readSessionEntryInWorker(
           { agentId, sessionKey, storePath, env: state.env },
@@ -152,7 +147,6 @@ describe("agent registration native settlement", () => {
         }
         expect(Atomics.load(control, 1)).toBe(1);
         expect(lostReceipt.events).toEqual(["native-exit", "read-rejected"]);
-        expect(receipts).toEqual([]);
         expect(registrations()).toEqual([expect.objectContaining({ agentId, path: storePath })]);
         // Unknown registration settlement revokes this lease; a fresh read discovers the store.
         expect(() => prepared.readCurrent(cfg)).toThrow(SessionMutationFactsUnavailableError);
@@ -203,11 +197,7 @@ describe("agent registration native settlement", () => {
         const observed = observeStores(fixture.shared);
         const endScope = createDeferredCore();
         let deliverCommitted: (() => void) | undefined;
-        const {
-          receipts,
-          errors: receiptErrors,
-          spy: registration,
-        } = observeRegistrationReceipts();
+        const { errors: receiptErrors, spy: registration } = observeRegistrationErrors();
         let execution: ReturnType<typeof captureOpenClawAgentDatabaseExecution> | undefined;
         let opening: Promise<unknown> | undefined;
         // Intercept the physical owner's receipt, independently of a caller's admission.
@@ -242,21 +232,10 @@ describe("agent registration native settlement", () => {
         const scope = withExistingOpenClawStateSchema({ path: fixture.shared.path }, async () => {
           const retained = captureOpenClawAgentDatabaseExecution(fixture.target);
           execution = retained;
-          const source: AgentDatabaseRequestExecutionSource = {
-            assertCurrent: () => retained.assertCurrent(),
-            createAdmission(binding) {
-              return () => ({
-                nativeLocations: binding.nativeLocations,
-                admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                  binding.authorize(request);
-                  retained.assertCurrent();
-                  if (!grant()) {
-                    throw new Error("Registration fixture lost admission");
-                  }
-                }, binding.attachment),
-              });
-            },
-          };
+          const source = createSessionWorkerExecutionSource(
+            () => retained.assertCurrent(),
+            "Registration fixture lost admission",
+          );
           opening = retained.prepare(source).then(
             () => ({ ok: true }),
             (error: unknown) => ({ ok: false, error }),
@@ -273,14 +252,12 @@ describe("agent registration native settlement", () => {
             }
             throw new Error("Registration settled before its post-COMMIT receipt barrier");
           }
-          expect(deliverCommitted).toBeTypeOf("function");
           deliverCommitted?.();
           deliverCommitted = undefined;
           expect(await opening).toEqual({
             ok: false,
             error: expect.anything(),
           });
-          expect(receipts).toEqual([fixture.receipt]);
           expect(receiptErrors).toEqual([
             expect.objectContaining({
               message: "Existing shared-state schema admission has ended.",

@@ -70,10 +70,6 @@ function isAbsoluteHttp(url: string): boolean {
   return /^https?:\/\//i.test(url.trim());
 }
 
-function isLoopbackHttpUrl(url: string): boolean {
-  return isLoopbackHost(URL.parse(url)?.hostname ?? "");
-}
-
 function withLoopbackBrowserAuth(
   url: string,
   init: (RequestInit & { timeoutMs?: number }) | undefined,
@@ -82,7 +78,7 @@ function withLoopbackBrowserAuth(
   if (
     headers.has("authorization") ||
     headers.has("x-openclaw-password") ||
-    !isLoopbackHttpUrl(url)
+    !isLoopbackHost(URL.parse(url)?.hostname ?? "")
   ) {
     return { ...init, headers };
   }

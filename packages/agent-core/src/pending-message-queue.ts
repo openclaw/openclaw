@@ -74,6 +74,12 @@ export class PendingMessageQueue {
     return this.messages.some((message) => !isOpenClawSystemUpdateMessage(message));
   }
 
+  hasPending(predicate: (message: AgentMessage) => boolean): boolean {
+    const matches = (message: AgentMessage) =>
+      !this.submitted.has(message) && !this.cancelled.has(message) && predicate(message);
+    return this.messages.some(matches) || this.inFlight.some(matches);
+  }
+
   drain(): AgentMessage[] {
     const input = this.messages.filter((message) => !isOpenClawSystemUpdateMessage(message));
     let count = this.mode === "all" ? input.length : 1;

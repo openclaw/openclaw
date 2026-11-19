@@ -60,6 +60,11 @@ Outcomes are retained past the credential's own expiry.
 - `node.pending.pull` and `node.pending.ack` are the connected-node queue APIs.
 - `node.pending.enqueue` and `node.pending.drain` manage durable pending work for offline/disconnected nodes.
 
+Foreground actions queued through OpenClaw ID retain the requesting device's
+membership authority. A pull discards actions whose original membership is no
+longer current, while an ordinary socket disconnect preserves them. Requests
+bound to an agent run or an execution approval are not deferred to a later pull.
+
 ## Approval families
 
 - `approval.history` returns newest-first terminal approvals retained for 30 days for exec, plugin, and system-agent requests (scope `operator.approvals`). It supports cursor pagination plus an optional kind filter; pending approvals are not history rows. Treat each cursor as an opaque server token and return the exact value without padding, rewriting, or adding fields.
@@ -103,7 +108,7 @@ exec policy, standing-grant, or execution-authorization semantics.
 
 ## Automation, skills, and tools
 
-- Automation: `wake` schedules an immediate or next-heartbeat wake text injection; `cron.get`, `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`, `cron.runs` manage scheduled work.
+- Automation: `wake` schedules an immediate or next-heartbeat wake text injection; `cron.get`, `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`, `cron.runs` manage scheduled work; `cron.bind` records the current incarnation of a key-only job's parent conversation and accepts only an owner agent turn in that conversation.
 - `cron.run` enqueues a manual run and acknowledges with `{ ok: true, enqueued: true, runId }`. Pass `waitTimeoutMs` to hold the response until that run records its outcome: the acknowledgement then also carries `run`, the same entry `cron.runs` returns for that `runId`, or `finished: true` when the run ended but its history is not visible to the caller. If the wait ends first, neither is set and the run continues. Agent-runtime callers get the plain acknowledgement immediately for main-session jobs and jobs that run in their own session, because those runs start only after the calling turn.
 - `cron.runs` accepts an optional non-empty `runId` filter so clients can follow one queued manual run without racing against other history entries for the same job.
 - `cron.runs` defaults to `view: "full"`. The Control UI requests `view: "summary"` to omit `diagnostics`, `delivery`, and `failureNotificationDelivery` from each entry. Summary pages retain full summaries, status, usage, and run/session links. Search still matches diagnostic text and delivery channels, and filtering, visibility, totals, and pagination are unchanged.

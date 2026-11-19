@@ -7,7 +7,6 @@ import { createAgentHarnessPromptToolPolicy } from "./harness/prompt-tool-policy
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
 import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
-import { resolveToolSearchCatalogTool } from "./tool-search-directory.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   createToolSearchSelectionMatcher,
@@ -21,6 +20,7 @@ import {
   createToolSearchCatalogRef,
   createToolSearchTools,
   resolveToolSearchConfig,
+  resolveToolSearchCatalogTool,
 } from "./tool-search.js";
 import type { AnyAgentTool } from "./tools/common.js";
 

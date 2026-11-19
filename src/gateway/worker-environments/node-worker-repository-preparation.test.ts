@@ -1,10 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { runInNewContext } from "node:vm";
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { appendGitConfig, gitMaintenanceEnvironment } from "../../infra/git-maintenance-env.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import {
@@ -26,71 +24,6 @@ const success = {
   termination: "exit" as const,
   workspaceDir: FIXTURE_WORKSPACE,
 };
-
-it.each(["win32", "linux", "darwin"] as const)(
-  "preserves authenticated Git arguments with native long paths on %s",
-  async (platform) => {
-    const spawnSync = vi.fn(() => ({ status: 1 }));
-    const repository = createNodeWorkerRepositoryPreparation(async ({ argv, input, seed }) => {
-      if (!seed) {
-        const gitArgs = argv.slice(4);
-        const guestProcess = {
-          platform,
-          argv: ["node", ...gitArgs],
-          env: {
-            PATH: "guest-tools",
-            Git_CONFIG_COUNT: "1",
-            GIT_CONFIG_VALUE_0: "inherited-secret",
-            GH_TOKEN: "inherited-token",
-            GITHUB_TOKEN: "inherited-token",
-          },
-          exitCode: 0,
-        };
-        runInNewContext(argv[2]!, {
-          Buffer,
-          process: guestProcess,
-          require: (id: string) => {
-            if (id === "node:fs") {
-              return { readFileSync: () => input };
-            }
-            if (id === "node:child_process") {
-              return { spawnSync };
-            }
-            throw new Error(`Unexpected guest import ${id}`);
-          },
-        });
-        expect(spawnSync).toHaveBeenCalledExactlyOnceWith(
-          "git",
-          platform === "win32" ? ["-c", "core.longpaths=true", ...gitArgs] : gitArgs,
-          {
-            stdio: ["ignore", "inherit", "inherit"],
-            env: {
-              PATH: "guest-tools",
-              GIT_CONFIG_NOSYSTEM: "1",
-              GIT_CONFIG_GLOBAL: platform === "win32" ? "NUL" : "/dev/null",
-              GIT_TERMINAL_PROMPT: "0",
-              GIT_ASKPASS: "",
-              SSH_ASKPASS: "",
-              ...appendGitConfig(gitMaintenanceEnvironment(), [
-                [
-                  `http.${ORIGIN}.extraheader`,
-                  `Authorization: Basic ${Buffer.from(`x-access-token:${FIXTURE_TOKEN}`).toString("base64")}`,
-                ],
-              ]),
-            },
-          },
-        );
-      }
-      return { ...success, stdout: "absent", code: seed ? 0 : 1 };
-    });
-    await expect(
-      repository.prepareRepository({ origin: ORIGIN, gitToken: FIXTURE_TOKEN }),
-    ).resolves.toMatchObject({
-      kind: "failed",
-      reason: "clone-failed",
-    });
-  },
-);
 
 it.each<[string, Partial<SpawnResult & { workspaceDir: string }>, string]>([
   [

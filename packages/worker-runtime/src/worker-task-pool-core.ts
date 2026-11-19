@@ -5,7 +5,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
 import type { WorkerLifecycle } from "./worker-lifecycle.js";
-import { WorkerTaskAdmission } from "./worker-task-admission.js";
+import { enqueueWorkerTask, WorkerTaskAdmission } from "./worker-task-admission.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -111,9 +111,9 @@ export class WorkerTaskPoolCore<Input, Output> {
   private readonly resumeCompute = () => this.dispatch();
   private closedError?: Error;
   private nextTaskId = 0;
-  private readonly retireIdleOnPressure = () => this.retirement.retireIdle(this.resourceClosures);
-  private readonly expireTasks = () =>
-    expireWorkerTasks(this.queue, this.slots, (task) => this.timeout(task));
+  private readonly retireIdleOnPressure = (critical: unknown) =>
+    this.retirement.retireIdle(this.resourceClosures, critical === true);
+  private readonly expireTasks = () => expireWorkerTasks(this.queue, this.slots, this.timeout);
 
   constructor(
     private readonly options: WorkerTaskPoolOptions<Output>,
@@ -135,6 +135,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     this.retirement = createWorkerTaskPoolRetirement({
       slots: this.slots,
       options,
+      retainOneIdleWorker: ownerOptions.retainOneIdleWorker,
       runInContext: runInWorkerPoolContext,
       dispatch: () => this.dispatch(),
       onRotationComplete: () => {
@@ -190,8 +191,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     serviceNativeWorkerPass(this.host, this.slots);
     this.expireTasks();
     this.retirement.service();
-    const tasks = [...this.ownedTasks];
-    for (const task of tasks) {
+    for (const task of Array.from(this.ownedTasks)) {
       task.owner?.closing?.service();
     }
     this.dispatch();
@@ -240,22 +240,17 @@ export class WorkerTaskPoolCore<Input, Output> {
       );
       return task;
     }
-    if (!this.admission.admit(inputBytes)) {
-      this.finish(
-        task,
-        new WorkerTaskError("worker task capacity reached", "overloaded", {
-          capacityAvailable: this.admission.waitForCapacity(inputBytes),
-        }),
-      );
+    const refusal = this.admission.admitTask(task, () =>
+      this.host.describeTask?.(this.options.workerUrl, undefined, options.diagnosticOperation),
+    );
+    if (refusal) {
+      this.finish(task, refusal);
       return task;
     }
-    task.admitted = true;
     task.observation = this.observeTask?.(task.options.diagnosticOperation);
-    if (options.timeoutMs !== undefined) {
-      armWorkerTaskTimeout(task, options.timeoutMs, () => this.timeout(task));
-    }
+    armWorkerTaskTimeout(task, options.timeoutMs, this.timeout, "enqueue");
     options.signal?.addEventListener("abort", task.abort, { once: true });
-    this.queue.push(task);
+    enqueueWorkerTask(this.queue, task);
     if (options.signal?.aborted) {
       task.abort();
     } else {
@@ -285,6 +280,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.slots,
       this.resourceClosures,
       (slot) => this.ownedSettlement.retire(slot),
+      runInWorkerPoolContext,
       key,
       this.ownerOptions,
       this.host.observeResourceReply,
@@ -341,8 +337,13 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.computeCapacity?.remove(this.resumeCompute);
     }
     while (!this.closedError && this.retirement.dispatchAllowed && this.queue.length) {
-      let slot = [...this.slots].find(
+      const nextTask = this.queue[0]!;
+      // One worker beyond the bulk limit stays reserved for point reads.
+      const workerLimit = this.maxWorkers + Number(nextTask.options.pointRead === true);
+      let slot = this.activeTasks < workerLimit ? this.retirement.preferredIdle : undefined;
+      slot ??= [...this.slots].find(
         (entry) =>
+          this.activeTasks < workerLimit &&
           !entry.task &&
           !entry.retiring &&
           !entry.retirementFailed &&
@@ -353,7 +354,7 @@ export class WorkerTaskPoolCore<Input, Output> {
         if (constructionBlocked) {
           this.bootstrap.rejectQueued();
         }
-        if (constructionBlocked || this.slots.size >= this.maxWorkers) {
+        if (constructionBlocked || this.slots.size >= workerLimit) {
           // A host-waiting task can checkpoint rather than monopolize a worker.
           // Signal one owner per queued contender, in slot admission order.
           let contenders = this.queue.length;
@@ -370,8 +371,7 @@ export class WorkerTaskPoolCore<Input, Output> {
           return;
         }
       }
-      const nextTask = this.queue[0]!;
-      if (this.computeCapacity) {
+      if (this.computeCapacity && !nextTask.options.pointRead) {
         const permit = this.computeCapacity.acquire(this.resumeCompute, () => {
           if (
             nextTask.exchange &&
@@ -398,6 +398,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.activeTasks++;
       task.slot = slot;
       task.startedAt = performance.now();
+      armWorkerTaskTimeout(task, task.options.timeoutMs, this.timeout, "dispatch");
       task.observation?.started();
       task.runInContext(() => {
         try {
@@ -588,7 +589,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.finishHostWait(task);
       exchange.onConsumed = response.onConsumed;
       exchange.sent = true;
-      armWorkerTaskTimeout(task, response.timeoutMs, () => this.timeout(task));
+      armWorkerTaskTimeout(task, response.timeoutMs, this.timeout);
       try {
         slot.worker!.postMessage(
           {
@@ -613,12 +614,12 @@ export class WorkerTaskPoolCore<Input, Output> {
     });
   }
 
-  private timeout(task: Task<Input, Output>): void {
+  private readonly timeout = (task: Task<Input, Output>): void => {
     if (task.done) {
       return;
     }
     this.cancel(task, workerTaskTimeoutError(task.exchange, this.options.workerUrl));
-  }
+  };
 
   private cancel(task: Task<Input, Output>, error: Error): void {
     if (task.done) {

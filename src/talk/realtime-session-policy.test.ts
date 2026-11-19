@@ -118,13 +118,10 @@ it("requires automatic wake names only for shared human participation", () => {
 });
 
 it("resolves provider-driven barge-in defaults", () => {
-  expect(interruptOnAudio(undefined)).toBe(true);
-  expect(interruptOnAudio(false)).toBe(false);
-  expect(interruptOnAudio("false")).toBe(true);
+  expect([undefined, false, "false"].map(interruptOnAudio)).toEqual([true, false, true]);
   expect(bargeIn({ configuredBargeIn: false, interruptResponseOnInputAudio: true })).toBe(false);
   expect(bargeIn({ configuredBargeIn: undefined, interruptResponseOnInputAudio: false })).toBe(
     false,
   );
-  expect(minAudioEndMs(undefined)).toBe(250);
-  expect(minAudioEndMs(0)).toBe(0);
+  expect([undefined, 0].map(minAudioEndMs)).toEqual([250, 0]);
 });

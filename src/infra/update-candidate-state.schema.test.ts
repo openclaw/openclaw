@@ -1,16 +1,18 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import {
   readUpdateDatabaseGenerationsIsolated,
   readUpdateStateSchemaVersions,
 } from "./update-candidate-state.js";
+import { runUpdateCandidateSnapshotWorker } from "./update-candidate-state.test-support.js";
 import { updateStateSchemaVersionsMatch } from "./update-candidate-state.versions.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -30,6 +32,39 @@ function createDatabase(file: string, sql: string, registered?: string) {
 function agentFile(stateDir: string, agent = "main") {
   return path.join(stateDir, "agents", agent, "agent", "openclaw-agent.sqlite");
 }
+
+it.each(["inspection", "snapshot"] as const)(
+  "%s keeps the selected state root when another profile has a newer schema",
+  async (mode) => {
+    const home = fs.realpathSync(dirs.make("update-schema-profile-"));
+    const stateDir = path.join(home, "selected");
+    const shared = path.join(stateDir, "state", "openclaw.sqlite");
+    const unrelated = path.join(home, ".openclaw", "state", "openclaw.sqlite");
+    createDatabase(shared, "PRAGMA user_version=7;");
+    createDatabase(unrelated, "PRAGMA user_version=999;");
+    const before = fs.readFileSync(unrelated);
+
+    const env = {
+      HOME: home,
+      OPENCLAW_HOME: home,
+      OPENCLAW_STATE_DIR: path.dirname(path.dirname(unrelated)),
+    };
+    const versions =
+      mode === "inspection"
+        ? await inspect(stateDir, { env: { ...process.env, ...env } })
+        : await runUpdateCandidateSnapshotWorker({
+            stateDir,
+            targetStateDir: path.join(home, "snapshot"),
+            candidateRoot: fileURLToPath(new URL("../../", import.meta.url)),
+            config: {},
+            env,
+          });
+
+    expect(versions).toContainEqual({ path: shared, userVersion: 7, contentVersion: 7 });
+    expect(versions.some((entry) => entry.path === unrelated)).toBe(false);
+    expect(fs.readFileSync(unrelated)).toEqual(before);
+  },
+);
 
 it.each(["malformed", "nonregular-wal", "empty-worker"])(
   "reports an actionable schema inspection failure: %s",
@@ -86,7 +121,10 @@ it("reports a best-effort generation verification failure for its actual sources
   const stateDir = fs.realpathSync(dirs.make("update-generation-unstable-"));
   const file = agentFile(stateDir);
   const missing = agentFile(stateDir, "ops");
-  createDatabase(file, "PRAGMA user_version=3;");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  using db = openNodeSqliteDatabase(file);
+  db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA user_version=3;");
+  expect(fs.statSync(`${file}-wal`).size).toBeGreaterThan(32);
   const preload = path.join(stateDir, "write-between-reads.cjs");
   // Wait for the private image to close, then commit between the final generation
   // reads. A write during provisional capture can instead fail snapshot acquisition.
@@ -223,8 +261,8 @@ it("fences WAL schema migration without copying a large registered agent payload
     sharedPath,
     `
     PRAGMA user_version=15;
-    CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY, value_json TEXT);
-    INSERT INTO config_machine_state VALUES('state.schema.contentVersion','16');
+    CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER);
+    INSERT INTO config_machine_state VALUES('state.schema.contentVersion','16',0);
     CREATE TABLE agent_databases(path TEXT);
   `,
     agentPath,
@@ -281,9 +319,7 @@ it("fences WAL schema migration without copying a large registered agent payload
   const migrated = await read();
   expect(migrated).toContainEqual({ path: agentPath, userVersion: 5 });
   expect(updateStateSchemaVersionsMatch(baseline, migrated, comparison)).toBe(false);
-  expect(
-    fs.existsSync(path.join(cache, "openclaw")) ? fs.readdirSync(path.join(cache, "openclaw")) : [],
-  ).toEqual([]);
+  expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot(env))).toEqual([]);
 });
 
 async function writeInstalledCandidateWorkers(packageRoot: string, legacy: boolean): Promise<void> {

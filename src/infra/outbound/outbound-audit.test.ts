@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
-import type { OutboundAuditTerminal, OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
 import {
   completedOutboundAuditTerminals,
   emitOutboundAuditLifecycle,
@@ -15,9 +14,9 @@ const baseContext = { channel: "matrix", to: "!room:target", payloads: [{ text: 
 const result = { channel: "matrix" as const, messageId: "platform-1" };
 type AuditContext = Parameters<typeof emitOutboundAuditTerminals>[0]["context"];
 
-function captureEvents(run: () => void, onEvent?: () => void): TrustedMessageAuditEvent[] {
+function captureEvents(run: () => void): TrustedMessageAuditEvent[] {
   const events: TrustedMessageAuditEvent[] = [];
-  const unsubscribe = onTrustedMessageAuditEvent(onEvent ?? ((event) => events.push(event)));
+  const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
   try {
     run();
   } finally {
@@ -38,8 +37,8 @@ function captureTerminals(...args: Parameters<typeof emitTerminals>) {
   return captureEvents(() => emitTerminals(...args));
 }
 
-function expectIsolated(run: () => void, onEvent?: () => void) {
-  expect(() => captureEvents(run, onEvent)).not.toThrow();
+function expectIsolated(run: () => void) {
+  expect(() => captureEvents(run)).not.toThrow();
 }
 
 describe("outbound audit projection", () => {
@@ -75,21 +74,6 @@ describe("outbound audit projection", () => {
     expect(JSON.stringify(events)).not.toContain("secret message");
   });
 
-  it("keeps lifecycle observers outside delivery semantics", () => {
-    expectIsolated(
-      () =>
-        emitOutboundAuditLifecycle({
-          context: { channel: "qa-channel", to: "target" },
-          outcome: "queued",
-          queueId: "queue-1",
-          startedAt: Date.now(),
-        }),
-      () => {
-        throw new Error("observer failed");
-      },
-    );
-  });
-
   it("keeps mixed logical payloads distinct under one durable queue intent", () => {
     const events = captureTerminals(
       () =>
@@ -108,8 +92,7 @@ describe("outbound audit projection", () => {
         }),
       {
         ...baseContext,
-        session: { conversationKind: "channel" },
-        mirror: { sessionKey: "secret-session", agentId: "mirror-agent", isGroup: true },
+        session: { conversationKind: "channel", key: "secret-session", agentId: "audit-agent" },
       },
       "queue-1",
     );
@@ -120,8 +103,8 @@ describe("outbound audit projection", () => {
         outcome: "suppressed",
         status: "blocked",
         actorType: "agent",
-        actorId: "mirror-agent",
-        agentId: "mirror-agent",
+        actorId: "audit-agent",
+        agentId: "audit-agent",
         conversationKind: "channel",
         resultCount: 0,
       },
@@ -160,13 +143,15 @@ describe("outbound audit projection", () => {
     );
   });
 
-  it("treats a missing adapter identity as unknown rather than a proven suppression", () => {
+  it("keeps an unidentified attempt unknown even after a later successful send", () => {
     const events = captureTerminals(
-      completedOutboundAuditTerminals({
+      failedOutboundAuditTerminals({
         payloadCount: 1,
         results: [],
+        failureStage: "platform_send",
         payloadOutcomes: [
           { index: 0, status: "suppressed", reason: "adapter_returned_no_identity" },
+          { index: 0, status: "sent", results: [result] },
         ],
       }),
     );
@@ -183,67 +168,19 @@ describe("outbound audit projection", () => {
     expect(events[0]).not.toHaveProperty("deliveryKind");
   });
 
-  it("projects recorded history consistently for failed runs", () => {
-    const expectHistory = (
-      payloadOutcomes: OutboundPayloadDeliveryOutcome[],
-      terminal: OutboundAuditTerminal,
-    ) =>
-      expect(
-        failedOutboundAuditTerminals({
-          payloadCount: 1,
-          results: [],
-          payloadOutcomes,
-          failureStage: "platform_send",
-        }),
-      ).toEqual([{ payloadIndex: 0, terminal }]);
-    expectHistory(
-      [
-        { index: 0, status: "suppressed", reason: "adapter_returned_no_identity" },
-        { index: 0, status: "sent", results: [result] },
-      ],
-      { outcome: "unknown", failureStage: "platform_send" },
-    );
-    expectHistory([{ index: 0, status: "sent", results: [result], deliveryKind: "media" }], {
-      outcome: "sent",
-      results: [result],
-      deliveryKind: "media",
-    });
-    expectHistory([{ index: 0, status: "suppressed", reason: "no_visible_payload" }], {
-      outcome: "suppressed",
-      reasonCode: "no_visible_payload",
-    });
-  });
-
-  it("counts physical sends once across receipt representations and result fallbacks", () => {
-    const received = (messageId: string, ids: string[], withParts: boolean) => ({
-      ...result,
-      messageId,
-      receipt: {
-        platformMessageIds: ids,
-        parts: withParts
-          ? ids.map((platformMessageId, index) => ({
-              platformMessageId,
-              index,
-              kind: "text" as const,
-            }))
-          : [],
-        sentAt: Date.now(),
-      },
-    });
+  it("counts platform IDs when a receipt has no physical parts", () => {
     const events = captureTerminals(
       uniformOutboundAuditTerminals(1, {
         outcome: "sent",
         results: [
-          received("aggregate-with-parts", ["part-1", "part-2"], true),
-          received("aggregate-with-ids", ["id-1", "id-2", "id-3"], false),
-          { channel: "matrix", messageId: "single-result" },
+          {
+            ...result,
+            receipt: { platformMessageIds: ["id-1", "id-2", "id-3"], parts: [], sentAt: 1 },
+          },
         ],
       }),
     );
-
-    expect(
-      events.map(({ status, outcome, resultCount }) => [status, outcome, resultCount]),
-    ).toEqual([["succeeded", "sent", 6]]);
+    expect(events).toMatchObject([{ status: "succeeded", outcome: "sent", resultCount: 3 }]);
   });
 
   function conversationKindFor(context: AuditContext) {
@@ -260,7 +197,6 @@ describe("outbound audit projection", () => {
     key: string | undefined,
     expected: string,
     session?: Parameters<typeof conversationKindFor>[0]["session"],
-    originGroup?: boolean,
   ];
   it.each<ConversationCase>([
     ["matrix", "@user:server", "agent:main:matrix:default:direct:@user:server", "direct"],
@@ -287,21 +223,10 @@ describe("outbound audit projection", () => {
         conversationType: "direct",
       },
     ],
-    ["matrix", "!room:server", undefined, "group", undefined, true],
-    ["matrix", "!room:server", undefined, "unknown", undefined, false],
-  ])(
-    "classifies only destination-proven routes: %s %s",
-    (channel, to, key, expected, session, originGroup) => {
-      const mirror =
-        originGroup === undefined
-          ? undefined
-          : {
-              sessionKey: "control-session",
-              agentId: "a",
-              isGroup: originGroup,
-            };
-      const ctx = { channel, to, session: key ? { key, ...session } : session, mirror };
-      expect(conversationKindFor(ctx)).toBe(expected);
-    },
-  );
+    ["matrix", "!room:server", undefined, "group", { conversationType: "group" }],
+    ["matrix", "!room:server", undefined, "unknown", { conversationType: "direct" }],
+  ])("classifies only destination-proven routes: %s %s", (channel, to, key, expected, session) => {
+    const ctx = { channel, to, session: key ? { key, ...session } : session };
+    expect(conversationKindFor(ctx)).toBe(expected);
+  });
 });

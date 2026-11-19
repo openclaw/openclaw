@@ -7,7 +7,7 @@ import type {
   SessionBranchSummaryReadRequest,
   SessionBranchSummaryReadResult,
 } from "./session-accessor.sqlite-branches.js";
-import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import { readSessionEntryIdentity } from "./session-accessor.sqlite-entry-read.js";
 import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 
 export function readSessionBranchSnapshot(
@@ -18,7 +18,7 @@ export function readSessionBranchSnapshot(
     database.db,
     () => {
       const databaseIdentity = readOpenClawAgentDatabaseIdentity(database).identity;
-      const entry = readSessionEntryRow(database, request.sessionKey, "list")?.entry;
+      const entry = readSessionEntryIdentity(database, request.sessionKey);
       if (!entry?.sessionId) {
         return { status: "missing-session" };
       }

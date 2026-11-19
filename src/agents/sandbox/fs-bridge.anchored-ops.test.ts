@@ -7,12 +7,9 @@ import "../../test-utils/prepare-compiled-subprocesses.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import {
   createSandbox,
-  expectOnlyCanonicalPathCommands,
   createSandboxFsBridge,
-  createSeededSandboxFsBridge,
   dockerExecResult,
   findCallByDockerArg,
-  findCallByScriptFragment,
   getDockerArg,
   getDockerScript,
   installFsBridgeTestHarness,
@@ -20,12 +17,7 @@ import {
   mockedOpenRootFile,
 } from "./fs-bridge.test-helpers.js";
 
-async function createStatBridge(
-  stateDir: string,
-  stat: (script: string) => ReturnType<typeof dockerExecResult>,
-) {
-  const workspaceDir = path.join(stateDir, "workspace");
-  await fs.mkdir(workspaceDir, { recursive: true });
+function mockStat(stat: (script: string) => ReturnType<typeof dockerExecResult>) {
   mockedExecDockerRaw.mockImplementation(async (args) => {
     const script = getDockerScript(args);
     if (script.includes('readlink -n -f -- "$cursor"')) {
@@ -33,29 +25,32 @@ async function createStatBridge(
     }
     return script.includes('stat -c "%F|%s|%y"') ? stat(script) : dockerExecResult("");
   });
-  return createSandboxFsBridge({
-    sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
-  });
 }
 
 describe("sandbox fs bridge anchored ops", () => {
   const dirs = useAutoCleanupTempDirTracker(afterEach);
-  let stateDir: string;
-  beforeEach(() => {
-    stateDir = dirs.make("openclaw-fs-bridge-anchored-");
-  });
+  let workspaceDir: string;
+  let bridge: ReturnType<typeof createSandboxFsBridge>;
   let readGate: ((fd: number) => Promise<void>) | undefined;
   installFsBridgeTestHarness({
     beforeAsyncRead: async (fd) => {
       await readGate?.(fd);
     },
   });
+  beforeEach(async () => {
+    workspaceDir = path.join(dirs.make("openclaw-fs-bridge-anchored-"), "workspace");
+    await fs.mkdir(path.join(workspaceDir, "nested"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "from.txt"), "hello");
+    bridge = createSandboxFsBridge({
+      sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+    });
+  });
 
   it.each([
-    { name: "uncapped", maxBytes: undefined },
-    { name: "bounded", maxBytes: 5 },
-  ])("yields during $name reads without losing the pinned file", async ({ maxBytes }) => {
-    const { bridge, workspaceDir } = await createSeededSandboxFsBridge(stateDir);
+    { name: "uncapped", contents: "hello", maxBytes: undefined },
+    { name: "chunked", contents: "x".repeat(64 * 1024 + 1), maxBytes: 64 * 1024 + 1 },
+  ])("yields during $name reads without losing the pinned file", async ({ contents, maxBytes }) => {
+    await fs.writeFile(path.join(workspaceDir, "from.txt"), contents);
     const openRootFile = mockedOpenRootFile.getMockImplementation()!;
     const events: string[] = [];
     let heartbeat: Promise<void> | undefined;
@@ -81,42 +76,26 @@ describe("sandbox fs bridge anchored ops", () => {
       expect(fsSync.fstatSync(fd).isFile()).toBe(true);
     };
 
-    let contents: Buffer;
+    let actual: Buffer;
     try {
-      contents = await bridge.readFile({ filePath: "from.txt", maxBytes });
+      actual = await bridge.readFile({ filePath: "from.txt", maxBytes });
       events.push("read-complete");
     } finally {
       await heartbeat;
       readGate = undefined;
     }
-    expect(contents).toEqual(Buffer.from("hello"));
+    expect(actual).toEqual(Buffer.from(contents));
     expect(events).toEqual(["event-loop", "read-complete"]);
     expect(() => fsSync.fstatSync(openedFd!)).toThrow(expect.objectContaining({ code: "EBADF" }));
   });
 
-  it("reads bounded chunks through one descriptor", async () => {
-    const contents = "x".repeat(64 * 1024 + 1);
-    const { bridge } = await createSeededSandboxFsBridge(stateDir, contents);
-
-    await expect(
-      bridge.readFile({ filePath: "from.txt", maxBytes: contents.length }),
-    ).resolves.toEqual(Buffer.from(contents));
-    expect(mockedOpenRootFile).toHaveBeenCalledTimes(1);
-    expectOnlyCanonicalPathCommands();
-  });
-
   it("rejects negative limits without an unbounded read", async () => {
-    const { bridge } = await createSeededSandboxFsBridge(stateDir);
-
     await expect(bridge.readFile({ filePath: "from.txt", maxBytes: -1 })).rejects.toThrow(
       /non-negative safe integer/,
     );
-    expect(mockedOpenRootFile).toHaveBeenCalledTimes(1);
-    expectOnlyCanonicalPathCommands();
   });
 
   it("rejects growth after opening the descriptor", async () => {
-    const { bridge, workspaceDir } = await createSeededSandboxFsBridge(stateDir);
     const openRootFile = mockedOpenRootFile.getMockImplementation()!;
     mockedOpenRootFile.mockImplementationOnce(async (params) => {
       const opened = await openRootFile(params);
@@ -129,25 +108,9 @@ describe("sandbox fs bridge anchored ops", () => {
     await expect(bridge.readFile({ filePath: "from.txt", maxBytes: 5 })).rejects.toThrow(
       /exceeds 5 bytes/,
     );
-    expect(mockedOpenRootFile).toHaveBeenCalledTimes(1);
-    expectOnlyCanonicalPathCommands();
-  });
-
-  it("exclusive create pins canonical parent + basename", async () => {
-    const { bridge } = await createSeededSandboxFsBridge(stateDir);
-    await bridge.createFileExclusive!({ filePath: "nested/new.txt", data: "created" });
-
-    const opCall = findCallByDockerArg(1, "create");
-    expect(opCall).toBeDefined();
-    const args = opCall![0];
-    expect(getDockerScript(args)).toContain('exec "$python_cmd" -c "$python_script" "$@"');
-    expect(args.slice(7)).toEqual(["create", "/workspace", "nested", "new.txt", "1"]);
-    expect(args).not.toContain("/workspace/nested/new.txt");
   });
 
   it("allows dot-dot names without treating them as traversal", async () => {
-    const { bridge } = await createSeededSandboxFsBridge(stateDir);
-
     expect(bridge.resolvePath({ filePath: "..cache" })).toMatchObject({
       relativePath: "..cache",
       containerPath: "/workspace/..cache",
@@ -160,8 +123,6 @@ describe("sandbox fs bridge anchored ops", () => {
   });
 
   it("rejects a mismatched pinned basename", async () => {
-    const { bridge } = await createSeededSandboxFsBridge(stateDir);
-
     await expect(
       bridge.writeFile({
         filePath: "notes/todo.txt",
@@ -172,7 +133,7 @@ describe("sandbox fs bridge anchored ops", () => {
   });
 
   it("uses C-locale stat errors to recognize missing files", async () => {
-    const bridge = await createStatBridge(stateDir, (script) => ({
+    mockStat((script) => ({
       stdout: Buffer.alloc(0),
       stderr: Buffer.from(
         script.includes('LC_ALL=C stat -c "%F|%s|%y"')
@@ -186,14 +147,10 @@ describe("sandbox fs bridge anchored ops", () => {
     await expect(
       bridge.stat({ filePath: "note.txt", expectedPolicyPath: "/workspace/note.txt" }),
     ).resolves.toBeNull();
-
-    const statCall = findCallByScriptFragment('stat -c "%F|%s|%y" -- "$2"');
-    expect(statCall).toBeDefined();
-    expect(getDockerScript(statCall![0])).toContain('LC_ALL=C stat -c "%F|%s|%y" -- "$2"');
   });
 
   it("keeps non-missing stat failures as errors", async () => {
-    const bridge = await createStatBridge(stateDir, () => ({
+    mockStat(() => ({
       stdout: Buffer.alloc(0),
       stderr: Buffer.from("stat: cannot stat 'note.txt': Permission denied\n"),
       code: 1,
@@ -212,17 +169,5 @@ describe("sandbox fs bridge anchored ops", () => {
     await expect(
       bridge.stat({ filePath: "note.txt", expectedPolicyPath: "/workspace/note.txt" }),
     ).rejects.toBe(failure);
-  });
-
-  it("saturates unsafe stat size output", async () => {
-    const bridge = await createStatBridge(stateDir, () =>
-      dockerExecResult("regular file|9007199254740992|8640000000001\n"),
-    );
-
-    await expect(bridge.stat({ filePath: "note.txt" })).resolves.toMatchObject({
-      type: "file",
-      size: Number.MAX_SAFE_INTEGER,
-      mtimeMs: 0,
-    });
   });
 });

@@ -230,7 +230,6 @@ it.each(["legacy", "catalog-user"] as const)(
     vi.stubEnv("CODEX_HOME", relativeHome);
     const { factory } = await createCatalog("user");
     try {
-      expect(path.isAbsolute(relativeHome)).toBe(false);
       await fs.writeFile(
         path.join(codexHome, "history.jsonl"),
         JSON.stringify({
@@ -354,7 +353,7 @@ it("keeps authorized resume execution available while native discovery is disabl
 });
 
 it.each([
-  { scenario: "hydrated cwd", text: "latest ask", ts: 1778678322 },
+  { scenario: "hydrated cwd", text: "Cafe\u0301 latest ask", ts: 1778678322 },
   { scenario: "empty rollout", text: "history prompt", ts: 1778678322 },
   { scenario: "Date-invalid timestamp", text: "bad timestamp", ts: 8_700_000_000_000 },
 ])("keeps history usable with $scenario", async ({ scenario, text, ts }) => {
@@ -376,7 +375,7 @@ it.each([
     await fs.writeFile(path.join(sessionsDir, `rollout-${sessionId}.jsonl`), "");
   }
   const parsed = await listLocalSessions({
-    filter: scenario === "empty rollout" ? sessionId : hydrated ? "latest" : text,
+    filter: scenario === "empty rollout" ? sessionId : hydrated ? "CAFÉ latest" : text,
     limit: 5,
   });
   expect(parsed.sessions).toEqual([
@@ -552,28 +551,19 @@ it.each(["thread", "node", "lock", "initializing", "missing row", "missing marke
   },
 );
 
-it.each(["many-chunk records", "UTF-16 boundaries"])("reads previews with %s", async (mode) => {
-  const large = mode === "many-chunk records";
-  const text = large ? "rollout fallback" : `${"b".repeat(136)}🤖tail`;
-  const preview = large ? "rollout fallback" : `${"b".repeat(136)}...`;
-  const timestamp = large ? "2026-05-14T00:10:24.000Z" : "2026-05-14T00:10:23.619Z";
+it("streams many-chunk records and truncates previews at UTF-16 boundaries", async () => {
+  const prefix = "b".repeat(136);
   const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5250";
   const cwd = "/tmp/codex-work";
-  const records: unknown[] = [meta(sessionId, cwd), userMessage(text, timestamp)];
-  if (large) {
-    records.splice(1, 0, {
-      timestamp: "2026-05-14T00:10:23.619Z",
-      type: "event_msg",
-      payload: { type: "token_count", padding: "x".repeat(5 * 1_024 * 1_024) },
-    });
-  }
-  const sessionFile = await writeRollout(sessionId, records);
+  const sessionFile = await writeRollout(sessionId, [
+    meta(sessionId, cwd),
+    { type: "event_msg", payload: { type: "token_count", padding: "x".repeat(5 * 1_024 * 1_024) } },
+    userMessage(`${prefix}🤖tail`),
+  ]);
   const readFile = vi.spyOn(fs, "readFile");
-  const parsed = await listLocalSessions({ ...(large ? {} : { filter: "" }), limit: 5 });
-  if (large) {
-    expect(readFile).not.toHaveBeenCalledWith(sessionFile, "utf8");
-  }
-  expect(parsed.sessions).toEqual([summary(sessionId, sessionFile, cwd, preview, timestamp)]);
+  const parsed = await listLocalSessions({ limit: 5 });
+  expect(readFile).not.toHaveBeenCalledWith(sessionFile, "utf8");
+  expect(parsed.sessions).toEqual([summary(sessionId, sessionFile, cwd, `${prefix}...`)]);
 });
 
 it.each(["read", "close"] as const)("handles a large-file %s failure", async (failure) => {

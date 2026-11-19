@@ -88,59 +88,6 @@ function mapWhatsAppIngressToTurnAdmission(ingress: WhatsAppInboundAdmission["in
   return { kind: "drop" as const, reason, recordHistory: false };
 }
 
-function shouldEmitWhatsAppMessageReceivedHooks(params: {
-  cfg: ReturnType<LoadConfigFn>;
-  accountId?: string;
-}): boolean {
-  const channelConfig = params.cfg.channels?.whatsapp;
-  const accountConfig = params.accountId ? channelConfig?.accounts?.[params.accountId] : undefined;
-
-  return (
-    accountConfig?.pluginHooks?.messageReceived ??
-    channelConfig?.pluginHooks?.messageReceived ??
-    false
-  );
-}
-
-function emitWhatsAppMessageReceivedHooksIfEnabled(params: {
-  cfg: ReturnType<LoadConfigFn>;
-  ctx: Awaited<ReturnType<typeof prepareWhatsAppInboundContext>>["ctxPayload"];
-  accountId?: string;
-  sessionKey: string;
-}): void {
-  if (!shouldEmitWhatsAppMessageReceivedHooks(params)) {
-    return;
-  }
-  const canonical = deriveInboundMessageHookContext(params.ctx);
-  const hookRunner = getGlobalHookRunner();
-  if (hookRunner?.hasHooks("message_received")) {
-    fireAndForgetBoundedHook(
-      () =>
-        hookRunner.runMessageReceived(
-          toPluginMessageReceivedEvent(canonical),
-          toPluginMessageContext(canonical),
-        ),
-      "whatsapp: message_received plugin hook failed",
-      undefined,
-      WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS,
-    );
-  }
-  fireAndForgetBoundedHook(
-    () =>
-      triggerInternalHook(
-        createInternalHookEvent(
-          "message",
-          "received",
-          params.sessionKey,
-          toInternalMessageReceivedContext(canonical),
-        ),
-      ),
-    "whatsapp: message_received internal hook failed",
-    undefined,
-    WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS,
-  );
-}
-
 export async function processMessage(params: {
   cfg: ReturnType<LoadConfigFn>;
   msg: AdmittedWebInboundMessage;
@@ -414,12 +361,45 @@ export async function processMessage(params: {
   const turnAdoptionLifecycle = ingressLifecycle
     ? bindIngressLifecycleToReplyOptions(ingressLifecycle).turnAdoptionLifecycle
     : undefined;
-  emitWhatsAppMessageReceivedHooksIfEnabled({
-    cfg: params.cfg,
-    ctx: ctxPayload,
-    accountId: params.route.accountId,
-    sessionKey: params.route.sessionKey,
-  });
+  const hookConfig = params.cfg;
+  const hookAccountId = params.route.accountId;
+  const hookSessionKey = params.route.sessionKey;
+  const channelConfig = hookConfig.channels?.whatsapp;
+  const accountConfig = hookAccountId ? channelConfig?.accounts?.[hookAccountId] : undefined;
+  if (
+    accountConfig?.pluginHooks?.messageReceived ??
+    channelConfig?.pluginHooks?.messageReceived ??
+    false
+  ) {
+    const canonical = deriveInboundMessageHookContext(ctxPayload);
+    const hookRunner = getGlobalHookRunner();
+    if (hookRunner?.hasHooks("message_received")) {
+      fireAndForgetBoundedHook(
+        () =>
+          hookRunner.runMessageReceived(
+            toPluginMessageReceivedEvent(canonical),
+            toPluginMessageContext(canonical),
+          ),
+        "whatsapp: message_received plugin hook failed",
+        undefined,
+        WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS,
+      );
+    }
+    fireAndForgetBoundedHook(
+      () =>
+        triggerInternalHook(
+          createInternalHookEvent(
+            "message",
+            "received",
+            hookSessionKey,
+            toInternalMessageReceivedContext(canonical),
+          ),
+        ),
+      "whatsapp: message_received internal hook failed",
+      undefined,
+      WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS,
+    );
+  }
 
   const pinnedMainDmRecipient = resolvePinnedMainDmOwnerFromAllowlist({
     dmScope: params.cfg.session?.dmScope,

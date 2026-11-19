@@ -73,6 +73,11 @@ export function BoardModal(props: {
   onCancel: () => void;
   onChange: () => void;
 }) {
+  const initialActiveElement = document.activeElement;
+  const initialReturnFocusTarget =
+    initialActiveElement instanceof HTMLElement && initialActiveElement !== document.body
+      ? initialActiveElement
+      : undefined;
   const draft = () => {
     void props.revision;
     return props.draft;
@@ -165,6 +170,7 @@ export function BoardModal(props: {
     <Dialog
       {...{
         label: t(draft().create ? "workboard.newBoard" : "workboard.editBoard"),
+        returnFocusTarget: initialReturnFocusTarget,
         style: `--openclaw-modal-width: ${draft().sessions ? "640px" : "420px"}; --openclaw-modal-backdrop-filter: blur(1px);`,
         onCancel: () => {
           if (busy) {
@@ -306,25 +312,27 @@ export function BoardModal(props: {
             </button>
           </openclaw-modal-actions>
         </form>
-        <Loading
-          on={completion()}
-          fallback={<WorkboardErrorToast owner={props.toastOwner} error={props.pageError} />}
-        >
-          <Errored
-            fallback={(error) => (
-              <WorkboardToast
-                owner={draft()}
-                message={formatUiError(error())}
-                key={completion()}
-                tone="error"
-                outcomeSource
-              />
-            )}
+        {!draft().sessions ? (
+          <Loading
+            on={completion()}
+            fallback={<WorkboardErrorToast owner={props.toastOwner} error={props.pageError} />}
           >
-            {completed()}
-            <WorkboardErrorToast owner={props.toastOwner} error={props.pageError} />
-          </Errored>
-        </Loading>
+            <Errored
+              fallback={(error) => (
+                <WorkboardToast
+                  owner={draft()}
+                  message={formatUiError(error())}
+                  key={completion()}
+                  tone="error"
+                  outcomeSource
+                />
+              )}
+            >
+              {completed()}
+              <WorkboardErrorToast owner={props.toastOwner} error={props.pageError} />
+            </Errored>
+          </Loading>
+        ) : undefined}
       </>
     </Dialog>
   );

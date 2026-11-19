@@ -107,17 +107,16 @@ function lateResource(event: string) {
   const { entered, release, run: wait } = heldOperation();
   const listener = () => {};
   const before = process.listenerCount(event);
-  cleanup.push(() => {
+  const detach = () => {
     process.off(event, listener);
-  });
+  };
+  cleanup.push(detach);
   return {
     entered,
     release,
     wait,
     attach: () => process.on(event, listener),
-    stop: vi.fn(() => {
-      process.off(event, listener);
-    }),
+    stop: vi.fn(detach),
     expectClean: () => expect(process.listenerCount(event)).toBe(before),
   };
 }
@@ -195,8 +194,7 @@ describe("plugin service reload", () => {
     "failed-cleanup",
   ] as const)("retains a timed-out reload until cleanup settles (%s)", async (recovery) => {
     vi.useFakeTimers();
-    const entered = deferred();
-    const release = deferred();
+    const { entered, release, run: stop } = heldOperation();
     const siblingStop = heldOperation();
     const restarted = deferred();
     let watching = false;
@@ -208,8 +206,7 @@ describe("plugin service reload", () => {
         }
       },
       async stop() {
-        entered.resolve();
-        await release.promise;
+        await stop();
         watching = false;
       },
     });

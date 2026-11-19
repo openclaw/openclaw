@@ -13,7 +13,7 @@ const context: OpenClawPluginToolContext = {
 };
 
 const environment = {
-  id: "environment-one",
+  id: "box",
   status: "available",
   worker: { profileId: "desktop", state: "ready" },
 };
@@ -29,6 +29,16 @@ const commandResult = {
 };
 const attachment = { environmentId: environment.id };
 const backgroundStart = { action: "exec", argv: ["node", "server.mjs"], background: true };
+const presentation = (action: string, response: unknown, ...text: string[]) => ({
+  action,
+  response,
+  text,
+});
+const state = (status: string, worker: string, error?: string) => ({
+  ...environment,
+  status,
+  worker: { state: worker, ...(error ? { error } : {}) },
+});
 type ToolResult = Awaited<ReturnType<NonNullable<ReturnType<typeof createCrabboxTool>>["execute"]>>;
 function expectText(result: ToolResult, text: string) {
   expect(result.content).toEqual([{ type: "text", text }]);
@@ -74,22 +84,8 @@ describe("Crabbox conversation tool", () => {
   });
   const execute = (action: string, params: Record<string, unknown> = {}) =>
     tool.execute(action, { action, ...params });
-  async function reply(action: string, response: unknown, text: string) {
-    request.mockResolvedValueOnce(response);
-    const result = await execute(action);
-    expectText(result, text);
-    expect(result.details).toBe(response);
-  }
 
-  it("explains an empty attachment without turning it into an error", async () => {
-    await reply(
-      "status",
-      { attachment: null },
-      "No Crabbox is attached to this conversation. Use action=create to create one.",
-    );
-  });
-
-  it("lists usable profile choices while retaining machine catalog metadata", async () => {
+  it("lists profiles with machine metadata", async () => {
     const profile = {
       id: "desktop",
       providerId: "crabbox",
@@ -108,122 +104,86 @@ describe("Crabbox conversation tool", () => {
     expectText(await execute("profiles"), "No Crabbox profiles are currently available.");
   });
 
-  it.each<[string | undefined, string | undefined, string]>([
-    [undefined, undefined, "No Crabbox is attached to this conversation. Nothing to stop."],
-    [
-      "stopping",
-      undefined,
-      "Crabbox environment-one is detached from this conversation.\nEnvironment: stopping (destroying).",
-    ],
-    [
-      "error",
+  it.each([
+    presentation("status", { attachment: null }, "No Crabbox is attached", "Use action=create"),
+    presentation("stop", { stopped: true }, "No Crabbox is attached", "Nothing to stop"),
+    presentation(
+      "stop",
+      { stopped: true, environment: state("error", "destroying", "Cleanup will retry") },
+      "is detached",
+      "Environment: error (destroying).",
       "Cleanup will retry",
-      "Crabbox environment-one is detached from this conversation.\nEnvironment: error (destroying).\nCleanup will retry",
-    ],
-  ])("does not claim lease release before confirmed cleanup (%s)", async (status, error, text) => {
-    const stopped = status
-      ? { ...environment, status, worker: { state: "destroying", ...(error ? { error } : {}) } }
-      : undefined;
-    await reply("stop", { stopped: true, ...(stopped ? { environment: stopped } : {}) }, text);
-  });
-
-  it.each([false, true])("distinguishes a new attachment from reuse (%s)", async (reused) => {
-    const response = { attachment, environment, reused };
-    request.mockResolvedValueOnce({ attachment: null });
-    await reply(
-      "create",
-      response,
-      (reused ? "Reusing" : "Created") +
-        " Crabbox environment-one.\nEnvironment: available (ready).",
-    );
-  });
-
-  it.each([
-    [
-      false,
-      "bootstrapping",
-      "starting",
-      "Crabbox environment-one is attached to this conversation.",
-    ],
-    [
-      true,
-      "destroyed",
-      "unavailable",
-      "Crabbox environment-one is no longer attached. Use action=create to create one.",
-    ],
-  ] as const)(
-    "reports attachment and machine state independently (%s/%s)",
-    async (closed, state, status, summary) => {
-      const response = {
-        attachment,
-        closed,
-        environment: { ...environment, status, worker: { ...environment.worker, state } },
-      };
-      await reply("status", response, summary + "\nEnvironment: " + status + " (" + state + ").");
-    },
-  );
-
-  it.each([
-    { code: 0, termination: "exit", signal: null, killed: false },
-    { code: 7, termination: "exit", signal: null, killed: false },
-    { code: null, termination: "timeout", signal: "SIGTERM", killed: true },
-  ])("preserves command output and exit facts ($code/$termination)", async (outcome) => {
-    const response = {
-      ...commandResult,
-      ...outcome,
-      stdoutTruncatedBytes: 12,
-      stderrTruncatedBytes: 3,
-      outputLimitExceeded: true,
-    };
+    ),
+    ...[false, true].map((reused) =>
+      presentation(
+        "create",
+        { attachment, environment, reused },
+        `${reused ? "Reusing" : "Created"} Crabbox box.`,
+        "Environment: available (ready).",
+      ),
+    ),
+    presentation(
+      "status",
+      { attachment, closed: false, environment: state("starting", "bootstrapping") },
+      "is attached to this conversation",
+      "Environment: starting (bootstrapping).",
+    ),
+    presentation(
+      "status",
+      { attachment, closed: true, environment: state("unavailable", "destroyed") },
+      "is no longer attached. Use action=create",
+      "Environment: unavailable (destroyed).",
+    ),
+    ...[
+      [0, "exit", null, false],
+      [null, "timeout", "SIGTERM", true],
+    ].map(([code, termination, signal, killed]) =>
+      presentation(
+        "exec",
+        {
+          ...commandResult,
+          code,
+          termination,
+          signal,
+          killed,
+          stdoutTruncatedBytes: 12,
+          stderrTruncatedBytes: 3,
+          outputLimitExceeded: true,
+        },
+        code === 0 ? "Command completed." : "Command failed.",
+        `exit code: ${code}; termination: ${termination}; signal: ${signal}; killed: ${killed}`,
+        "Environment: box; workspace: /workspace",
+        "stdout truncated: 12 bytes",
+        "stderr truncated: 3 bytes",
+        "Output limit exceeded.",
+        "stdout:\n  output\n\nstderr:\nwarning\n",
+      ),
+    ),
+    ...["process_status", "process_stop"].map((action) => {
+      const processState = action === "process_stop" ? "exited" : "running";
+      return presentation(
+        action,
+        { ...commandResult, process: { processId: "app-one", state: processState } },
+        `Process app-one: ${processState}.` +
+          (processState === "running" ? " App readiness has not been checked." : ""),
+      );
+    }),
+  ])("presents $action: $text", async ({ action, response, text }) => {
+    if (action === "create") {
+      request.mockResolvedValueOnce({ attachment: null });
+    }
     request.mockResolvedValueOnce(response);
-    const result = await execute("exec", { argv: ["example"] });
-    expectText(
-      result,
-      `${outcome.code === 0 ? "Command completed." : "Command failed."}
-exit code: ${outcome.code}; termination: ${outcome.termination}; signal: ${outcome.signal}; killed: ${outcome.killed}
-Environment: environment-one; workspace: /workspace
-stdout truncated: 12 bytes
-stderr truncated: 3 bytes
-Output limit exceeded.
-
-stdout:
-  output
-
-stderr:
-warning
-`,
-    );
+    const result = await execute(action, { argv: ["example"], processId: "app-one" });
+    for (const fragment of text) {
+      expect(result.content[0]).toMatchObject({ text: expect.stringContaining(fragment) });
+    }
+    if (action === "stop") {
+      expect(result.content[0]).toMatchObject({ text: expect.not.stringContaining("released") });
+    }
     expect(result.details).toBe(response);
   });
 
-  it.each([
-    { action: "exec", state: "running", code: 0 },
-    { action: "exec", state: "exited", code: 1 },
-    { action: "process_status", state: "running", code: null },
-    { action: "process_stop", state: "exited", code: null },
-  ])(
-    "reports observed process state, not app readiness ($action/$state)",
-    async ({ action, state, code }) => {
-      const response = { ...commandResult, code, process: { processId: "app-one", state } };
-      request.mockResolvedValueOnce(response);
-      const result = await execute(action, {
-        argv: ["server"],
-        background: true,
-        processId: "app-one",
-      });
-      expect(result.content[0]).toMatchObject({
-        text: expect.stringContaining(
-          "Process app-one: " +
-            state +
-            "." +
-            (state === "running" ? " App readiness has not been checked." : ""),
-        ),
-      });
-      expect(result.details).toBe(response);
-    },
-  );
-
-  it("emits one public request update before create I/O without invented stages", async () => {
+  it("publishes one update before create I/O", async () => {
     const onUpdate = vi.fn();
     request.mockImplementation(async () => {
       expect(onUpdate).toHaveBeenCalledTimes(1);
@@ -239,7 +199,7 @@ warning
     });
   });
 
-  it("keeps progress failures out of execution and preserves Gateway failures", async () => {
+  it("ignores progress failure but preserves Gateway failure", async () => {
     const onUpdate = vi.fn(() => {
       throw new Error("Progress display unavailable");
     });
@@ -254,7 +214,7 @@ warning
     ).rejects.toThrow("Gateway response timed out");
   });
 
-  it("does not emit progress or dispatch on invalid or aborted input", async () => {
+  it("rejects invalid or aborted input before effects", async () => {
     const onUpdate = vi.fn();
     await expect(
       tool!.execute("invalid", { action: "exec", argv: [] }, undefined, onUpdate),
@@ -269,11 +229,11 @@ warning
     { ...context, sandboxed: true },
     { ...context, sessionId: undefined },
     { ...context, config: { cloudWorkers: { profiles: { other: { provider: "other" } } } } },
-  ])("is absent without a permitted conversation and configured provider", (toolContext) => {
+  ])("requires a permitted conversation and provider", (toolContext) => {
     expect(fixture(toolContext).tool).toBeNull();
   });
 
-  it("dedupes repeated calls until an empty attachment is replaced, across tool instances", async () => {
+  it("dedupes across instances until the attachment changes", async () => {
     const first = fixture();
     const retry = fixture();
     const next = fixture();
@@ -296,7 +256,7 @@ warning
     expect(keys[2]).not.toBe(keys[0]);
   });
 
-  it("reuses allocation identity on a replay without accepting caller-supplied ownership", async () => {
+  it("replays allocation identity without trusting caller ownership", async () => {
     const params = {
       action: "create",
       presentation: "desktop",
@@ -318,7 +278,7 @@ warning
     );
   });
 
-  it("requires a profile choice when more than one is configured and rechecks runtime config", async () => {
+  it("requires a profile choice and rechecks runtime config", async () => {
     let current = context.config;
     const live = fixture({ ...context, getRuntimeConfig: () => current });
     current = {
@@ -339,10 +299,10 @@ warning
     expect(live.request).not.toHaveBeenCalled();
   });
 
-  it("preserves remote command argument and standard-input bytes", async () => {
+  it("preserves command and stdin bytes", async () => {
     const argv = ["node", "-e", "process.stdout.write(process.argv[1])", "  padded\n"];
     const params = {
-      environmentId: "environment-one",
+      environmentId: "box",
       argv,
       input: "\n payload \n",
     };
@@ -354,7 +314,7 @@ warning
     );
   });
 
-  it("gives replayed background starts the same process identity and stops only the selected process", async () => {
+  it("replays background identity and stops only that process", async () => {
     await tool!.execute("launch", backgroundStart);
     const first = request.mock.calls[0]?.[1];
     await tool!.execute("launch", backgroundStart);
@@ -371,7 +331,7 @@ warning
     );
   });
 
-  it("retains the process identity for reconciliation after a lost launch acknowledgement", async () => {
+  it("retains process identity after a lost launch acknowledgement", async () => {
     request.mockRejectedValueOnce(new Error("Gateway response timed out"));
     const execution = tool!.execute("launch", backgroundStart);
     const processId = request.mock.calls[0]?.[1].processId;

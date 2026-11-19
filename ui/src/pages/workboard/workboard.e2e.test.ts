@@ -7,7 +7,8 @@ import {
 } from "../../../../packages/workboard-contract/src/index.js";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { waitForControlUiProofSurface } from "../../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway, type MockGatewayControls } from "../../test-helpers/control-ui-e2e.ts";
+import type { MockGatewayControls } from "../../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../../test-helpers/control-ui-plugin-e2e.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 import { openPicker } from "../../test-helpers/select-picker-e2e.ts";
 import {
@@ -80,9 +81,9 @@ function cardsListResponse(
 function installWorkboard(
   page: Page,
   cards: WorkboardCard[],
-  extra: Parameters<typeof installMockGateway>[1] = {},
+  extra: Parameters<typeof installNativePluginMockGateway>[1] = {},
 ) {
-  return installMockGateway(page, {
+  return installNativePluginMockGateway(page, {
     ...workboardUi,
     ...extra,
     methodResponses: {
@@ -111,7 +112,11 @@ const width = (locator: Locator) =>
 async function clickCardAction(cardLocator: Locator, name: string) {
   await cardLocator.hover();
   await cardLocator.locator(".workboard-card__menu-trigger").click();
-  await cardLocator.getByRole("button", { name, exact: true }).click();
+  await cardLocator
+    .page()
+    .getByRole("dialog", { name: "Card actions", exact: true })
+    .getByRole("button", { name, exact: true })
+    .click();
 }
 
 suite.define(() => {

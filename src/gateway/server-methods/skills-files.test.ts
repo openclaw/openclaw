@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
@@ -42,83 +42,70 @@ beforeEach(async () => {
   await fs.mkdir(skillDir, { recursive: true });
   await fs.mkdir(workspace);
   await fs.writeFile(skillPath, content);
-  entries = [
-    {
-      frontmatter: {},
-      skill: createCanonicalFixtureSkill({
-        name: "release-notes",
-        description: "Write clear release notes.",
-        filePath: skillPath,
-        baseDir: skillDir,
-        source: "openclaw-managed",
-      }),
-    },
-  ];
+  const skill = createCanonicalFixtureSkill({
+    name: "release-notes",
+    description: "Write clear release notes.",
+    filePath: skillPath,
+    baseDir: skillDir,
+    source: "openclaw-managed",
+  });
+  entries = [{ frontmatter: {}, skill }];
   discovered.mockResolvedValue({ entries });
 });
 afterEach(() => vi.clearAllMocks());
 
-describe("skills.files.get", () => {
-  it("reads an installed skill outside the workspace and returns live edits", async () => {
-    expect(await read()).toMatchObject({
-      ok: true,
-      response: { path: skillPath, name: "release-notes", content },
-    });
-    await fs.writeFile(skillPath, `${content}\nUpdated on disk.\n`);
-    expect(await read()).toMatchObject({
-      ok: true,
-      response: { content: `${content}\nUpdated on disk.\n` },
-    });
-    expect((await read("../installed/release-notes/SKILL.md")).ok).toBe(true);
-    expect((await read(pathToFileURL(skillPath).href)).ok).toBe(true);
+it("reads an installed skill outside the workspace and returns live edits", async () => {
+  expect(await read()).toMatchObject({
+    ok: true,
+    response: { path: skillPath, name: "release-notes", content },
   });
-
-  it("rejects unknown agents and files outside the discovered skill allowlist", async () => {
-    expect((await read(skillPath, "unknown")).ok).toBe(false);
-    const privateFile = path.join(directory, "SKILL.md");
-    await fs.writeFile(privateFile, "private");
-    expect((await read(privateFile)).ok).toBe(false);
-    expect((await read(path.join(skillDir, "..", "..", "SKILL.md"))).ok).toBe(false);
-    expect((await read("SKILL.md")).ok).toBe(false);
+  await fs.writeFile(skillPath, `${content}\nUpdated on disk.\n`);
+  expect(await read()).toMatchObject({
+    ok: true,
+    response: { content: `${content}\nUpdated on disk.\n` },
   });
+  expect((await read("../installed/release-notes/SKILL.md")).ok).toBe(true);
+  expect((await read(pathToFileURL(skillPath).href)).ok).toBe(true);
+});
 
-  it("accepts a skill-directory alias without allowing final symlink escapes or hardlinks", async () => {
-    const alias = path.join(directory, "alias");
-    await fs.symlink(skillDir, alias);
-    expect((await read(path.join(alias, "SKILL.md"))).ok).toBe(true);
-    const privateFile = path.join(directory, "private.md");
-    await fs.writeFile(privateFile, "private");
-    for (const link of [fs.symlink, fs.link]) {
-      await fs.unlink(skillPath);
-      await link(privateFile, skillPath);
-      expect((await read()).ok).toBe(false);
-    }
-  });
+it("rejects unknown agents and files outside the discovered skill allowlist", async () => {
+  expect((await read(skillPath, "unknown")).ok).toBe(false);
+  const privateFile = path.join(directory, "SKILL.md");
+  await fs.writeFile(privateFile, "private");
+  expect((await read(privateFile)).ok).toBe(false);
+  expect((await read(path.join(skillDir, "..", "..", "SKILL.md"))).ok).toBe(false);
+  expect((await read("SKILL.md")).ok).toBe(false);
+});
 
-  it("preserves bundled hardlink support and rejects files over the discovery byte limit", async () => {
-    const source = path.join(directory, "package.md");
-    await fs.writeFile(source, content);
+it("allows directory aliases and only bundled hardlinks, with bounded reads", async () => {
+  const alias = path.join(directory, "alias");
+  await fs.symlink(skillDir, alias);
+  expect((await read(path.join(alias, "SKILL.md"))).ok).toBe(true);
+  const privateFile = path.join(directory, "private.md");
+  await fs.writeFile(privateFile, "private");
+  for (const link of [fs.symlink, fs.link]) {
     await fs.unlink(skillPath);
-    await fs.link(source, skillPath);
-    entries[0].skill.source = "openclaw-bundled";
-    expect((await read()).ok).toBe(true);
-    await fs.writeFile(skillPath, "x".repeat(256_001));
+    await link(privateFile, skillPath);
     expect((await read()).ok).toBe(false);
-  });
+  }
+  entries[0].skill.source = "openclaw-bundled";
+  expect((await read()).ok).toBe(true);
+  await fs.writeFile(skillPath, "x".repeat(256_001));
+  expect((await read()).ok).toBe(false);
+});
 
-  it("never reads a remote workspace or node skill from the Gateway filesystem", async () => {
-    entries[0].skill.fileHost = "workspace";
-    expect((await read()).ok).toBe(false);
-    entries[0].skill.fileHost = "gateway";
-    entries[0].skill.filePath = "node://remote/release-notes/SKILL.md";
-    expect((await read()).ok).toBe(false);
-  });
+it("never reads a remote workspace or node skill from the Gateway filesystem", async () => {
+  entries[0].skill.fileHost = "workspace";
+  expect((await read()).ok).toBe(false);
+  entries[0].skill.fileHost = "gateway";
+  entries[0].skill.filePath = "node://remote/release-notes/SKILL.md";
+  expect((await read()).ok).toBe(false);
+});
 
-  it("does not disclose source after the agent configuration changes during discovery", async () => {
-    discovered.mockImplementationOnce(async () => {
-      config = { agents: { entries: { main: { workspace: path.join(directory, "other") } } } };
-      return { entries };
-    });
-    expect((await read()).ok).toBe(false);
+it("does not disclose source after the agent configuration changes during discovery", async () => {
+  discovered.mockImplementationOnce(async () => {
+    config = { agents: { entries: { main: { workspace: path.join(directory, "other") } } } };
+    return { entries };
   });
+  expect((await read()).ok).toBe(false);
 });

@@ -5,6 +5,7 @@ import {
   ErrorCodes,
   errorShape,
   validateTalkClientCloseParams,
+  validateTalkClientSayParams,
   validateTalkClientSteerParams,
   validateTalkClientToolCallParams,
   validateTalkClientTranscriptParams,
@@ -33,7 +34,7 @@ import {
   parseRealtimeVoiceAgentConsultArgs,
   buildRealtimeVoiceAgentConsultChatMessage,
 } from "../../../talk/agent-consult-tool.js";
-import { controlRealtimeVoiceAgentRun } from "../../../talk/agent-run-control.js";
+import { controlTalkAgentRun } from "../../../talk/agent-run-control.js";
 import {
   assertClientVoiceSessionOpen,
   resolveOpenClientVoiceSessionId,
@@ -45,7 +46,6 @@ import {
 } from "../../../talk/client-voice-session-source.js";
 import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session-write.js";
 import {
-  appendClientVoiceTranscript,
   closeClientVoiceSession,
   createOrResumeClientVoiceSession,
   registerClientVoiceConsultRun,
@@ -70,8 +70,10 @@ import { prepareTalkAgentConsultTranscript } from "../agent-consult-transcript.j
 import { prepareTalkClientControlAuthority } from "../client-agent-consult.js";
 import {
   closeTalkClientGatewayControlSession,
-  resolveTalkAgentConsultAuthority,
+  sendTalkClientGatewayControlSpeech,
 } from "../client-gateway-control.js";
+import { resolveTalkAgentConsultAuthority } from "../client-tool-authority.js";
+import { appendTalkClientTranscript } from "../client-transcript.js";
 import { createTalkRunCancel } from "../realtime-run-control.js";
 import {
   ensureTalkRealtimeRelayVoiceSession,
@@ -108,6 +110,35 @@ const clientMutationError = (error: unknown) =>
 
 export const talkClientHandlers: GatewayRequestHandlers = {
   "talk.client.create": createTalkClient,
+  "talk.client.say": defineValidatedGatewayHandler(
+    "talk.client.say",
+    validateTalkClientSayParams,
+    (request) => {
+      const { params, respond } = request;
+      if (!params.text.trim() || Buffer.byteLength(params.text, "utf8") > 1024) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "text must contain 1–1024 UTF-8 bytes of speech"),
+        );
+        return;
+      }
+      const target = requirePreparedTalkSessionTarget(
+        request.sessionMutationAuthorization?.talkSessionTarget,
+      );
+      request.sessionMutationAuthorization?.assertCurrent();
+      readGatewayRequestMutationAuthority(request).assertCurrent();
+      target.assertCurrent(request.context.getRuntimeConfig());
+      sendTalkClientGatewayControlSpeech({
+        voiceSessionId: params.voiceSessionId,
+        sessionTarget: target,
+        connId: request.client?.connId,
+        text: params.text,
+      });
+      respond(true, { accepted: true }, undefined);
+    },
+    talkRequestError,
+  ),
   "talk.client.toolCall": defineValidatedGatewayHandler(
     "talk.client.toolCall",
     validateTalkClientToolCallParams,
@@ -176,6 +207,11 @@ export const talkClientHandlers: GatewayRequestHandlers = {
             },
             assertPreparationCurrent,
             request.signal,
+            (change) =>
+              request.sessionMutationAuthorization?.followRegistration?.(
+                { agentId, sessionKey: target.canonicalKey },
+                change,
+              ),
           );
           if (preparedRequester.opaqueCommitGuard) {
             requester.assertCurrent();
@@ -257,7 +293,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           assertStoreCurrent?.();
           request.sessionMutationAuthorization?.assertCurrent();
           parseRealtimeVoiceAgentConsultArgs(params.args ?? {});
-          const origin = assertClientVoiceSessionOpen(
+          const origin = await assertClientVoiceSessionOpen(
             { agentId, sessionKey: params.sessionKey, voiceSessionId },
             physicalSource,
           );
@@ -546,17 +582,20 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         sessionMutationAuthorization?.talkSessionTarget ??
         (await prepareTalkSessionTarget(config, params.sessionKey));
       sessionMutationAuthorization?.assertCurrent();
-      await appendClientVoiceTranscript({
-        agentId: target.agentId,
-        sessionKey: target.sessionKey,
-        sessionTarget: { sessionKey: target.canonicalKey, storePath: target.storePath },
-        voiceSessionId: params.voiceSessionId,
-        entryId: params.entryId,
-        role: params.role,
-        text: params.text,
-        ...(params.timestamp !== undefined ? { timestamp: params.timestamp } : {}),
-        config,
-      });
+      await appendTalkClientTranscript(
+        {
+          agentId: target.agentId,
+          sessionKey: target.sessionKey,
+          sessionTarget: { sessionKey: target.canonicalKey, storePath: target.storePath },
+          voiceSessionId: params.voiceSessionId,
+          entryId: params.entryId,
+          role: params.role,
+          text: params.text,
+          ...(params.timestamp !== undefined ? { timestamp: params.timestamp } : {}),
+          config,
+        },
+        context,
+      );
       respond(true, { ok: true }, undefined);
     },
     clientMutationError,
@@ -633,10 +672,10 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         hasCurrentClientAuthority,
       });
       try {
-        const result = await controlRealtimeVoiceAgentRun({
+        const result = await controlTalkAgentRun({
           sessionKey: target.canonicalKey,
           runTarget,
-          getToolAuthorityOverlay: () =>
+          getToolAuthorityOverlayAsync: () =>
             prepareTalkClientControlAuthority({
               config: context.getRuntimeConfig(),
               agentRuntime: createPluginRuntime().agent,

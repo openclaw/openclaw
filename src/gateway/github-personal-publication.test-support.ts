@@ -20,6 +20,7 @@ import {
   SESSION_KEY,
   createTestGitHubPublicationCoordinator,
   githubPublicationTestMocks,
+  overrideCommands,
 } from "./github-publication.test-support.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -43,16 +44,13 @@ afterEach(() => {
 });
 
 /** Gateway startup prepares profile authority again after database admission closes. */
-export async function preparePersonalPublicationProfileCatalog() {
+async function preparePersonalPublicationProfileCatalog() {
   const catalog = await prepareUserProfileCatalog();
   profileCatalogs.add(catalog);
   return catalog;
 }
 
-export async function preparePersonalPublicationFixtureV2(
-  fixture: PersonalClient,
-  signal?: AbortSignal,
-) {
+async function preparePersonalPublicationFixtureV2(fixture: PersonalClient, signal?: AbortSignal) {
   const owner = fixture.client.authenticatedUserProfile!.profileId;
   fixture.client.internal = {
     ...fixture.client.internal,
@@ -178,12 +176,10 @@ export async function createPersonalPublicationFixture() {
     });
   });
   vi.stubGlobal("fetch", fetchMock);
-  const fallback = mocks.runCommand.getMockImplementation()!;
-  mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+  overrideCommands((argv) => {
     if (argv[0] === "gh" && (argv[1] !== "api" || argv.includes("user"))) {
       throw new Error("Unexpected GitHub CLI credential operation");
     }
-    return await fallback(argv, options);
   });
   const client: GatewayClient = {
     connId: `direct-human-${generation}`,

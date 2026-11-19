@@ -15,7 +15,9 @@ const nextTag = "v2026.9.4";
 const channel = "linux-stable";
 const publicKey = Buffer.from("fixture public key\n").toString("base64");
 const signature = Buffer.from("fixture signature\n").toString("base64");
-const toolingSha = "b".repeat(40);
+const requestSha = "a".repeat(40);
+const builderSha = "b".repeat(40);
+const toolingSha = builderSha;
 const toolingRef = `release-publish/${toolingSha.slice(0, 12)}-42`;
 const mutationActions = new Set(["upload", "DELETE", "PATCH", "create", "edit"]);
 const appimageName = "OpenClaw-2026.9.3-amd64.AppImage";
@@ -59,6 +61,7 @@ type Call = {
   url?: string;
   releaseId?: number;
   makeLatest?: boolean;
+  delay?: number;
 };
 type Transition = {
   kind: "replace-release" | "move-tag" | "select-latest";
@@ -226,7 +229,7 @@ const releaseResponse = (owner) => {
 };
 const workflowRun = (id, prefix, fields) => ({
   id, run_attempt: state.authority[prefix + "Attempt"],
-  repository: { full_name: "openclaw/openclaw" }, head_sha: "b".repeat(40),
+  repository: { full_name: "openclaw/openclaw" }, head_sha: state.authority[prefix + "Sha"],
   status: state.authority[prefix + "Status"], conclusion: state.authority[prefix + "Conclusion"],
   ...fields,
 });
@@ -299,7 +302,7 @@ try {
       take("authorityAfterDelete", changeAuthority);
       if (owner.tag_name === "desktop-test") take("authorityAfterDesktopDelete", changeAuthority);
     } else if (route.startsWith("compare/") && route.endsWith("...main")) {
-      assert.equal(route, "compare/" + "b".repeat(40) + "...main");
+      assert.equal(route, "compare/" + state.authority.toolingSha + "...main");
       answer({ status: "identical" });
     } else if (route === "actions/runs/42") {
       answer(workflowRun(42, "parent", {
@@ -432,8 +435,8 @@ try {
     take("replaceReleaseAfterDownload", () => transition({ kind: "replace-release", tag }), { tag, name });
     take("authorityAfterDownload", ({ change }) => changeAuthority(change), { tag, name });
   } else if (tool === "sleep") {
-    assert(args.length === 1 && ["2", "5", "10"].includes(args[0]));
-    state.calls.push({ tool, action: "wait" });
+    assert(args.length === 1 && /^[1-9][0-9]*$/u.test(args[0]) && Number(args[0]) <= 60);
+    state.calls.push({ tool, action: "wait", delay: Number(args[0]) });
   } else if (tool === "minisign") {
     state.calls.push({ tool, action: "verify" });
     for (const option of ["-Vm", "-x", "-p"]) {
@@ -463,12 +466,15 @@ function makeAuthority(workflowRef: string, desktop: boolean, conclusion: string
     toolingRef: workflowRef,
     toolingFullRef: fullRef,
     parentAttempt: 1,
+    parentSha: toolingSha,
     parentStatus: "in_progress",
     parentConclusion: conclusion,
     requestTag: tag,
     requestAttempt: 1,
+    requestSha,
     desktop,
     writerAttempt: 1,
+    writerSha: toolingSha,
     writerStatus: "in_progress",
     writerConclusion: conclusion,
     writerRef: workflowRef,
@@ -593,6 +599,8 @@ function fixture(
       "finalize-core": "openclaw-release-publish",
     }[mode];
     Object.assign(current.authority, {
+      toolingSha: publishing ? requestSha : toolingSha,
+      writerSha: publishing ? builderSha : toolingSha,
       writerRef: ref,
       writerFullRef: fullRef,
       writerPath: `.github/workflows/${workflowName}.yml`,
@@ -602,7 +610,8 @@ function fixture(
       current.authority.requestTag = releaseTag;
     }
     flags({
-      "tooling-sha": toolingSha,
+      "tooling-sha": current.authority.toolingSha,
+      ...(publishing ? { "builder-sha": builderSha } : {}),
       "workflow-ref": ref,
       "workflow-full-ref": fullRef,
       ...(publishing
@@ -709,6 +718,43 @@ function failed(run: () => unknown, message?: string) {
   }
   throw new Error("Expected publication to fail");
 }
+
+it("publishes with request SHA tooling under an independently authorized later builder SHA", () => {
+  const f = fixture();
+  expect(f.run("publish")).toMatchObject({ state: "published" });
+  expect(JSON.parse(f.bytes(tag, linuxName(tag)).toString()).linuxPublication.toolingSha).toBe(
+    requestSha,
+  );
+  expect(requestSha).not.toBe(builderSha);
+  expect(f.mutations().length).toBeGreaterThan(0);
+});
+
+it.each([
+  [
+    "unauthorized request",
+    (state: State) => {
+      state.authority.requestSha = "c".repeat(40);
+    },
+  ],
+  [
+    "superseded request attempt",
+    (state: State) => {
+      state.authority.requestAttempt = 2;
+    },
+  ],
+  [
+    "cancelled builder",
+    (state: State) => {
+      state.authority.writerStatus = "completed";
+      state.authority.writerConclusion = "cancelled";
+    },
+  ],
+] as const)("rejects %s before release mutations", (_name, revoke) => {
+  const f = fixture();
+  f.update(revoke);
+  failed(() => f.run("publish"));
+  expect(f.mutations()).toEqual([]);
+});
 
 it("reuses complete public Linux assets without local build inputs", () => {
   const f = fixture({ publicDownloadCache: {} });
@@ -1063,6 +1109,7 @@ it("rejects corrupted public bundle readback before publishing channel metadata"
   const f = fixture({ fault: { point: "upload-readback", tag, name: appimageName } });
   failed(() => f.run("publish"), "Public asset digest mismatch");
   expect(f.state().releases.some((release) => release.tag_name === channel)).toBe(false);
+  expect(f.calls("curl")).toHaveLength(1);
   expect(f.calls("sleep")).toEqual([]);
 });
 
@@ -1306,6 +1353,23 @@ it.each(["canonical", "canonical reread", "existing feed reread", "legacy asset"
   },
 );
 
+it("recovers API-confirmed metadata readback beyond the former convergence window", () => {
+  // Four stale responses exhaust the former convergence window.
+  const f = published({ advance: true });
+  const stale = staleFeed(nextTag, { remaining: 4 });
+  f.update((state) => {
+    state.calls = [];
+    state.staleAfterUpload = stale;
+  });
+  expect(f.run("mirror", nextTag)).toMatchObject({ state: "mirrored" });
+  expect(stale.remaining).toBe(0);
+  const waits = f.calls("sleep").map((call) => call.delay ?? 0);
+  const waited = waits.reduce((total, delay) => total + delay, 0);
+  expect(waited).toBeGreaterThan(17);
+  expect(waited).toBeLessThanOrEqual(120);
+  expect(f.mutations({ action: "upload", tag: nextTag, name: "latest.json" })).toHaveLength(1);
+});
+
 it.each(["stale public bytes", "wrong uploaded bytes", "asset replaced"])(
   "stops feed readback on %s with no repeat upload",
   (failure) => {
@@ -1340,7 +1404,8 @@ it.each(["stale public bytes", "wrong uploaded bytes", "asset replaced"])(
       expect(error.message).toContain(`asset=${uploaded.id}`);
       expect(error.message).toContain(`expected=${hash(f.bytes(channel))}`);
       expect(error.message).toContain(`observed=${hash(staleBytes)}`);
-      expect(f.calls("sleep")).toHaveLength(3);
+      const waits = f.calls("sleep").map((call) => call.delay ?? 0);
+      expect(waits.reduce((total, delay) => total + delay, 0)).toBe(120);
     } else if (failure === "wrong uploaded bytes") {
       expect(f.calls("sleep")).toEqual([]);
     }

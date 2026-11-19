@@ -1,4 +1,5 @@
 import { readLatestAssistantReply, waitForAgentRunsToDrain } from "../../agents/run-wait.js";
+import { readSubagentRunFinalAnswer } from "../../agents/subagents/announce/subagent-announce-output.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { isRetainedUnendedSubagentRun } from "../../agents/subagents/registry/subagent-run-liveness.js";
 import { bindAgentToolGatewayRequest } from "../../agents/tools/in-process-gateway.js";
@@ -33,7 +34,12 @@ export async function readDescendantSubagentFallbackReply(params: {
     if (terminalReply?.disposition !== "visible" || !terminalReply.text) {
       continue;
     }
-    replies.push(terminalReply.text);
+    // The lifecycle preview is capped at 4,096 characters; deliver the run's complete answer.
+    const answer =
+      terminalReply.text.endsWith("…") && entry.execution.outcome?.status === "ok"
+        ? await readSubagentRunFinalAnswer(entry).catch(() => undefined)
+        : undefined;
+    replies.push(answer?.trim() || terminalReply.text);
   }
   return replies.length ? replies.join("\n\n") : undefined;
 }
@@ -99,13 +105,13 @@ export async function waitForDescendantSubagentSummary(params: {
   };
   const requestGateway = bindAgentToolGatewayRequest({ hostedOnly: true });
   const initialReply = params.initialReply;
-  const deadline = Date.now() + Math.max(timings.waitMinMs, Math.floor(params.timeoutMs));
+  const deadline = performance.now() + Math.max(timings.waitMinMs, Math.floor(params.timeoutMs));
 
   const callGateway: typeof requestGateway = (request) =>
     requestGateway({
       ...request,
       signal: params.abortSignal,
-      timeoutMs: Math.min(request.timeoutMs ?? Infinity, Math.max(1, deadline - Date.now())),
+      timeoutMs: Math.min(request.timeoutMs ?? Infinity, Math.max(1, deadline - performance.now())),
     });
 
   const getActiveRuns = async () => {
@@ -150,9 +156,9 @@ export async function waitForDescendantSubagentSummary(params: {
       callGateway,
     });
     let pendingRunIds = initialActiveRuns.map((entry) => entry.runId);
-    while (Date.now() < deadline && !params.abortSignal?.aborted) {
+    while (performance.now() < deadline && !params.abortSignal?.aborted) {
       await waitForAgentRunsToDrain({
-        deadlineAtMs: deadline,
+        timeoutMs: Math.max(0, deadline - performance.now()),
         callGateway,
         initialPendingRunIds: pendingRunIds,
         getPendingRunIds: async () => (await getActiveRuns()).map((entry) => entry.runId),
@@ -163,7 +169,7 @@ export async function waitForDescendantSubagentSummary(params: {
       // A yielded task still owns completion while no execution can be waited
       // on. Observe the registry's handoff without waking a competing parent.
       await sleepWithAbort(
-        Math.min(timings.gracePollMs, Math.max(0, deadline - Date.now())),
+        Math.min(timings.gracePollMs, Math.max(0, deadline - performance.now())),
         params.abortSignal,
       );
       pendingRunIds = (await getActiveRuns()).map((entry) => entry.runId);
@@ -177,7 +183,7 @@ export async function waitForDescendantSubagentSummary(params: {
     }
 
     // Give the parent a bounded window to synthesize the settled descendants.
-    const gracePeriodDeadline = Math.min(Date.now() + timings.finalReplyGraceMs, deadline);
+    const gracePeriodDeadline = Math.min(performance.now() + timings.finalReplyGraceMs, deadline);
 
     const resolveUsableLatestReply = async () => {
       const latest = await readLatestAssistantReply({ sessionKey: params.sessionKey, callGateway });
@@ -187,20 +193,20 @@ export async function waitForDescendantSubagentSummary(params: {
       return undefined;
     };
 
-    while (Date.now() < gracePeriodDeadline) {
+    while (performance.now() < gracePeriodDeadline) {
       const latest = await resolveUsableLatestReply();
       if (latest) {
         return latest;
       }
       await sleepWithAbort(
-        Math.min(timings.gracePollMs, gracePeriodDeadline - Date.now()),
+        Math.min(timings.gracePollMs, gracePeriodDeadline - performance.now()),
         params.abortSignal,
       );
     }
 
     return await resolveUsableLatestReply();
   } catch (error) {
-    if (params.abortSignal?.aborted || Date.now() >= deadline) {
+    if (params.abortSignal?.aborted || performance.now() >= deadline) {
       return undefined;
     }
     throw error;

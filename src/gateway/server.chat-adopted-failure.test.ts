@@ -138,6 +138,15 @@ describe("chat.send quoted model profiles", () => {
   let context: GatewayRequestContext;
   let storePath: string;
   let runPreparedReply: MockInstance<typeof replyRun.runPreparedReply>;
+  const settle = () =>
+    captureSessionControllerSettlement({ scope: storePath, identities: [sessionKey, sessionId] });
+  function addProfile(profileId: string, provider = "openai") {
+    upsertAuthProfile({
+      agentDir: resolveAgentDir(getRuntimeConfig(), "main"),
+      profileId,
+      credential: { type: "api_key", provider, key: "synthetic-profile-key" },
+    });
+  }
 
   beforeEach(async () => {
     runPreparedReply = vi.spyOn(replyRun, "runPreparedReply");
@@ -173,11 +182,7 @@ describe("chat.send quoted model profiles", () => {
         },
       },
     });
-    upsertAuthProfile({
-      agentDir: resolveAgentDir(getRuntimeConfig(), "main"),
-      profileId: "openai:before",
-      credential: { type: "api_key", provider: "openai", key: "synthetic-before-key" },
-    });
+    addProfile("openai:before");
     await prepareGatewayReplyRuntimeForTest({ force: true });
     context = createDirectChatContext({ getRuntimeConfig });
     gatewayReplyMock.mockImplementation((ctx, options, config) =>
@@ -189,16 +194,14 @@ describe("chat.send quoted model profiles", () => {
   });
 
   afterEach(async () => {
-    await captureSessionControllerSettlement({
-      scope: storePath,
-      identities: [sessionKey, sessionId],
-    });
+    await settle();
     testState.agentConfig = undefined;
     runPreparedReply.mockRestore();
     Object.assign(agentDiscoveryMock, { enabled: false, models: [] });
   });
 
   async function sendChat(message: string) {
+    const configBefore = await readConfigFileSnapshot();
     const respond = vi.fn<RespondFn>();
     const requestId = randomUUID();
     await handleGatewayRequest({
@@ -215,17 +218,9 @@ describe("chat.send quoted model profiles", () => {
     });
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(respond.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
-    await captureSessionControllerSettlement({
-      scope: storePath,
-      identities: [sessionKey, sessionId],
-    });
+    await settle();
     expect(context.logGateway.error).not.toHaveBeenCalled();
     expect(rpcSourceTesting.size).toBe(0);
-  }
-
-  async function expectUnchangedModelScope(
-    configBefore: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
-  ) {
     expect(loadSessionEntry({ sessionKey: siblingKey, storePath })).toMatchObject(priorSelection);
     expect(getRuntimeConfig().agents?.defaults?.model).toEqual({ primary: "openai/default-model" });
     expect((await readConfigFileSnapshot()).raw).toBe(configBefore.raw);
@@ -247,12 +242,7 @@ describe("chat.send quoted model profiles", () => {
   ])(
     "persists the exact model and profile only in this session: %s",
     async (command, profile, provider, model) => {
-      upsertAuthProfile({
-        agentDir: resolveAgentDir(getRuntimeConfig(), "main"),
-        profileId: profile,
-        credential: { type: "api_key", provider, key: "synthetic-selected-key" },
-      });
-      const configBefore = await readConfigFileSnapshot();
+      addProfile(profile, provider);
       await sendChat(command);
       expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
         sessionId,
@@ -261,7 +251,6 @@ describe("chat.send quoted model profiles", () => {
         authProfileOverride: profile,
         authProfileOverrideSource: "user",
       });
-      await expectUnchangedModelScope(configBefore);
       expect(runPreparedReply).not.toHaveBeenCalled();
     },
   );
@@ -274,7 +263,6 @@ describe("chat.send quoted model profiles", () => {
     "preserves malformed quoted input without selecting its trailing alias: %s",
     async (reference) => {
       const command = `/model ${reference} -s /opus -g`;
-      const configBefore = await readConfigFileSnapshot();
       await sendChat(command);
       expect(runPreparedReply).toHaveBeenCalledOnce();
       expect(runPreparedReply.mock.calls[0]?.[0]).toMatchObject({
@@ -288,7 +276,6 @@ describe("chat.send quoted model profiles", () => {
       expect(directives?.rawModelProfile).toBeUndefined();
       expect(directives?.modelScope).toBeUndefined();
       expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(priorSelection);
-      await expectUnchangedModelScope(configBefore);
     },
   );
 });

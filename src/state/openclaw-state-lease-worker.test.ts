@@ -15,7 +15,7 @@ afterEach(() => vi.restoreAllMocks());
 
 it.each(["renewed", "replaced", "expired", "refused"] as const)(
   "verifies without pinning WAL (%s)",
-  (change) => {
+  async (change) => {
     let now = 10_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const databasePath = path.join(tempDirs.make("lease-verify-"), "state.sqlite");
@@ -46,11 +46,7 @@ it.each(["renewed", "replaced", "expired", "refused"] as const)(
     peer.exec("PRAGMA busy_timeout=0");
     let checkpoint: unknown;
     const admission = createAdmission(
-      (request, grant) => {
-        expect(request).toEqual({
-          stage: "transaction",
-          facts: { kind: "state-lease-verify", identity, expiresAt: 20_000 },
-        });
+      (_request, grant) => {
         if (change === "refused") {
           throw new Error("Live owner retired");
         }
@@ -93,7 +89,7 @@ it.each(["renewed", "replaced", "expired", "refused"] as const)(
       }
       expect(db.isTransaction).toBe(false);
     } finally {
-      admission.finish();
+      await admission.finish();
       peer.close();
       db.close();
     }

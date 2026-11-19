@@ -4,15 +4,21 @@ import { isMainThread, threadId, type Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { DEFAULT_WORKER_PENDING_TASKS, WorkerTaskError } from "@openclaw/worker-runtime";
 import { getDatabaseEngineSelection } from "../../infra/database-engine/context.js";
+import { captureStateDatabaseAccess } from "../../infra/gateway-state-owner.js";
+import {
+  createPostgresPoolEndpoints,
+  postgresPoolTransferList,
+} from "../../infra/postgres-sync/pool.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerThreadExecArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import { trackSqliteDatabaseAdmissionWorker } from "../../infra/sqlite-database-admission.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
-import { createCpuTrackedWorker } from "../../infra/worker-cpu.js";
+import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "../../infra/worker-cpu.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -25,6 +31,7 @@ import {
 } from "./session-accessor.sqlite-archive-session.js";
 import type {
   MaterializedSessionStateDeletePlan,
+  SqliteArchiveOperation,
   SessionHistoryEvictionArchivePlan,
   SessionStateDeletePlan,
   SqliteArchiveOneShotWorkerData,
@@ -68,30 +75,48 @@ export function createSqliteTranscriptArchiveWorker(
   const releaseService = retainSqliteWriteAdmissionService(nativeLocations, () =>
     admission.service(),
   );
-  const finish = () => {
+  const finish = async () => {
     active = false;
-    admission.finish();
-    releaseService();
+    try {
+      await admission.finish();
+    } finally {
+      releaseService();
+    }
   };
   let worker: Worker;
+  const postgresPool = createPostgresPoolEndpoints();
   try {
     worker = createCpuTrackedWorker(workerUrl, {
       resourceLimits: { maxOldGenerationSizeMb: 512 },
       workerData: {
         ...workerData,
+        postgresPool,
         databaseAdmissionPort: admission.port,
         databaseEngineSelection: getDatabaseEngineSelection(),
       },
-      transferList: [admission.port],
+      transferList: [admission.port, ...postgresPoolTransferList(postgresPool)],
       execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
     });
   } catch (error) {
-    finish();
+    active = false;
+    try {
+      try {
+        admission.abortConstruction();
+      } finally {
+        releaseService();
+      }
+    } catch (cleanupError) {
+      throw createSqliteLifecycleAggregateError(
+        [error, cleanupError],
+        "SQLite archive worker construction cleanup failed",
+        error,
+      );
+    }
     throw error;
   }
-  trackSqliteArchiveWorkerCleanup(worker);
+  trackSqliteArchiveWorkerCleanup(worker, finish);
   trackSqliteDatabaseAdmissionWorker(worker);
-  worker.once("exit", finish);
+  worker.on("message", (message: unknown) => receiveWorkerMemoryPort(worker, message));
   return worker;
 }
 
@@ -99,7 +124,11 @@ type TranscriptArchiveWorkerOperation<Result> = {
   assertCurrent?: () => void;
   signal?: AbortSignal;
 } & (
-  | { expectedMessageType: "done" | "published" | "sized"; workerData: object }
+  | {
+      expectedMessageType: "done" | "published" | "sized";
+      workerData: object;
+      nativeLocations?: readonly string[];
+    }
   | {
       expectedMessageType: "reclaimed";
       workerData: SessionColdWorkerData;
@@ -115,7 +144,7 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
 ): Promise<Result[]> {
   let worker: Worker;
   try {
-    worker = createSqliteTranscriptArchiveWorker(params.workerData);
+    worker = createSqliteTranscriptArchiveWorker(params.workerData, params.nativeLocations);
   } catch (error) {
     return Promise.reject(toStringifiedError(error));
   }
@@ -182,7 +211,12 @@ function runSqliteColdMutation<Result>(
     }),
   };
   return withSqliteTranscriptArchiveSession(params.workerData.plan.databaseOptions, () =>
-    runExclusiveSqliteTranscriptArchiveWorker(() => {
+    runExclusiveSqliteTranscriptArchiveWorker(async () => {
+      params.assertCurrent?.();
+      const stateAccess = await captureStateDatabaseAccess(
+        params.stateContext.admission.databasePath,
+      );
+      params.stateContext.admission.assertCurrent();
       params.assertCurrent?.();
       return runScopedSqliteArchiveMutation(
         params.workerData,
@@ -204,7 +238,7 @@ function runSqliteColdMutation<Result>(
                 operationId: transport.initialOperationId,
                 completion: "exit",
                 databaseAuthority: {
-                  databasePath: params.stateContext.admission.databasePath,
+                  stateAccess,
                   maintenanceScope: params.stateContext.maintenanceScope,
                   creationPaths: [
                     params.workerData.plan.databaseOptions.path,
@@ -341,6 +375,25 @@ export function runSqliteTranscriptArchiveWorkerOperation<Result>(
     params.assertCurrent?.();
     return spawnSqliteTranscriptArchiveWorkerOperation<Result>(params);
   }, params.signal);
+}
+
+export function prepareSqliteColdArchiveBatch(
+  input: Extract<SqliteArchiveOperation, { operation: "cold-prepare" }>["input"],
+  assertCurrent: () => void,
+  signal: AbortSignal,
+) {
+  return withSqliteTranscriptArchiveSession(input.databaseOptions, async () => {
+    const result = await runScopedSqliteArchiveOperation(
+      { operation: "cold-prepare", input },
+      createSqliteTranscriptArchiveWorker,
+      (run) =>
+        runExclusiveSqliteTranscriptArchiveWorker(() => {
+          assertCurrent();
+          return run();
+        }, signal),
+    );
+    return result!.results;
+  });
 }
 
 function runSqliteTranscriptArchiveWorker(

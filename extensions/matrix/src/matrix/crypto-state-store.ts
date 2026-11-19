@@ -12,6 +12,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixRuntime } from "../runtime.js";
 import {
   chunkMatrixStateJson,
+  pruneMatrixStateChunks,
   readMatrixStateChunks,
   writeMatrixStateChunks,
 } from "./chunked-state.js";
@@ -64,6 +65,13 @@ export type MatrixSnapshotStateRuntime = Pick<PluginRuntime["state"], "openKeyed
 
 export type MatrixSnapshotStateReader = {
   openKeyedStoreV2: <T>(options: OpenKeyedStoreOptions) => Pick<PluginStateKeyedStore<T>, "lookup">;
+};
+
+/** Snapshot reads and sealing use bounded stores, including Doctor's narrow state adapter. */
+export type MatrixSnapshotStateAccess = {
+  openKeyedStoreV2: <T>(
+    options: OpenKeyedStoreOptions,
+  ) => Pick<PluginStateKeyedStore<T>, "lookup" | "lookupMany" | "entries" | "register">;
 };
 
 export function openMatrixRecoveryKeyStoreOptions(storageRootDir: string) {
@@ -130,7 +138,7 @@ export async function writeMatrixRecoveryKeyStateForPathAsync(params: {
 
 export async function readMatrixIdbSnapshotJson(
   storageRootDir: string,
-  stateRuntime: MatrixSnapshotStateRuntime = getMatrixRuntime().state,
+  stateRuntime: MatrixSnapshotStateAccess = getMatrixRuntime().state,
 ): Promise<string | null> {
   const store = stateRuntime.openKeyedStoreV2<MatrixIdbSnapshotRecord>(
     openMatrixIdbSnapshotStoreOptions(storageRootDir),
@@ -182,7 +190,7 @@ export async function readMatrixIdbSnapshotOwnerGeneration(
 export async function sealMatrixIdbSnapshotOwnerGeneration(
   storageRootDir: string,
   generation: string,
-  stateRuntime: MatrixSnapshotStateRuntime = getMatrixRuntime().state,
+  stateRuntime: MatrixSnapshotStateAccess = getMatrixRuntime().state,
 ): Promise<void> {
   const store = stateRuntime.openKeyedStoreV2<MatrixIdbSnapshotRecord>(
     openMatrixIdbSnapshotStoreOptions(storageRootDir),
@@ -217,6 +225,25 @@ export async function writeMatrixIdbSnapshotJson(params: {
   );
   const rows = buildIdbSnapshotRows(params.snapshotJson, params.databaseCount);
   await writeMatrixStateChunks(store, rows, idbChunkKeyPrefix());
+}
+
+/** An unchanged snapshot still retries cleanup interrupted after metadata publication. */
+export async function pruneMatrixIdbSnapshotChunks(
+  storageRootDir: string,
+  stateRuntime: MatrixSnapshotStateRuntime,
+): Promise<void> {
+  const store = stateRuntime.openKeyedStoreV2<MatrixIdbSnapshotRecord>(
+    openMatrixIdbSnapshotStoreOptions(storageRootDir),
+  );
+  const meta = await store.lookup(idbMetaKey());
+  if (!isIdbSnapshotMeta(meta)) {
+    throw new MatrixIdbSnapshotInvalidError("metadata is missing or malformed");
+  }
+  await pruneMatrixStateChunks(
+    store,
+    Array.from({ length: meta.chunkCount }, (_, index) => idbChunkKey(meta.generation, index)),
+    idbChunkKeyPrefix(),
+  );
 }
 
 export async function scoreMatrixCryptoStateInStore(storageRootDir: string): Promise<number> {

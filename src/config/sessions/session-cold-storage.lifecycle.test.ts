@@ -53,7 +53,7 @@ import { forkSessionEntryFromParentTargetWithPatch } from "./session-accessor.sq
 import {
   appendTranscriptEventSnapshotSync,
   appendTranscriptMessageSnapshotSync,
-} from "./session-accessor.sqlite-transcript-write.js";
+} from "./session-accessor.sqlite-transcript-write.kernel.js";
 import {
   appendTranscriptEventSync,
   replaceTranscriptEvents,
@@ -468,7 +468,6 @@ describe("cold current transcript lifecycle", () => {
     });
     const archiveBytes = await fs.readFile(archivePath);
     const before = snapshot();
-    expect(fixture.database().prepare("SELECT * FROM transcript_events").all()).toEqual([]);
     expect(
       fixture.database().prepare("SELECT current_session_id FROM session_nodes").all(),
     ).toEqual([{ current_session_id: scope.sessionId }]);
@@ -608,7 +607,7 @@ describe("cold current transcript lifecycle", () => {
         errorMessage: "Compaction conversation authority revoked",
       });
       const source: SessionSourceAssertion = current.source;
-      const before = fixture.snapshot();
+      let before = fixture.snapshot();
       const archiveBefore = await fs.readFile(fixture.archivePath);
       let changed = false;
       let inCommitGrant = false;
@@ -640,14 +639,19 @@ describe("cold current transcript lifecycle", () => {
       }
       interceptRestoration((params) => ({
         ...params,
-        withWriteAdmission: (run, diagnostics) =>
-          params.withWriteAdmission((refusal) => {
-            if (!refusal && !foreign && !changed) {
-              revokeBinding();
-            }
-            return run(refusal);
-          }, diagnostics),
+        withWriteAdmission: (run, diagnostics, operation) =>
+          params.withWriteAdmission(
+            (refusal) => {
+              if (!refusal && !foreign && !changed) {
+                revokeBinding();
+              }
+              return run(refusal);
+            },
+            diagnostics,
+            operation,
+          ),
         onCommitRequest: (...args) => {
+          before = fixture.snapshot();
           inCommitGrant = true;
           try {
             params.onCommitRequest(...args);
@@ -707,20 +711,24 @@ describe("cold current transcript lifecycle", () => {
       let changed = false;
       interceptRestoration((params) => ({
         ...params,
-        withWriteAdmission: (run, diagnostics) =>
-          params.withWriteAdmission((refusal) => {
-            if (!refusal) {
-              replaceSessionEntrySync(fixture.scope, {
-                ...fixture.entry,
-                ...(change === "source"
-                  ? { label: "revoked grant" }
-                  : { lifecycleRevision: "successor" }),
-              });
-              changed = true;
-              before = fixture.snapshot();
-            }
-            return run(refusal);
-          }, diagnostics),
+        withWriteAdmission: (run, diagnostics, operation) =>
+          params.withWriteAdmission(
+            (refusal) => {
+              if (!refusal) {
+                replaceSessionEntrySync(fixture.scope, {
+                  ...fixture.entry,
+                  ...(change === "source"
+                    ? { label: "revoked grant" }
+                    : { lifecycleRevision: "successor" }),
+                });
+                changed = true;
+                before = fixture.snapshot();
+              }
+              return run(refusal);
+            },
+            diagnostics,
+            operation,
+          ),
       }));
       await expect(authority.trim()).rejects.toThrow(
         change === "source"
@@ -732,21 +740,24 @@ describe("cold current transcript lifecycle", () => {
     },
   );
 
-  it("rolls back restoration when prepared authority is revoked at commit", async () => {
+  it("rolls back hot publication when prepared authority is revoked at commit", async () => {
     const fixture = await createColdCurrentSession();
-    const before = fixture.snapshot();
+    let before = fixture.snapshot();
     const authority = createCompactAuthority(fixture);
-    const commit = observeCommit(authority.revoke);
+    const commit = observeCommit(() => {
+      before = fixture.snapshot();
+      authority.revoke();
+    });
     await expect(authority.trim()).rejects.toThrow("Compaction source authority revoked");
     expect(commit.requested).toBe(true);
     expect(fixture.snapshot()).toEqual(before);
   });
 
   it.each(["foreign row", "alias path"])(
-    "rolls back restoration when a %s changes at the commit grant",
+    "rolls back hot publication when a %s changes at the commit grant",
     async (change) => {
       const fixture = await createColdCurrentSession();
-      const before = fixture.snapshot();
+      let before = fixture.snapshot();
       const archiveBefore = await fs.readFile(fixture.archivePath);
       const sourceScope = {
         ...fixture.scope,
@@ -764,6 +775,7 @@ describe("cold current transcript lifecycle", () => {
       interceptRestoration((params) => ({
         ...params,
         onCommitRequest: () => {
+          before = fixture.snapshot();
           if (change === "alias path") {
             unlinkSync(sourceScope.storePath);
             symlinkSync(seed!.snapshotPath, sourceScope.storePath);
@@ -806,9 +818,15 @@ describe("cold current transcript lifecycle", () => {
     ]);
   });
 
-  it.each(actions)("restores exact history before %s", async (action) => {
+  it.each(actions)("preserves exact history through %s", async (action) => {
     const fixture = await createColdCurrentSession();
     const result = await runAction(action, fixture);
+    if (action === "parent decision") {
+      expect(result).toMatchObject({ status: "fork" });
+      expect(coldDescriptor(fixture)).toEqual(fixture.descriptor);
+      expect(await loadTranscriptEvents(fixture.scope)).toEqual(fixture.original);
+      return;
+    }
     if (action === "reset" || action === "batched reset") {
       expect(result).toMatchObject({ sessionId: "reset-next" });
     } else if (action === "fork" || action === "rewind") {
@@ -823,12 +841,7 @@ describe("cold current transcript lifecycle", () => {
       });
     } else {
       expect(result).toMatchObject({
-        status:
-          action === "parent entry fork"
-            ? "forked"
-            : action === "parent decision"
-              ? "fork"
-              : "created",
+        status: action === "parent entry fork" ? "forked" : "created",
       });
     }
     expect(coldDescriptor(fixture)).toBeUndefined();

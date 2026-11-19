@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceConfig, resolveConfigForRead } from "../config/io.read-helpers.js";
 import {
@@ -9,7 +9,6 @@ import {
   setConfigResolutionFacts,
 } from "../config/resolution-facts.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry-contributions.js";
-import { analyzeCommandSecretAssignmentsFromSnapshot } from "../secrets/command-config.js";
 import { collectConfigAssignments as collectRuntimeConfigAssignments } from "../secrets/runtime-config-collectors.js";
 import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
@@ -20,35 +19,16 @@ import {
 } from "../test-utils/talk-test-provider.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
 
-const mocks = vi.hoisted(() => ({
-  callGateway: vi.fn(),
-}));
+const callGateway = vi.hoisted(() => vi.fn());
+const tempRoots = useAutoCleanupTempDirTracker(afterEach);
+// mock-isolation: exercise command-secret resolution without opening a Gateway connection.
+vi.mock("../gateway/call.js", () => ({ callGateway }));
 
-const { callGateway } = mocks;
-const tempRoots = new Set<string>();
-
-vi.mock("../gateway/call.js", () => ({
-  callGateway: mocks.callGateway,
-}));
-
-vi.mock("../secrets/runtime-web-tools.js", () => ({
-  resolveRuntimeWebTools: vi.fn(async () => ({
-    metadata: {
-      search: { providerSource: "none", diagnostics: [] },
-      fetch: { providerSource: "none", diagnostics: [] },
-      diagnostics: [],
-    },
-    degradedOwners: [],
-  })),
-}));
-
-vi.mock("../secrets/command-config.js", { spy: true });
 vi.mock("../secrets/runtime-config-collectors.js", { spy: true });
 vi.mock("../secrets/target-registry-query.js", { spy: true });
 vi.mock("../plugins/plugin-registry-contributions.js", { spy: true });
 
 function resetCommandSecretMocks(): void {
-  vi.mocked(analyzeCommandSecretAssignmentsFromSnapshot).mockReset();
   vi.mocked(collectRuntimeConfigAssignments).mockReset();
   vi.mocked(discoverConfigSecretTargetsByIds).mockReset();
   vi.mocked(resolveManifestContractOwnerPluginId).mockReset();
@@ -59,13 +39,9 @@ beforeEach(() => {
   resetCommandSecretMocks();
 });
 
-afterEach(async () => {
+afterEach(() => {
   resetCommandSecretMocks();
   vi.unstubAllEnvs();
-  for (const root of tempRoots) {
-    await fs.rm(root, { recursive: true, force: true });
-  }
-  tempRoots.clear();
 });
 
 const secretRef = (id: string) => ({ source: "env" as const, provider: "default", id });
@@ -129,8 +105,7 @@ async function createExecProviderConfig(refId: string): Promise<{
   config: OpenClawConfig;
   markerPath: string;
 }> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-command-secret-exec-"));
-  tempRoots.add(root);
+  const root = tempRoots.make("openclaw-command-secret-exec-");
   const markerPath = path.join(root, "executed");
   const resolverScript = [
     "const fs = require('node:fs');",
@@ -188,19 +163,6 @@ function setSingleSecretTargetDeps(params: {
 }): void {
   const pathSegments = params.path.split(".");
   const target = { path: params.path, pathSegments };
-  vi.mocked(analyzeCommandSecretAssignmentsFromSnapshot).mockImplementation(
-    ({ inactiveRefPaths, resolvedConfig }) => {
-      const value = readPath(resolvedConfig, pathSegments);
-      const resolved = typeof value === "string" && value.length > 0;
-      const inactive = Boolean(inactiveRefPaths?.has(params.path));
-      return {
-        assignments: resolved ? [{ ...target, value }] : [],
-        diagnostics: [],
-        inactive: inactive ? [target] : [],
-        unresolved: resolved || inactive ? [] : [target],
-      } as never;
-    },
-  );
   vi.mocked(collectRuntimeConfigAssignments).mockImplementation(
     params.collectConfigAssignments ??
       (async ({ context }) => {
@@ -226,15 +188,6 @@ function setDiscordAccountTargetDeps(): void {
     value: secretRef(`DISCORD_${account.toUpperCase()}_TOKEN`),
     entry: { expectedResolvedValue: "string" },
   }));
-  vi.mocked(analyzeCommandSecretAssignmentsFromSnapshot).mockImplementation(
-    () =>
-      ({
-        assignments: [assignment("channels.discord.accounts.ops.token", "ops-token")],
-        diagnostics: [],
-        inactive: [],
-        unresolved: [],
-      }) as never,
-  );
   vi.mocked(collectRuntimeConfigAssignments).mockImplementation(async ({ context }) => {
     context.assignments.push(...targets.map((target) => ({ path: target.path }) as never));
   });

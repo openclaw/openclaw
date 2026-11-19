@@ -32,6 +32,11 @@ const PROXY_KEYS = [
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const closers: Array<() => Promise<void> | void> = [];
 const execFileAsync = promisify(execFile);
+function writeCa() {
+  const file = path.join(tempDirs.make("openclaw-slack-ca-"), "ca.pem");
+  writeFileSync(file, PROXY_FIXTURE_CERTIFICATE);
+  return file;
+}
 
 // Resolve the installed SDK dependency without Bun's bare-undici builtin alias.
 type SocketModeUndici = typeof import("undici");
@@ -233,16 +238,13 @@ describe("slack socket mode dispatcher", () => {
   it("opens a trusted wss target through HTTPS_PROXY", async ({ signal }) => {
     const proxy = await startConnectProxy();
     const target = await startEchoWebSocketServer({ tls: true });
-    const dir = tempDirs.make("openclaw-slack-target-ca-");
-    const targetCaFile = path.join(dir, "ca.pem");
-    writeFileSync(targetCaFile, PROXY_FIXTURE_CERTIFICATE);
     process.env.HTTPS_PROXY = proxy.url;
 
     await expect(
       echoThroughTrustedChildProcess({
         proxyUrl: proxy.url,
         signal,
-        targetCaFile,
+        targetCaFile: writeCa(),
         targetUrl: target,
       }),
     ).resolves.toEqual({ ok: true, echoed: "hello" });
@@ -252,9 +254,6 @@ describe("slack socket mode dispatcher", () => {
   it("trusts an HTTPS CONNECT proxy only after the managed proxy CA is configured", async () => {
     const proxy = await startConnectProxy({ tls: true });
     const target = await startEchoWebSocketServer();
-    const dir = tempDirs.make("openclaw-slack-proxy-ca-");
-    const proxyCaFile = path.join(dir, "ca.pem");
-    writeFileSync(proxyCaFile, PROXY_FIXTURE_CERTIFICATE);
     process.env.HTTP_PROXY = proxy.url;
 
     await withDispatchers(async ({ socketMode }) => {
@@ -265,7 +264,7 @@ describe("slack socket mode dispatcher", () => {
     });
 
     process.env.OPENCLAW_PROXY_ACTIVE = "1";
-    process.env.OPENCLAW_PROXY_CA_FILE = proxyCaFile;
+    process.env.OPENCLAW_PROXY_CA_FILE = writeCa();
     await withDispatchers(async ({ socketMode }) => {
       await expectEcho(target, socketMode);
       expect(proxy.secureConnections()).toBe(1);

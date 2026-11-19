@@ -69,6 +69,13 @@ Healthy signals:
 - `nodes describe` includes the capability you're calling.
 - Exec approvals show the expected mode/allowlist.
 
+If `system.run.prepare` fails before a command starts, check the **node host's local file log**
+for `node host system.run.prepare failed`. That warning retains the exception stack
+available to the node preparation handler; the Gateway response remains message-only.
+It does not establish the cause of state contention or recover stacks already omitted
+by an underlying worker. Review and redact local logs before sharing; see
+[logging](/gateway/logging#file-based-logger).
+
 If startup preparation disables container session hosting that you enabled, check the node host's
 local stderr for `node host worker hosting disabled: ...` and follow the reported
 engine or context recovery guidance. The macOS app forwards worker stderr to its

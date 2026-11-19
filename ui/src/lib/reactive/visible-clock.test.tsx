@@ -156,12 +156,12 @@ describe("shared visible presentation clocks", () => {
     expect(view.container.querySelectorAll("time")).toHaveLength(100);
     expect(view.container.querySelectorAll("openclaw-approval-countdown")).toHaveLength(100);
     expect(activity.textContent).toBe("Updated just now");
-    expect(approval.textContent).toBe("expires in 01:31");
+    expect(approval.textContent).toBe("expires in 1:31");
     expect(vi.getTimerCount()).toBe(2);
 
     await vi.advanceTimersByTimeAsync(30_000);
     expect(activity.textContent).toBe("Updated 1m ago");
-    expect(approval.textContent).toBe("expires in 01:01");
+    expect(approval.textContent).toBe("expires in 1:01");
     setVisibility("hidden");
     expect(vi.getTimerCount()).toBe(0);
     const beforeHidden = view.container.textContent;
@@ -202,21 +202,21 @@ describe("shared visible presentation clocks", () => {
         (element) => element.textContent,
       );
     await settle();
-    expect(labels()).toEqual(["expired", "00:00"]);
+    expect(labels()).toEqual(["expired", "0:00"]);
     expect(vi.getTimerCount()).toBe(0);
 
     view.update({ expiresAtMs: NOW + 1_500 });
     await settle();
-    expect(labels()).toEqual(["expires in 00:02", "00:02"]);
+    expect(labels()).toEqual(["expires in 0:02", "0:02"]);
     expect(vi.getTimerCount()).toBe(1);
     await vi.advanceTimersByTimeAsync(2_000);
     await settle();
-    expect(labels()).toEqual(["expired", "00:00"]);
+    expect(labels()).toEqual(["expired", "0:00"]);
     expect(vi.getTimerCount()).toBe(0);
 
     view.update({ expiresAtMs: NOW + 3_000 });
     await settle();
-    expect(labels()).toEqual(["expires in 00:01", "00:01"]);
+    expect(labels()).toEqual(["expires in 0:01", "0:01"]);
     expect(vi.getTimerCount()).toBe(1);
   });
 

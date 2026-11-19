@@ -28,6 +28,7 @@ import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { hasErrnoCode } from "./errno.js";
 import { createFileLockManager } from "./file-lock-manager.js";
+import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
@@ -110,12 +111,13 @@ function scheduleCleanup(root: string, state: CleanupState, at: number): void {
       () => {
         state.timer = undefined;
         state.nextAt = undefined;
-        void ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: state.retentionMs });
+        void runWithMainThreadTask("terminal-upload:cleanup", () =>
+          ensureTerminalUploadCleanup({ tempRoot: root, retentionMs: state.retentionMs }),
+        );
       },
       Math.max(0, at - Date.now()),
     ),
-  );
-  state.timer.unref?.();
+  ).unref();
 }
 
 async function withUploadLock<T>(

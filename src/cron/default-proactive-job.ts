@@ -3,17 +3,21 @@ import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveBundledProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { AgentDeletionRecoveryHoldPredicate } from "../state/agent-deletion-journal-recovery.kernel.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { readDefaultProactiveJobReceiptsAsync } from "./proactive-job-receipt.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import { readDefaultProactiveJobReceiptsByKeyAsync } from "./proactive-job-receipt.js";
 import { computeJobNextRunAtMs } from "./service/jobs-scheduling.js";
 import { runCronRuntimeMutation } from "./service/runtime-mutation.js";
 import { noteCronJobsStoreCommit, publishCronJobsStoreMutation } from "./store.js";
+import { resolveCronStoreSelectionAsync } from "./store/paths.js";
 import type { CronStoredJob } from "./types.js";
 
 export const DEFAULT_PROACTIVE_PROMPT =
@@ -79,6 +83,7 @@ export async function provisionDefaultProactiveJob(
     return undefined;
   }
   const recoveryHoldPredicate = structuredClone(options.recoveryHoldPredicate);
+  const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
   const context = captureOpenClawStateWorkerContext(options);
   const assertCurrent = () => {
     context.admission.assertCurrent();
@@ -87,8 +92,15 @@ export async function provisionDefaultProactiveJob(
   assertCurrent();
   const configuredStore = asOptionalRecord(cfg.cron)?.store;
   const storePath = typeof configuredStore === "string" ? configuredStore : undefined;
+  await runOpenClawStateWorkerOperation(context, async () => assertCurrent(), { assertCurrent });
+  const selection = await resolveCronStoreSelectionAsync(storePath, env, context);
+  assertCurrent();
+  if (selection.status === "unresolved") {
+    createSubsystemLogger("cron").warn(selection.message);
+    return undefined;
+  }
   const previous = (
-    await readDefaultProactiveJobReceiptsAsync(storePath, [owner], options, {
+    await readDefaultProactiveJobReceiptsByKeyAsync(selection.storeKey, [owner], options, {
       context,
       current: true,
     })
@@ -103,7 +115,12 @@ export async function provisionDefaultProactiveJob(
   await runCronRuntimeMutation({
     context,
     type: "cron.provisionDefaultProactive",
-    input: { storePath, agentId: owner, planned, recoveryHoldPredicate },
+    input: {
+      storeKey: selection.storeKey,
+      agentId: owner,
+      planned,
+      recoveryHoldPredicate,
+    },
     assertCurrent,
     snapshot: {},
     onSettled: (outcome) => {

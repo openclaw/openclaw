@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { expiryAdmission } from "./openclaw-state-lease-async.test-support.js";
+import { createOpenClawStateLeaseLostError } from "./openclaw-state-lease-error.js";
 import { leaseHeartbeatState } from "./openclaw-state-lease-heartbeat-shared.js";
 import { withOpenClawStateLeaseWorkerAdmission as withAdmission } from "./openclaw-state-lease-worker-owner.js";
 import {
@@ -37,6 +38,11 @@ vi.mock("./openclaw-state-lease-worker-storage.js", () => ({
 }));
 vi.mock("./openclaw-state-lease-storage.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./openclaw-state-lease-storage.js")>()),
+  createOpenClawStateLeaseLostErrorFromDatabase: (
+    identity: Parameters<typeof createOpenClawStateLeaseLostError>[0],
+    _database: unknown,
+    cause?: unknown,
+  ) => createOpenClawStateLeaseLostError(identity, cause),
   prepareLeaseDatabase: fixture.forbiddenSqlite,
   resolveLeaseDatabasePath: () => "/synthetic-state/lease.sqlite",
   verifyOpenClawStateLeaseOwnership: () => {

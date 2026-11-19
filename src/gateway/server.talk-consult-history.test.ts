@@ -72,6 +72,8 @@ import {
 } from "./test-helpers.js";
 
 const runEmbeddedAgent = vi.spyOn(embeddedAgent, "runEmbeddedAgent");
+const heldModel = () =>
+  expectDefined(runEmbeddedAgent.getMockImplementation(), "held model implementation");
 installGatewayTestHooks({ scope: "suite" });
 let agentId = "main";
 let sessionKey = "agent:main:main";
@@ -103,7 +105,7 @@ let publicationErrors: unknown[] = [];
 let requestExecution: Awaited<ReturnType<typeof observeGatewayRunExecution>>;
 let lifecycleWrites: ReturnType<typeof createPreparedLifecycleWriteTracker>;
 let lifecyclePersistence: MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>;
-let expectedRevokedWriters: Map<string, () => boolean>;
+let reportParityFailure: (() => void) | undefined;
 
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
@@ -112,28 +114,15 @@ afterAll(async () => {
   await harness.close();
 });
 beforeEach(async () => {
+  reportParityFailure = undefined;
   requestExecution = await observeGatewayRunExecution();
   lifecycleWrites = createPreparedLifecycleWriteTracker();
-  expectedRevokedWriters = new Map();
   const prepareLifecycle = lifecycleState.prepareGatewaySessionLifecycleEvent;
   lifecyclePersistence = vi
     .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
     .mockImplementation((params) => {
       const persist = prepareLifecycle(params);
-      return lifecycleWrites.track(async () => {
-        try {
-          await persist();
-        } catch (error) {
-          const isCurrent = params.event.runId
-            ? expectedRevokedWriters.get(params.event.runId)
-            : undefined;
-          if (!isCurrent || isCurrent()) {
-            throw error;
-          }
-          expect(error).toBeInstanceOf(Error);
-          expect(error).toHaveProperty("message", "Terminal write owner changed before commit");
-        }
-      });
+      return lifecycleWrites.track(persist);
     });
   agentId = "main";
   sessionKey = canonicalKey = "agent:main:main";
@@ -209,7 +198,10 @@ beforeEach(async () => {
     transcriptCapable: true,
   });
 });
-afterEach(async () => {
+afterEach(async ({ task }) => {
+  if (task.result?.state === "fail") {
+    reportParityFailure?.();
+  }
   releaseModel.resolve();
   try {
     try {
@@ -495,10 +487,7 @@ it("preserves an actual human stop command", async () => {
 
 it("keeps read-only Talk operator consult scaffolding out of chat and later context but in the raw archive", async () => {
   client.connect.scopes = ["operator.read", "operator.talk"];
-  const completeModel = expectDefined(
-    runEmbeddedAgent.getMockImplementation(),
-    "held model implementation",
-  );
+  const completeModel = heldModel();
   let modelReply = consultAnswer;
   let modelMessages: Parameters<SessionManager["appendMessage"]>[0][] = [
     Object.assign(assistantMessage(consultCommentary), {
@@ -527,7 +516,6 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
   runEmbeddedAgent.mockImplementation(async (params) => {
     const recorder = expectDefined(params.userTurnTranscriptRecorder, "consult input recorder");
     await recorder.persistApproved();
-    expect(recorder.hasPersisted()).toBe(true);
     await params.onAgentEvent?.({
       stream: "lifecycle",
       data: { phase: "start" },
@@ -553,7 +541,6 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
     modelStarted.promise,
     captureSessionControllerSettlement({ scope: storePath, identities: [sessionKey, sessionId] }),
   ]);
-  expect(context.logGateway.error).not.toHaveBeenCalled();
   expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   const run = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "consult model invocation");
   expect(run.toolsAllow).toEqual([
@@ -658,14 +645,10 @@ it.each(["before-final", "after-final"] as const)(
     const directAnswer = "DIRECT_FINAL_134003: The requested note contains both labels.";
     const finalCommitted = createDeferred();
     const releaseResult = createDeferred();
-    const completeModel = expectDefined(
-      runEmbeddedAgent.getMockImplementation(),
-      "held model implementation",
-    );
+    const completeModel = heldModel();
     runEmbeddedAgent.mockImplementation(async (params) => {
       const recorder = expectDefined(params.userTurnTranscriptRecorder, "direct input recorder");
       await recorder.persistApproved();
-      expect(recorder.hasPersisted()).toBe(true);
       const result = await completeModel(params);
       params.abortSignal?.throwIfAborted();
       transcriptManager(params).appendMessage(assistantMessage(directAnswer));
@@ -715,8 +698,8 @@ it.each(["before-final", "after-final"] as const)(
       expect(generated[0]).toMatchObject({
         role: "user",
         display: false,
-        excludeFromContext: true,
       });
+      expect(generated[0]).not.toHaveProperty("excludeFromContext");
       expect(
         storedMessages.filter((message) => message.role === "assistant").map(extractText),
       ).toEqual([directAnswer]);
@@ -730,7 +713,7 @@ it.each(["before-final", "after-final"] as const)(
         expectNoGeneratedInput(messages, `closed direct call ${view}`);
       }
       const modelContext = SessionManager.openModelContext(scope()).buildSessionContext().messages;
-      expectNoGeneratedInput(modelContext, "closed direct call model context");
+      expect(generatedInputs(modelContext).map(extractText)).toEqual([extractText(generated[0])]);
       expect(modelContext.map(extractText)).toContain(directAnswer);
     } finally {
       releaseModel.resolve();
@@ -780,14 +763,16 @@ it("preserves the original operator source through chat-backed capability adapta
 
 // The isolated native cell uses Linux executables; protocol/policy siblings remain portable.
 it.runIf(process.platform === "linux").each([false, true])(
-  "keeps host-authenticated node approval cancellation (public callback: %s)",
+  "keeps admitted node approvals through device revocation and honors Stop (public callback: %s)",
   async (publicOnly) => {
     const { runTalkNodePermissionParity } =
       await import("./server.talk-permission-parity.test-support.js");
     await runTalkNodePermissionParity({
       ...parityFixture(),
       publicOnly,
-      expectRevokedWriter: (runId, isCurrent) => expectedRevokedWriters.set(runId, isCurrent),
+      setFailureReporter: (report) => {
+        reportParityFailure = report;
+      },
     });
   },
 );

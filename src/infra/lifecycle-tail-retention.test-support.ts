@@ -88,9 +88,19 @@ if (mode === "native-source") {
   // An unused pool has no worker resources and needs no explicit close to be collected.
   abandonPool();
   await assertCollected();
+} else if (mode === "cleanup-deadline") {
+  const { createServiceChildCleanupDeadline: createDeadline } =
+    await import("../process/supervisor/service-child-cleanup-deadline.js");
+  const noop = () => {};
+  const owner = createDeadline({ enabled: () => true, expire: noop, force: noop });
+  await withCaller(() => {
+    owner.begin();
+    owner.clear();
+  });
+  await assertCollected();
+  assert.equal(typeof owner.at, "number", "The cleared deadline owner must remain alive");
 } else {
   throw new Error(`Unknown lifecycle retention resource: ${mode}`);
 }
-const detail =
-  mode === "worker-pool" ? { runtime: process.versions.bun ? "bun" : "node" } : { reused: true };
+const detail = { runtime: process.versions.bun ? "bun" : "node" };
 process.stdout.write(JSON.stringify({ resource: mode, collected: references.length, ...detail }));

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
 import {
   seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
@@ -12,6 +13,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { listSessionFixture } from "./session-list.test-support.js";
+import { resolveSessionChildOwners } from "./session-utils-core.js";
 import { seedSessionEntries, useSessionStoreFixture } from "./session-utils.test-support.js";
 
 const storePath = useSessionStoreFixture("session-navigation-retention-");
@@ -27,6 +29,40 @@ afterEach(async () => {
   resetAgentEventsForTest({ preserveListeners: true });
   await resetSubagentRegistryForTests({ persist: false });
   clearRuntimeConfigSnapshot();
+});
+
+test("resolves durable native lineage without inspecting retained execution state", () => {
+  const key = "agent:main:subagent:finished";
+  const parent = "agent:main:dashboard:parent";
+  const execution = { status: "terminal" as const, startedAt: old - 1_000, endedAt: old };
+  let executionReads = 0;
+  const run = {
+    runId: "retained-finished",
+    childSessionKey: key,
+    requesterSessionKey: parent,
+    requesterDisplayKey: "parent",
+    task: "finished child",
+    cleanup: "keep" as const,
+    createdAt: old - 2_000,
+    get execution() {
+      executionReads++;
+      return execution;
+    },
+  };
+  const subagentRuns = buildSubagentRunReadIndexFromRuns({
+    runs: new Map([[run.runId, run]]),
+    now,
+  });
+  executionReads = 0;
+  expect(
+    resolveSessionChildOwners({
+      key,
+      entry: { sessionId: "finished", updatedAt: old, spawnedBy: parent },
+      now,
+      subagentRuns,
+    }),
+  ).toEqual([parent]);
+  expect(executionReads).toBe(0);
 });
 
 test.each(["idle", "fork", "visible spawn", "native spawn", "legacy native spawn"] as const)(

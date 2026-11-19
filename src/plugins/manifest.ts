@@ -1,17 +1,28 @@
 /** Loads and normalizes OpenClaw plugin manifests, including contracts and config schemas. */
 import path from "node:path";
+import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import type {
+  ModelCatalog,
+  ModelCatalogModel,
+  ModelDecisionCapabilities,
+} from "@openclaw/model-catalog-core/model-catalog-types";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { validatePluginUiCapabilities } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
-import { validatePluginCategories } from "../../packages/plugin-package-contract/src/index.js";
+import {
+  validatePluginCategories,
+  validatePluginRecommendedPrompts,
+} from "../../packages/plugin-package-contract/src/index.js";
+import { normalizeCommandDescriptorName } from "../cli/program/command-descriptor-utils.js";
 import { matchRootFileOpenFailure } from "../infra/boundary-file-read.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isRecord } from "../utils.js";
 import { loadPluginControlUiDeclaration } from "./control-ui-build-manifest.js";
 import { coerceDoctorSessionRouteStateOwners } from "./doctor-session-route-state-owner-types.js";
 import * as capabilityNormalizers from "./manifest-capability-normalizers.js";
 import { normalizeManifestCommandAliases } from "./manifest-command-aliases.js";
 import { normalizeConfigGroups } from "./manifest-config-groups.js";
-import { normalizeManifestModelCatalog } from "./manifest-decision-catalog.js";
 import * as modelProviderNormalizers from "./manifest-model-provider-normalizers.js";
 import { normalizeManifestPlatforms } from "./manifest-platforms.js";
 import * as setupNormalizers from "./manifest-setup-normalizers.js";
@@ -35,7 +46,7 @@ export {
 /** Canonical plugin manifest filename inside plugin roots. */
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
-const CORE_RESERVED_PLUGIN_IDS = new Set(["node-mcp"]);
+const CORE_RESERVED_PLUGIN_IDS = new Set(["node-mcp", "openclaw"]);
 const VALID_PLUGIN_KINDS: ReadonlySet<string> = new Set<PluginKind>(["memory", "context-engine"]);
 
 export function isCoreReservedPluginId(id: string): boolean {
@@ -102,7 +113,8 @@ function parseManifestBackupResources(
     if (
       !isRecord(entry) ||
       Object.keys(entry).some(
-        (key) => !["disposition", "scope", "relativePath", "databaseFamily"].includes(key),
+        (key) =>
+          !["disposition", "scope", "relativePath", "databaseFamily", "profile"].includes(key),
       ) ||
       !("disposition" in entry) ||
       !("scope" in entry) ||
@@ -110,12 +122,18 @@ function parseManifestBackupResources(
     ) {
       return {
         ok: false,
-        error: `backupResources[${index}] requires disposition, scope, relativePath, and optional databaseFamily`,
+        error: `backupResources[${index}] requires disposition, scope, relativePath, and optional databaseFamily or profile`,
       };
     }
-    const { disposition, scope, relativePath, databaseFamily } = entry;
+    const { disposition, scope, relativePath, databaseFamily, profile } = entry;
     if (disposition !== "include" && disposition !== "regenerable") {
       return { ok: false, error: `backupResources[${index}].disposition is invalid` };
+    }
+    if (profile !== undefined && (profile !== "local-companion" || disposition !== "regenerable")) {
+      return {
+        ok: false,
+        error: `backupResources[${index}].profile requires a local-companion regenerable resource`,
+      };
     }
     if (scope !== "state" && scope !== "agent") {
       return { ok: false, error: `backupResources[${index}].scope is invalid` };
@@ -146,8 +164,12 @@ function parseManifestBackupResources(
       scope,
       relativePath,
       ...(databaseFamily !== undefined ? { databaseFamily } : {}),
+      ...(profile !== undefined ? { profile } : {}),
     };
-    resources.set(`${scope}\0${relativePath}\0${disposition}\0${databaseFamily ?? ""}`, resource);
+    resources.set(
+      `${scope}\0${relativePath}\0${disposition}\0${databaseFamily ?? ""}\0${profile ?? ""}`,
+      resource,
+    );
   }
   return {
     ok: true,
@@ -213,6 +235,9 @@ export function loadPluginManifest(
   if (!configSchema) {
     return fail("plugin manifest requires configSchema");
   }
+  if (raw.generationOverlap !== undefined && typeof raw.generationOverlap !== "boolean") {
+    return fail("plugin manifest generationOverlap must be a boolean");
+  }
   const backupResources = parseManifestBackupResources(raw.backupResources);
   if (!backupResources.ok) {
     return cacheResult({
@@ -262,6 +287,35 @@ export function loadPluginManifest(
   const contracts = capabilityNormalizers.normalizeManifestContracts(raw.contracts);
   const cliBackends = normalizeTrimmedStringList(raw.cliBackends);
   const rawDoctorContract = isRecord(raw.doctorContract) ? raw.doctorContract : undefined;
+  const cliCommands = setupNormalizers.normalizeManifestCliCommands(raw.cliCommands);
+  let recoveryCli: string[][] | undefined;
+  if (rawDoctorContract?.recoveryCli !== undefined) {
+    if (!Array.isArray(rawDoctorContract.recoveryCli)) {
+      return fail("doctorContract.recoveryCli must be an array of command paths");
+    }
+    recoveryCli = [];
+    const seen = new Set<string>();
+    for (const commandPath of rawDoctorContract.recoveryCli) {
+      if (
+        !Array.isArray(commandPath) ||
+        commandPath.length === 0 ||
+        !commandPath.every(
+          (segment) =>
+            typeof segment === "string" && normalizeCommandDescriptorName(segment) === segment,
+        ) ||
+        !cliCommands?.some(({ name }) => name === commandPath[0])
+      ) {
+        return fail(
+          "doctorContract.recoveryCli paths must use plain command names beneath a declared cliCommands root",
+        );
+      }
+      const key = commandPath.join(" ");
+      if (!seen.has(key)) {
+        seen.add(key);
+        recoveryCli.push(commandPath);
+      }
+    }
+  }
   const stateMigrations = parseDoctorStateMigrationDescriptors(rawDoctorContract?.stateMigrations);
   const doctorContract = rawDoctorContract
     ? ({
@@ -272,17 +326,107 @@ export function loadPluginManifest(
           ),
         ),
         ...(stateMigrations !== undefined ? { stateMigrations } : {}),
+        ...(recoveryCli !== undefined ? { recoveryCli } : {}),
       } as PluginManifestDoctorContract)
     : undefined;
+  /** The documented V1 manifest is an input adapter, not a second catalog. */
+  const normalizeManifestModelCatalog = (): ModelCatalog | undefined => {
+    const ownedProviders = new Set([
+      ...providers,
+      ...cliBackends,
+      ...(contracts?.decisionProviders ?? []),
+    ]);
+    const catalog = normalizeModelCatalog(raw.modelCatalog, { ownedProviders });
+    const legacy = capabilityNormalizers.normalizeManifestDecisionModels(
+      raw.decisionModels,
+      contracts?.decisionProviders,
+    );
+    if (!legacy?.length) {
+      return catalog;
+    }
+    // Reserve explicit identities before validation: a rejected canonical declaration
+    // must not be resurrected as an apparently usable legacy capability.
+    const declaredModels = new Map<string, Set<string>>();
+    if (isRecord(raw.modelCatalog) && isRecord(raw.modelCatalog.providers)) {
+      for (const [catalogProviderId, provider] of Object.entries(raw.modelCatalog.providers)) {
+        if (!isRecord(provider) || !Array.isArray(provider.models)) {
+          continue;
+        }
+        const key = normalizeProviderId(catalogProviderId);
+        const ids = declaredModels.get(key) ?? new Set<string>();
+        for (const row of provider.models) {
+          const modelId = isRecord(row) ? normalizeOptionalString(row.id) : undefined;
+          if (modelId) {
+            ids.add(modelId);
+          }
+        }
+        declaredModels.set(key, ids);
+      }
+    }
+    const catalogProviders = { ...catalog?.providers };
+    for (const model of legacy) {
+      const provider = normalizeProviderId(model.provider);
+      if (!provider || isBlockedObjectKey(provider)) {
+        continue;
+      }
+      const current = catalogProviders[provider];
+      // An explicit canonical declaration owns the entire row, never a blended contract.
+      if (declaredModels.get(provider)?.has(model.id)) {
+        continue;
+      }
+      const capabilities = model.capabilities;
+      const questions: NonNullable<ModelDecisionCapabilities["questions"]> = {};
+      for (const questionKind of capabilities?.questionTypes ?? []) {
+        questions[questionKind] = {
+          // V1 reports estimates, but never promises categorical normalization or abstention.
+          probabilities: questionKind === "boolean" ? "boolean" : "provider-defined",
+          abstention: false,
+          ...(questionKind === "boolean" && capabilities?.requiresBooleanCriteria !== undefined
+            ? { requiresCriteria: capabilities.requiresBooleanCriteria }
+            : {}),
+          ...(questionKind === "choice" && capabilities?.maxChoiceAlternatives !== undefined
+            ? { maxOptions: capabilities.maxChoiceAlternatives }
+            : {}),
+          ...(questionKind === "score" && capabilities?.maxScoreLevels !== undefined
+            ? { maxOptions: capabilities.maxScoreLevels }
+            : {}),
+        };
+      }
+      const row: ModelCatalogModel = {
+        id: model.id,
+        name: model.name,
+        inference: {
+          chat: false,
+          decision: {
+            protocol: "decision-v1",
+            input: ["text"],
+            ...(capabilities
+              ? {
+                  questions,
+                  ...(capabilities.confidence ? { confidence: capabilities.confidence } : {}),
+                  limits: {
+                    ...(capabilities.maxQuestions !== undefined
+                      ? { maxQuestions: capabilities.maxQuestions }
+                      : {}),
+                    ...(capabilities.maxInputTokens !== undefined
+                      ? { maxInputTokens: capabilities.maxInputTokens }
+                      : {}),
+                    ...(capabilities.inputTokenScope
+                      ? { inputTokenScope: capabilities.inputTokenScope }
+                      : {}),
+                  },
+                }
+              : {}),
+          },
+        },
+      };
+      catalogProviders[provider] = { ...current, models: [...(current?.models ?? []), row] };
+    }
+    return normalizeModelCatalog({ ...catalog, providers: catalogProviders }, { ownedProviders });
+  };
   let modelCatalog: ReturnType<typeof normalizeManifestModelCatalog>;
   try {
-    modelCatalog = normalizeManifestModelCatalog({
-      modelCatalog: raw.modelCatalog,
-      decisionModels: raw.decisionModels,
-      providers,
-      cliBackends,
-      decisionProviders: contracts?.decisionProviders,
-    });
+    modelCatalog = normalizeManifestModelCatalog();
   } catch {
     return cacheResult({
       ok: false,
@@ -299,11 +443,15 @@ export function loadPluginManifest(
       : {}),
     ...(requiresPlugins.length > 0 ? { requiresPlugins } : {}),
     ...(raw.enabledByDefault === true ? { enabledByDefault: true } : {}),
+    ...(raw.generationOverlap !== undefined ? { generationOverlap: raw.generationOverlap } : {}),
     ...(enabledByDefaultOnPlatforms.length > 0 ? { enabledByDefaultOnPlatforms } : {}),
     ...(legacyPluginIds.length > 0 ? { legacyPluginIds } : {}),
     ...(autoEnableWhenConfiguredProviders.length > 0 ? { autoEnableWhenConfiguredProviders } : {}),
     kind,
     ...(contextEngineIds ? { contextEngineIds } : {}),
+    ...(isRecord(raw.reload) && raw.reload.turnHandover === true
+      ? { reload: { turnHandover: true } }
+      : {}),
     channels,
     channelAccountKeyPolicies: setupNormalizers.normalizeChannelAccountKeyPolicies(
       raw.channelAccountKeyPolicies,
@@ -341,7 +489,7 @@ export function loadPluginManifest(
     syntheticAuthRefs: normalizeTrimmedStringList(raw.syntheticAuthRefs),
     nonSecretAuthMarkers: normalizeTrimmedStringList(raw.nonSecretAuthMarkers),
     commandAliases: normalizeManifestCommandAliases(raw.commandAliases),
-    cliCommands: setupNormalizers.normalizeManifestCliCommands(raw.cliCommands),
+    cliCommands,
     providerUsageAuthEnvVars: capabilityNormalizers.normalizeStringListRecord(
       raw.providerUsageAuthEnvVars,
     ),
@@ -364,6 +512,7 @@ export function loadPluginManifest(
     return fail(`invalid plugin manifest dashboard: ${dashboardResult.error}`);
   }
   const uiCapabilities = validatePluginUiCapabilities(raw.uiCapabilities);
+  const recommendedPrompts = validatePluginRecommendedPrompts(raw.recommendedPrompts);
   const controlUiResult = loadPluginControlUiDeclaration({
     rootDir,
     controlUi: raw.controlUi,
@@ -375,6 +524,14 @@ export function loadPluginManifest(
     return fail(`invalid plugin manifest controlUi: ${controlUiResult.error}`);
   }
 
+  const agentSkillsDir = normalizeOptionalString(raw.agentSkillsDir);
+  if (
+    raw.agentSkillsDir !== undefined &&
+    (!agentSkillsDir || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(agentSkillsDir))
+  ) {
+    return fail("invalid plugin manifest agentSkillsDir: must be one folder name");
+  }
+
   const themesResult = normalizeManifestThemes(raw.themes, id, file.contents.toString("utf8"));
   if (!themesResult.ok) {
     return fail(`invalid plugin manifest themes: ${themesResult.error}`);
@@ -384,8 +541,17 @@ export function loadPluginManifest(
     ok: true,
     // Older readers ignored this advisory field; invalid display metadata must
     // not prevent an installed plugin from loading after an OpenClaw update.
-    ...(!uiCapabilities.ok
-      ? { warnings: [`ignoring invalid plugin manifest uiCapabilities: ${uiCapabilities.error}`] }
+    ...(!uiCapabilities.ok || !recommendedPrompts.ok
+      ? {
+          warnings: [
+            ...(!uiCapabilities.ok
+              ? [`ignoring invalid plugin manifest uiCapabilities: ${uiCapabilities.error}`]
+              : []),
+            ...(!recommendedPrompts.ok
+              ? [`ignoring invalid plugin manifest recommendedPrompts: ${recommendedPrompts.error}`]
+              : []),
+          ],
+        }
       : {}),
     manifest: {
       ...manifestBeforeDashboard,
@@ -394,9 +560,13 @@ export function loadPluginManifest(
       ...(uiCapabilities.ok && uiCapabilities.capabilities !== undefined
         ? { uiCapabilities: uiCapabilities.capabilities }
         : {}),
+      ...(recommendedPrompts.ok && recommendedPrompts.recommendedPrompts !== undefined
+        ? { recommendedPrompts: recommendedPrompts.recommendedPrompts }
+        : {}),
       themes: themesResult.themes,
       mcpServers: capabilityNormalizers.normalizeManifestMcpServers(raw.mcpServers),
       skills: normalizeTrimmedStringList(raw.skills),
+      ...(agentSkillsDir ? { agentSkillsDir } : {}),
       name: normalizeOptionalString(raw.name),
       description: normalizeOptionalString(raw.description),
       catalog: capabilityNormalizers.normalizeManifestCatalog(raw.catalog),

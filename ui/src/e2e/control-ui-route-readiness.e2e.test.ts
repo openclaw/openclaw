@@ -30,6 +30,7 @@ suite.define(() => {
         const activeLeafEntryId = "history-ready-leaf";
         const submittedMessage = "Send before history.";
         const gateway = await installMockGateway(page, {
+          subscriptionInitialHistory: false,
           sessionKey,
           sessions: [
             {
@@ -48,11 +49,16 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat/main/draft-timing-12345678`);
         const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
         const composer = pane.locator(".agent-chat__composer-combobox textarea");
+        const transcript = pane.locator(".chat-thread");
+        const historyLoading = transcript.locator(
+          ime ? ".chat-conversation-loading" : ".lazy-view-state--loading",
+        );
         await composer.waitFor({ state: "visible" });
         await expect.poll(() => composer.isEnabled()).toBe(true);
-        await expect
-          .poll(() => pane.locator(".loading-skeleton, .chat-conversation-loading").isVisible())
-          .toBe(true);
+        await expect.poll(() => historyLoading.isVisible()).toBe(true);
+        await gateway.waitForRequest("chat.startup");
+        expect(await historyLoading.getAttribute("aria-busy")).toBe("true");
+        expect(await transcript.getByText("Ready.", { exact: true }).count()).toBe(0);
         expect(await composer.evaluate((el) => el === document.activeElement)).toBe(false);
         await composer.fill(submittedMessage);
         await expect.poll(() => pane.locator(".chat-send-btn--send").isEnabled()).toBe(true);
@@ -64,9 +70,10 @@ suite.define(() => {
         await expect.poll(() => composer.inputValue()).toBe("");
         await pane.locator(".chat-queue").getByText(submittedMessage, { exact: true }).waitFor();
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        expect(
-          await pane.locator(".loading-skeleton, .chat-conversation-loading").isVisible(),
-        ).toBe(true);
+        // Updating the queue remounts the transcript placeholder, whose shared
+        // reveal animation briefly hides it; history must remain held throughout.
+        await expect.poll(() => historyLoading.isVisible()).toBe(true);
+        expect(await transcript.getByText("Ready.", { exact: true }).count()).toBe(0);
 
         await composer.fill("Next draft before history.");
         const input = await composer.elementHandle();
@@ -94,9 +101,7 @@ suite.define(() => {
         const before = await composer.boundingBox();
 
         await gateway.resolveDeferred("chat.startup");
-        await expect
-          .poll(() => pane.locator(".loading-skeleton, .chat-conversation-loading").count())
-          .toBe(0);
+        await expect.poll(() => historyLoading.count()).toBe(0);
         await expect.poll(() => pane.textContent()).toContain("Ready.");
         expect(
           await input!.evaluate(

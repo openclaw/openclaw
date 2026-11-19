@@ -203,6 +203,11 @@ describe("iMessage plugin payload attachments", () => {
 
       const nativeClient = {
         request: vi.fn(async (method: string) => {
+          if (method === "chats.list") {
+            return {
+              chats: [{ id: 123, guid: "iMessage;-;+15550001111", identifier: "+15550001111" }],
+            };
+          }
           if (method !== "send") {
             throw new Error(`unexpected native iMessage method ${method}`);
           }
@@ -286,11 +291,11 @@ describe("iMessage plugin payload attachments", () => {
         return;
       }
       expect(dispatch).toHaveBeenCalledOnce();
-      expect(nativeClient.request).toHaveBeenCalledExactlyOnceWith(
-        "send",
-        expect.objectContaining({ text }),
-        expect.any(Object),
-      );
+      // Destination-history routing resolves chat_id selectors after the confirmed send (#182329).
+      expect(nativeClient.request.mock.calls).toEqual([
+        ["send", expect.objectContaining({ chat_id: 123, text }), expect.any(Object)],
+        ["chats.list", { limit: 1000 }, expect.any(Object)],
+      ]);
       expect(messageSent).toHaveBeenCalledOnce();
       expect(messageSent).toHaveBeenCalledWith(
         expect.objectContaining({ content: text, success: true, messageId: `native-${kind}-guid` }),

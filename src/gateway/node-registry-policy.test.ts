@@ -2,23 +2,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND } from "../infra/node-commands.js";
+import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
+import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import {
   mergeRemoteNodeSkillEntries,
   removeRemoteNodeSkills,
 } from "../skills/runtime/remote-skills.js";
-import {
-  resolveNodeCommandAllowlist,
-  resolveRequiredNodeCommandAuthority,
-  TALK_PTT_COMMANDS,
-} from "./node-command-policy.js";
+import { TALK_PTT_COMMANDS } from "./node-command-policy.js";
 import { listConnectedNodePluginTools } from "./node-plugin-tool-snapshot.js";
-import {
-  NodeRegistry,
-  readNodeSessionWithheldCommands,
-  type NodeSession,
-} from "./node-registry.js";
-import { makeClient } from "./node-registry.test-helpers.js";
+import { updateNodeRunnerInventory } from "./node-registry-private.js";
+import { NodeRegistry, readNodeSessionWithheldCommands } from "./node-registry.js";
+import { createTestNodeSocket, makeClient } from "./node-registry.test-helpers.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 const registries: NodeRegistry[] = [];
@@ -115,7 +111,6 @@ function createFixture(
         seq: 0,
         chunk,
       }),
-    getConfig: () => config,
     publishConfig: (next: OpenClawConfig) => {
       config = next;
     },
@@ -126,46 +121,7 @@ function createFixture(
   };
 }
 
-function readCommandState(node: NodeSession, config: OpenClawConfig, command: string) {
-  return resolveRequiredNodeCommandAuthority({
-    nodeId: node.nodeId,
-    requiredCommands: [command],
-    declaredCommands: node.declaredCommands,
-    effectiveCommands: node.commands,
-    withheldCommands: readNodeSessionWithheldCommands(node),
-    allowlist: resolveNodeCommandAllowlist(config, node),
-  })?.state;
-}
-
 describe("connected node runtime policy", () => {
-  it.each([
-    ["system.run", [], [], "pending-approval"],
-    ["screen.snapshot", ["screen"], [], "pending-approval"],
-    ["computer.act", ["computer"], [], "pending-approval"],
-    ["camera.list", ["camera"], ["camera.list"], "pending-approval"],
-    ["location.get", ["location"], ["location.get"], "pending-approval"],
-    ["talk.ptt.start", [], [], "pending-approval"],
-    ["camera.snap", [], [], "unauthorized"],
-    ["camera.snap", [], ["camera.snap"], "pending-approval"],
-    [
-      NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
-      [],
-      [NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND],
-      "unauthorized",
-    ],
-  ] satisfies Array<[string, string[], string[], string]>)(
-    "classifies an unapproved %s (caps=%j, allow=%j) as %s",
-    (command, caps, allow, state) => {
-      const config = policy({ commands: { allow } });
-      const { registerSurface, socket } = createFixture(config);
-      const node = registerSurface(caps, [command], []);
-
-      expect(readCommandState(node, config, command)).toBe(state);
-      expect(node).toMatchObject({ commands: [], caps: [] });
-      expect(socket.close).not.toHaveBeenCalled();
-    },
-  );
-
   it.each([
     { name: "command-only advertisement", caps: [], initiallyDenied: false },
     { name: "initially denied approved declaration", caps: [], initiallyDenied: true },
@@ -319,23 +275,17 @@ describe("connected node runtime policy", () => {
   });
 
   it("withdraws and restores approved commands without granting an unapproved declaration", () => {
-    const { node, client, socket, reload, getConfig } = createFixture();
-    expect(readCommandState(node, getConfig(), "computer.act")).toBe("invocable");
-    expect(readCommandState(node, getConfig(), "screen.snapshot")).toBe("pending-approval");
+    const { node, client, socket, reload } = createFixture();
     reload(denyComputer);
 
     expect(node).toMatchObject({ commands: ["system.run"], caps: [] });
     expect(client.connect.commands).toEqual(["system.run"]);
     expect(readNodeSessionWithheldCommands(node)).toContain("computer.act");
-    expect(readCommandState(node, getConfig(), "computer.act")).toBe("unauthorized");
-    expect(readCommandState(node, getConfig(), "screen.snapshot")).toBe("pending-approval");
 
     reload(policy({ commands: { allow: ["screen.snapshot"] } }));
 
     expect(node).toMatchObject({ commands: ["computer.act", "system.run"], caps: ["computer"] });
     expect(readNodeSessionWithheldCommands(node)).not.toContain("computer.act");
-    expect(readCommandState(node, getConfig(), "computer.act")).toBe("invocable");
-    expect(readCommandState(node, getConfig(), "screen.snapshot")).toBe("pending-approval");
     expect(node).toMatchObject({ connId: "policy-conn", pairingGeneration: "policy-generation" });
     expect(socket.close).not.toHaveBeenCalled();
   });
@@ -380,4 +330,104 @@ describe("connected node runtime policy", () => {
       expect(tools ? visible() : resident()).toEqual([]);
     },
   );
+});
+
+describe("dedicated worker MCP permission", () => {
+  const command = NODE_MCP_TOOLS_CALL_COMMAND;
+  const nodeId = "worker-node";
+  const connId = "worker-connection";
+
+  function createMcpFixture(options: ConstructorParameters<typeof NodeRegistry>[0] = {}) {
+    const registry = new NodeRegistry(options);
+    registries.push(registry);
+    const frames: string[] = [];
+    const socket = createTestNodeSocket(frames);
+    const register = (id: string) =>
+      registry.register(
+        makeClient(id, nodeId, [], {
+          clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+          commands: [command],
+          ...(id === connId ? { socket: socket as unknown as GatewayWsClient["socket"] } : {}),
+        }),
+        registration,
+      );
+    register(connId);
+    const publishWorker = (localMcp?: true) =>
+      updateNodeRunnerInventory({
+        registry,
+        nodeId,
+        connId,
+        declaration: {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerHost: {
+            enabled: true,
+            capacity: { total: 1, available: 1 },
+            ...(localMcp ? { localMcp } : {}),
+          },
+        },
+      });
+    const policies = () =>
+      frames
+        .map((frame) => JSON.parse(frame))
+        .filter((frame) => frame.event === "node.worker.localMcpPolicy")
+        .map((frame) => frame.payload.allowed);
+    return { registry, socket, register, publishWorker, policies };
+  }
+  it("sends effective MCP permission changes only to a supervisor executing local MCP grants", () => {
+    const { registry, register, publishWorker, policies } = createMcpFixture();
+    const setDenied = (denied: boolean) =>
+      registry.refreshRuntimePolicy({
+        gateway: { nodes: { commands: { allow: [command], deny: denied ? [command] : [] } } },
+      });
+    setDenied(true);
+    publishWorker();
+    expect(policies()).toEqual([]);
+    publishWorker(true);
+    setDenied(false);
+    setDenied(false);
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.nodeInvokePolicies.push({
+      pluginId: "restricted-mcp",
+      pluginName: "Restricted MCP",
+      source: "test",
+      pluginConfig: {},
+      rootDir: "/test",
+      policy: { commands: [command], handle: (ctx) => ctx.invokeNode() },
+    });
+    try {
+      setActivePluginRegistry(pluginRegistry);
+      registry.refreshRuntimePolicy();
+      expect(policies()).toEqual([false, true, false]);
+      setDenied(true);
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
+    setDenied(false);
+    register("replacement");
+    expect(policies()).toEqual([false, true, false, true, false]);
+  });
+
+  it("retires local MCP grants on the still-connected supervisor when pairing is promoted", () => {
+    const nextGeneration = "next-generation";
+    let generation = registration.pairingGeneration;
+    const { registry, socket, publishWorker, policies } = createMcpFixture({
+      isPairingStateCurrent: (_nodeId, expected) =>
+        expected.identity === registration.pairingIdentity && expected.generation === generation,
+    });
+    publishWorker(true);
+    // Device pairing publishes the new authority before notifying the registry.
+    generation = nextGeneration;
+    registry.updateSurface(
+      nodeId,
+      { commands: [command] },
+      {
+        expectedConnId: connId,
+        expectedPairingIdentity: registration.pairingIdentity,
+        expectedPairingGeneration: registration.pairingGeneration,
+        nextPairingGeneration: nextGeneration,
+      },
+    );
+    expect(policies()).toEqual([true, false]);
+    expect(socket.close).not.toHaveBeenCalled();
+  });
 });

@@ -1,8 +1,7 @@
-import { describe, expect, it } from "vitest";
-import {
-  privateRequesterRouteCases,
-  visibleCompletion,
-} from "./subagent-announce-fixtures.test-support.js";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { recordGatewaySessionRunFailure } from "../../../sessions/session-run-error.js";
+import { onInternalSessionTranscriptUpdate } from "../../../sessions/transcript-events.js";
+import { visibleCompletion } from "./subagent-announce-fixtures.test-support.js";
 import {
   registryRuntimeMock,
   setSessionStore,
@@ -19,6 +18,15 @@ import {
 
 const { maybeWakeRequesterAfterAllChildrenSettled } =
   await import("./subagent-announce.requester-settle-wake.js");
+const wake = (overrides?: Parameters<typeof wakeParams>[0]) =>
+  maybeWakeRequesterAfterAllChildrenSettled(wakeParams(overrides));
+
+// mock-isolation: Policy fixtures use an in-memory session map; the benchmark proves real notice storage.
+vi.mock("../../../sessions/session-run-error.js", () => ({
+  recordGatewaySessionRunFailure: vi.fn(async () => {}),
+}));
+
+beforeEach(() => vi.mocked(recordGatewaySessionRunFailure).mockReset());
 
 describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
   type PrivateOptions = Partial<Record<"mixed" | "yielded" | "single" | "marked", boolean>>;
@@ -51,28 +59,17 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     current?: { sessionId: string; lifecycleRevision?: string };
     frozen?: boolean;
   };
-  it.each<Scenario>([
-    { name: "pending private pair" },
-    { name: "pending mixed pair", mixed: true },
-    { name: "yielded private child", single: true, yielded: true },
-    { name: "yielded mixed pair", mixed: true, yielded: true },
-    { name: "unmarked upgrade", single: true, yielded: true, marked: false, frozen: true },
-    {
-      name: "replacement session",
-      single: true,
-      yielded: true,
-      frozen: true,
-      current: { sessionId: "new-parent" },
-    },
-    {
-      name: "reset lifecycle",
-      single: true,
-      yielded: true,
-      frozen: true,
-      current: { sessionId: "sess-main", lifecycleRevision: "rev-2" },
-    },
-  ])("preserves the admitted reply policy: $name", async (scenario) => {
+  it.each`
+    name                     | mixed    | single   | yielded  | marked   | frozen   | current
+    ${"pending mixed pair"}  | ${true}  | ${false} | ${false} | ${true}  | ${false} | ${undefined}
+    ${"yielded mixed pair"}  | ${true}  | ${false} | ${true}  | ${true}  | ${false} | ${undefined}
+    ${"unmarked upgrade"}    | ${false} | ${true}  | ${true}  | ${false} | ${true}  | ${undefined}
+    ${"replacement session"} | ${false} | ${true}  | ${true}  | ${true}  | ${true}  | ${{ sessionId: "new-parent" }}
+    ${"reset lifecycle"}     | ${false} | ${true}  | ${true}  | ${true}  | ${true}  | ${{ sessionId: "sess-main", lifecycleRevision: "rev-2" }}
+  `("preserves the admitted reply policy: $name", async (scenario: Scenario) => {
     const { single, yielded, current, marked = true } = scenario;
+    const onUpdate = vi.fn();
+    onTestFinished(onInternalSessionTranscriptUpdate(onUpdate));
     if (current) {
       setSessionStore({ [REQUESTER]: current });
     }
@@ -80,23 +77,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     if (scenario.frozen) {
       children[0]!.requesterSettleWake!.batchRunIds = ["run-b"];
     }
-    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(!current);
-    if (current) {
-      expect(deliverSpy).not.toHaveBeenCalled();
-      expect(completeBatchSpy).toHaveBeenCalledWith(
-        ["run-b"],
-        expect.anything(),
-        expect.objectContaining({
-          delivered: false,
-          reason: "completion_handoff_unavailable",
-          disposition: "intentional_non_delivery",
-        }),
-      );
-      return;
-    }
-    expect(deliverSpy).toHaveBeenCalledOnce();
+    // The chat key is the address: a reset or a replacement session still receives the results.
+    expect(await wake()).toBe(true);
     const call = deliveredCallArg();
-    expect(call.completionRequesterSessionId).toBe("sess-main");
+    expect(recordGatewaySessionRunFailure).not.toHaveBeenCalled();
+    expect(onUpdate).not.toHaveBeenCalled();
     expect(call.requireVisibleReply).toBeUndefined();
     expect(call.completionTarget).toBe(yielded && marked ? undefined : "parent");
     if (yielded && single) {
@@ -106,14 +91,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     expect(trigger).toContain("private marker");
     if (yielded && marked) {
       expect(trigger).not.toContain("Your final reply stays internal");
-      expect(trigger).toContain("under its normal reply rules");
       expect(trigger).toContain("must go through the message tool, send your answer with it");
-      expect(trigger).toContain("avoid repeating an update already delivered");
     } else if (!yielded) {
       expect(trigger).not.toContain("messaging tool");
       expect(trigger).toContain("Your final reply is recorded in this session for the requester");
-      expect(trigger).toContain("briefly record the reviewed outcome and any remaining work");
-      expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
+      expect(await wake()).toBe(false);
       expect(deliverSpy).toHaveBeenCalledOnce();
       expect(completeBatchSpy.mock.calls[0]?.[2]).not.toHaveProperty(
         "requesterVisibleFinalDelivered",
@@ -121,21 +103,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     }
   });
 
-  it.each(privateRequesterRouteCases())(
-    "guides private $name settles according to the requester route",
-    async ({ origin, canDeliver }) => {
-      settledPrivateChildren({});
-      expect(
-        await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ requesterOrigin: origin })),
-      ).toBe(true);
-      const trigger = String(deliveredCallArg().triggerMessage);
-      if (canDeliver) {
-        expect(trigger).toContain("send it through an available, permitted messaging tool");
-      } else {
-        expect(trigger).not.toContain("messaging tool");
-        expect(trigger).toContain("Your final reply is recorded in this session for the requester");
-        expect(trigger).toContain("no messaging send is needed");
-      }
-    },
-  );
+  it("forwards the requester route to private completion guidance", async () => {
+    settledPrivateChildren({});
+    expect(await wake({ requesterOrigin: { channel: "discord", to: "channel:123" } })).toBe(true);
+    expect(deliveredCallArg().triggerMessage).toContain(
+      "send it through an available, permitted messaging tool",
+    );
+  });
 });

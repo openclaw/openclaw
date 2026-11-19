@@ -5,15 +5,20 @@ import { vi } from "vitest";
 import type { ConfigMutationResult } from "../config/mutate.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { InstallOwner } from "../infra/install-owner.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
-export const MACOS_APP_INSTALL_OWNER_MARKER = JSON.stringify({
-  schemaVersion: 1,
-  owner: "macos-app",
-  displayName: "OpenClaw.app",
-  updateHint: "Update OpenClaw.app to update this Gateway.",
-});
+export function createMacosAppInstallOwner(): InstallOwner {
+  return {
+    schemaVersion: 1,
+    owner: "macos-app",
+    displayName: "OpenClaw.app",
+    updateHint: "Update OpenClaw.app to update this Gateway.",
+  };
+}
+
+export const MACOS_APP_INSTALL_OWNER_MARKER = JSON.stringify(createMacosAppInstallOwner());
 
 export const baseConfigSnapshot = {
   path: "/tmp/openclaw.json",

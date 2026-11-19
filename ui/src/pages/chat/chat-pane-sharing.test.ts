@@ -14,11 +14,10 @@ import type { SessionRefreshOutcome } from "../../lib/sessions/session-capabilit
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import {
   createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
   createSessionContext,
-  createTestChatPane,
-  type TestChatPane,
-} from "./chat-pane.test-support.ts";
+} from "./chat-application-context.test-support.ts";
+import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type {
   ChatSessionSharingState,
@@ -239,6 +238,13 @@ describe("public session sharing", () => {
         enabled: false,
       });
       expect(confirmPublicShare).toHaveBeenCalledTimes(1);
+      expect(confirmPublicShare).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Make this session public?",
+          message: expect.stringContaining("disabling access cannot recall downloaded copies"),
+          confirmLabel: "Make public",
+        }),
+      );
       expect(request.mock.calls.every(([method]) => method !== "session.visibility.set")).toBe(
         true,
       );

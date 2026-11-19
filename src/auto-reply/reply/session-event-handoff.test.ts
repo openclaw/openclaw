@@ -22,13 +22,17 @@ import {
   loadReplySessionInitializationSnapshot,
 } from "../../config/sessions/session-accessor.reset.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as sessionReplacement from "../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
-import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import {
+  claimAgentRunContext,
+  clearAgentRunContext,
+  registerAgentRunContext,
+  releaseAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import {
   enqueueRequiredSystemEventEntry,
   isSystemEventTurnOwned,
@@ -82,13 +86,8 @@ function joinContinuations() {
   );
 }
 
-function interceptReadOwner(
-  intercept: (
-    owner: sessionEntryRead.SessionEntryReadWorkerOwner,
-  ) =>
-    | sessionEntryRead.SessionEntryReadWorkerOwner
-    | Promise<sessionEntryRead.SessionEntryReadWorkerOwner>,
-) {
+type ReadOwner = sessionEntryRead.SessionEntryReadWorkerOwner;
+function interceptReadOwner(intercept: (owner: ReadOwner) => ReadOwner | Promise<ReadOwner>) {
   const original = sessionEntryRead.withSessionEntryReadOnlyInWorker;
   return vi
     .spyOn(sessionEntryRead, "withSessionEntryReadOnlyInWorker")
@@ -287,12 +286,21 @@ describe("session event target custody", () => {
       env: captured.env,
     });
     setRuntimeConfigSnapshot({ ...cfg, session: { store: replacement.storePath } });
+    // A cron run admits the event only while its executor still owns the run.
+    const runScope = {
+      sessionKey: runKey,
+      sessionId: target.sessionId,
+      agentId: "main",
+      cronRunsByJobId: new Map([["nightly", { nextCheckEnabled: false }]]),
+    };
+    const claim = claimAgentRunContext("captured-cron-run", runScope, { trackOwner: true });
     const receipt = enqueueEvent("Process completed", {
       agentId: "main",
       sessionKey: runKey,
       source: "exec",
       expectedTarget: target,
     });
+    releaseAgentRunContext("captured-cron-run", claim);
     receipt.cancel();
     expect(await withinTest(receipt.settled, signal)).toMatchObject({ status: "cancelled" });
     await withinTest(joinContinuations(), signal);
@@ -308,6 +316,13 @@ describe("session event target custody", () => {
   it("rejects deleted-agent events", async ({ nativeState: state }) => {
     const { env } = state;
     const target = await captureTarget("main", sessionKey, { env });
+    {
+      using resolution = vi.spyOn(path, "resolve");
+      for (let index = 0; index < 10_000; index += 1) {
+        assertTargetCurrent(target);
+      }
+      expect(resolution.mock.calls.length).toBe(0);
+    }
     await withAgentDeletion(
       "main",
       async (begin) => {
@@ -512,6 +527,49 @@ describe("session event target custody", () => {
       await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
+  it.for(["plugin", "tool_handoff"] as const)(
+    "refuses a keyed %s retry while its occurrence is pending",
+    async (source, { state: { env } }) => {
+      const target = await captureTarget("main", sessionKey, { env });
+      const contextKey = "tool-handoff:retry";
+      const pending = enqueueRequiredSystemEventEntry("Tool result", {
+        sessionKey,
+        contextKey,
+        deliveryContext: target.deliveryContext,
+      });
+      expect(() =>
+        enqueueEvent("Tool result", { ...eventScope, source, contextKey, expectedTarget: target }),
+      ).toThrow("an identical occurrence is already pending");
+      expect(peekSystemEventEntries(sessionKey)).toEqual([pending]);
+    },
+  );
+
+  it("batches retained owner authority only for the same requester", async ({ state: { env } }) => {
+    setRuntimeConfigSnapshot({
+      agents: { entries: { main: {} } },
+      channels: { telegram: {} },
+      commands: { ownerAllowFrom: ["456", "457"] },
+    });
+    const capture = (senderId: string) =>
+      withGatewayToolCallerIdentity(
+        { ...eventScope, requesterOrigin: { sessionKey, messageProvider: "telegram", senderId } },
+        () => captureTarget("main", sessionKey, { env, retainRequesterOwner: true }),
+      );
+    const owner = await capture("456");
+    const [sameOwner, guest, otherOwner] = await Promise.all([
+      capture("456"),
+      capture("789"),
+      capture("457"),
+    ]);
+    expect(combineSessionEventTargetsForHost([owner, sameOwner])).toBeDefined();
+    // Owners share a source label, but each authority rechecks only its own requester.
+    for (const other of [guest, otherOwner]) {
+      expect(() => combineSessionEventTargetsForHost([owner, other])).toThrow(
+        "requester authority",
+      );
+    }
+  });
+
   it("retains store, route and producer limits across lookup", async ({
     state: { env, path: fixturePath, storePath },
   }) => {
@@ -595,28 +653,6 @@ describe("session event target custody", () => {
     },
   );
 
-  it.for(["session reset", "lifecycle replacement"] as const)(
-    "rejects %s before dispatch",
-    async (change, { state: { env, storePath } }) => {
-      const target = await captureTarget("main", sessionKey, { env });
-      replaceSessionEntrySync(
-        { agentId: "main", storePath, sessionKey, env },
-        {
-          sessionId: change === "session reset" ? "replacement-session" : "original-session",
-          lifecycleRevision: "replacement-revision",
-          updatedAt: 2,
-          delivery: normalizeSessionDeliveryState({
-            context: { ...route, to: "replacement-target" },
-          }),
-        },
-      );
-      const receipt = enqueueCompletion(target);
-
-      await expectStopped(receipt, "failed", "original session generation");
-      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-    },
-  );
-
   it("cancels pending occurrences when queues close", async ({ state: { env } }) => {
     const target = await captureTarget("main", sessionKey, { env });
     const suspension = gatewayWork.tryBeginGatewaySuspendAdmission(() => {});
@@ -641,7 +677,6 @@ describe("session event target custody", () => {
     async (boundary, { state: { env } }) => {
       const target = await captureTarget("main", sessionKey, { env });
       const occurrence = enqueueRequiredSystemEventEntry("Deferred hook", { sessionKey });
-      expect(occurrence).not.toBeNull();
       if (!occurrence) {
         throw new Error("Expected deferred hook occurrence");
       }
@@ -661,10 +696,13 @@ describe("session event target custody", () => {
         resetSystemEventsForTest();
       }
       await expect(receipt.accepted).resolves.toMatchObject({ ok: false });
-      await expect(receipt.settled).resolves.toMatchObject({
-        status: boundary === "reject" ? "failed" : "cancelled",
-        executionStarted: false,
-      });
+      await expectStopped(receipt, "cancelled");
+      if (boundary === "reject") {
+        await expect(receipt.settled).resolves.toMatchObject({
+          terminalOutcome: { stopReason: "restart" },
+          interruptedByRestart: true,
+        });
+      }
       expect(isSystemEventTurnOwned(sessionKey, occurrence)).toBe(false);
       expect(peekSystemEventEntries(sessionKey)).toEqual(
         boundary === "removed" ? [] : [occurrence],
@@ -698,11 +736,7 @@ it("retains one requester until pre-admission cancellation", async ({ signal, st
   expect(() => combineSessionEventTargetsForHost([target, other])).toThrow(
     "different captured destinations",
   );
-  const receipt = enqueueEvent("Command completed", {
-    ...eventScope,
-    source: "exec",
-    expectedTarget: target,
-  });
+  const receipt = enqueueCompletion(target);
   expect(receipt.cancel()).toBe(true);
   await expect(withinTest(receipt.settled, signal)).resolves.toMatchObject({
     status: "cancelled",

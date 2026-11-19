@@ -7,6 +7,7 @@ import {
   isSubagentSessionRow,
   isSystemCreatedSessionRow,
 } from "../shared/session-list-visibility.js";
+import { isGitHubPublicationTaskSession } from "./session-classification.js";
 import type { materializeSessionRow } from "./session-utils-row.js";
 
 export function readSessionListSelectionFacts(
@@ -17,36 +18,12 @@ export function readSessionListSelectionFacts(
     spawnedBy?: string;
     category?: string;
     heartbeatIsolatedBaseSessionKey?: string;
-    createdSurface?: "plugin-dock";
-    chatType?: string;
-    autoLabel?: string;
-    topicName?: string;
-    groupChannel?: string;
-    space?: string;
-    delivery?: SessionEntry["delivery"];
-    modelProvider?: string;
-    model?: string;
+    createdSurface?: SessionEntry["createdSurface"];
+    parentSessionKey?: string;
   } & Omit<Parameters<typeof isSystemCreatedSessionRow>[0], "key" | "classification">,
 ) {
   const parsed = parseAgentSessionKey(key);
   return {
-    // Search memoization shares this identity, independently of activity timestamps.
-    searchSource: [
-      entry?.sessionId,
-      entry?.label,
-      entry?.subject,
-      entry?.category,
-      entry?.displayName,
-      entry?.autoLabel,
-      entry?.topicName,
-      entry?.groupChannel,
-      entry?.space,
-      entry?.delivery,
-      entry?.chatType,
-      entry?.spawnedBy,
-      entry?.modelProvider,
-      entry?.model,
-    ],
     agentId: parsed ? normalizeAgentId(parsed.agentId) : undefined,
     isCronRun: isCronRunSessionKey(key),
     isCron: isCronSessionDisplayKey(key),
@@ -55,10 +32,15 @@ export function readSessionListSelectionFacts(
       key,
       createdActor: entry?.createdActor,
       createdVia: entry?.createdVia,
+      createdSurface: entry?.createdSurface,
       label: entry?.label,
       displayName: entry?.displayName,
       subject: entry?.subject,
-      classification: entry?.heartbeatIsolatedBaseSessionKey ? "heartbeat" : undefined,
+      classification: entry?.heartbeatIsolatedBaseSessionKey
+        ? "heartbeat"
+        : isGitHubPublicationTaskSession(key, entry)
+          ? "github-publication"
+          : undefined,
     }),
     isSubagent: isSubagentSessionRow(key, entry),
     isPhantom:

@@ -4,6 +4,7 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { captureSecurityEvents } from "../../agents/test-helpers/security-events.js";
 import { approveDevicePairing } from "../../infra/device-pairing-approval.js";
 import {
   captureNodePairingGeneration,
@@ -17,11 +18,7 @@ import {
   requestDevicePairing,
   resolveNodePairingState,
 } from "../../infra/device-pairing.js";
-import {
-  onInternalDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  type DiagnosticEventPayload,
-} from "../../infra/diagnostic-events.js";
+import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { loadApnsRegistration, registerApnsRegistration } from "../../infra/push-apns.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -91,16 +88,6 @@ afterEach(async () => {
     await createdStates.pop()?.cleanup();
   }
 });
-
-function captureSecurityEvents() {
-  const events: Extract<DiagnosticEventPayload, { type: "security.event" }>[] = [];
-  const stop = onInternalDiagnosticEvent((event, metadata) => {
-    if (metadata.trusted && event.type === "security.event") {
-      events.push(event);
-    }
-  });
-  return { events, stop };
-}
 
 function createContext() {
   return {

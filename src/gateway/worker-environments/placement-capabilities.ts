@@ -1,7 +1,23 @@
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agents/agent-runtime-id.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
-import type { WorkerPlacementExecutionMode } from "./placement-record.js";
+import type {
+  WorkerPlacementExecutionMode,
+  WorkerSessionPlacementRecord,
+} from "./placement-record.js";
+
+export function resolveWorkerPlacementRuntimeChangeError(
+  placement: Pick<WorkerSessionPlacementRecord, "executionMode" | "state">,
+  executionMode: WorkerPlacementExecutionMode | undefined,
+  sessionLabel = "Session",
+): string | undefined {
+  if (executionMode === placement.executionMode) {
+    return undefined;
+  }
+  return executionMode
+    ? `${sessionLabel} cannot change cloud placement execution mode while placement is ${placement.state}.`
+    : `${sessionLabel} cannot select a runtime without cloud placement support while cloud worker placement is ${placement.state}.`;
+}
 
 /** Returns the bounded placement contract declared by one active agent runtime. */
 export function resolveWorkerPlacementCapabilities(runtime: string): {

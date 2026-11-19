@@ -14,10 +14,10 @@ import { workerTransformProbe } from "./vitest-worker-artifacts.transforms.test-
 const root = process.cwd();
 const it = createWorkerArtifactTest();
 
-// Each sequence owns its cache and two generations; keep their observations ordered.
+// Each sequence owns its cache and generations; keep their observations ordered.
 describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
   it.for((["single", "projects"] as const).map((layout) => ({ layout })))(
-    "preserves filesystem transforms across fresh generations, source mode, and edits ($layout)",
+    "preserves filesystem transforms across generations, source mode, edits, and presets ($layout)",
     ({ layout }, { workerArtifacts, signal, onTestFinished }) =>
       inWorkerArtifactFixture(
         { workerArtifacts, signal, onTestFinished },
@@ -42,10 +42,10 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
             );
           };
           let compiled = false;
-          const owner = createVitestWorkerRun(controlled.env);
+          let owner = createVitestWorkerRun(controlled.env);
           let redirectedCompilers = 0;
           // The second owner lives in this process; its child env cannot intercept its spawn.
-          const compilerLaunch = controlled.intercept(owner.descriptor.directory, () => {
+          let compilerLaunch = controlled.intercept(owner.descriptor.directory, () => {
             redirectedCompilers += 1;
           });
           try {
@@ -104,6 +104,17 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
             );
             await launch("compiled", [4, 3], "configured");
             expect(redirectedCompilers).toBe(1);
+            if (layout === "single") {
+              await owner.dispose();
+              compilerLaunch.mockRestore();
+              owner = createVitestWorkerRun(controlled.env, undefined, "runtime");
+              compilerLaunch = controlled.intercept(owner.descriptor.directory, () => {
+                redirectedCompilers += 1;
+              });
+              await launch("compiled", [5, 4], "configured");
+              await launch("compiled", [5, 4], "configured");
+              expect(redirectedCompilers).toBe(2);
+            }
           } finally {
             try {
               await owner.dispose();

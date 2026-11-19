@@ -1,6 +1,7 @@
 import type * as ChildProcessModule from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import type * as TimerPromises from "node:timers/promises";
 import type * as SecurityRuntime from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,10 +10,19 @@ import type * as ChromeDiagnostics from "./chrome.diagnostics.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveBrowserConfig } from "./config.js";
 
-const { spawnMock, readVersionMock, diagnoseMock } = vi.hoisted(() => ({
+const { spawnMock, readVersionMock, diagnoseMock, logInfo, logError } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
   readVersionMock: vi.fn(),
   diagnoseMock: vi.fn(),
+  logInfo: vi.fn(),
+  logError: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>()),
+  createSubsystemLogger: () => ({
+    child: () => ({ info: logInfo, error: logError, warn: vi.fn(), debug: vi.fn() }),
+  }),
 }));
 
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -64,14 +74,9 @@ vi.mock("./chrome.executables.js", async (importOriginal) => ({
   processCommandUsesHeadlessChrome: () => false,
   resolveBrowserExecutableForPlatform: () => ({ kind: "custom", path: "/synthetic/chrome" }),
 }));
-vi.mock("./output-directories.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./output-directories.js")>()),
-  ensureOutputDirectory: vi.fn(),
-}));
-vi.mock("./chrome.profile-decoration.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./chrome.profile-decoration.js")>()),
-  usesOpenClawMockKeychain: () => false,
-  prepareOpenClawProfile: vi.fn(),
+vi.mock("../../profile-filesystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../profile-filesystem.js")>()),
+  prepareProfileFilesystem: vi.fn(async () => ({})),
 }));
 // Keep process-discovery timing independent of cross-process profile-lock I/O.
 vi.mock("./chrome.profile-lifecycle-lock.js", async (importOriginal) => ({
@@ -79,8 +84,8 @@ vi.mock("./chrome.profile-lifecycle-lock.js", async (importOriginal) => ({
   withChromeProfileLifecycleLock: <T>(_profile: string, run: () => Promise<T>) => run(),
 }));
 
+import { prepareProfileFilesystem } from "../../profile-filesystem.js";
 import { launchOpenClawChrome, ManagedChromeCleanupError } from "./chrome.js";
-import { prepareOpenClawProfile } from "./chrome.profile-decoration.js";
 
 function makeProc() {
   const proc = Object.assign(new EventEmitter(), {
@@ -97,6 +102,7 @@ function makeProc() {
   return proc;
 }
 
+let proc: ReturnType<typeof makeProc>;
 const resolved = {
   ...resolveBrowserConfig({ headless: true, noSandbox: true, extraArgs: [] }),
   localLaunchTimeoutMs: 15_000,
@@ -114,11 +120,27 @@ const profile: ResolvedBrowserProfile = {
 };
 const readyVersion = { webSocketDebuggerUrl: "ws://127.0.0.1:51114/devtools/browser/fixture" };
 
+const launchFailure = (signal?: AbortSignal) =>
+  launchOpenClawChrome(resolved, profile, { signal }).catch((error: unknown) => error);
+
+async function settleLaunch(signal?: AbortSignal) {
+  const outcome = launchFailure(signal);
+  await vi.runAllTimersAsync();
+  return outcome;
+}
+
+function expectDetached(child: ReturnType<typeof makeProc>, events = ["data"]) {
+  expect(events.map((event) => child.stderr.listenerCount(event))).toEqual(events.map(() => 0));
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
+  proc = makeProc();
+  spawnMock.mockReturnValue(proc);
   vi.spyOn(fs, "existsSync").mockReturnValue(true);
-  vi.spyOn(fs, "mkdirSync").mockReturnValue(undefined);
-  vi.spyOn(fs, "readlinkSync").mockImplementation(() => {
+  vi.spyOn(fsp, "mkdir").mockResolvedValue(undefined);
+  vi.spyOn(fsp, "access").mockResolvedValue(undefined);
+  vi.spyOn(fsp, "readlink").mockImplementation(async () => {
     throw Object.assign(new Error("synthetic missing profile lock"), { code: "ENOENT" });
   });
   readVersionMock.mockRejectedValue(new Error("synthetic unavailable CDP"));
@@ -137,15 +159,110 @@ afterEach(() => {
 });
 
 describe("managed Chrome early child exit", () => {
+  it.each([null, "SIGABRT"] as const)(
+    "retains stderr until close and reports only abnormal exit (%s)",
+    async (exitSignal) => {
+      readVersionMock.mockResolvedValue(readyVersion);
+      diagnoseMock.mockResolvedValue({ ok: true, cdpUrl: profile.cdpUrl, elapsedMs: 0 });
+      expect(await settleLaunch()).toMatchObject({ proc });
+      expect(logInfo).toHaveBeenCalledOnce();
+      proc.emit("exit", exitSignal ? null : 0, exitSignal);
+      proc.stderr.emit(
+        "data",
+        "FATAL: synthetic GPU failure after readiness token=synthetic-private-value",
+      );
+      proc.emit("close", exitSignal ? null : 0, exitSignal);
+      if (exitSignal) {
+        expect(logError).toHaveBeenCalledWith(
+          expect.stringMatching(/SIGABRT[\s\S]*token=synthetic-private-value/),
+        );
+      } else {
+        expect(logError).not.toHaveBeenCalled();
+      }
+      expectDetached(proc);
+    },
+  );
+
+  it("waits for a slow CDP command before logging success", async () => {
+    readVersionMock.mockResolvedValue(readyVersion);
+    diagnoseMock.mockImplementation(async (_url, _httpTimeoutMs, wsTimeoutMs: number) => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, Math.min(750, wsTimeoutMs));
+      });
+      return { ok: wsTimeoutMs >= 750, cdpUrl: profile.cdpUrl, elapsedMs: 750 };
+    });
+    const outcome = launchFailure();
+    await vi.waitFor(() => expect(diagnoseMock).toHaveBeenCalledOnce());
+    expect(logInfo).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(750);
+    expect(await outcome).toMatchObject({ proc });
+    expect(logInfo).toHaveBeenCalledOnce();
+    proc.emit("close", 0, null);
+    expectDetached(proc);
+  });
+
+  it("retries command readiness after late HTTP discovery", async () => {
+    const startedAt = performance.now();
+    diagnoseMock.mockImplementation(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 800);
+      });
+      return performance.now() - startedAt >= resolved.localLaunchTimeoutMs + 1_000
+        ? { ok: true, cdpUrl: profile.cdpUrl, ...readyVersion, elapsedMs: 800 }
+        : {
+            ok: false,
+            code: "websocket_health_command_timeout",
+            cdpUrl: profile.cdpUrl,
+            wsUrl: readyVersion.webSocketDebuggerUrl,
+            elapsedMs: 800,
+            message: "synthetic command channel still starting",
+          };
+    });
+    expect(await settleLaunch()).toMatchObject({ proc });
+    expect(diagnoseMock).toHaveBeenCalledTimes(2);
+    expect(proc.kill).not.toHaveBeenCalled();
+    expect(logInfo).toHaveBeenCalledOnce();
+    proc.emit("close", 0, null);
+  });
+
+  it("reports a GPU abort after HTTP discovery instead of announcing a started browser", async () => {
+    const fatal =
+      "FATAL:content/browser/gpu/gpu_data_manager_impl_private.cc:417] GPU process isn't usable. Goodbye.";
+    const rawFatal = `${fatal} token=synthetic-private-value`;
+    readVersionMock.mockResolvedValue(readyVersion);
+    diagnoseMock.mockImplementation(async () => {
+      proc.stderr.emit("data", `${rawFatal}\n${"#0 synthetic stack frame\n".repeat(200)}`);
+      proc.signalCode = "SIGABRT";
+      proc.emit("exit", null, "SIGABRT");
+      return { ok: true, cdpUrl: profile.cdpUrl, elapsedMs: 0 };
+    });
+    const error = await settleLaunch();
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).toContain("SIGABRT");
+    expect(String(error)).toContain(fatal);
+    expect(String(error)).toContain("retry");
+    expect(logInfo).not.toHaveBeenCalled();
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining(rawFatal));
+    expect(String(error)).not.toContain("synthetic-private-value");
+    expectDetached(proc);
+  });
+
   it("does not spawn after cancellation while preparing the profile", async () => {
     const preparation = Promise.withResolvers<void>();
-    vi.mocked(prepareOpenClawProfile).mockReturnValueOnce(preparation.promise);
+    vi.mocked(prepareProfileFilesystem).mockImplementation(async (command) => {
+      if (command.type === "decorate") {
+        await preparation.promise;
+      }
+      return {};
+    });
     const controller = new AbortController();
     const reason = new Error("synthetic profile preparation cancellation");
-    const outcome = launchOpenClawChrome(resolved, profile, { signal: controller.signal }).catch(
-      (error: unknown) => error,
+    const outcome = launchFailure(controller.signal);
+    await vi.waitFor(() =>
+      expect(prepareProfileFilesystem).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "decorate" }),
+      ),
     );
-    await vi.waitFor(() => expect(prepareOpenClawProfile).toHaveBeenCalledOnce());
     controller.abort(reason);
     preparation.resolve();
     expect(await outcome).toBe(reason);
@@ -153,7 +270,6 @@ describe("managed Chrome early child exit", () => {
   });
 
   it("cancels the bounded stderr drain without retaining listeners", async () => {
-    const proc = makeProc();
     proc.exitCode = 23;
     const controller = new AbortController();
     const reason = new Error("synthetic drain cancellation");
@@ -161,19 +277,14 @@ describe("managed Chrome early child exit", () => {
       setTimeout(() => controller.abort(reason), 25);
       return proc;
     });
-    const outcome = launchOpenClawChrome(resolved, profile, { signal: controller.signal }).catch(
-      (error: unknown) => error,
-    );
+    const outcome = launchFailure(controller.signal);
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
     await vi.runAllTimersAsync();
     expect(await outcome).toBe(reason);
-    expect(proc.stderr.listenerCount("data")).toBe(0);
-    expect(proc.stderr.listenerCount("close")).toBe(0);
-    expect(proc.stderr.listenerCount("error")).toBe(0);
+    expectDetached(proc, ["data", "close", "error"]);
   });
 
   it("keeps stderr buffered until shortly after the child exit", async () => {
-    const proc = makeProc();
     proc.exitCode = 23;
     spawnMock.mockImplementation(() => {
       setTimeout(() => {
@@ -182,11 +293,8 @@ describe("managed Chrome early child exit", () => {
       }, 25);
       return proc;
     });
-    const outcome = launchOpenClawChrome(resolved, profile).catch((error: unknown) => error);
-    await vi.runAllTimersAsync();
-    expect(String(await outcome)).toContain("synthetic delayed newest stderr");
-    expect(proc.stderr.listenerCount("data")).toBe(0);
-    expect(proc.stderr.listenerCount("close")).toBe(0);
+    expect(String(await settleLaunch())).toContain("synthetic delayed newest stderr");
+    expectDetached(proc, ["data", "close"]);
   });
 
   it.each([
@@ -194,20 +302,19 @@ describe("managed Chrome early child exit", () => {
     { exitCode: 23, signalCode: null },
     { exitCode: null, signalCode: "SIGTERM" as const },
   ])("stops discovery for exit $exitCode / $signalCode", async (exit) => {
-    const proc = Object.assign(makeProc(), exit);
+    Object.assign(proc, exit);
     spawnMock.mockImplementation(() => {
       queueMicrotask(() => proc.stderr.emit("data", "synthetic newest stderr"));
       return proc;
     });
     let settled = false;
-    const outcome = launchOpenClawChrome(resolved, profile).catch((error: unknown) => error);
+    const outcome = launchFailure();
     void outcome.then(() => {
       settled = true;
     });
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
     await vi.advanceTimersByTimeAsync(1_000);
     const settledPromptly = settled;
-    // Drain the original implementation too, so the RED replay leaves no timer behind.
     await vi.runAllTimersAsync();
     const error = await outcome;
     expect(settledPromptly).toBe(true);
@@ -216,12 +323,10 @@ describe("managed Chrome early child exit", () => {
     expect(String(error)).toContain("synthetic newest stderr");
     expect(readVersionMock).not.toHaveBeenCalled();
     expect(diagnoseMock).not.toHaveBeenCalled();
-    expect(proc.stderr.listenerCount("data")).toBe(0);
+    expectDetached(proc);
   });
 
   it.each([false, true])("rejects an exit while readiness returns %s", async (reachable) => {
-    const proc = makeProc();
-    spawnMock.mockReturnValue(proc);
     readVersionMock.mockImplementation(async () => {
       proc.exitCode = 23;
       proc.emit("exit", 23, null);
@@ -230,19 +335,15 @@ describe("managed Chrome early child exit", () => {
       }
       return readyVersion;
     });
-    const outcome = launchOpenClawChrome(resolved, profile).catch((error: unknown) => error);
-    await vi.runAllTimersAsync();
-    expect(String(await outcome)).toContain("exited before CDP became ready");
+    expect(String(await settleLaunch())).toContain("exited before CDP became ready");
     expect(diagnoseMock).not.toHaveBeenCalled();
-    expect(proc.stderr.listenerCount("data")).toBe(0);
+    expectDetached(proc);
   });
 
   it("rejects a child that exits while the final diagnostic succeeds", async () => {
-    const proc = makeProc();
-    spawnMock.mockReturnValue(proc);
     // Expire discovery before polling so this case owns only the final diagnostic race.
-    let now = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => {
+    let now = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => {
       now += 15_000;
       return now;
     });
@@ -251,16 +352,12 @@ describe("managed Chrome early child exit", () => {
       proc.emit("exit", 0, null);
       return { ok: true, cdpUrl: profile.cdpUrl, elapsedMs: 0 };
     });
-    const outcome = launchOpenClawChrome(resolved, profile).catch((error: unknown) => error);
-    await vi.runAllTimersAsync();
-    expect(String(await outcome)).toContain("code 0");
+    expect(String(await settleLaunch())).toContain("code 0");
     expect(readVersionMock).not.toHaveBeenCalled();
     expect(diagnoseMock).toHaveBeenCalledTimes(1);
   });
 
   it("preserves cancellation when the child also exits during a probe", async () => {
-    const proc = makeProc();
-    spawnMock.mockReturnValue(proc);
     const controller = new AbortController();
     const reason = new Error("synthetic lifecycle cancellation");
     readVersionMock.mockImplementation(async () => {
@@ -268,30 +365,20 @@ describe("managed Chrome early child exit", () => {
       controller.abort(reason);
       return readyVersion;
     });
-    const outcome = launchOpenClawChrome(resolved, profile, { signal: controller.signal }).catch(
-      (error: unknown) => error,
-    );
-    await vi.runAllTimersAsync();
-    expect(await outcome).toBe(reason);
-    expect(proc.stderr.listenerCount("data")).toBe(0);
+    expect(await settleLaunch(controller.signal)).toBe(reason);
+    expectDetached(proc);
   });
 
   it("retains the exact child when cancellation cleanup does not finish", async () => {
-    const proc = makeProc();
     proc.kill.mockReturnValue(false);
-    spawnMock.mockReturnValue(proc);
     const controller = new AbortController();
     readVersionMock.mockImplementation(async () => {
       controller.abort(new Error("synthetic cancellation"));
       return readyVersion;
     });
-    const outcome = launchOpenClawChrome(resolved, profile, { signal: controller.signal }).catch(
-      (error: unknown) => error,
-    );
-    await vi.runAllTimersAsync();
-    const error = await outcome;
+    const error = await settleLaunch(controller.signal);
     expect(error).toBeInstanceOf(ManagedChromeCleanupError);
     expect(error).toMatchObject({ running: { proc } });
-    expect(proc.stderr.listenerCount("data")).toBe(0);
+    expectDetached(proc);
   });
 });

@@ -8,10 +8,6 @@ import {
 } from "./qa-transport.js";
 import { extractQaFailureReplyText } from "./reply-failure.js";
 
-type WaitForNoOutboundOptions = {
-  sinceIndex?: number;
-};
-
 async function waitForQaInboundCompletion(
   state: QaBusState,
   inbound: QaBusMessage,
@@ -23,13 +19,15 @@ async function waitForQaInboundCompletion(
       (candidate) =>
         candidate.kind === "inbound-message" &&
         candidate.accountId === inbound.accountId &&
-        candidate.message.id === inbound.id,
+        candidate.message.id === inbound.id &&
+        candidate.message.conversation.kind === inbound.conversation.kind &&
+        candidate.message.conversation.id === inbound.conversation.id,
     );
   if (!event) {
     throw new Error(`QA inbound event missing for ${inbound.id}`);
   }
   await waitForQaTransportCondition(
-    () => state.getAcknowledgedPollCursor(inbound.accountId) >= event.cursor || undefined,
+    () => state.hasCompletedInboundEvent(inbound.accountId, event.cursor) || undefined,
     timeoutMs,
   );
 }
@@ -102,7 +100,9 @@ async function waitForOutboundMessage(
 async function waitForNoOutbound(
   state: QaTransportState,
   timeoutMs = 1_200,
-  options?: WaitForNoOutboundOptions,
+  options?: {
+    sinceIndex?: number;
+  },
 ) {
   await sleep(timeoutMs);
   const outbound = state

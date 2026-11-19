@@ -145,5 +145,6 @@ if (isMainThread) {
       measuredStart = undefined;
     }
   });
+  process.channel?.unref();
   process.once("exit", () => emit("exit"));
 }

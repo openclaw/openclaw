@@ -86,8 +86,6 @@ it.each([
           expectedExistingSessionId: sessionId,
           agentId,
           request: preflight.request,
-          canUseCronRunContinuation: false,
-          lifecycleGeneration: getAgentRunLifecycleGeneration(),
           respond: vi.fn(),
         });
         assert(prepared, "prepared requester session");
@@ -115,15 +113,9 @@ it.each([
       const foreignChild = { ...child, requesterStorePath: physicalStore + ".other" };
       try {
         expect(io.emitAcceptance).not.toHaveBeenCalled();
-        await withSessionTurn({ ...turn, controllerInput: source.input }, async (operation) => {
-          const requester = expectDefined(operation, "native requester operation");
+        await withSessionTurn({ ...turn, controllerInput: source.input }, async () => {
           expect(isClaimedByLiveRequesterTurn(child)).toBe(true);
-          await withSessionTurn({ ...turn, replyOperation: requester }, async () => {
-            expect(isClaimedByLiveRequesterTurn(child)).toBe(true);
-            expect(isClaimedByLiveRequesterTurn(foreignChild)).toBe(false);
-            requester.yield();
-            expect(isClaimedByLiveRequesterTurn(child)).toBe(true);
-          });
+          expect(isClaimedByLiveRequesterTurn(foreignChild)).toBe(false);
         });
         expect(isClaimedByLiveRequesterTurn(child)).toBe(false);
       } finally {

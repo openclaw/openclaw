@@ -115,11 +115,6 @@ export function extractTailscaleServeGatewayUrls(
   return [...urls].toSorted();
 }
 
-type TailscaleServeGatewayInspection =
-  | { status: "ok"; urls: string[] }
-  | { status: "unavailable" }
-  | { status: "invalid" };
-
 /** Reads backend state without changing connectivity or Serve configuration. */
 export async function inspectTailscaleBackendStateWithRunner(
   runCommandWithTimeout: TailscaleStatusCommandRunner,
@@ -149,7 +144,7 @@ export async function inspectTailscaleServeGatewayUrlsWithRunner(
   gatewayPort: number,
   runCommandWithTimeout?: TailscaleStatusCommandRunner,
   forAdoption = false,
-): Promise<TailscaleServeGatewayInspection> {
+): Promise<{ status: "ok"; urls: string[] } | { status: "unavailable" } | { status: "invalid" }> {
   if (!runCommandWithTimeout) {
     return { status: "unavailable" };
   }

@@ -34,12 +34,11 @@ const SIDEBAR_NARRATION_BUFFER_CHARS = 16_384;
 const SIDEBAR_NARRATION_RETRY_INITIAL_MS = 500;
 const SIDEBAR_NARRATION_RETRY_MAX_MS = 30_000;
 
-type SessionMessageSubscription = Awaited<ReturnType<SessionCapability["subscribeMessages"]>>;
 type NarrationSource = Pick<SessionCapability, "subscribeMessages" | "unsubscribeMessages">;
 
 type NarrationSubscription = {
   source: NarrationSource;
-  subscription: SessionMessageSubscription;
+  subscription: Awaited<ReturnType<SessionCapability["subscribeMessages"]>>;
 };
 
 type NarrationRetry = {
@@ -48,25 +47,9 @@ type NarrationRetry = {
   timer: ReturnType<typeof globalThis.setTimeout> | null;
 };
 
-type PendingSubscription = NarrationRetry & { agentId: string | null };
-
 function createNarrationRetry(): NarrationRetry {
   return { retryWindowMs: SIDEBAR_NARRATION_RETRY_INITIAL_MS, retryAt: 0, timer: null };
 }
-
-type ThrottledLine = {
-  lastPublishedAt: number;
-  pending: string | null;
-  timer: ReturnType<typeof globalThis.setTimeout> | null;
-};
-
-type NarrationStream = {
-  // Keep the full stream length even after visibleText trims its bounded buffer.
-  consumedLength: number;
-  internalDepth: number;
-  delimiterTail: string;
-  visibleText: string;
-};
 
 export type SidebarNarrationSyncInput = {
   enabled: boolean;
@@ -109,10 +92,26 @@ export function createSidebarNarration() {
   let currentAgentId = "main";
   let desiredKeys = new Set<string>();
   const subscriptions = new Map<string, NarrationSubscription>();
-  const pendingSubscriptions = new Map<string, PendingSubscription>();
-  const streams = new Map<string, NarrationStream>();
+  const pendingSubscriptions = new Map<string, NarrationRetry & { agentId: string | null }>();
+  const streams = new Map<
+    string,
+    {
+      // Keep the full stream length even after visibleText trims its bounded buffer.
+      consumedLength: number;
+      internalDepth: number;
+      delimiterTail: string;
+      visibleText: string;
+    }
+  >();
   const runIds = new Map<string, string>();
-  const throttles = new Map<string, ThrottledLine>();
+  const throttles = new Map<
+    string,
+    {
+      lastPublishedAt: number;
+      pending: string | null;
+      timer: ReturnType<typeof globalThis.setTimeout> | null;
+    }
+  >();
   let lines = new Map<string, string>();
   let observerDigests = new Map<string, SessionObserverDigest>();
   let tools = new Map<string, SidebarToolActivity>();

@@ -25,7 +25,7 @@ import {
 
 const statusSummaryMocks = vi.hoisted(() => ({
   readProactiveJobs:
-    vi.fn<typeof import("../cron/proactive-job-receipt.js").readDefaultProactiveJobsAsync>(),
+    vi.fn<typeof import("../cron/proactive-job-receipt.js").readDefaultProactiveJobsByKeyAsync>(),
   hasConfiguredChannelsForReadOnlyScopeAsync: vi.fn<
     typeof import("../plugins/channel-plugin-ids.js").hasConfiguredChannelsForReadOnlyScopeAsync
   >(async () => true),
@@ -48,6 +48,7 @@ const statusSummaryMocks = vi.hoisted(() => ({
 // mock-isolation: Project fixed receipt-owned jobs without opening shared-state storage in the aggregation fixture.
 vi.mock("../cron/proactive-job-receipt.js", () => ({
   readDefaultProactiveJobsAsync: statusSummaryMocks.readProactiveJobs,
+  readDefaultProactiveJobsByKeyAsync: statusSummaryMocks.readProactiveJobs,
 }));
 
 // mock-isolation: Keep plugin discovery outside this status aggregation fixture.
@@ -309,6 +310,20 @@ describe("getStatusSummary", () => {
       statusSummaryMocks.listSessionEntriesCore.mockReturnValue(toSessionEntrySummaries(store)),
   });
   registerStatusSummaryWalCases((options) => getStatusSummary(options));
+
+  it("prepares session snapshots while channel summary is pending", async () => {
+    const channel = Promise.withResolvers<string[]>();
+    statusSummaryMocks.buildChannelSummary.mockReturnValueOnce(channel.promise);
+    const reading = getStatusSummary();
+    try {
+      await vi.waitFor(() => expect(statusSummaryMocks.buildChannelSummary).toHaveBeenCalled());
+      await vi.waitFor(() => expect(statusSummaryMocks.listSessionEntriesCore).toHaveBeenCalled());
+    } finally {
+      channel.resolve(["ok"]);
+      await reading;
+    }
+    expect((await reading).channelSummary).toEqual(["ok"]);
+  });
 
   it("summarizes every configured agent's global pending events without an ambient owner", async () => {
     const config = setExplicitAgents("global", "inbox");

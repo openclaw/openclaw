@@ -1,4 +1,5 @@
 import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
+import { prepareSystemPrompt } from "@openclaw/ai/internal/shared";
 import {
   createEmptyTransportUsage,
   replaceCompactionReplayOwnerContent,
@@ -8,7 +9,12 @@ import {
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   REPETITIVE_OUTPUT_ERROR_CODE,
 } from "@openclaw/llm-core";
-import type { AssistantMessage, Context, ToolResultMessage } from "@openclaw/llm-core";
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  Context,
+  ToolResultMessage,
+} from "@openclaw/llm-core";
 import { AssistantRepetitionGuard } from "./assistant-repetition-guard.js";
 import { REPETITIVE_OUTPUT_ERROR_MESSAGE } from "./errors.js";
 import { uuidv7 } from "./harness/session/uuid.js";
@@ -22,6 +28,7 @@ import { createStreamSteering } from "./stream-steering.js";
 import { mergeToolExecutionFailure } from "./tool-batch-completion.js";
 import type { FinalizedToolCallOutcome } from "./tool-call-outcome.js";
 import { resolveAgentAssistantTurnId } from "./tool-execution-context.js";
+import type { ToolRepeatVerdict } from "./tool-repeat-guard.js";
 import { withToolResultContentSource } from "./turn-taint.js";
 import type {
   AgentContext,
@@ -31,7 +38,6 @@ import type {
   AgentToolCall,
   AgentToolResult,
   StreamFn,
-  ToolLoopIntervention,
   ToolResultContentSource,
 } from "./types.js";
 
@@ -40,6 +46,7 @@ export type AgentEventSink = (event: AgentEvent) => Promise<void> | void;
 export type AsyncToolBatchScheduling = {
   waitForPrevious: () => Promise<void>;
   onParallelStarted: () => void;
+  onTerminalLoop: () => void;
   hasUnobservedAsyncToolResults: boolean;
 };
 
@@ -48,8 +55,8 @@ export type ExecutedToolCallBatch = {
   terminalToolCallIds: string[];
   steeringMessages: AgentMessage[];
   terminate: boolean;
-  terminateRun: boolean;
-  intervention?: ToolLoopIntervention;
+  /** The repeat guard capped this batch; the turn ends with `tool_repeat_limit`. */
+  repeatStop?: ToolRepeatVerdict;
   fatal?: { error: unknown };
 };
 
@@ -93,12 +100,12 @@ export function emitToolExecutionStart(
   });
 }
 
-export async function emitToolExecutionEnd(
+export function emitToolExecutionEnd(
   finalized: FinalizedToolCallOutcome,
   batch: { emit: AgentEventSink; assistantMessage: AssistantMessage },
-): Promise<void> {
+): ReturnType<AgentEventSink> {
   const assistantTurnId = resolveAgentAssistantTurnId(batch.assistantMessage);
-  await batch.emit({
+  return batch.emit({
     type: "tool_execution_end",
     toolCallId: finalized.toolCall.id,
     ...(assistantTurnId ? { assistantTurnId } : {}),
@@ -187,8 +194,13 @@ export async function streamAgentResponse(
   const llmMessages = await convertMessages(sourceMessages);
   let requestPrefix: string | undefined;
 
+  context.preparedSystemPrompt = prepareSystemPrompt(
+    context.systemPrompt,
+    context.preparedSystemPrompt,
+  );
   const llmContext: Context = {
     systemPrompt: context.systemPrompt,
+    preparedSystemPrompt: context.preparedSystemPrompt,
     messages: llmMessages,
     tools: context.tools,
   };
@@ -205,9 +217,16 @@ export async function streamAgentResponse(
     : executionAbort.signal;
   const modelAbort = new AbortController();
   const requestSignal = AbortSignal.any([executionSignal, modelAbort.signal]);
+  let toolRepeatStopped = false;
+  const onTerminalLoop = () => {
+    // Stop sampling before ordered publication waits for already-started effects.
+    toolRepeatStopped = true;
+    modelAbort.abort(new Error("Tool batch terminated"));
+  };
   const abortFailedResponse = (message?: AssistantMessage) => {
     if (
       message &&
+      !toolRepeatStopped &&
       (message.stopReason === "error" || message.stopReason === "aborted") &&
       message.errorCode !== REPETITIVE_OUTPUT_ERROR_CODE &&
       !isResponsesOutputLimitToolCallError(message)
@@ -277,14 +296,22 @@ export async function streamAgentResponse(
     });
     const execution = previousAdmission
       .then(async () => {
-        const batch = await executeAsyncTools(message, calls, executionSignal, emitToolEvent, {
+        // Later queued batches complete as unstarted calls without cancelling active work.
+        let batchSignal = executionSignal;
+        if (toolRepeatStopped) {
+          batchSignal = AbortSignal.abort(new Error("Tool repeat limit reached"));
+          // Sampling already stopped; keep their synthetic results behind earlier work.
+          await previousExecutions;
+        }
+        const batch = await executeAsyncTools(message, calls, batchSignal, emitToolEvent, {
           waitForPrevious: () => previousExecutions,
           onParallelStarted: releaseAdmission,
+          onTerminalLoop,
           hasUnobservedAsyncToolResults,
         });
         batches.push(batch);
-        if (batch.fatal || batch.terminateRun) {
-          executionAbort.abort(batch.fatal?.error ?? new Error("Tool batch terminated"));
+        if (batch.fatal) {
+          executionAbort.abort(batch.fatal.error);
         }
       })
       .catch((error: unknown) => {
@@ -339,6 +366,26 @@ export async function streamAgentResponse(
           await emit({ type: "message_end", message });
         };
 
+        function projectEvent(
+          event: Extract<AssistantMessageEvent, { contentIndex: number }>,
+          fragment: AssistantMessage,
+          completedToolCall: boolean,
+        ) {
+          // Keep completion events isolated: their original fields govern admission after emit.
+          if (
+            committedContentCount === 0 &&
+            !completedToolCall &&
+            (!("partial" in event) || event.partial === fragment)
+          ) {
+            return event;
+          }
+          const projected = { ...event, contentIndex: event.contentIndex - committedContentCount };
+          if ("partial" in event) {
+            projected.partial = fragment;
+          }
+          return projected;
+        }
+
         for await (const event of response) {
           switch (event.type) {
             case "start": {
@@ -361,14 +408,14 @@ export async function streamAgentResponse(
             case "toolcall_end":
               if (partialMessage) {
                 // Only updates assembled here prove appends; provider snapshots can correct text.
-                const priorBlock = partialMessage.content[event.contentIndex];
-                const append =
-                  repetitionGuard && event.type === "text_delta" && event.partial === undefined
-                    ? {
-                        offset: priorBlock?.type === "text" ? priorBlock.text.length : 0,
-                        delta: event.delta,
-                      }
-                    : undefined;
+                let append: { offset: number; delta: string } | undefined;
+                if (repetitionGuard && event.type === "text_delta" && event.partial === undefined) {
+                  const priorBlock = partialMessage.content[event.contentIndex];
+                  append = {
+                    offset: priorBlock?.type === "text" ? priorBlock.text.length : 0,
+                    delta: event.delta,
+                  };
+                }
                 let message: AssistantMessage = partialMessage;
                 if ("partial" in event && event.partial) {
                   message = event.partial;
@@ -401,41 +448,40 @@ export async function streamAgentResponse(
                 } else {
                   context.messages[partialIndex] = fragment;
                 }
-                const fragmentEvent = {
-                  ...event,
-                  contentIndex: event.contentIndex - committedContentCount,
-                  ...("partial" in event ? { partial: fragment } : {}),
-                };
+                const completedToolCall = event.type === "toolcall_end";
+                const fragmentEvent = projectEvent(event, fragment, completedToolCall);
                 await emit({
                   type: "message_update",
                   assistantMessageEvent: fragmentEvent,
-                  message: { ...fragment },
+                  // Partial-free text already has a fresh envelope; providers still own snapshots.
+                  message:
+                    event.type === "text_delta" && !event.partial
+                      ? Object.freeze(fragment)
+                      : { ...fragment },
                 });
                 if (
-                  event.type === "toolcall_end" &&
+                  completedToolCall &&
                   event.toolCall.async &&
                   !executedIds.has(event.toolCall.id) &&
                   message.content
                     .slice(committedContentCount, event.contentIndex)
                     .every((item) => item.type !== "toolCall" || item.async === true)
                 ) {
-                  const prefix = prepareAssistantMessage(
-                    ensureToolTurnIdentity({
-                      // Persistence takes ownership and freezes nested values. Detach the
-                      // completed prefix from the provider's still-mutable stream, after
-                      // replay checkpoints have been reindexed using original block identity.
-                      ...structuredClone(
-                        replaceCompactionReplayOwnerContent(
-                          message,
-                          message.content.slice(committedContentCount, event.contentIndex + 1),
-                        ),
-                      ),
-                      ...(streamedTurnId ? { turnId: streamedTurnId } : {}),
-                      stopReason: "toolUse",
-                      // Usage belongs to the terminal fragment, once per provider response.
-                      usage: createEmptyTransportUsage(),
-                    }),
+                  // Persistence takes ownership and freezes nested values. Detach the
+                  // completed prefix after reindexing checkpoints using original block identity.
+                  let prefix = structuredClone(
+                    replaceCompactionReplayOwnerContent(
+                      message,
+                      message.content.slice(committedContentCount, event.contentIndex + 1),
+                    ),
                   );
+                  if (streamedTurnId) {
+                    prefix.turnId = streamedTurnId;
+                  }
+                  prefix.stopReason = "toolUse";
+                  // Usage belongs to the terminal fragment, once per provider response.
+                  prefix.usage = createEmptyTransportUsage();
+                  prefix = prepareAssistantMessage(ensureToolTurnIdentity(prefix));
                   streamedTurnId ??= prefix.turnId;
                   // Await transcript persistence before admitting side effects. The model
                   // may keep sampling, but every executed call has a durable owner.

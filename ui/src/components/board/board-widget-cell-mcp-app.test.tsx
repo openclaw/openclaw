@@ -111,6 +111,13 @@ async function settle(cell: BoardWidgetCell): Promise<void> {
 
 const app = (cell: BoardWidgetCell) => cell.querySelector<TestMcpAppView>("mcp-app-view");
 const stale = (cell: BoardWidgetCell) => testId(cell, "board-mcp-app-stale");
+const actionError = (cell: BoardWidgetCell) => testId(cell, "board-widget-action-error");
+const frameError = (cell: BoardWidgetCell) => testId(cell, "board-widget-error");
+const scrollable = (cell: BoardWidgetCell) => cell.querySelector(".board-widget__body--scrollable");
+const grantButton = (cell: BoardWidgetCell) =>
+  cell.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]')!;
+const htmlWidget = (overrides: Partial<BoardWidget> = {}) =>
+  widget({ contentKind: "html", ...overrides });
 const waitForApp = (cell: BoardWidgetCell) => vi.waitFor(() => expect(app(cell)).not.toBeNull());
 function mountLease(
   viewId: string,
@@ -121,6 +128,13 @@ function mountLease(
     widgetAppView: vi.fn(async () => readyAppView(viewId, expiresAtMs)),
     refreshWidgetAppView,
   });
+}
+async function pendingLease(expiresAtMs = 11_000) {
+  vi.useFakeTimers({ now: 10_000 });
+  const renewal = deferred<BoardWidgetAppViewState>();
+  const refreshWidgetAppView = vi.fn(() => renewal.promise);
+  const cell = await mountLease("initial-view", expiresAtMs, refreshWidgetAppView);
+  return { cell, renewal, refreshWidgetAppView };
 }
 async function advance(cell: BoardWidgetCell, ms: number) {
   await vi.advanceTimersByTimeAsync(ms);
@@ -234,53 +248,44 @@ describe("board MCP App cell lifecycle", () => {
     const removal = deferred();
     const retry = deferred();
     const remove = vi.fn().mockReturnValueOnce(removal.promise).mockReturnValueOnce(retry.promise);
-    const cell = await mount(
-      { remove },
-      { widget: widget({ contentKind: "html", grantState: "pending" }) },
-    );
+    const cell = await mount({ remove }, { widget: htmlWidget({ grantState: "pending" }) });
 
     cell.selectMenuItem("remove");
     cell.selectMenuItem("remove");
     expect(remove).toHaveBeenCalledOnce();
     await settle(cell);
 
-    const allow = cell.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]')!;
+    const allow = grantButton(cell);
     expect(allow.disabled).toBe(true);
     removal.reject(new Error("Removal failed"));
     await settle(cell);
 
-    await waitForSolid(() =>
-      expect(testId(cell, "board-widget-action-error")?.textContent).toContain("Removal failed"),
-    );
+    await waitForSolid(() => expect(actionError(cell)?.textContent).toContain("Removal failed"));
     expect(allow.disabled).toBe(false);
     cell.selectMenuItem("remove");
     await settle(cell);
-    expect(testId(cell, "board-widget-action-error")).toBeNull();
-    expect(cell.querySelector('[data-test-id="board-grant-allow"]')).toBe(allow);
+    expect(actionError(cell)).toBeNull();
+    expect(grantButton(cell)).toBe(allow);
     expect(allow.disabled).toBe(true);
     retry.reject(new Error("Retry failed differently"));
     await settle(cell);
     expect(allow.disabled).toBe(false);
     await waitForSolid(() =>
-      expect(testId(cell, "board-widget-action-error")?.textContent).toContain(
-        "Retry failed differently",
-      ),
+      expect(actionError(cell)?.textContent).toContain("Retry failed differently"),
     );
   });
 
   it("does not publish an old action failure into a replacement widget", async () => {
     const removal = deferred();
-    const current = widget({ contentKind: "html", grantState: "pending" });
+    const current = htmlWidget({ grantState: "pending" });
     const cell = await mount({ remove: () => removal.promise }, { widget: current });
     cell.selectMenuItem("remove");
     await settle(cell);
     await update(cell, { widget: { ...current, name: "replacement" } });
     removal.reject(new Error("Retired widget failed"));
     await settle(cell);
-    expect(testId(cell, "board-widget-action-error")).toBeNull();
-    expect(
-      cell.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]')?.disabled,
-    ).toBe(false);
+    expect(actionError(cell)).toBeNull();
+    expect(grantButton(cell)?.disabled).toBe(false);
   });
 
   it.each([
@@ -291,7 +296,7 @@ describe("board MCP App cell lifecycle", () => {
   ] as const)(
     "retains action errors across unrelated updates and clears them on a new %s",
     async (_change, boardRevision, replacement) => {
-      const current = widget({ contentKind: "html", grantState: "pending" });
+      const current = htmlWidget({ grantState: "pending" });
       const cell = await mount(
         {
           remove: async () => {
@@ -300,26 +305,25 @@ describe("board MCP App cell lifecycle", () => {
         },
         { widget: current },
       );
-      const error = () => testId(cell, "board-widget-action-error");
       cell.selectMenuItem("remove");
       await settle(cell);
-      await waitForSolid(() => expect(error()?.textContent).toContain("Removal failed"));
+      await waitForSolid(() => expect(actionError(cell)?.textContent).toContain("Removal failed"));
 
       await update(cell, { widget: { ...current, title: "Updated title" }, active: false });
-      expect(error()?.textContent).toContain("Removal failed");
+      expect(actionError(cell)?.textContent).toContain("Removal failed");
 
       await update(cell, { boardRevision, widget: { ...current, ...replacement } });
-      expect(error()).toBeNull();
+      expect(actionError(cell)).toBeNull();
     },
   );
 
   it.each(["resolver replacement", "in-place revision"] as const)(
     "keeps failed frame retries visible and clears their presentation after %s",
     async (recovery) => {
-      const current = widget({ contentKind: "html" });
+      const current = htmlWidget();
       const cell = await mount({}, { widget: current });
-      expect(testId(cell, "board-widget-error")).not.toBeNull();
-      expect(cell.querySelector(".board-widget__body--scrollable")).not.toBeNull();
+      expect(frameError(cell)).not.toBeNull();
+      expect(scrollable(cell)).not.toBeNull();
 
       await update(cell, {
         widgetFrameUrl: (_name, revision) => {
@@ -329,8 +333,8 @@ describe("board MCP App cell lifecycle", () => {
           throw new Error("Frame unavailable");
         },
       });
-      expect(testId(cell, "board-widget-error")?.textContent).toContain("Frame unavailable");
-      expect(cell.querySelector(".board-widget__body--scrollable")).not.toBeNull();
+      expect(frameError(cell)?.textContent).toContain("Frame unavailable");
+      expect(scrollable(cell)).not.toBeNull();
 
       if (recovery === "in-place revision") {
         current.revision = 2;
@@ -338,14 +342,14 @@ describe("board MCP App cell lifecycle", () => {
       } else {
         await update(cell, { widgetFrameUrl: () => "/recovered-frame" });
       }
-      expect(testId(cell, "board-widget-error")).toBeNull();
-      expect(cell.querySelector(".board-widget__body--scrollable")).toBeNull();
+      expect(frameError(cell)).toBeNull();
+      expect(scrollable(cell)).toBeNull();
       expect(cell.querySelector("iframe")?.getAttribute("src")).toBe("/recovered-frame");
     },
   );
 
   it("refreshes an in-place HTML widget when its board revision changes", async () => {
-    const current = widget({ contentKind: "html" });
+    const current = htmlWidget();
     const cell = await mount(
       {},
       {
@@ -418,9 +422,7 @@ describe("board MCP App cell lifecycle", () => {
   });
 
   it("updates ready leases and titles without replacing the native view", async () => {
-    vi.useFakeTimers({ now: 10_000 });
-    const renewal = deferred<BoardWidgetAppViewState>();
-    const cell = await mountLease("initial-view", 20_000, () => renewal.promise);
+    const { cell, renewal } = await pendingLease(20_000);
     await waitForApp(cell);
     const view = app(cell)!;
     await update(cell, { active: false, widget: widget({ title: "Updated app" }) });
@@ -484,28 +486,30 @@ describe("board MCP App cell lifecycle", () => {
     expect(refreshWidgetAppView).toHaveBeenCalledOnce();
   });
 
-  it("cleans up visibility when an MCP App cell becomes HTML", async () => {
+  it("creates an MCP App owner from a native cell and cleans up visibility on HTML", async () => {
     const visibility = stubVisibility(() => true);
     const widgetAppView = vi.fn(async () => readyAppView("converted-view"));
-    const cell = await mount({ widgetAppView }, { widget: widget({ contentKind: "html" }) });
+    const cell = await mount(
+      { widgetAppView },
+      { widget: widget({ contentKind: "plugin", pluginKind: "fixture:native" }) },
+    );
+    expect(widgetAppView).not.toHaveBeenCalled();
+    expect(visibility.observed()).toBe(0);
     await update(cell, { widget: widget() });
     await vi.waitFor(() => expect(widgetAppView).toHaveBeenCalledOnce());
     expect(visibility.observed()).toBe(1);
-    await update(cell, { widget: widget({ contentKind: "html" }) });
+    await update(cell, { widget: htmlWidget() });
     expect(visibility.disconnect).toHaveBeenCalledOnce();
     expect(widgetAppView).toHaveBeenCalledOnce();
   });
 
   it("recovers when a slow renewal finishes after the expiry watchdog", async () => {
-    vi.useFakeTimers({ now: 10_000 });
-    const remint = deferred<BoardWidgetAppViewState>();
-    const refreshWidgetAppView = vi.fn(() => remint.promise);
-    const cell = await mountLease("short-view", 11_000, refreshWidgetAppView);
+    const { cell, renewal, refreshWidgetAppView } = await pendingLease();
     await advance(cell, 0);
     expect(refreshWidgetAppView).toHaveBeenCalledOnce();
     await advance(cell, 1_000);
     expect(stale(cell)).not.toBeNull();
-    remint.resolve(readyAppView("late-view", 30_000));
+    renewal.resolve(readyAppView("late-view", 30_000));
     await settle(cell);
     expect(app(cell)?.viewId).toBe("late-view");
   });
@@ -526,11 +530,8 @@ describe("board MCP App cell lifecycle", () => {
   });
 
   it("keeps the expiry watchdog when a renewing app moves offscreen", async () => {
-    vi.useFakeTimers({ now: 10_000 });
     const setVisible = stubChangingVisibility();
-    const remint = deferred<BoardWidgetAppViewState>();
-    const refreshWidgetAppView = vi.fn(() => remint.promise);
-    const cell = await mountLease("short-view", 11_000, refreshWidgetAppView);
+    const { cell, refreshWidgetAppView } = await pendingLease();
     await advance(cell, 0);
     setVisible(false);
     await settle(cell);
@@ -542,14 +543,11 @@ describe("board MCP App cell lifecycle", () => {
   });
 
   it("does not remint a short renewed lease when it returns onscreen", async () => {
-    vi.useFakeTimers({ now: 10_000 });
     const setVisible = stubChangingVisibility();
-    const remint = deferred<BoardWidgetAppViewState>();
-    const refreshWidgetAppView = vi.fn(() => remint.promise);
-    const cell = await mountLease("first-view", 20_000, refreshWidgetAppView);
+    const { cell, renewal, refreshWidgetAppView } = await pendingLease(20_000);
     await vi.advanceTimersByTimeAsync(5_000);
     setVisible(false);
-    remint.resolve(readyAppView("short-renewed", 18_000));
+    renewal.resolve(readyAppView("short-renewed", 18_000));
     await settle(cell);
     setVisible(true);
     await settle(cell);

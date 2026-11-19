@@ -19,6 +19,7 @@ type StartupResult = Awaited<ReturnType<typeof ensureGatewayStartupAuth>>;
 type Auth = NonNullable<NonNullable<OpenClawConfig["gateway"]>["auth"]>;
 const secretRef = (id: string) => ({ source: "env" as const, provider: "default", id });
 const authConfig = (auth: Auth): OpenClawConfig => ({ gateway: { auth } });
+const authInput = (auth: Auth): StartupInput => ({ cfg: authConfig(auth) });
 const refConfig = (auth: Auth): OpenClawConfig => ({
   ...authConfig(auth),
   secrets: { providers: { default: { source: "env" } } },
@@ -171,49 +172,30 @@ describe("ensureGatewayStartupAuth", () => {
     },
   );
 
-  it.each<StartupInput & { name: string; error: RegExp }>([
-    refCase("token", false),
-    {
-      name: "ambiguous token/password mode",
-      cfg: authConfig({ token: "configured-token", password: "configured-password" }), // pragma: allowlist secret
-      persist: true,
-      error: /gateway\.auth\.mode is unset/i,
-    },
-    refCase("password", false),
-    {
-      name: "environment placeholder token",
-      cfg: {},
-      env: { OPENCLAW_GATEWAY_TOKEN: WEAK_TOKEN },
-      error: /example placeholder/i,
-    },
-    {
-      name: "configured placeholder token",
-      cfg: authConfig({ mode: "token", token: WEAK_TOKEN }),
-      error: /example placeholder/i,
-    },
-    {
-      name: "configured undefined token",
-      cfg: authConfig({ mode: "token", token: "undefined" }),
-      error: /example placeholder/i,
-    },
-    {
-      name: ".env.example placeholder password",
-      cfg: authConfig({ mode: "password", password: "change-me-to-a-strong-password" }), // pragma: allowlist secret
-      error: /example placeholder/i,
-    },
-    {
-      name: "invalid password with password-specific recovery advice",
-      cfg: authConfig({ mode: "password", password: "  undefined  " }),
-      error:
-        /gateway auth password.*Generate a real secret.*OPENCLAW_GATEWAY_PASSWORD.*gateway.auth.password/,
-    },
-    {
-      name: "persisted blank token",
-      cfg: authConfig({ mode: "token", token: "" }),
-      error: /blank/,
-    },
-  ])("rejects $name", async ({ cfg, env, persist, error }) => {
-    await expect(run({ cfg, env, persist })).rejects.toThrow(error);
+  it.each<[StartupInput, RegExp]>([
+    [refCase("token", false), /GW_TOKEN/i],
+    [refCase("password", false), /GW_PASSWORD/i],
+    [
+      {
+        ...authInput({ token: "configured-token", password: "configured-password" }),
+        persist: true,
+      },
+      /gateway\.auth\.mode is unset/i,
+    ],
+    [{ cfg: {}, env: { OPENCLAW_GATEWAY_TOKEN: WEAK_TOKEN } }, /example placeholder/i],
+    [authInput({ mode: "token", token: WEAK_TOKEN }), /example placeholder/i],
+    [authInput({ mode: "token", token: "undefined" }), /example placeholder/i],
+    [
+      authInput({ mode: "password", password: "change-me-to-a-strong-password" }),
+      /example placeholder/i,
+    ],
+    [
+      authInput({ mode: "password", password: "  undefined  " }),
+      /gateway auth password.*Generate a real secret.*OPENCLAW_GATEWAY_PASSWORD.*gateway.auth.password/,
+    ],
+    [authInput({ mode: "token", token: "" }), /blank/],
+  ])("rejects invalid startup credentials %j", async (input, error) => {
+    await expect(run(input)).rejects.toThrow(error);
   });
 
   it("does not generate in explicit none mode", async () => {

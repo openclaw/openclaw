@@ -412,7 +412,7 @@ export function workerProbe(
     directory,
     `
     ${receiptEndpoint ? fixtureReceiptClientSource(receiptEndpoint) : ""}
-    import * as cp from 'node:child_process';
+    import cp from 'node:child_process';
     import fs from 'node:fs';
     import path from 'node:path';
     import { fileURLToPath } from 'node:url';
@@ -439,7 +439,8 @@ export function workerProbe(
     const entriesPresentAtCollection = [...tuiUrls,...setupUrls,retentionUrl,scriptUrl].every(url => fs.existsSync(new URL(url)));
     vi.mock('node:child_process', async (original) => {
       const actual = await original();
-      return {...actual, execFile: vi.fn(actual.execFile)};
+      const execFile = vi.fn(actual.execFile);
+      return {...actual, execFile, default: {...actual.default, execFile}};
     });
     vi.mock('node:worker_threads', async (original) => {
       const actual = await original();
@@ -481,7 +482,7 @@ export function workerProbe(
           const [archiveUrl] = Worker.mock.calls.at(-1);
           expect(archiveUrl.href.endsWith(sourceMode ? '.ts' : '.js')).toBe(true);
           if (!sourceMode) expect(fileURLToPath(archiveUrl).startsWith(fileURLToPath(new URL('../', generation)))).toBe(true);
-          expect(tuiUrls).toHaveLength(5);
+          expect(tuiUrls).toHaveLength(6);
           expect(setupUrls).toHaveLength(2);
           expect(scriptUrl.endsWith(sourceMode ? '.mts' : '.js')).toBe(true);
           for (const url of [...tuiUrls,...setupUrls,retentionUrl]) {

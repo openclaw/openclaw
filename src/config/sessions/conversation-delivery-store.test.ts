@@ -175,23 +175,20 @@ it.each(["maintenance", "guarded deletion"] as const)(
 
 it("removes only source-bound delivery evidence and its progress cache when fully deleted", async () => {
   const { scope, conversationRef, begin, get, send } = await conversationStore();
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteReadScope(scope)));
+  const { db } = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteReadScope(scope)));
   const progressJson = JSON.stringify({ lines: ["Working"] });
+  const insertCache = db.prepare(
+    "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, 1)",
+  );
   for (const [operationId, sourceSessionKey] of [
     ["deleted", sessionKey],
     ["other", "agent:main:other"],
   ] as const) {
     await begin(operationId, { sourceSessionKey });
     await send(operationId, "platform-deleted");
-    database.db
-      .prepare(
-        "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES ('conversation-progress', ?, ?, 1)",
-      )
-      .run(operationId, progressJson);
+    insertCache.run("conversation-progress", operationId, progressJson);
   }
-  database.db
-    .prepare("INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)")
-    .run("unrelated", "deleted", "keep", 1);
+  insertCache.run("unrelated", "deleted", "keep");
 
   await deleteSessionEntryLifecycle({
     ...scope,
@@ -202,12 +199,12 @@ it("removes only source-bound delivery evidence and its progress cache when full
 
   expect(await get("deleted")).toBeUndefined();
   expect(
-    database.db
+    db
       .prepare("SELECT key, value_json FROM cache_entries WHERE scope = 'conversation-progress'")
       .all(),
   ).toEqual([{ key: "other", value_json: progressJson }]);
   expect(
-    database.db
+    db
       .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
       .get("unrelated", "deleted"),
   ).toEqual({ value_json: "keep" });

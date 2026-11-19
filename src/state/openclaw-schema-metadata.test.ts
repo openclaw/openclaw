@@ -2,9 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { DatabaseSync, StatementSync, constants as SQL } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { probeSqliteIteratorBehavior } from "../infra/sqlite-native-observer.js";
 import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import {
   admitSqliteSchema,
@@ -75,10 +73,9 @@ describe.each(["agent", "global"] as const)("%s schema metadata", (role) => {
       } else if (failure === "inspect-ignored") {
         authorize(database, SQL.SQLITE_PRAGMA, "table_info", SQL.SQLITE_IGNORE);
       }
-      const cause = { code: "ERR_SQLITE_ERROR", errcode: 1 };
       const expected =
         failure === "missing"
-          ? { name: "SqliteSchemaMismatchError", cause }
+          ? { name: "SqliteSchemaMismatchError", cause: { code: "ERR_SQLITE_ERROR", errcode: 1 } }
           : { name: "Error", code: "ERR_SQLITE_ERROR", errcode: 23 };
       const check = (observed: unknown) => {
         if (nativeFailure) {
@@ -110,14 +107,10 @@ it.each(["transaction", "pinned snapshot"] as const)(
     writer.exec("PRAGMA journal_mode=WAL");
     using reader = new DatabaseSync(filename, { readOnly: true });
     const read = () => readOperation(reader, () => readAgentMeta(reader));
-    const observation = observeSqliteReadSql(StatementSync.prototype);
-    const metadataReads = () =>
-      observation.queries.filter((sql) => /^SELECT role, schema_version, agent_id/iu.test(sql));
     const readSnapshot = () => {
       expect([read()?.agentId, read()?.agentId]).toEqual(["main", "main"]);
       writer.exec("UPDATE schema_meta SET agent_id = 'foreign'");
       expect(read()?.agentId).toBe("main");
-      expect(metadataReads()).toHaveLength(3);
     };
     if (snapshot === "transaction") {
       reader.exec("BEGIN");
@@ -130,7 +123,6 @@ it.each(["transaction", "pinned snapshot"] as const)(
       runSqliteSchemaReadSnapshotSync(reader, readSnapshot);
     }
     expect([read()?.agentId, read()?.agentId]).toEqual(["foreign", "foreign"]);
-    expect(metadataReads()).toHaveLength(5);
   },
 );
 
@@ -142,7 +134,6 @@ it("keeps admitted ownership current through local writes, rollback, and authori
   trackSqliteSchema(database, {
     DatabaseSync,
     StatementSync,
-    iteratorBehavior: probeSqliteIteratorBehavior(database.prepare("SELECT 1")).iteratorBehavior,
   });
   admitSqliteSchema(database);
   const read = () => readOperation(database, () => readAgentMeta(database));

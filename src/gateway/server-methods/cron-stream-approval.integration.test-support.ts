@@ -152,15 +152,15 @@ export async function withStreamApprovalFixture(
     }
     return true;
   };
-  const registry = createRequestGatewayMethodRegistry({
-    ...createExecApprovalHandlers(manager, {
+  const registry = createRequestGatewayMethodRegistry(
+    createExecApprovalHandlers(manager, {
       forwarder: {
         handleRequested: fixture.context.forwardExecApprovalRequest,
         handleResolved: async () => {},
         stop: async () => {},
       },
     }),
-  });
+  );
   fixture.context.getGatewayMethodRegistry = () => registry;
   const operator = createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] });
   const operatorConnId = "stream-native-operator";

@@ -16,6 +16,7 @@ import {
   waitForExecSession,
   type ProcessSession,
 } from "../../agents/bash-process-registry.js";
+import type { AgentHarness } from "../../agents/harness/types.js";
 import { createLazyExecTool } from "../../agents/lazy-exec-tool.js";
 import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
@@ -88,6 +89,10 @@ function mainRun(owner?: NonNullable<Parameters<typeof createActiveRun>[1]>["own
   return createActiveRun(mainIdentity.sessionKey, { ...mainIdentity, owner });
 }
 
+function queueChild(groupId: string, runId: string, capacity: string, start: () => Promise<void>) {
+  fixture.queueRun({ groupId, runId, activeRunIds: [capacity], start });
+}
+
 function registerDescendant(
   runId: string,
   childSessionKey: string,
@@ -107,11 +112,7 @@ function registerDescendant(
 afterEach(() => resetPluginRuntimeStateForTest());
 
 function installNativeCancellation(
-  withDescendantCancellation: NonNullable<
-    ReturnType<
-      typeof createEmptyPluginRegistry
-    >["agentHarnesses"][number]["harness"]["withDescendantCancellation"]
-  >,
+  withDescendantCancellation: NonNullable<AgentHarness["withDescendantCancellation"]>,
 ) {
   const registry = createEmptyPluginRegistry();
   registry.agentHarnesses.push({
@@ -418,12 +419,7 @@ describe("descendant cascade ownership", () => {
           requesterTurnRunId,
           queued: true,
         });
-        fixture.queueRun({
-          groupId: "exec-continuation-ownership",
-          runId,
-          activeRunIds: ["held-continuation-capacity"],
-          start,
-        });
+        queueChild("exec-continuation-ownership", runId, "held-continuation-capacity", start);
       };
       try {
         await withExecRequestTurn(
@@ -541,12 +537,7 @@ describe("descendant cascade ownership", () => {
     const start = vi.fn(async () => {
       started.resolve();
     });
-    fixture.queueRun({
-      groupId: "retained-stop",
-      runId: "retained-stop-child",
-      activeRunIds: ["held-capacity"],
-      start,
-    });
+    queueChild("retained-stop", "retained-stop-child", "held-capacity", start);
     let current = true;
     const parent = mainRun({ connId: "owner" });
     const turnAborted = createDeferred();
@@ -582,53 +573,39 @@ describe("descendant cascade ownership", () => {
       };
     });
     let command: ProcessSession | undefined;
+    const identity = { ...mainIdentity, runId: "parent", ownerConnId: "owner" };
     const execution = withEnvAsync({ OPENCLAW_EXEC_SHELL_SNAPSHOT: "0" }, () =>
-      withExecRequestTurn(
-        {
-          identity: {
-            runId: "parent",
-            sessionKey,
-            sessionId: "main-session",
-            agentId: "main",
-            ownerConnId: "owner",
+      withExecRequestTurn({ identity, abortSignal: parent.input.abortSignal }, async () => {
+        const tool = createLazyExecTool({
+          ...identity,
+          config: getRuntimeConfig(),
+          cwd: fixture.stateDir,
+          scopeKey: sessionKey,
+          host: "gateway",
+          mode: "full",
+          ask: "off",
+          allowBackground: true,
+          notifyOnExit: false,
+          preparedStoreEnvironment: {},
+        });
+        const result = await tool.execute(
+          "ordinary-command",
+          {
+            command: `node -e "require('fs').watch('.', () => {})"`,
+            yieldMs: 10,
+            timeoutSeconds: 60,
           },
-          abortSignal: parent.input.abortSignal,
-        },
-        async () => {
-          const tool = createLazyExecTool({
-            runId: "parent",
-            sessionKey,
-            sessionId: "main-session",
-            agentId: "main",
-            config: getRuntimeConfig(),
-            cwd: fixture.stateDir,
-            scopeKey: sessionKey,
-            host: "gateway",
-            mode: "full",
-            ask: "off",
-            allowBackground: true,
-            notifyOnExit: false,
-            preparedStoreEnvironment: {},
-          });
-          const result = await tool.execute(
-            "ordinary-command",
-            {
-              command: `node -e "require('fs').watch('.', () => {})"`,
-              yieldMs: 10,
-              timeoutSeconds: 60,
-            },
-            parent.input.abortSignal,
-          );
-          const details = asOptionalRecord(result.details);
-          expect(details?.status).toBe("running");
-          if (typeof details?.sessionId !== "string") {
-            throw new Error("Expected an ordinary command to yield its process handle");
-          }
-          command = expectDefined(getSession(details.sessionId), "ordinary command");
-          commandReady.resolve();
-          await turnAborted.promise;
-        },
-      ),
+          parent.input.abortSignal,
+        );
+        const details = asOptionalRecord(result.details);
+        expect(details?.status).toBe("running");
+        if (typeof details?.sessionId !== "string") {
+          throw new Error("Expected an ordinary command to yield its process handle");
+        }
+        command = expectDefined(getSession(details.sessionId), "ordinary command");
+        commandReady.resolve();
+        await turnAborted.promise;
+      }),
     );
     void execution.catch((error: unknown) => commandReady.reject(error));
     let stopping: ReturnType<typeof invokeChatAbortHandler> | undefined;
@@ -714,28 +691,29 @@ describe("descendant cascade ownership", () => {
     "represented worker",
     "hidden worker",
   ])("does not kill or inhibit excluded queued descendants: %s", async (kind) => {
-    const sessionKey = kind.includes("worker") ? "global" : "agent:main:main";
+    const worker = kind.includes("worker");
+    const late = kind === "late descendant";
+    const hidden = ["hidden", "hidden worker", "all foreign hidden"].includes(kind);
+    const allForeign = kind.startsWith("all foreign");
+    const mixedOwner = kind === "mixed active" || kind === "mixed queued";
+    const sessionKey = worker ? "global" : "agent:main:main";
+    const orchestratorKey = "agent:main:subagent:orchestrator";
     const cfg: OpenClawConfig = sessionKey === "global" ? { session: { scope: "global" } } : {};
     const childKey = "agent:main:subagent:cascade-ownership";
     const storePath = await writeSession(sessionKey, "main-session");
     await writeSession(childKey, "cascade-queued");
     const canCascade = ["owned", "orphan", "represented worker", "late descendant"].includes(kind);
-    const hasOwnedActive = kind !== "orphan" && !kind.startsWith("all foreign");
+    const hasOwnedActive = kind !== "orphan" && !allForeign;
+    const runIdentity = { storeScope: storePath, sessionId: "main-session", agentId: "main" };
     const mine = createActiveRun(sessionKey, {
-      storeScope: storePath,
-      sessionId: "main-session",
-      agentId: "main",
+      ...runIdentity,
       owner: { connId: "conn-owner", deviceId: "dev-owner" },
     });
     const foreign = createActiveRun(sessionKey, {
-      storeScope: storePath,
+      ...runIdentity,
       queued: kind === "mixed queued",
-      sessionId: "main-session",
-      agentId: "main",
       owner: { connId: "conn-foreign", deviceId: "dev-foreign" },
-      controlUiVisible: ["hidden", "hidden worker", "all foreign hidden"].includes(kind)
-        ? false
-        : undefined,
+      controlUiVisible: hidden ? false : undefined,
       turnKind: kind === "preserved" ? "btw" : undefined,
     });
     const context = createChatAbortContext({ getRuntimeConfig: () => cfg });
@@ -743,28 +721,16 @@ describe("descendant cascade ownership", () => {
       rpcSourceTesting.set("run-mine", mine);
       context.chatRunState.getOrCreate("run-mine").buffer = "partial parent reply";
       mine.input.abortSignal.addEventListener("abort", () => {
-        if (kind !== "late descendant") {
+        if (!late) {
           releaseSwarmRun("capacity");
         }
       });
     }
-    if (
-      [
-        "all foreign",
-        "all foreign hidden",
-        "mixed active",
-        "hidden",
-        "preserved",
-        "hidden worker",
-      ].includes(kind)
-    ) {
-      rpcSourceTesting.set("run-foreign", foreign);
-    }
-    if (kind === "mixed queued") {
+    if (allForeign || mixedOwner || hidden || kind === "preserved") {
       rpcSourceTesting.set("run-foreign", foreign);
     }
     const cancelInferenceForSession = vi.fn(() => ["worker-run"]);
-    if (kind.includes("worker")) {
+    if (worker) {
       const workerRunId =
         kind === "represented worker"
           ? "run-mine"
@@ -779,14 +745,13 @@ describe("descendant cascade ownership", () => {
     }
     const registerChild = () =>
       registerDescendant("cascade-queued", childKey, {
-        requesterSessionKey:
-          kind === "late descendant" ? "agent:main:subagent:orchestrator" : sessionKey,
+        requesterSessionKey: late ? orchestratorKey : sessionKey,
         requesterDisplayKey: sessionKey,
         queued: true,
       });
-    if (kind === "late descendant") {
-      await writeSession("agent:main:subagent:orchestrator", "orchestrator");
-      await registerDescendant("orchestrator", "agent:main:subagent:orchestrator", {
+    if (late) {
+      await writeSession(orchestratorKey, "orchestrator");
+      await registerDescendant("orchestrator", orchestratorKey, {
         requesterSessionKey: sessionKey,
         requesterTurnRunId: "run-mine",
       });
@@ -794,33 +759,27 @@ describe("descendant cascade ownership", () => {
       await registerChild();
     }
     const start = vi.fn(async () => {});
-    fixture.queueRun({
-      groupId: "cascade-ownership",
-      runId: "cascade-queued",
-      activeRunIds: ["capacity"],
-      start,
-    });
+    queueChild("cascade-ownership", "cascade-queued", "capacity", start);
     const entered = createDeferred();
     const proceed = createDeferred();
-    const admission =
-      kind === "late descendant"
-        ? await beginSessionEffect({
-            scope: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-            identities: ["agent:main:subagent:orchestrator"],
-            run: {
-              runId: "orchestrator",
-              sessionKey: "agent:main:subagent:orchestrator",
-              sessionId: "orchestrator",
-              agentId: "main",
-            },
-            assertAllowed: () => {},
-            onInterrupt: () => entered.resolve(),
-          })
-        : undefined;
+    const admission = late
+      ? await beginSessionEffect({
+          scope: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+          identities: [orchestratorKey],
+          run: {
+            runId: "orchestrator",
+            sessionKey: orchestratorKey,
+            sessionId: "orchestrator",
+            agentId: "main",
+          },
+          assertAllowed: () => {},
+          onInterrupt: () => entered.resolve(),
+        })
+      : undefined;
     const append = vi
       .spyOn(transcriptInject, "appendInjectedAssistantMessageToTranscript")
       .mockImplementationOnce(async () => {
-        if (kind === "late descendant") {
+        if (late) {
           releaseSwarmRun("capacity");
         }
         entered.resolve();
@@ -830,7 +789,6 @@ describe("descendant cascade ownership", () => {
     if (!hasOwnedActive && kind !== "orphan") {
       releaseSwarmRun("capacity");
     }
-    const mixedOwner = kind === "mixed active" || kind === "mixed queued";
     const pending = stop({
       handler: cascade,
       context,
@@ -838,7 +796,7 @@ describe("descendant cascade ownership", () => {
         sessionKey,
         agentId: "main",
         preserveSideRuns: kind === "preserved",
-        ...(kind === "late descendant" ? { runId: "run-mine" } : {}),
+        ...(late ? { runId: "run-mine" } : {}),
       },
       client: {
         connId: "conn-owner",
@@ -852,10 +810,9 @@ describe("descendant cascade ownership", () => {
     try {
       if (hasOwnedActive) {
         await entered.promise;
-        if (kind === "late descendant") {
+        if (late) {
           expect(
-            (await getSubagentRunByChildSessionKey("agent:main:subagent:orchestrator"))?.execution
-              .endedAt,
+            (await getSubagentRunByChildSessionKey(orchestratorKey))?.execution.endedAt,
           ).toBeUndefined();
           await registerChild();
         }
@@ -877,7 +834,7 @@ describe("descendant cascade ownership", () => {
       if (kind === "orphan") {
         releaseSwarmRun("capacity");
       }
-      expect(requireLastRespondCall(respond)[0]).toBe(!kind.startsWith("all foreign"));
+      expect(requireLastRespondCall(respond)[0]).toBe(!allForeign);
       if (mixedOwner) {
         expect(requireLastRespondCall(respond)[1]).toMatchObject({
           aborted: true,

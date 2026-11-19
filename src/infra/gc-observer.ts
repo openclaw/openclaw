@@ -15,6 +15,10 @@ export type GcSample = {
   /** Positive native before/after heap drop, not total allocated bytes. */
   reclaimedBytes?: number;
   heapUsedBeforeBytes?: number;
+  /** Native full-heap epilogue, never a later JavaScript heap read. */
+  heapUsedAfterMajorGcBytes?: number;
+  /** Unix observation time: GCProfiler has no per-collection timestamp. */
+  heapUsedAfterMajorGcTimestampSeconds?: number;
 };
 
 const kinds: Readonly<Record<string, GcSample["kind"]>> = {
@@ -43,7 +47,21 @@ function drain(restart: boolean): void {
   const samples: GcSample[] = [];
   for (const entry of result?.statistics ?? []) {
     const kind = kinds[entry.gcType];
+    if (!kind) {
+      continue;
+    }
+    // GCProfiler reports microseconds but does not expose callback flags.
+    const before = entry.beforeGC.heapStatistics.usedHeapSize;
+    const sample: GcSample = {
+      kind,
+      reason: "other",
+      durationMs: entry.cost / 1000,
+      heapUsedBeforeBytes: before,
+      reclaimedBytes: Math.max(0, before - entry.afterGC.heapStatistics.usedHeapSize),
+    };
     if (kind === "mark_sweep_compact") {
+      sample.heapUsedAfterMajorGcBytes = entry.afterGC.heapStatistics.usedHeapSize;
+      sample.heapUsedAfterMajorGcTimestampSeconds = Date.now() / 1000;
       oldGenerationAfterGcBytes = 0;
       for (const space of entry.afterGC.heapSpaceStatistics) {
         if (space.spaceName === "old_space" || space.spaceName === "large_object_space") {
@@ -51,17 +69,7 @@ function drain(restart: boolean): void {
         }
       }
     }
-    if (kind) {
-      // GCProfiler reports microseconds but does not expose callback flags.
-      const before = entry.beforeGC.heapStatistics.usedHeapSize;
-      samples.push({
-        kind,
-        reason: "other",
-        durationMs: entry.cost / 1000,
-        heapUsedBeforeBytes: before,
-        reclaimedBytes: Math.max(0, before - entry.afterGC.heapStatistics.usedHeapSize),
-      });
-    }
+    samples.push(sample);
   }
   if (samples.length) {
     for (const publish of subscribers) {

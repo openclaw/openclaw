@@ -2,6 +2,7 @@ import { connect, type Socket } from "node:net";
 import type { MessagePort } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { decodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import {
@@ -27,6 +28,7 @@ export function attachBrokerNativeResource(
   let closeSequence = 0;
   let ready = false;
   let initializedOwner = false;
+  let dispatched = false;
   let closed = false;
   let failure: Error | undefined;
   let transportLost = false;
@@ -36,6 +38,7 @@ export function attachBrokerNativeResource(
       return;
     }
     const firstFailure = failure === undefined;
+    materializeErrorStack(error);
     failure ??= error;
     clearTimeout(retryTimer);
     clearTimeout(startupTimer);
@@ -148,6 +151,7 @@ export function attachBrokerNativeResource(
     });
     candidate.once("connect", () => {
       connected = true;
+      dispatched = true;
       void transmit({ type: "resource-attach", attachment }).catch((error: unknown) =>
         lose(toErrorObject(error, "Native resource attachment failed")),
       );
@@ -188,6 +192,10 @@ export function attachBrokerNativeResource(
     () => {},
   );
   return {
+    /** False is a no-dispatch receipt: the broker cannot have received this factory. */
+    get dispatched() {
+      return dispatched;
+    },
     ownerMessage(value: unknown, sequence: number) {
       void initialized.promise
         .then(() => transmit({ type: "resource-owner", id: attachment.id, sequence, value }, true))

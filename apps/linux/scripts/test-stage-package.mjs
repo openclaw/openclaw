@@ -18,7 +18,7 @@ const write = (root, file, value) => {
 };
 const read = (root, file) => JSON.parse(fs.readFileSync(path.join(root, file), "utf8"));
 
-for (const platform of ["linux", "windows"]) {
+for (const platform of ["linux", "windows", "darwin"]) {
   test(`stages same-commit Codex and ${platform} dependencies as verified resources`, (t) => {
     // openclaw-temp-dir: allow verifies raw Tauri resource publication
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "tauri-package-"));
@@ -42,7 +42,7 @@ for (const platform of ["linux", "windows"]) {
     write(installed, `${core}/dist/extensions/codex/index.js`, "export {};\n");
     write(installed, `${native}/package.json`, { name: "@openai/codex" });
     write(installed, `${native}/vendor/codex`, "synthetic platform executable");
-    write(work, "manifest.json", { files: { "bin/bun": "existing-runtime-hash" } });
+    write(work, "manifest.json", { runtime: { flavor: "jit", executable: "bin/bun" }, files: { "bin/bun": "existing-runtime-hash" } });
     const payloadWrites = [];
     const writeFileSync = fs.writeFileSync;
     t.mock.method(fs, "writeFileSync", (file, ...args) => {
@@ -69,6 +69,7 @@ for (const platform of ["linux", "windows"]) {
     });
     assert.equal(decode(`${native}/vendor/codex`).toString(), "synthetic platform executable");
     const manifest = read(work, "manifest.json");
+    assert.deepEqual(manifest.runtime, { flavor: "jit", executable: "bin/bun", entry: "package/node_modules/openclaw/openclaw.mjs" });
     assert.deepEqual(payloadWrites.toSorted(), platform === "linux"
       ? Object.keys(manifest.files).filter((file) => file.startsWith("package/")).toSorted()
       : []);
@@ -88,6 +89,17 @@ for (const platform of ["linux", "windows"]) {
   });
 }
 
+test("never installs a loose package into an AOT payload", (t) => {
+  // openclaw-temp-dir: allow verifies rejection before any package mutation
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), "tauri-aot-package-"));
+  t.after(() => fs.rmSync(work, { recursive: true, force: true }));
+  const manifest = { runtime: { flavor: "aot", executable: "standalone/openclaw" }, files: {} };
+  write(work, "manifest.json", manifest);
+  assert.throws(() => stageInstalledPackage(path.join(work, "absent"), work, { platform: "linux", arch: "x64" }, {}), /only be staged for the JIT/);
+  assert.deepEqual(read(work, "manifest.json"), manifest);
+  assert.equal(fs.existsSync(path.join(work, "package")), false);
+});
+
 test("rejects an installed package with the wrong identity before staging", (t) => {
   // openclaw-temp-dir: allow verifies the fresh archive identity before mutation
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "tauri-package-identity-"));
@@ -101,18 +113,18 @@ test("rejects an installed package with the wrong identity before staging", (t) 
   });
   write(installed, "node_modules/openclaw/dist/extensions/codex/index.js", "export {};\n");
   write(installed, "node_modules/@openai/codex-win32-x64/package.json", { name: "@openai/codex" });
-  write(work, "manifest.json", { files: { "bin/bun": "original" } });
+  write(work, "manifest.json", { runtime: { flavor: "jit", executable: "bin/bun" }, files: { "bin/bun": "original" } });
   assert.throws(() => stageInstalledPackage(installed, work, { platform: "windows", arch: "x64" }, {
     commit, pluginIds: ["codex"],
   }), /Expected the OpenClaw package/);
   assert.deepEqual(read(installed, "node_modules/openclaw/package.json"), { name: "unexpected-package" });
   assert.deepEqual(read(installed, "node_modules/openclaw/dist/build-info.json"), { commit });
   assert.equal(fs.existsSync(path.join(installed, "node_modules/openclaw/openclaw-install-owner.json")), false);
-  assert.deepEqual(read(work, "manifest.json"), { files: { "bin/bun": "original" } });
+  assert.deepEqual(read(work, "manifest.json"), { runtime: { flavor: "jit", executable: "bin/bun" }, files: { "bin/bun": "original" } });
   assert.equal(fs.existsSync(path.join(work, "package")), false);
 });
 
-test("exact release builds leave runtime resources unchanged without building or installing core", (t) => {
+test("exact release builds still stage their source package", (t) => {
   // openclaw-temp-dir: allow exercises the exact Git release boundary
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "tauri-release-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -121,15 +133,17 @@ test("exact release builds leave runtime resources unchanged without building or
     "commit", "--allow-empty", "-qm", "fixture"]);
   execFileSync("git", ["-C", root, "tag", "v2026.10.2"]);
   write(root, "package.json", { version: "2026.10.2" });
+  write(root, "scripts/package-openclaw-for-docker.mjs", 'import fs from "node:fs"; fs.writeFileSync("package-builder-reached", "yes"); process.exit(42);');
   const work = path.join(root, "resources");
-  write(work, "manifest.json", { files: { "bin/bun": "original" } });
-  stagePackage(root, work, { platform: "linux", arch: "x64" });
+  write(work, "manifest.json", { runtime: { flavor: "jit", executable: "bin/bun" }, files: { "bin/bun": "original" } });
+  assert.throws(() => stagePackage(root, work, { platform: "linux", arch: "x64" }), { status: 42 });
+  assert.equal(fs.readFileSync(path.join(root, "package-builder-reached"), "utf8"), "yes");
   assert.deepEqual(fs.readdirSync(work), ["manifest.json"]);
-  assert.deepEqual(read(work, "manifest.json"), { files: { "bin/bun": "original" } });
+  assert.deepEqual(read(work, "manifest.json"), { runtime: { flavor: "jit", executable: "bin/bun" }, files: { "bin/bun": "original" } });
 });
 
 for (const platform of ["linux", "windows"]) {
-  test(`tagless ${platform} release builds preserve Bun-only resources`, (t) => {
+  test(`tagless ${platform} release builds still stage their source package`, (t) => {
     // openclaw-temp-dir: allow exercises release staging through a shallow Git checkout
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "tauri-release-identity-"));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -144,15 +158,18 @@ for (const platform of ["linux", "windows"]) {
     execFileSync("git", ["clone", "--quiet", "--depth=1", "--no-tags", pathToFileURL(origin).href, clone]);
     assert.equal(execFileSync("git", ["-C", clone, "tag", "--list"], { encoding: "utf8" }), "");
     const source = execFileSync("git", ["-C", clone, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    write(clone, "scripts/package-openclaw-for-docker.mjs", 'import fs from "node:fs"; fs.writeFileSync("package-builder-reached", "yes"); process.exit(42);');
     const work = path.join(root, "resources");
-    write(work, "manifest.json", { files: { "bin/bun": "original" } });
-    execFileSync(process.execPath, ["--input-type=module", "--eval",
+    write(work, "manifest.json", { runtime: { flavor: "jit", executable: "bin/bun" }, files: { "bin/bun": "original" } });
+    assert.throws(() => execFileSync(process.execPath, ["--input-type=module", "--eval",
       "const { stagePackage } = await import(process.argv[1]); stagePackage(process.argv[2], process.argv[3], { platform: process.argv[4], arch: 'x64' });",
       new URL("./stage-package.mjs", import.meta.url).href, clone, work, platform], {
       env: { ...process.env, RELEASE_TAG: "v2026.10.2", RELEASE_SHA: source },
-    });
+      stdio: "pipe",
+    }), /Command failed/);
+    assert.equal(fs.readFileSync(path.join(clone, "package-builder-reached"), "utf8"), "yes");
     assert.deepEqual(fs.readdirSync(work), ["manifest.json"]);
-    assert.deepEqual(read(work, "manifest.json"), { files: { "bin/bun": "original" } });
+    assert.deepEqual(read(work, "manifest.json"), { runtime: { flavor: "jit", executable: "bin/bun" }, files: { "bin/bun": "original" } });
   });
 }
 
@@ -241,7 +258,7 @@ test("reuses npm tarballs across isolated same-commit package installs", async (
       execFileSync("tar", ["-czf", coreArchive, "-C", core, "package"]);
     }
     const work = path.join(root, `resources-${index}`);
-    write(work, "manifest.json", { files: { "bin/bun.exe": "existing-runtime-hash" } });
+    write(work, "manifest.json", { runtime: { flavor: "jit", executable: "bin/bun.exe" }, files: { "bin/bun.exe": "existing-runtime-hash" } });
     execFileSync(process.execPath, ["--input-type=module", "--eval", `
       import assert from "node:assert/strict";
       import childProcess from "node:child_process";

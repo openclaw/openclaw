@@ -117,16 +117,10 @@ const prependScript = (command: Command, script: string): Command => ({
 });
 const directoryLink = process.platform === "win32" ? "junction" : "dir";
 function placementClaim(error = new Error("placement retired")) {
-  let current = true;
+  const controller = new AbortController();
   return {
-    retire: () => {
-      current = false;
-    },
-    assertCurrent: () => {
-      if (!current) {
-        throw error;
-      }
-    },
+    retire: () => controller.abort(error),
+    assertCurrent: () => controller.signal.throwIfAborted(),
   };
 }
 
@@ -714,6 +708,7 @@ it.each(["cancelled", "retired"])(
     const instructions = await fs.readFile(filePath, "utf8");
     expect(selected).toMatchObject({ filePath: `${remote}/SKILL.md`, baseDir: remote });
     expect(selected.sourceInfo).toEqual(snapshot.resolvedSkills![0]!.sourceInfo);
+    expect(selected).not.toHaveProperty("resourceRootIdentity");
     expect(snapshot.resolvedSkills![0]!.filePath).toBe(filePath);
     for (const prompt of [
       resources!.snapshot.prompt,

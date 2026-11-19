@@ -17,9 +17,9 @@ function createInputPolicy() {
     }
   });
   // A lifecycle assertion is not a SQL-safe input-policy capability.
-  const assertInvocationCurrent = vi.fn(() => {
+  const assertInvocationCurrent = () => {
     throw new Error("lifecycle authority must not be borrowed by SQLite");
-  });
+  };
   return {
     denied,
     enabled: () => enabled,
@@ -42,6 +42,10 @@ function uploadTool(params: Parameters<typeof createWorkboardTools>[0]) {
 
 function uploadInput(id: string) {
   return { id, fileName: "proof.txt", contentBase64: "cHJvb2Y=" };
+}
+
+function physicalBlobs(db: DatabaseSync) {
+  return db.prepare("SELECT attachment_id FROM workboard_attachment_blobs").all();
 }
 
 describe("Workboard tool input commit policy", () => {
@@ -93,16 +97,13 @@ describe("Workboard tool input commit policy", () => {
         }),
       ]);
       expect(adding).toHaveBeenCalledOnce();
-      expect(db.prepare("SELECT attachment_id FROM workboard_attachment_blobs").all()).toEqual([]);
+      expect(physicalBlobs(db)).toEqual([]);
       policy.disable();
       release.resolve();
       await prior;
       expect.soft(await uploading).toBe(policy.denied);
       expect.soft((await store.listAttachments(card.id)).attachments).toEqual([]);
-      expect
-        .soft(db.prepare("SELECT attachment_id FROM workboard_attachment_blobs").all())
-        .toEqual([]);
-      expect(policy.context.assertInvocationCurrent).not.toHaveBeenCalled();
+      expect.soft(physicalBlobs(db)).toEqual([]);
       await expect(store.get(card.id)).resolves.toMatchObject({ notes: "Unrelated admitted edit" });
     } finally {
       release.resolve();
@@ -179,41 +180,25 @@ describe("Workboard tool input commit policy", () => {
     expect(registering).toHaveBeenCalledOnce();
     expect.soft((await store.listAttachments(card.id)).attachments).toEqual([]);
     // Attachment-store reads join metadata and would hide orphaned physical blobs.
-    expect
-      .soft(db.prepare("SELECT attachment_id FROM workboard_attachment_blobs").all())
-      .toEqual([]);
-    expect(policy.context.assertInvocationCurrent).not.toHaveBeenCalled();
+    expect.soft(physicalBlobs(db)).toEqual([]);
   });
 
   // Verifies the physical blob count through a native SQLite file handle.
-  test.each(["enabled-client", "internal-without-context"] as const)(
-    "keeps %s uploads working without borrowing lifecycle authority",
-    async (origin) => {
-      const policy = createInputPolicy();
-      const { store, dbPath } = createWorkboardSqliteTestHarness();
-      const card = await store.create({ title: "Allowed upload" });
-      const tool = uploadTool({
-        store,
-        context: origin === "enabled-client" ? policy.context : undefined,
-      });
-      await tool.execute("allowed-upload", uploadInput(card.id));
-      const { attachments } = await store.listAttachments(card.id);
-      expect(attachments).toEqual([
-        expect.objectContaining({ fileName: "proof.txt", byteSize: 5 }),
-      ]);
-      await expect(store.getAttachment(attachments[0]!.id)).resolves.toMatchObject({
-        contentBase64: "cHJvb2Y=",
-      });
-      using db = new DatabaseSync(dbPath, { readOnly: true });
-      expect(db.prepare("SELECT COUNT(*) AS count FROM workboard_attachment_blobs").get()).toEqual({
-        count: 1,
-      });
-      if (origin === "enabled-client") {
-        expect(policy.context.assertInputCommitAllowed).toHaveBeenCalled();
-      } else {
-        expect(policy.context.assertInputCommitAllowed).not.toHaveBeenCalled();
-      }
-      expect(policy.context.assertInvocationCurrent).not.toHaveBeenCalled();
-    },
-  );
+  test("keeps enabled client uploads working without borrowing lifecycle authority", async () => {
+    const policy = createInputPolicy();
+    const { store, dbPath } = createWorkboardSqliteTestHarness();
+    const card = await store.create({ title: "Allowed upload" });
+    const tool = uploadTool({ store, context: policy.context });
+    await tool.execute("allowed-upload", uploadInput(card.id));
+    const { attachments } = await store.listAttachments(card.id);
+    expect(attachments).toEqual([expect.objectContaining({ fileName: "proof.txt", byteSize: 5 })]);
+    await expect(store.getAttachment(attachments[0]!.id)).resolves.toMatchObject({
+      contentBase64: "cHJvb2Y=",
+    });
+    using db = new DatabaseSync(dbPath, { readOnly: true });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM workboard_attachment_blobs").get()).toEqual({
+      count: 1,
+    });
+    expect(policy.context.assertInputCommitAllowed).toHaveBeenCalled();
+  });
 });

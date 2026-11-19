@@ -3,6 +3,7 @@
  *
  * Handles host paths, file URLs, temporary media paths, and workspace root assertions.
  */
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { URL } from "node:url";
@@ -10,16 +11,18 @@ import {
   assertNoPathAliasEscape,
   assertNoWindowsNetworkPath,
   hasEncodedFileUrlSeparator,
+  resolveAbsolutePathForRead,
   resolvePathPrefixSync,
   safeFileURLToPath,
   type PathAliasPolicy,
 } from "@openclaw/fs-safe/advanced";
 import { isWindowsDrivePath } from "@openclaw/fs-safe/archive";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
+import { respellUnderRoot } from "../infra/path-containment.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";
-import { resolveHostWorkspaceRoot } from "./workspace-write-scope.js";
+import { resolveHostRootAsync } from "./workspace-write-scope.js";
 
 const DATA_URL_RE = /^data:/i;
 const SANDBOX_CONTAINER_WORKDIR = "/workspace";
@@ -133,6 +136,15 @@ export function isPathBoundaryEscapeError(
 }
 
 async function resolveRawPathViaExistingAncestor(rawPath: string): Promise<string> {
+  try {
+    // Kernel traversal checks search permissions even inside symlink targets;
+    // native realpath alone can erase a denied directory followed by '..'.
+    if (fs.existsSync(rawPath)) {
+      return (await resolveAbsolutePathForRead(rawPath, { symlinks: "follow" })).canonicalPath;
+    }
+  } catch {
+    // The prefix resolver owns missing paths and the original error contract.
+  }
   const { existingPath, unresolvedSegments } = resolvePathPrefixSync(rawPath);
   return path.resolve(existingPath, ...unresolvedSegments);
 }
@@ -146,7 +158,7 @@ export async function assertSandboxPath(params: {
   allowFinalHardlinkForUnlink?: boolean;
 }) {
   const root = params.allowLinkedWorktrees
-    ? resolveHostWorkspaceRoot(params.root, resolveSandboxInputPath(params.filePath, params.cwd))
+    ? await resolveHostRootAsync(params.root, resolveSandboxInputPath(params.filePath, params.cwd))
     : path.resolve(params.root);
   const cwd = path.resolve(params.cwd);
   let resolutionCwd = cwd;
@@ -244,12 +256,19 @@ export function resolveManagedMediaRoot(candidate: string): string | undefined {
 export async function resolveAllowedManagedMediaPath(
   candidate: string,
 ): Promise<string | undefined> {
+  const managedMediaRoot = path.resolve(resolveConfigDir(), "media");
   const expanded = normalizeSandboxInputPath(candidate);
-  if (!resolveManagedMediaRoot(expanded)) {
+  if (!hostPathLooksAbsolute(expanded)) {
     return undefined;
   }
-  const resolved = path.resolve(expanded);
-  const managedMediaRoot = path.resolve(resolveConfigDir(), "media");
+  // Same owner spelling as the tmp root above, so an aliased config dir still matches.
+  const lexical = path.resolve(expanded);
+  const resolved = isPathInside(managedMediaRoot, lexical)
+    ? lexical
+    : ((await respellUnderRoot(managedMediaRoot, expanded)) ?? lexical);
+  if (!resolveManagedMediaRoot(resolved)) {
+    return undefined;
+  }
   await assertNoPathAliasEscape({
     absolutePath: resolved,
     rootPath: managedMediaRoot,
@@ -377,8 +396,15 @@ async function resolveAllowedTmpMediaPath(params: {
   if (!candidateIsAbsolute) {
     return undefined;
   }
-  const resolved = path.resolve(resolveSandboxInputPath(params.candidate, params.sandboxRoot));
   const openClawTmpDir = path.resolve(resolvePreferredOpenClawTmpDir());
+  const requested = resolveSandboxInputPath(params.candidate, params.sandboxRoot);
+  // Re-spell through the containment owner so /private/tmp and /tmp (or any aliased prefix)
+  // compare as one location; a lexically inside path keeps its spelling so the alias-escape
+  // walk below reports links that leave the root.
+  const lexical = path.resolve(requested);
+  const resolved = isPathInside(openClawTmpDir, lexical)
+    ? lexical
+    : ((await respellUnderRoot(openClawTmpDir, requested)) ?? lexical);
   if (!isPathInside(openClawTmpDir, resolved)) {
     return undefined;
   }

@@ -7,7 +7,7 @@ import {
   Virtualizer,
   type VirtualItem,
 } from "@tanstack/virtual-core";
-import { createProjection, createSignal, onSettled, Show } from "solid-js";
+import { createMemo, createProjection, createSignal, onSettled, Show } from "solid-js";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 
 export type ModelPickerRowRenderer = (key: string, render: () => JSX.Element) => JSX.Element;
@@ -22,6 +22,15 @@ export function createModelPickerWindow(
   const [window, setWindow] = createSignal<{ items: VirtualItem[]; height: number }>({
     items: [],
     height: 0,
+  });
+  // Only the leading provider heading sticks; later sections keep their virtual offset.
+  const stickyHeading = () => {
+    const first = rows()[0];
+    return first?.startsWith("heading:") ? first : undefined;
+  };
+  const itemKey = createMemo(() => {
+    const source = rows();
+    return (index: number) => source[index]!;
   });
   const publish = () =>
     setWindow({ items: virtualizer.getVirtualItems(), height: virtualizer.getTotalSize() });
@@ -43,17 +52,23 @@ export function createModelPickerWindow(
     return mountVirtualizer();
   });
   createLayoutMeasurement(
-    () => ({ rows: rows(), highlighted: highlighted(), shortcuts: shortcuts() }),
+    () => ({
+      rows: rows(),
+      highlighted: highlighted(),
+      shortcuts: shortcuts(),
+      itemKey: itemKey(),
+      stickyHeading: stickyHeading(),
+    }),
     (next) => {
       if (!next) {
         return;
       }
-      const pinned = new Set([...next.shortcuts, next.highlighted]);
+      const pinned = new Set([...next.shortcuts, next.highlighted, next.stickyHeading]);
       const pinnedIndexes = next.rows.flatMap((key, index) => (pinned.has(key) ? [index] : []));
       virtualizer.setOptions({
         ...virtualizer.options,
         count: next.rows.length,
-        getItemKey: (index) => next.rows[index]!,
+        getItemKey: next.itemKey,
         // Keep the active descendant and digit shortcuts addressable offscreen.
         rangeExtractor: (range) =>
           [...new Set([...defaultRangeExtractor(range), ...pinnedIndexes])].toSorted(
@@ -69,6 +84,10 @@ export function createModelPickerWindow(
   const items = createProjection<Record<string, VirtualItem | undefined>>(() =>
     Object.fromEntries(window().items.map((item) => [item.key, item])),
   );
+  const keys = createMemo(() => window().items.map((item) => String(item.key)), {
+    equals: (before, after) =>
+      before.length === after.length && before.every((key, index) => key === after[index]),
+  });
   function Row(props: { rowKey: string; render: () => JSX.Element }) {
     let element: HTMLDivElement;
     onSettled(() => {
@@ -80,7 +99,13 @@ export function createModelPickerWindow(
         ref={(node) => (element = node)}
         class="chat-controls__model-virtual-row"
         data-index={items[props.rowKey]?.index}
-        style={{ transform: `translateY(${items[props.rowKey]?.start ?? 0}px)` }}
+        data-chat-model-heading={props.rowKey === stickyHeading() ? "" : undefined}
+        style={{
+          transform:
+            props.rowKey === stickyHeading()
+              ? undefined
+              : `translateY(${items[props.rowKey]?.start ?? 0}px)`,
+        }}
       >
         {props.render()}
       </div>
@@ -94,11 +119,19 @@ export function createModelPickerWindow(
   return {
     bind: (element: HTMLDivElement) => (viewport = element),
     height: () => window().height,
+    keys,
     has: (key: string) => Boolean(items[key]),
     renderRow,
     reveal(key: string) {
       const index = rows().indexOf(key);
       if (index >= 0) {
+        const row = virtualizer.measurementsCache[index];
+        const top = virtualizer.scrollOffset ?? 0;
+        const height = virtualizer.scrollRect?.height ?? 0;
+        // Leave any pending reveal to settle; an in-view key needs no new scroll.
+        if (row && row.start >= top && row.end <= top + height) {
+          return;
+        }
         virtualizer.scrollToIndex(index, { align: "auto" });
         publish();
       }

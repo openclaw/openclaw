@@ -352,7 +352,7 @@ describe("AppSidebar agent chip", () => {
         expect(tile.attr(".agent-select__avatar img", "src")).toBe("blob:agent-avatar");
       });
       avatar = researchRow?.querySelector(".agent-select__avatar");
-      expect(avatar?.classList).toContain("is-pending");
+      expect(avatar?.classList).not.toContain("is-pending");
       avatar?.querySelector("img")?.dispatchEvent(new Event("load"));
       await waitForSolid(() => expect(avatar?.classList).not.toContain("is-pending"));
       expect(createObjectURL).toHaveBeenCalledTimes(1);

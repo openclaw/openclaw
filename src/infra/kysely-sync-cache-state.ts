@@ -25,6 +25,7 @@ const statementInvalidationSymbol = Symbol.for("openclaw.kyselySyncStatementInva
 const statementCacheEnabledSymbol = Symbol.for("openclaw.kyselySyncStatementCacheEnabled");
 const authorizerActiveSymbol = Symbol.for("openclaw.kyselySyncAuthorizerActive");
 const disposeCallbacksSymbol = Symbol.for("openclaw.sqliteDisposeCallbacks");
+const disposeGuardsSymbol = Symbol.for("openclaw.sqliteDisposeGuards");
 // Admit up to 4 MiB of SQL plus variable-size bindings per enabled database.
 // Candidate SQL and native/JS overhead are additional; retention scales with open handles.
 const statementCacheCapacity = 64;
@@ -45,6 +46,7 @@ type StatementCacheOwner = DatabaseSync & {
   [statementCacheEnabledSymbol]?: true;
   [authorizerActiveSymbol]?: boolean;
   [disposeCallbacksSymbol]?: Set<(reason: SqliteDisposeReason) => void>;
+  [disposeGuardsSymbol]?: Set<() => void>;
 };
 
 /** Node 26.8+ can release bindings without waiting for an unrelated V8 collection. */
@@ -76,10 +78,25 @@ export function registerNodeSqliteDisposeCallback(
   return registerListener((owner[disposeCallbacksSymbol] ??= new Set()), callback);
 }
 
+/** Pending native work must settle before any dependent identity or lease is released. */
+export function registerNodeSqliteDisposeGuard(db: DatabaseSync, guard: () => void): () => void {
+  const owner: StatementCacheOwner = db;
+  installStatementInvalidation(owner);
+  return registerListener((owner[disposeGuardsSymbol] ??= new Set()), guard);
+}
+
+/** Lifecycle owners check before preparing cleanup that would revoke retained admission. */
+export function assertNodeSqliteDisposalAllowed(owner: StatementCacheOwner): void {
+  for (const guard of owner[disposeGuardsSymbol] ?? []) {
+    guard();
+  }
+}
+
 export function disposeNodeSqliteDependents(
   owner: StatementCacheOwner,
   reason: SqliteDisposeReason = "close",
 ): void {
+  assertNodeSqliteDisposalAllowed(owner);
   for (const callback of owner[disposeCallbacksSymbol] ?? []) {
     callback(reason);
   }

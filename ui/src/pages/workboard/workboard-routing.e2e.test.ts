@@ -1,7 +1,9 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
-import { installMockGateway, waitForControlUiRoute } from "../../test-helpers/control-ui-e2e.ts";
+import { waitForControlUiRoute } from "../../test-helpers/control-ui-e2e.ts";
+import { installNativePluginMockGateway } from "../../test-helpers/control-ui-plugin-e2e.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
 import {
   button,
@@ -26,8 +28,11 @@ const boards = [
   makeBoard("ops", { name: "Operations", icon: "⚙", color: "#22c55e" }),
 ];
 
-function installWorkboard(page: Page, extra: Parameters<typeof installMockGateway>[1] = {}) {
-  return installMockGateway(page, {
+function installWorkboard(
+  page: Page,
+  extra: Parameters<typeof installNativePluginMockGateway>[1] = {},
+) {
+  return installNativePluginMockGateway(page, {
     ...workboardUi,
     sessions: [],
     ...extra,
@@ -89,15 +94,7 @@ suite.define(() => {
 
       const gateway = await installWorkboard(page, {
         methodResponses: {
-          "agents.list": {
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-            agents: [
-              { id: "main", name: "Main" },
-              { id: "writer", name: "Writer" },
-            ],
-          },
+          "agents.list": agentRoster({ main: "Main", writer: "Writer" }, "main", "agent"),
         },
       });
       await page.goto(`${suite.server.baseUrl}workboard`);
@@ -106,7 +103,17 @@ suite.define(() => {
       const agentScope = page.locator(".workboard-agent-filter openclaw-agent-select");
       await agentScope.locator(".agent-select__trigger").click();
       const agentOptions = agentScope.locator(".agent-select__option[data-agent-option]");
-      await expectFocus(agentOptions.filter({ hasText: "Main" }));
+      await expectFocus(agentScope.getByRole("listbox"));
+      await expect
+        .poll(() =>
+          agentOptions
+            .filter({ hasText: "Main" })
+            .evaluate(
+              (option) =>
+                document.activeElement?.getAttribute("aria-activedescendant") === option.id,
+            ),
+        )
+        .toBe(true);
       await agentOptions.filter({ hasText: "Writer" }).click();
       await expect.poll(() => agentValue(agentScope)).toBe("writer");
       await expect
@@ -146,11 +153,13 @@ suite.define(() => {
   it("refreshes board navigation after browser Back retains an unfinished card draft", async () => {
     await withPage(async (page) => {
       const gateway = await installWorkboard(page);
-      await page.goto(`${suite.server.baseUrl}apps`);
-      const sidebar = page.locator("openclaw-app-sidebar");
-      await button(sidebar, "Pages").click();
+      // The Workboard sidebar lists each board with its pin toggle.
+      await page.goto(`${suite.server.baseUrl}workboard`);
+      await boardEntry(page).hover();
       await button(boardEntry(page), "Pin").click();
       const pinned = pinnedBoard(page);
+      await pinned.waitFor();
+      await page.goto(`${suite.server.baseUrl}apps`);
       await pinned.click();
       await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
       await page.getByRole("button", { name: /New card/u }).click();
@@ -183,7 +192,7 @@ suite.define(() => {
 
   it("hides Workboard navigation while the plugin is inactive", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
+      const gateway = await installNativePluginMockGateway(page, {
         nativePlugins: [],
         sessions: [],
         methodResponses: {

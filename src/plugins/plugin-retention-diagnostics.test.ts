@@ -14,7 +14,7 @@ import { createPluginRecord } from "./status.test-helpers.js";
 afterEach(() => vi.restoreAllMocks());
 
 describe("plugin retained reference diagnostics", () => {
-  it("captures separate acquisition owners and bounded payload-free snapshots", () => {
+  it("captures acquisition owners across runtime calls in bounded payload-free snapshots", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
     const instance = new PluginInstance("fixture");
     const owner = {
@@ -23,13 +23,17 @@ describe("plugin retained reference diagnostics", () => {
       payload: "private-prompt",
       secret: "private-secret",
     };
-    const first = withPluginRetentionOwner(owner, () => {
+    const first = await withPluginRetentionOwner(owner, async () => {
       const release = instance.retainWork("registry-construction");
-      instance.run(() => {
-        const [work, call] = instance.retentionSnapshot().references;
-        expect(Object.isFrozen(work!.owner)).toBe(true);
-        expect(call!.owner).toBe(work!.owner);
-      });
+      await withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
+        instance.run(async () => {
+          await Promise.resolve();
+          const [work, call] = instance.retentionSnapshot().references;
+          expect(Object.isFrozen(work!.owner)).toBe(true);
+          expect(call!.kind).toBe("call");
+          expect(call!.owner).toBe(work!.owner);
+        }),
+      );
       return release;
     });
     owner.sessionKey = "mutated";
@@ -92,21 +96,20 @@ describe("plugin retained reference diagnostics", () => {
   it("bounds all references while making unknown owners explicit", () => {
     const instance = new PluginInstance("fixture");
     const releases = Array.from({ length: 70 }, () => instance.retainWork());
-    expect(instance.retentionSnapshot({ limit: Infinity })).toMatchObject({
-      total: 70,
-      omitted: 6,
-    });
-    expect(instance.retentionSnapshot().references).toHaveLength(64);
-    expect(instance.retentionSnapshot({ limit: Number.NaN }).references).toHaveLength(64);
-    expect(instance.retentionSnapshot({ limit: 0.5 }).references).toHaveLength(0);
+    for (const [limit, count] of [
+      [undefined, 64],
+      [Infinity, 64],
+      [Number.NaN, 64],
+      [0.5, 0],
+      [-1, 0],
+    ] as const) {
+      const snapshot = instance.retentionSnapshot({ limit });
+      expect(snapshot).toMatchObject({ total: 70, omitted: 70 - count });
+      expect(snapshot.references).toHaveLength(count);
+    }
     expect(instance.retentionSnapshot().references[0]).toMatchObject({
       owner: "unknown",
       reason: "unknown",
-    });
-    expect(instance.retentionSnapshot({ limit: -1 })).toMatchObject({
-      total: 70,
-      omitted: 70,
-      references: [],
     });
     releases.forEach((release) => release());
   });
@@ -174,22 +177,5 @@ describe("plugin retained reference diagnostics", () => {
     expect(instance.retainedWorkCount).toBe(1);
     release();
     await instance.waitForRetainedWork(new AbortController().signal);
-  });
-
-  it("attributes calls through runtime frames without extending their lifetime", async () => {
-    const instance = new PluginInstance("fixture");
-    const gate = createDeferredCore();
-    const run = withPluginRetentionOwner({ runId: "active-run" }, () =>
-      withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
-        instance.run(() => gate.promise),
-      ),
-    );
-    expect(instance.retentionSnapshot().references[0]).toMatchObject({
-      kind: "call",
-      owner: { runId: "active-run" },
-    });
-    gate.resolve();
-    await run;
-    expect(instance.retentionSnapshot().total).toBe(0);
   });
 });

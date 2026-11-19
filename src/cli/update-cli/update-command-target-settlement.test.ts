@@ -72,43 +72,43 @@ function targetFixture(overrides: Partial<Parameters<typeof resolveUpdateCommand
   };
 }
 
-it.each(["recovered", "busy", "corrupt"] as const)(
-  "continues target inspection only after a successful contention reinspection (%s)",
+it.each(["busy", "corrupt"] as const)(
+  "rejects failed target inspection without acquiring mutation authority (%s)",
   async (outcome) => {
-    const config = await channelConfig.readUpdateChannelConfig(false);
-    const contention = new SqliteReadOnlyInspectionContentionError(
-      "SQLite read-only inspection: database is locked",
-    );
-    const corruption = Object.assign(new Error("database disk image is malformed"), {
-      errcode: 11,
-    });
-    const read = vi.spyOn(channelConfig, "readUpdateChannelConfig");
-    if (outcome === "recovered") {
-      read.mockResolvedValue(config).mockRejectedValueOnce(contention);
-    } else {
-      read.mockRejectedValue(outcome === "busy" ? contention : corruption);
-    }
+    const failure =
+      outcome === "busy"
+        ? new SqliteReadOnlyInspectionContentionError(
+            "SQLite read-only inspection: database is locked",
+          )
+        : Object.assign(new Error("database disk image is malformed"), { errcode: 11 });
+    const read = vi.spyOn(channelConfig, "readUpdateChannelConfig").mockRejectedValue(failure);
     const warning = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
-    const { run, enter, inspect } = targetFixture({ startedAt: Date.now() });
-    const target = inspect(true);
-    if (outcome === "recovered") {
-      await expect(target).resolves.toMatchObject({ updateInstallKind: "git", channel: "dev" });
-      expect(warning).toHaveBeenCalledWith(expect.stringContaining("continuing the update"));
-      expect(getUpdateRun(run.runId, { env: state.env })?.steps).toContainEqual(
-        expect.objectContaining({
-          step: "warning:installation-inspection",
-          status: "completed",
-          detail: expect.stringContaining(contention.message),
-        }),
-      );
-    } else {
-      await expect(target).rejects.toBe(outcome === "busy" ? contention : corruption);
-      expect(warning).not.toHaveBeenCalled();
-    }
+    const { enter, inspect } = targetFixture({ startedAt: Date.now() });
+    await expect(inspect(true)).rejects.toBe(failure);
+    expect(warning).not.toHaveBeenCalled();
     expect(read).toHaveBeenCalledTimes(outcome === "corrupt" ? 1 : 2);
     expect(enter).not.toHaveBeenCalled();
   },
 );
+
+it("records what admission settled as a warning step of the run", async () => {
+  const warning = "Settled previous package update (publication-not-started).";
+  const reported = new Error("terminal refusal was reported");
+  boundary.report.mockRejectedValue(reported);
+  const step = { name: "package-publication-recovery", command: "settle", cwd: state.root };
+  const { run, inspect } = targetFixture({
+    requestedChannel: "extended-stable",
+    packageActivationSteps: [{ ...step, durationMs: 0, exitCode: 0, warnings: [warning] }],
+  });
+  // The step is in run history before the first target decision can refuse the update.
+  await expect(withCommandProcessScope(() => inspect())).rejects.toBe(reported);
+  expect(getUpdateRun(run.runId, { env: state.env })?.steps).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ step: step.name, status: "completed" }),
+      expect.objectContaining({ step: `warning:${step.name}`, detail: warning }),
+    ]),
+  );
+});
 
 it.each(["forced", "uncertain"] as const)(
   "settles target inspection before reporting preflight refusal (%s)",

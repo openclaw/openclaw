@@ -78,19 +78,34 @@ describe("plugin-sdk delivery queue drainPendingDeliveries", () => {
       started.resolve();
       return finished.promise;
     });
-    const deliver = vi.fn(async () => []);
+    const receipt = { messageId: "queued-message" };
+    const deliver = vi.fn(async () => {
+      expect(getActiveGatewayRootWorkCount()).toBe(2);
+      return receipt;
+    });
 
     await runWithGatewayRootWorkAdmissionForTest(async () => {
       expect(getActiveGatewayRootWorkCount()).toBe(1);
       const pending = drain(deliver);
       await started.promise;
 
-      expect(getActiveGatewayRootWorkCount()).toBe(2);
-      finished.resolve();
-      await pending;
+      try {
+        expect(getActiveGatewayRootWorkCount()).toBe(2);
+        const params = {
+          cfg: {},
+          channel: "telegram" as const,
+          to: "chat",
+          payloads: [{ text: "Queued notice." }],
+        };
+        const coreDeliver = mocks.coreDrainPendingDeliveries.mock.calls[0]![0].deliver;
+        expect(await coreDeliver(params)).toBe(receipt);
+        expect(deliver).toHaveBeenCalledExactlyOnceWith(params);
+      } finally {
+        finished.resolve();
+        await pending;
+      }
       expect(getActiveGatewayRootWorkCount()).toBe(1);
       expect(mocks.coreDrainPendingDeliveries).toHaveBeenCalledOnce();
-      expect(mocks.coreDrainPendingDeliveries.mock.calls[0]?.[0].deliver).toBe(deliver);
       expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     });
 

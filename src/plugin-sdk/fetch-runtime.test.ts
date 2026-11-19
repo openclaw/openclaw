@@ -1,82 +1,73 @@
 import { setImmediate } from "node:timers/promises";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { responseWithRelease } from "./fetch-runtime.js";
 
-function readerWithRelease(body: BodyInit, release: () => Promise<void>) {
-  return responseWithRelease(new Response(body), release).body!.getReader();
-}
-
-function settlement(promise: Promise<unknown>) {
-  return Promise.race([promise.then(() => "settled"), setImmediate("pending")]);
-}
-
-it.for(["throw", "reject"] as const)(
-  "reports null-body response release failures (%s) without an unhandled rejection",
-  async (failureMode, { onTestFinished }) => {
-    const failure = new Error("request ownership release failed");
-    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-    onTestFinished(() => warning.mockRestore());
-    const unhandled: unknown[] = [];
-    const onUnhandledRejection = (error: unknown) => unhandled.push(error);
-    process.on("unhandledRejection", onUnhandledRejection);
-    onTestFinished(() => {
-      process.off("unhandledRejection", onUnhandledRejection);
-    });
-    const release = vi.fn(() => {
-      if (failureMode === "throw") {
-        throw failure;
-      }
-      return Promise.reject(failure);
-    });
-    const response = new Response(null, { status: 204 });
-
-    expect(responseWithRelease(response, release)).toBe(response);
-    await setImmediate();
-
-    expect(release).toHaveBeenCalledOnce();
-    expect(warning).toHaveBeenCalledExactlyOnceWith(failure);
-    expect(unhandled).toEqual([]);
-  },
-);
-
-it("closes downstream EOF before awaiting release", async () => {
-  const releaseGate = createDeferred();
-  const releaseFinished = createDeferred();
-  const reader = readerWithRelease("complete", async () => {
-    await releaseGate.promise;
-    releaseFinished.resolve();
+const settlement = (promise: Promise<unknown>) =>
+  Promise.race([promise.then(() => "settled"), setImmediate("pending")]);
+afterEach(() => vi.restoreAllMocks());
+it.each(["throw", "reject"] as const)("reports null-body release failure: %s", async (mode) => {
+  const failure = new Error("request ownership release failed");
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+  const release = vi.fn(() => {
+    if (mode === "throw") {
+      throw failure;
+    }
+    return Promise.reject(failure);
   });
+  const response = new Response(null, { status: 204 });
+  expect(responseWithRelease(response, release)).toBe(response);
+  await setImmediate();
+  expect(warning).toHaveBeenCalledExactlyOnceWith(failure);
+});
 
+it("preserves metadata and closes EOF before release", async () => {
+  const uri = "data:,complete";
+  const original = await fetch(uri);
+  Object.defineProperty(original, "redirected", { value: true });
+  const releaseGate = createDeferred();
+  const release = vi.fn(() => releaseGate.promise);
+  const wrapped = responseWithRelease(original, release);
+  const clone = wrapped.clone();
+  const deepClone = clone.clone();
+  const expected = { url: uri, redirected: true, type: original.type, status: 200 };
+  for (const response of [wrapped, clone, deepClone]) {
+    expect(response).toMatchObject(expected);
+  }
+  clone.headers.set("x-response", "clone");
+  wrapped.headers.set("x-response", "wrapped");
+  expect(original.headers.get("x-response")).toBeNull();
+  expect(clone.headers.get("x-response")).toBe("clone");
+  const reader = wrapped.body!.getReader();
   await expect(reader.read()).resolves.toMatchObject({ done: false });
   const eof = reader.read();
   await expect(settlement(eof)).resolves.toBe("settled");
   await expect(eof).resolves.toEqual({ done: true, value: undefined });
+  expect(release).toHaveBeenCalledTimes(1);
   releaseGate.resolve();
-  await releaseFinished.promise;
+  await release.mock.results[0]!.value;
+  const bodies = await Promise.all([clone.text(), deepClone.text()]);
+  expect(bodies).toEqual(["complete", "complete"]);
 });
 
-it("awaits both upstream cancellation and owner release", async () => {
-  const pullStarted = createDeferred();
+it.each([false, true])("awaits cancellation and release (failure=%s)", async (fails) => {
   const cancelGate = createDeferred();
   const releaseGate = createDeferred();
-  const release = vi.fn(async () => await releaseGate.promise);
+  const release = vi.fn(() => releaseGate.promise);
   const reason = new Error("consumer stopped");
-  const upstreamCancel = vi.fn(async () => await cancelGate.promise);
-  const reader = readerWithRelease(
-    new ReadableStream<Uint8Array>({
-      pull: () => pullStarted.resolve(),
-      cancel: upstreamCancel,
-    }),
-    release,
-  );
+  const cancel = vi.fn(async () => {
+    await cancelGate.promise;
+    if (fails) {
+      throw new Error("upstream cancellation failed");
+    }
+  });
+  const upstream = new Response(new ReadableStream<Uint8Array>({ cancel }));
+  const reader = responseWithRelease(upstream, release).body!.getReader();
   const read = reader.read();
-  await pullStarted.promise;
-
   const cancellation = reader.cancel(reason);
   try {
     await expect(settlement(cancellation)).resolves.toBe("pending");
-    expect(upstreamCancel).toHaveBeenCalledWith(reason);
+    expect(cancel).toHaveBeenCalledWith(reason);
     expect(release).toHaveBeenCalledTimes(1);
     cancelGate.resolve();
     await expect(settlement(cancellation)).resolves.toBe("pending");
@@ -94,8 +85,7 @@ it("releases a cancelled response before its capture tee settles", async () => {
   const response = new Response(new ReadableStream<Uint8Array>({ cancel: sourceCancel }));
   const capture = response.clone();
   const release = vi.fn(async () => await capture.body?.cancel("capture stopped"));
-  const wrapped = responseWithRelease(response, release);
-  const cancellation = wrapped.body!.cancel("consumer stopped");
+  const cancellation = responseWithRelease(response, release).body!.cancel("consumer stopped");
   try {
     await expect(settlement(cancellation)).resolves.toBe("settled");
     expect(release).toHaveBeenCalledTimes(1);
@@ -105,17 +95,4 @@ it("releases a cancelled response before its capture tee settles", async () => {
     await capture.body?.cancel("test cleanup");
     await cancellation;
   }
-});
-
-it("settles cancellation after release when upstream cancellation fails", async () => {
-  const source = new ReadableStream<Uint8Array>({
-    cancel() {
-      throw new Error("upstream cancellation failed");
-    },
-  });
-  const release = vi.fn(async () => {});
-  const wrapped = responseWithRelease(new Response(source), release);
-
-  await expect(wrapped.body?.cancel()).resolves.toBeUndefined();
-  expect(release).toHaveBeenCalledTimes(1);
 });

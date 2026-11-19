@@ -32,12 +32,13 @@ export type RemoteModelCatalogUpstreamPrice = {
 
 /** Configured v1 mirrors remain a public input contract; runtime uses one projection. */
 export function parseRemoteModelCatalogWireBundle(value: unknown): RemoteModelCatalogWireBundle {
+  const warn = (message: string) => log.warn(message);
   if (isRecord(value) && value.schemaVersion === 3) {
-    return validateAndSanitizeRemoteModelCatalogBundleV3(value, (message) => log.warn(message));
+    return validateAndSanitizeRemoteModelCatalogBundleV3(value, warn);
   }
   return isRecord(value) && value.schemaVersion === 2
-    ? validateAndSanitizeRemoteModelCatalogBundleV2(value, (message) => log.warn(message))
-    : validateAndSanitizeRemoteModelCatalogBundle(value, (message) => log.warn(message));
+    ? validateAndSanitizeRemoteModelCatalogBundleV2(value, warn)
+    : validateAndSanitizeRemoteModelCatalogBundle(value, warn);
 }
 
 export function projectRemoteModelCatalog(bundle: RemoteModelCatalogWireBundle): {

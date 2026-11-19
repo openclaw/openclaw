@@ -11,16 +11,14 @@ function findLastBlankLine(text: string): number {
   return lastBlank;
 }
 
-type ProjectedTokenText = {
-  text: string;
-  codeOwnershipPending: boolean;
-  hasRetainedInlineCode: boolean;
-};
-
 export function projectModelSpecialTokens(
   text: string,
   resolveOwnership?: (text: string) => ReturnType<typeof findCodeOwnership>,
-): ProjectedTokenText {
+): {
+  text: string;
+  codeOwnershipPending: boolean;
+  hasRetainedInlineCode: boolean;
+} {
   if (!text) {
     return { text, codeOwnershipPending: false, hasRetainedInlineCode: false };
   }
@@ -48,7 +46,7 @@ export function projectModelSpecialTokens(
   let cursor = 0;
   for (const match of text.matchAll(MODEL_SPECIAL_TOKEN_RE)) {
     const matched = match[0];
-    const start = match.index ?? 0;
+    const start = match.index;
     const end = start + matched.length;
     out += text.slice(cursor, start);
     const code = codeRegions.find((region) => start < region.end && end > region.start);

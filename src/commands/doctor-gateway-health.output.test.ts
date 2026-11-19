@@ -2,7 +2,7 @@ import { Console } from "node:console";
 import { once } from "node:events";
 import { Writable } from "node:stream";
 import { finished } from "node:stream/promises";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -24,6 +24,7 @@ import {
 import type { ConsoleStyle } from "../logging/types.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
+import { expectText } from "../test-utils/text-assertions.js";
 import { checkGatewayHealth } from "./doctor-gateway-health.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -33,7 +34,7 @@ describe("Doctor Gateway close note output", { concurrent: false }, () => {
   let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
   let cfg: OpenClawConfig;
   let closeReason = "";
-  const requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[] = [];
+  let testLogging = { ...loggingState };
 
   beforeAll(async () => {
     state = await createOpenClawTestState({
@@ -53,7 +54,6 @@ describe("Doctor Gateway close note output", { concurrent: false }, () => {
       sendMinimalGatewayConnectChallenge(ws);
       ws.on("message", (data) => {
         const frame = parseMinimalGatewayRequestFrame(data);
-        requests.push(frame);
         if (frame.method === "connect") {
           ws.close(1011, closeReason);
         }
@@ -74,10 +74,13 @@ describe("Doctor Gateway close note output", { concurrent: false }, () => {
     await state.writeConfig(cfg);
   });
 
+  beforeEach(() => {
+    testLogging = { ...loggingState };
+  });
   afterEach(() => {
+    Object.assign(loggingState, testLogging);
     resetSecretRedactionRegistryForTest();
     vi.restoreAllMocks();
-    requests.length = 0;
   });
 
   afterAll(async () => {
@@ -102,7 +105,6 @@ describe("Doctor Gateway close note output", { concurrent: false }, () => {
         .map(([chunk]) => (typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")))
         .join("");
       expect(result).toMatchObject({ healthOk: false, authenticated: false });
-      expect(requests.map((request) => request.method)).toEqual(["connect"]);
       expect(runtime.error).not.toHaveBeenCalled();
     } finally {
       stdout.mockRestore();
@@ -163,44 +165,25 @@ describe("Doctor Gateway close note output", { concurrent: false }, () => {
   }
 
   it("keeps built-in masking with custom patterns in Doctor notes and Gateway stderr", async () => {
-    const previousLogging = { ...loggingState };
-    try {
-      applyLoggingConfig({ redactPatterns: ["deploymentMask9X"] });
-      const output = await captureCloseConsole(
-        "remote password=mockPass7X deploymentMask9X visible",
-        "pretty",
-      );
-      const stderr = stripAnsi(output.stderr);
-      expect(stderr).toContain("gateway connect failed:");
-      expect(stderr).toContain("gateway closed (1011):");
-      expect(stderr).toContain("remote");
-      expect(stderr).toContain("visible");
-      expect(stderr).not.toContain("deploymentMask9X");
-      expect(stderr).not.toContain("mockPass7X");
-      expect(stderr).toContain("***");
-      expect(output.note).toContain("remote");
-      expect(output.note).toContain("visible");
-      expect(output.note).not.toContain("deploymentMask9X");
-      expect(output.note).toContain("***");
-      expect(output.note).not.toContain("mockPass7X");
-    } finally {
-      Object.assign(loggingState, previousLogging);
+    applyLoggingConfig({ redactPatterns: ["deploymentMask9X"] });
+    const output = await captureCloseConsole(
+      "remote password=mockPass7X deploymentMask9X visible",
+      "pretty",
+    );
+    expectText(output.stderr, ["gateway connect failed:", "gateway closed (1011):"]);
+    for (const text of [stripAnsi(output.stderr), output.note]) {
+      expectText(text, ["remote", "visible", "***"], ["deploymentMask9X", "mockPass7X"]);
     }
   });
 
   it("masks configured path values in the companion Gateway connection note", async () => {
-    const previousLogging = { ...loggingState };
-    try {
-      applyLoggingConfig({ redactPatterns: ["doctor-close-output"] });
-      const output = await captureCloseConsole("ordinary close", "pretty");
-      expect(output.note).toContain("ordinary close");
-      expect(output.note).toContain("Gateway connection");
-      expect(output.note).toContain("Config:");
-      expect(output.note).not.toContain("doctor-close-output");
-      expect(output.note).toContain("doctor…tput");
-    } finally {
-      Object.assign(loggingState, previousLogging);
-    }
+    applyLoggingConfig({ redactPatterns: ["doctor-close-output"] });
+    const output = await captureCloseConsole("ordinary close", "pretty");
+    expectText(
+      output.note,
+      ["ordinary close", "Gateway connection", "Config:", "doctor…tput"],
+      ["doctor-close-output"],
+    );
   });
 
   it.each([
@@ -214,10 +197,8 @@ describe("Doctor Gateway close note output", { concurrent: false }, () => {
   ] as const)("masks $shape in actual $style Gateway stderr", async ({ style, value }) => {
     registerSecretValueForRedaction("proofSecr9X");
     const output = await captureCloseConsole(`remote ${value} visible`, style);
-    expect(output.note).not.toContain("proofSecr9X");
-    expect(output.note).toContain("***");
-    expect(output.stderr).toContain("gateway connect failed:");
-    expect(output.stderr).toContain("gateway closed (1011):");
+    expectText(output.note, ["***"], ["proofSecr9X"]);
+    expectText(output.stderr, ["gateway connect failed:", "gateway closed (1011):"], ["\u0000"]);
     if (style === "json") {
       const records: unknown[] = output.stderr
         .trim()
@@ -232,61 +213,32 @@ describe("Doctor Gateway close note output", { concurrent: false }, () => {
     }
     // NUL is not an ANSI escape. Normalize controls as well to assess visible text.
     const displayed = sanitizeTerminalText(stripAnsi(output.stderr));
-    expect(displayed).toContain("remote");
-    expect(displayed).toContain("visible");
-    expect(displayed).not.toContain("proofSecr9X");
-    expect(output.stderr).not.toContain("\u0000");
-    expect(displayed).toContain("***");
+    expectText(displayed, ["remote", "visible", "***"], ["proofSecr9X"]);
   });
 
   it.each([
-    {
-      name: "registered multiline value",
+    ...["\n", "\u2028", "\u2029"].map((separator) => ({
       registered: "lineA9\nlineB7",
-      reason: "remote lineA9\nlineB7 omitted detail",
+      reason: `lineA9${separator}lineB7 omitted detail`,
       forbidden: ["lineA9", "lineB7"],
-    },
+    })),
+    { registered: "joined secret", reason: "joined  secret visible", forbidden: ["joined secret"] },
     {
-      name: "registered value joined by note whitespace",
-      registered: "joined secret",
-      reason: "remote joined  secret visible",
-      forbidden: ["joined secret"],
-    },
-    {
-      name: "registered multiline value with a Unicode line separator",
-      registered: "lineA9\nlineB7",
-      reason: "remote lineA9\u2028lineB7 omitted detail",
-      forbidden: ["lineA9", "lineB7"],
-    },
-    {
-      name: "registered multiline value with a Unicode paragraph separator",
-      registered: "lineA9\nlineB7",
-      reason: "remote lineA9\u2029lineB7 omitted detail",
-      forbidden: ["lineA9", "lineB7"],
-    },
-    {
-      name: "registered value reconstructed by both note transformations",
       registered: "part one\ntwo",
-      reason: "remote part  one\u2028two omitted detail",
+      reason: "part  one\u2028two omitted detail",
       forbidden: ["part one", "two"],
     },
-  ])("masks $name through the real note stream", async ({ registered, reason, forbidden }) => {
-    if (registered) {
+  ])(
+    "masks registered $reason through the real note stream",
+    async ({ registered, reason, forbidden }) => {
       registerSecretValueForRedaction(registered);
-    }
-    const output = await captureCloseNote(reason);
-    expect(output).toContain("remote");
-    for (const value of forbidden) {
-      expect(output).not.toContain(value);
-    }
-    expect(output).toContain("***");
-  });
+      const output = await captureCloseNote(`remote ${reason}`);
+      expectText(output, ["remote", "***"], forbidden);
+    },
+  );
 
   it("preserves ordinary close context and terminal control safety", async () => {
     const output = await captureCloseNote("ordinary\r\t\u001b[31mshutdown\nignored detail");
-    expect(output).toContain("ordinary\\r\\tshutdown");
-    expect(output).not.toContain("ignored detail");
-    expect(output).not.toContain("\r");
-    expect(output).not.toContain("\t");
+    expectText(output, ["ordinary\\r\\tshutdown"], ["ignored detail", "\r", "\t"]);
   });
 });

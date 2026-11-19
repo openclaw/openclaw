@@ -126,7 +126,7 @@ export function buildInlineProviderModels(
       models: entry?.models,
       normalizeModelId: (modelId) => modelId.trim(),
     });
-    return Array.from(models.values()).map((model) => {
+    return Array.from(models.values(), (model) => {
       const api = normalizeResolvedTransportApi(model.api ?? entry?.api);
       const configuredBaseUrl = model.baseUrl ?? entry?.baseUrl;
       const baseUrl =

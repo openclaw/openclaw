@@ -231,6 +231,9 @@ struct UpdateError {
 }
 
 pub fn schedule_auto_check(app: AppHandle) {
+    if crate::test_profile::enabled() {
+        return;
+    }
     let state = app.state::<UpdaterState>();
     if state.auto_check_started.swap(true, Ordering::AcqRel) {
         return;
@@ -313,6 +316,17 @@ fn activate(app: &AppHandle, relaunch: bool) {
 // progress/ready/errors always surface, since the user has been told an update
 // is coming.
 async fn run_check(app: AppHandle, manual: bool) {
+    if crate::test_profile::enabled() {
+        if manual {
+            deliver_error(
+                &app,
+                true,
+                TerminalResultKind::CheckFailed,
+                "Updates are disabled for this isolated AOT test app.",
+            );
+        }
+        return;
+    }
     let manual_pending = Arc::clone(&app.state::<UpdaterState>().manual_pending);
     if manual {
         manual_pending.store(true, Ordering::Release);

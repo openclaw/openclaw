@@ -14,7 +14,21 @@ const native = vi.hoisted(() => ({
   select: vi.fn<(pathname: string) => void>(),
   closeProbe: vi.fn<() => Promise<SqliteRuntimeCapabilities>>(),
   publish: vi.fn<(key: unknown, value: unknown) => void>(),
+  spawn: vi.fn(),
 }));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawnSync: (...args: Parameters<typeof actual.spawnSync>) => {
+      if (!native.enabled) {
+        return actual.spawnSync(...args);
+      }
+      return native.spawn(...args);
+    },
+  };
+});
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -29,19 +43,7 @@ vi.mock("node:module", async (importOriginal) => {
     const require = actual.createRequire(...args);
     return Object.assign((specifier: string) => {
       if (specifier === "bun:ffi") {
-        return {
-          FFIType: { cstring: 0, i32: 1 },
-          dlopen: (pathname: string) => {
-            const probe = native.probe(pathname);
-            return {
-              symbols: {
-                sqlite3_libversion: () => probe.version,
-                sqlite3_compileoption_used: () => (probe.extensionLoadingSupported ? 0 : 1),
-              },
-              close() {},
-            };
-          },
-        };
+        throw new Error("bun:ffi requires the JIT");
       }
       if (specifier === "bun:sqlite") {
         return { Database: { setCustomSQLite: (pathname: string) => native.select(pathname) } };
@@ -139,6 +141,21 @@ export function mockBunSqliteNativeBoundary(
   native.probe = vi.fn(
     options.probe ?? (() => ({ version: "3.53.4", extensionLoadingSupported: true })),
   );
+  native.spawn.mockReset().mockImplementation((_command: string, args: string[]) => {
+    try {
+      const facts = native.probe(args.at(-1) ?? "");
+      return { status: 0, signal: null, stdout: JSON.stringify({ protocol: 1, ...facts }) };
+    } catch (error) {
+      return {
+        status: 1,
+        signal: null,
+        stdout: JSON.stringify({
+          protocol: 1,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      };
+    }
+  });
   native.select = vi.fn(options.select ?? (() => {}));
   Reflect.deleteProperty(globalThis, sqliteSelectionKey);
   setValue(globalThis, "__openclawStandaloneRootUrl", options.standaloneRootUrl);

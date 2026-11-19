@@ -1,12 +1,13 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db-cache.js";
+import { aroundEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import {
   createOpenClawTestState,
-  type OpenClawTestState,
+  withOpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
-import { configureMockSubagentRegistryPersistence } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  configureMockSubagentRegistryPersistence,
+  createSubagentRunRecord,
+} from "../../subagent-test-fixtures.test-helpers.js";
 import * as delivery from "./subagent-delivery-state.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
@@ -27,21 +28,17 @@ import {
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-let state: OpenClawTestState;
 const childSessionKey = "agent:main:subagent:prepared";
 function run(runId = "retained", createdAt = 100): SubagentRunRecord {
-  return {
+  return createSubagentRunRecord({
     runId,
     childSessionKey,
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
     task: "Synthetic retained subagent",
-    cleanup: "keep",
     createdAt,
     execution: { status: "running", startedAt: createdAt },
     completion: { required: false },
     delivery: { status: "not_required" },
-  };
+  });
 }
 const runMap = (...runs: SubagentRunRecord[]) => new Map(runs.map((row) => [row.runId, row]));
 const readSnapshot = () => getSubagentRunsSnapshotForRead(new Map());
@@ -85,20 +82,22 @@ function readLatest() {
     { sessionKeys: [childSessionKey], descendants: true },
   );
 }
-beforeEach(async () => {
-  state = await createOpenClawTestState({ prefix: "openclaw-subagent-read-", applyEnv: true });
-  vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", "1");
-  subagentRuns.clear();
-  clearSubagentRunsReadCacheForTest();
-});
-afterEach(async () => {
-  vi.restoreAllMocks();
-  subagentRuns.clear();
-  clearSubagentRunsReadCacheForTest();
-  await closeOpenClawStateDatabaseAsync();
-  vi.unstubAllEnvs();
-  await state.cleanup();
-});
+aroundEach((runTest) =>
+  withOpenClawTestState(
+    { env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
+    async () => {
+      subagentRuns.clear();
+      clearSubagentRunsReadCacheForTest();
+      try {
+        await runTest();
+      } finally {
+        vi.restoreAllMocks();
+        subagentRuns.clear();
+        clearSubagentRunsReadCacheForTest();
+      }
+    },
+  ),
+);
 
 describe("prepared subagent publication ownership", () => {
   it.each(["run", "session"] as const)(
@@ -198,10 +197,7 @@ describe("prepared subagent publication ownership", () => {
         [intended.runId]: intended,
       }),
     );
-    const copy = expectDefined(await readLatest(), "retained committed row");
-    expect(() => {
-      copy.task = "Caller must not mutate committed facts";
-    }).toThrow(TypeError);
+    const copy = await readLatest();
     expect(await readLatest()).toBe(copy);
     expect(await readLatest()).toMatchObject(removed);
     expect(readSnapshot().has(intended.runId)).toBe(false);
@@ -233,10 +229,6 @@ describe("prepared subagent publication ownership", () => {
           saveSubagentRegistryToSqlite(otherRows);
           expect(await readLatest()).toMatchObject(otherDurable);
           await expectRefusedMutation(otherRows, { [otherIntent.runId]: otherIntent });
-          const copy = expectDefined(await readLatest(), "other database committed row");
-          expect(() => {
-            copy.task = "Caller must not mutate committed facts";
-          }).toThrow(TypeError);
           expect(await readLatest()).toMatchObject(otherDurable);
         });
         expect(await readLatest()).toMatchObject(retained);

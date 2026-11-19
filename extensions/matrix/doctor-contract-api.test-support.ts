@@ -12,7 +12,6 @@ import {
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import type { MatrixStoredCredentialRecord } from "./src/matrix/credentials-state.js";
 
-// Released Matrix replay markers retain their identities for 30 days.
 export const MATRIX_INBOUND_DEDUPE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export function createContext(
@@ -124,12 +123,8 @@ export const legacyCredentials = (
   ...overrides,
 });
 
-export function withDatabase<T>(
-  databasePath: string,
-  readOnly: boolean,
-  run: (db: DatabaseSync) => T,
-): T {
-  using db = new DatabaseSync(databasePath, { readOnly });
+export function withDatabase<T>(file: string, readOnly: boolean, run: (db: DatabaseSync) => T): T {
+  using db = new DatabaseSync(file, { readOnly });
   return run(db);
 }
 
@@ -160,15 +155,6 @@ export async function migrationById(id: string) {
   return migration;
 }
 
-export const dedupeMigrationResult = (roots: string[], imported: number, total = imported) => ({
-  changes: [
-    `Migrated Matrix inbound dedupe markers to the durable ingress spool (${imported} of ${total} entries)`,
-    ...roots.map((root) => `Retired Matrix inbound dedupe rows for ${root}`),
-    `Recorded Matrix inbound dedupe migration completion (${roots.length} SQLite roots scanned)`,
-  ],
-  warnings: [],
-});
-
 export function writeSqliteDedupeSource(
   storageRootDir: string,
   accountId: string,
@@ -197,9 +183,5 @@ export const syncCachePayload = (nextBatch: string, cleanShutdown = true) => ({
   cleanShutdown,
 });
 
-export function writeLegacySyncCache(storageRootDir: string, nextBatch: string): void {
-  writeSource(
-    path.join(storageRootDir, "bot-storage.json"),
-    JSON.stringify(syncCachePayload(nextBatch)),
-  );
-}
+export const writeLegacySyncCache = (root: string, nextBatch: string): string =>
+  writeSource(path.join(root, "bot-storage.json"), JSON.stringify(syncCachePayload(nextBatch)));

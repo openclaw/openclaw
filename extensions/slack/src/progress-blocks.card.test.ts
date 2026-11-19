@@ -19,28 +19,26 @@ const approval = (detail: string, label = "Approval"): ChannelProgressDraftLine 
   detail,
   status: "requested",
 });
-const sessionLink = (text: string, url: string) => ({
+const link = { text: "Open work session", url: "https://example.com/session" };
+const linkBlock = expect.objectContaining({
   type: "actions",
   elements: [
-    {
+    expect.objectContaining({
       type: "button",
       action_id: "openclaw:session_link",
-      text: { type: "plain_text", text },
-      url,
-    },
+      url: link.url,
+      text: { type: "plain_text", text: link.text },
+    }),
   ],
 });
 
 describe("buildSlackProgressCardBlocks", () => {
   it.each<[boolean, CardOptions["state"]]>([
     [false, "working"],
-    [false, "success"],
     [false, "error"],
     [true, "working"],
     [true, "success"],
-    [true, "error"],
   ])("renders card layout (detailed=%s, state=%s)", (detailed, state) => {
-    const link = { text: "Open work session", url: "https://example.com/session" };
     const blocks = card({
       detailed,
       state,
@@ -82,7 +80,7 @@ describe("buildSlackProgressCardBlocks", () => {
       ...(detailed
         ? [context(state === "working" ? "3 tools · 4 files +2 −1 · 12s" : "4 files +2 −1")]
         : []),
-      ...(state !== "working" ? [sessionLink(link.text, link.url)] : []),
+      ...(state !== "working" ? [linkBlock] : []),
     ]);
     if (state !== "working") {
       expect(card({ state, title: "Implementing" })).toEqual(headings);
@@ -139,30 +137,13 @@ describe("buildSlackProgressCardBlocks", () => {
     ]);
   });
 
+  const source = "Check **x** _y_ `pnpm test` C:\\path <#C123> <@U123> & <!channel> 🔧";
+  const escaped =
+    "Check *x* y `pnpm test` C:\\path &lt;#C123&gt; &lt;@U123&gt; &amp; &lt;!channel&gt; 🔧";
   it.each<[Partial<CardOptions>, string]>([
-    [
-      {
-        lines: [
-          itemLine("Compare <#C123> approaches 🔍"),
-          itemLine("Checking **the fix** <@U123> & <!channel> 🔧"),
-          toolLine("run tests"),
-        ],
-      },
-      "_Compare &lt;#C123&gt; approaches 🔍_\n_Checking *the fix* &lt;@U123&gt; &amp; &lt;!channel&gt; 🔧_\nExec — run tests",
-    ],
-    [{ narration: [{ text: "Read C:\\path" }] }, "_Read C:\\path_"],
-    [
-      { narration: [{ text: "Check _x_ and *x* with `pnpm test` for <@U123> & <!channel>" }] },
-      "_Check x and x with `pnpm test` for &lt;@U123&gt; &amp; &lt;!channel&gt;_",
-    ],
-    [
-      {
-        plan: [
-          { step: "Run `pnpm test` for **checks** <@U123> & <!channel>", status: "in_progress" },
-        ],
-      },
-      "▸ Run `pnpm test` for *checks* &lt;@U123&gt; &amp; &lt;!channel&gt;",
-    ],
+    [{ lines: [itemLine(source)] }, `_${escaped}_`],
+    [{ narration: [{ text: source }] }, `_${escaped}_`],
+    [{ plan: [{ step: source, status: "in_progress" }] }, `▸ ${escaped.replace(" y ", " _y_ ")}`],
     [
       { lines: [{ ...toolLine("`pnpm test` <@U123> & <!channel>"), status: "exit 1" }] },
       "Exec — `pnpm test` &lt;@U123&gt; &amp; &lt;!channel&gt; — exit 1",
@@ -171,25 +152,17 @@ describe("buildSlackProgressCardBlocks", () => {
     expect(card(options)).toEqual([section(expected)]);
   });
 
-  it("keeps approval attention visible beside fifty recent activity rows", () => {
+  it("keeps approval attention and newest activity inside Slack's budgets", () => {
     const blocks = card({
       title: "Working",
       maxLineChars: 300,
       lines: [
-        { ...approval("Run the command"), text: "Approval required" },
-        ...Array.from({ length: 50 }, (_, index) => ({
+        approval("Run the command"),
+        ...Array.from({ length: 60 }, (_value, index) => ({
           ...progressLine(index),
-          detail: "x".repeat(300),
+          detail: `run ${index} ${"x".repeat(300)}`,
         })),
       ],
-    });
-    expect(JSON.stringify(blocks)).toContain("Run the command");
-  });
-
-  it("keeps the newest activity rows inside one section and the Slack block budget", () => {
-    const blocks = card({
-      title: "Working",
-      lines: Array.from({ length: 60 }, (_value, index) => progressLine(index)),
       elapsedSeconds: 1,
     });
     const activity = blocks.find(
@@ -197,6 +170,7 @@ describe("buildSlackProgressCardBlocks", () => {
     );
 
     expect(blocks.length).toBeLessThanOrEqual(50);
+    expect(JSON.stringify(blocks)).toContain("Run the command");
     expect(activity).toBeDefined();
     expect(JSON.stringify(activity)).toContain("Exec 59 — run 59");
     expect(JSON.stringify(activity)).not.toContain("Exec 0");

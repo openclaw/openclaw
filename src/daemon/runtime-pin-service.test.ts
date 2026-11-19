@@ -29,7 +29,10 @@ const native = vi.hoisted(() => ({
   loaded: vi.fn(),
   runtime: vi.fn(),
   stop: vi.fn(),
+  start: vi.fn(),
+  restart: vi.fn(),
 }));
+// mock-isolation: Keep native launchd reads and mutations outside the synthetic service fixture.
 vi.mock("./launchd.js", () => ({
   installLaunchAgent: native.install,
   stageLaunchAgent: native.stage,
@@ -38,8 +41,8 @@ vi.mock("./launchd.js", () => ({
   isLaunchAgentEnabled: vi.fn(),
   isLaunchAgentLoaded: native.loaded,
   readLaunchAgentRuntime: native.runtime,
-  restartLaunchAgent: vi.fn(),
-  startLaunchAgent: vi.fn(),
+  restartLaunchAgent: native.restart,
+  startLaunchAgent: native.start,
   stopLaunchAgent: native.stop,
 }));
 vi.mock("../infra/tmp-openclaw-dir.js", () => ({
@@ -59,6 +62,8 @@ vi.mock("../infra/gateway-supervision.js", () => ({
 }));
 beforeEach(() => {
   native.command = null;
+  native.start.mockReset();
+  native.restart.mockReset();
   native.loaded.mockReset().mockResolvedValue(true);
   native.runtime.mockReset().mockResolvedValue({ status: "running" });
   native.stop.mockReset().mockImplementation(async (args: Service.GatewayServiceControlArgs) => {
@@ -81,7 +86,6 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
 });
-
 function pinFixture(env: NodeJS.ProcessEnv, kind: "gateway" | "node") {
   const scope = { kind, env };
   const pin = { runtime: "node" as const, path: "/runtime/node" };
@@ -102,6 +106,9 @@ function pinFixture(env: NodeJS.ProcessEnv, kind: "gateway" | "node") {
 
 const bundledPin = { runtime: "bun", path: "/bundled/bun" } as const;
 const pausedService = /Start it before choosing Use bundled runtime/;
+const gatewayCommand = (runtime: string) => ({
+  programArguments: [runtime, "/app/openclaw.mjs", "gateway"],
+});
 function bundledArgs(
   args: Service.GatewayServiceInstallArgs,
   expected: DaemonRuntimePinSnapshot,
@@ -109,7 +116,7 @@ function bundledArgs(
 ): Service.GatewayServiceInstallArgs {
   return {
     ...args,
-    programArguments: [bundledPin.path, "/app/openclaw.mjs", "gateway"],
+    ...gatewayCommand(bundledPin.path),
     runtimePinUpdate: { expected, pin: bundledPin, ...overrides },
   };
 }
@@ -142,6 +149,19 @@ async function withoutSnapshots(run: () => Promise<void>) {
     snapshots.mockRestore();
   }
 }
+it.for(["start", "restart"] as const)(
+  "keeps pending pin migration out of unchanged service %s",
+  async (action, { state }) => {
+    const service = resolveGatewayService();
+    native.command = gatewayCommand("/runtime/node");
+    expect(readDaemonRuntimePinMigrationPending(state.env)).toBe(true);
+    await service[action]({ env: state.env, stdout: process.stdout, preserveDefinition: true });
+    expect(native[action]).toHaveBeenCalledOnce();
+    expect(native.command).toEqual(gatewayCommand("/runtime/node"));
+    expect(readDaemonRuntimePinMigrationPending(state.env)).toBe(true);
+    expect(fs.existsSync(state.statePath("state", "openclaw.sqlite"))).toBe(false);
+  },
+);
 it.for(["gateway", "node"] as const)(
   "admits pending migration before %s uninstall",
   async (kind, { state }) => {
@@ -181,19 +201,16 @@ it.for(["before-native-write", "before-persistence"] as const)(
 
 it("keeps pin-unaware writes read-only", async ({ state }) => {
   const service = resolveGatewayService();
-  const args = {
-    env: state.env,
-    stdout: process.stdout,
-    programArguments: ["/runtime/node", "/app/openclaw.mjs", "gateway"],
-  };
-  await service.stage(args);
-  await service.install(args);
-  expect(native.stage).toHaveBeenCalledOnce();
-  expect(native.install).toHaveBeenCalledOnce();
-  expect(readDaemonRuntimePin({ kind: "gateway", env: state.env }, native.command).stored).toBe(
-    false,
-  );
-  expect(fs.existsSync(state.statePath("state", "openclaw.sqlite"))).toBe(false);
+  const args = { env: state.env, stdout: process.stdout, ...gatewayCommand("/runtime/node") };
+  for (const action of ["stage", "install"] as const) {
+    native.command = null;
+    await service[action](args);
+    expect(native.command).toMatchObject({ programArguments: args.programArguments });
+    expect(readDaemonRuntimePin({ kind: "gateway", env: state.env }, native.command).stored).toBe(
+      false,
+    );
+    expect(fs.existsSync(state.statePath("state", "openclaw.sqlite"))).toBe(false);
+  }
 });
 it.for(["gateway", "node"] as const)(
   "requires explicit %s runtime intent for rewrites and removes the pin on uninstall",
@@ -269,7 +286,7 @@ it("serializes competing pin writes", async ({ pins: { service, pin, args, readP
 it.for([false, true])(
   "preserves a stop before the guarded runtime writer acquires its lock (disable=%s)",
   async (disable, { pins: { service, args, readPin } }) => {
-    native.command = { programArguments: ["/original/node", "/app/openclaw.mjs", "gateway"] };
+    native.command = gatewayCommand("/original/node");
     const original = native.command;
     const observed = await readGatewayServiceState(service, args);
     expect(observed.running).toBe(true);
@@ -306,14 +323,14 @@ it.for([
 ] as const)(
   "guards a %s runtime %s under the native lock",
   async ([mode, action], { pins: { service, args, readPin } }) => {
-    native.command = { programArguments: ["/original/node", "/app/openclaw.mjs", "gateway"] };
+    native.command = gatewayCommand("/original/node");
     const fresh = mode === "fresh-drift";
     const drift = mode === "drift" || fresh;
     const expected = readPin(fresh ? null : native.command);
     const requiresRunning = mode !== "unpinned" && !drift;
     const pinned = mode === "running" || fresh;
     if (drift) {
-      native.command = { programArguments: ["/operator/node", "/app/openclaw.mjs", "gateway"] };
+      native.command = gatewayCommand("/operator/node");
     } else if (mode === "inspection-failed") {
       native.runtime.mockRejectedValue(new Error("native inspection failed"));
     } else if (mode === "disabled") {
@@ -323,7 +340,7 @@ it.for([
     }
     const previous = native.command;
     const runtime = requiresRunning ? bundledPin.path : "/retained/node";
-    const programArguments = [runtime, "/app/openclaw.mjs", "gateway"];
+    const { programArguments } = gatewayCommand(runtime);
     const runtimePinUpdate: DaemonRuntimePinUpdate = {
       expected,
       ...(pinned
@@ -331,11 +348,7 @@ it.for([
         : { requireDefinitionMatch: true }),
       ...(requiresRunning ? { requireRunning: true } : {}),
     };
-    const write = service[action]({
-      ...args,
-      programArguments,
-      runtimePinUpdate,
-    });
+    const write = service[action]({ ...args, programArguments, runtimePinUpdate });
     if (drift || (requiresRunning && !pinned)) {
       await expect(write).rejects.toThrow(
         drift ? /changed during runtime pin planning/ : pausedService,
@@ -346,7 +359,6 @@ it.for([
       }
     } else {
       await write;
-      expect(native[action]).toHaveBeenCalledOnce();
       expect(native.command?.programArguments).toEqual(programArguments);
     }
     expect(readPin()).toMatchObject(pinned && !drift ? { pin: bundledPin } : { stored: false });
@@ -357,7 +369,6 @@ it("allows first runtime install", async ({ pins: { service, args, readPin } }) 
   native.loaded.mockResolvedValue(false);
   native.runtime.mockResolvedValue({ status: "stopped" });
   await service.install(bundledArgs(args, readPin(null), { requireDefinitionMatch: true }));
-  expect(native.install).toHaveBeenCalledOnce();
   expect(native.runtime).not.toHaveBeenCalled();
   expect(readPin().pin).toEqual(bundledPin);
 });

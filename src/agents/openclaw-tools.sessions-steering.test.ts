@@ -78,25 +78,19 @@ function userEntries(scope: Parameters<typeof SessionManager.open>[0], dir: stri
 }
 async function steeringFixture(sessionKey: string, alternateStore = false, updatedAt = Date.now()) {
   const dir = tempDirs.make("openclaw-steering-");
+  const store = alternateStore
+    ? path.join(dir, "agents", "{agentId}", "sessions", "sessions.json")
+    : path.join(dir, "sessions.json");
   const scope = {
     agentId: "leasing-ops",
     sessionId: "caller-active-session",
     sessionKey,
     storePath: alternateStore
       ? resolveSessionStorePathCore(undefined, { agentId: "leasing-ops" })
-      : path.join(dir, "sessions.json"),
-  };
-  const testConfig = {
-    ...config,
-    session: {
-      ...config.session,
-      store: alternateStore
-        ? path.join(dir, "agents", "{agentId}", "sessions", "sessions.json")
-        : scope.storePath,
-    },
+      : store,
   };
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt });
-  return { dir, scope, testConfig };
+  return { dir, scope, testConfig: { ...config, session: { ...config.session, store } } };
 }
 registerAgentSessionLoopTestLifecycle();
 beforeEach(() => {
@@ -158,13 +152,15 @@ it.each(["missing", "different", "different account"] as const)(
 );
 
 it.each([
-  [undefined, false, false, false, false],
-  ["steer", true, false, true, false],
-  ["steer", false, true, false, false],
-  [undefined, false, false, false, true],
+  [undefined, false, false, false, false, false],
+  ["steer", true, false, true, false, false],
+  ["steer", false, true, false, false, false],
+  [undefined, false, false, false, true, false],
+  // A parent's ordinary reply-waiting send must still reach its busy child's current run.
+  [undefined, false, false, false, true, true],
 ] as const)(
-  "persists steering provenance: mode=%s alternateStore=%s hiddenRun=%s refreshedDisplay=%s ownChild=%s",
-  async (mode, alternateStore, hiddenRun, refreshedDisplay, ownChild) => {
+  "persists steering provenance: mode=%s alternateStore=%s hiddenRun=%s refreshedDisplay=%s ownChild=%s defaultTimeout=%s",
+  async (mode, alternateStore, hiddenRun, refreshedDisplay, ownChild, defaultTimeout) => {
     const runId = "hidden-sessions-send-steering-run";
     const sessionKey = ownChild
       ? "agent:leasing-ops:subagent:active-child"
@@ -265,7 +261,7 @@ it.each([
           mode,
           sessionKey,
           message: "[TASK-COMPLETE] re-portal occupancy ready",
-          timeoutSeconds: 0,
+          ...(defaultTimeout ? {} : { timeoutSeconds: 0 }),
         }),
       );
       let acknowledged = false;
@@ -275,9 +271,9 @@ it.each([
       pending.push(send);
       await Promise.race([queued.promise, send, prompt]);
       expect(session.pendingMessageCount).toBe(1);
-      // Reply waiting cannot acknowledge volatile input or withdraw it before
-      // the independent durable-admission deadline and receiver consumption.
-      await vi.advanceTimersByTimeAsync(30_000);
+      // Stay below the fixed admission deadline while checking that input remains
+      // pending until the receiver consumes it.
+      await vi.advanceTimersByTimeAsync(15_000);
       vi.useRealTimers();
       expect(acknowledged).toBe(false);
       expect(session.pendingMessageCount).toBe(1);

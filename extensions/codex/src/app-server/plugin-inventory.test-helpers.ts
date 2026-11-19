@@ -31,15 +31,10 @@ export function pluginList(
   plugins: v2.PluginSummary[],
   marketplace: { name?: string; path?: string | null } = {},
 ): v2.PluginListResponse {
+  const { name = CODEX_PLUGINS_MARKETPLACE_NAME, path = "/marketplaces/openai-curated" } =
+    marketplace;
   return {
-    marketplaces: [
-      {
-        name: marketplace.name ?? CODEX_PLUGINS_MARKETPLACE_NAME,
-        path: marketplace.path === undefined ? "/marketplaces/openai-curated" : marketplace.path,
-        interface: null,
-        plugins,
-      },
-    ],
+    marketplaces: [{ name, path, interface: null, plugins }],
     marketplaceLoadErrors: [],
     featuredPluginIds: [],
   };
@@ -80,8 +75,6 @@ export function pluginDetail(
           ? "/marketplaces/openai-curated"
           : marketplace.marketplacePath,
       summary: pluginSummary(pluginName, { installed: true, enabled: true }),
-      description: null,
-      skills: [],
       apps,
       mcpServers: marketplace.mcpServers ?? [],
     },
@@ -102,14 +95,6 @@ export function appInfo(id: string, accessible: boolean, enabled = true): v2.App
   return {
     id,
     name: id,
-    description: null,
-    logoUrl: null,
-    logoUrlDark: null,
-    distributionChannel: null,
-    branding: null,
-    appMetadata: null,
-    labels: null,
-    installUrl: null,
     isAccessible: accessible,
     isEnabled: enabled,
     pluginDisplayNames: [],

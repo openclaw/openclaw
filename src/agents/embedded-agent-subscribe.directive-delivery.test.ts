@@ -12,6 +12,7 @@ import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply
 import { isAudioPayload } from "../auto-reply/reply/agent-runner-helpers.js";
 import { createBlockReplyPipeline } from "../auto-reply/reply/block-reply-pipeline.js";
 import { createBlockReplyDeliveryHandler } from "../auto-reply/reply/reply-delivery.js";
+import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createReplyToModeFilterForChannel } from "../auto-reply/reply/reply-threading.js";
 import { createTypingSignaler } from "../auto-reply/reply/typing-mode.js";
 import { createTypingController } from "../auto-reply/reply/typing.js";
@@ -121,7 +122,10 @@ function createDeliveryHarness(
     onBlockReply: record,
     replyThreading: { implicitCurrentMessage: "deny" },
     normalizeStreamingText: (payload) => {
-      const text = sanitizeUserFacingText(payload.text ?? "", { streaming: true });
+      const text = sanitizeUserFacingText(payload.text ?? "", {
+        streaming: true,
+        preserveLeadingSourceBoundary: getReplyPayloadMetadata(payload)?.streamedSourceBoundary,
+      });
       return { text, skip: !text.trim() };
     },
     applyReplyToMode: createReplyToModeFilterForChannel("all"),
@@ -263,6 +267,8 @@ const prefixCorrection = {
   literal: true,
   terminalText: leadChunks.join("") + correctedText + "\n",
   correctedText,
+  streamedText:
+    "First lead stays.\nNext lead stays.\nThe current value is one for this item.Continue. Keep this sentence unchanged. Retaineach result. The final summary also remains",
 };
 
 it.each([...blockDirectiveCases, ...inlineDirectiveCases, prefixCorrection])(
@@ -307,9 +313,7 @@ it.each([...blockDirectiveCases, ...inlineDirectiveCases, prefixCorrection])(
       expect(delivered.length).toBeGreaterThan(0);
       const beforeTerminalCount = delivered.length;
       if ("terminalText" in scenario) {
-        expect(texts(delivered).join("\n")).toBe(
-          scenario.chunks.map((text) => text.trimEnd()).join("\n"),
-        );
+        expect(texts(delivered).join("")).toBe(scenario.streamedText);
       }
       const text = texts(delivered).join("");
       if ("preservedLiteral" in scenario) {
@@ -338,16 +342,13 @@ it.each([...blockDirectiveCases, ...inlineDirectiveCases, prefixCorrection])(
       expect
         .soft(delivered.filter((payload) => payload.audioAsVoice && payload.text).length)
         .toBe("voiceEdges" in scenario ? scenario.voiceEdges : 0);
-      if ("textOnly" in scenario) {
-        expect(delivered.every(hasNoMedia)).toBe(true);
-      }
       releaseTerminal.resolve();
       await settled;
       await flush();
       if ("terminalText" in scenario) {
         const recipientText = texts(delivered);
         const additional = recipientText.slice(beforeTerminalCount);
-        expect(additional.join(" ")).toBe(scenario.correctedText);
+        expect(additional.join(" ")).toBe("\n" + scenario.correctedText);
         for (const sentence of scenario.unchangedLeadSentences) {
           expect.soft(recipientText.join(" ").split(sentence)).toHaveLength(2);
         }
@@ -519,67 +520,68 @@ it("keeps generic directive URLs separate from tool-owned managed media", () => 
   ).toEqual(["./managed.png"]);
 });
 
-it("retains raw XML projection across a source replacement", () => {
-  const xmlText = "<tool_call>{}</tool_call>Visible\n";
+function resolveReplyFrames(frames: readonly { text: string; delta?: string }[], raw = false) {
   const resolve = createStreamingReplyResolver();
-  let previousCleaned = "";
-  for (const frame of [
-    { text: "Discarded.", delta: "Discarded.", expected: "Discarded." },
-    { text: xmlText, expected: "Visible" },
-    { text: xmlText + "tail", delta: "tail", expected: "Visible\ntail" },
-  ]) {
-    const delta = "delta" in frame ? frame.delta : undefined;
+  let previousText = "";
+  let previous = { text: "", audioDirectiveCount: 0 };
+  return frames.map((frame) => {
+    const visibleDelta = frame.delta ?? frame.text;
     const result = resolve({
       evtType: "text_delta",
       next: frame.text,
-      previousText: "",
-      previousCleaned,
-      visibleDelta: delta ?? frame.text,
-      appendDelta: delta ?? null,
-      parsedStreamDirectives: { text: "", replyToTag: false },
-      previousAudioDirectiveCount: 0,
-      rawDirectiveSource: frame.text,
-      rawDirectiveDelta: delta,
+      previousText,
+      previousCleaned: previous.text,
+      visibleDelta,
+      appendDelta: frame.delta ?? null,
+      parsedStreamDirectives: { text: visibleDelta, replyToTag: false },
+      previousAudioDirectiveCount: previous.audioDirectiveCount,
+      ...(raw ? { rawDirectiveSource: frame.text, rawDirectiveDelta: frame.delta } : {}),
     });
-    expect(result.text).toBe(frame.expected);
-    previousCleaned = result.text;
-  }
-});
-
-it("appends visible text across long blank runs without stalling the media scan", () => {
-  const delta = `before${"\n".repeat(60_000)}after`;
-  const started = performance.now();
-  expect(
-    createStreamingReplyResolver()({
-      evtType: "text_delta",
-      next: delta,
-      previousText: "",
-      previousCleaned: "",
-      visibleDelta: delta,
-      appendDelta: delta,
-      parsedStreamDirectives: { text: delta, replyToTag: false },
-      previousAudioDirectiveCount: 0,
-    }),
-  ).toEqual({
-    text: delta,
-    delta,
-    replace: false,
-    hasText: true,
-    replyDirectives: { text: delta, replyToTag: false },
-    audioDirectiveCount: 0,
+    previousText = frame.text;
+    previous = result;
+    return result;
   });
+}
+const literalVoice = "`[[audio_as_voice]]`";
+const reclassifiedVoice = parseReplyDirectives(literalVoice + "`");
+it("keeps raw XML and directive ownership canonical across replacements", () => {
+  const xmlText = "<tool_call>{}</tool_call>Visible\n";
+  const frames = [
+    { text: "Discarded.", delta: "Discarded.", expected: "Discarded." },
+    { text: xmlText, expected: "Visible" },
+    { text: xmlText + "tail", delta: "tail", expected: "Visible\ntail" },
+    { text: literalVoice, expected: literalVoice },
+    { text: literalVoice + "`", delta: "`", expected: reclassifiedVoice.text },
+  ];
+  const results = resolveReplyFrames(frames, true);
+  expect(results.map((result) => result.text)).toEqual(frames.map((frame) => frame.expected));
+  expect(results.map((result) => result.audioDirectiveCount)).toEqual([0, 0, 0, 0, 1]);
+  expect(results.at(-1)?.replyDirectives?.audioAsVoice).toBe(reclassifiedVoice.audioAsVoice);
+});
+it.each([
+  ["", `before${"\n".repeat(60_000)}after`],
+  ...["\r", "\n", "\r\n"].flatMap((eol) =>
+    ["", "M", "ME", "MED", "MEDI", "MEDIA"].map((marker) => [
+      "MEDIA: ./a.png\nCaption",
+      marker ? `${eol}${marker}` : `${eol}MEDIA: ./b.png${eol}After`,
+      marker ? `${"MEDIA".slice(marker.length)}: ./b.png${eol}After` : "",
+    ]),
+  ),
+])("keeps media boundaries and long blank runs canonical: %j", (...chunks: string[]) => {
+  let text = "";
+  const frames = chunks.filter(Boolean).map((delta) => ({ text: (text += delta), delta }));
+  const started = performance.now();
+  const results = resolveReplyFrames(frames);
+  expect(results.at(-1)?.text).toBe(parseReplyDirectives(text).text);
   expect(performance.now() - started).toBeLessThan(1_000);
 });
-
 it("streams a long reply-tagged answer without a quadratic slowdown", () => {
   const body = `${"Paragraph with `code` and **bold** text.\n\n- item `one`\n- item two\n\n".repeat(100)}\`\`\`ts\nconst x = 1;\n\`\`\`\n\nDone.`;
   const text = `[[reply_to_current]] Intro.\n\n${body}`;
   const partials: ReplyPayload[] = [];
   const { emit } = createSubscribedSessionHarness({
     runId: "run-tagged-stream",
-    onPartialReply: (payload) => {
-      partials.push(payload);
-    },
+    onPartialReply: (payload) => void partials.push(payload),
   });
   emit({ type: "message_start", message: textMessage("") });
   const started = performance.now();

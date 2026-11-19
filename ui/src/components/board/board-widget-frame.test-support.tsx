@@ -1,5 +1,6 @@
 import { createSignal, flush } from "solid-js";
 import type { BoardWidget } from "../../lib/board/types.ts";
+import { createBoardWidget } from "../../lib/board/widget.test-support.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -9,21 +10,15 @@ import {
 } from "./board-widget-frame.tsx";
 
 export function grantedFrameWidgetFixture(): BoardWidget {
-  return {
+  return createBoardWidget({
     name: "weather",
-    revision: 1,
-    tabId: "main",
-    contentKind: "html",
-    sizeW: 6,
-    sizeH: 4,
-    position: 0,
     grantState: "granted",
     viewTicket: "ticket",
     viewGeneration: "generation",
     sandboxUrl: "/mcp-app-sandbox",
     sandboxPort: 8444,
     sandboxOrigin: "https://sandbox.example",
-  };
+  });
 }
 
 type FrameHost = Parameters<typeof createBoardWidgetFrame>[0];

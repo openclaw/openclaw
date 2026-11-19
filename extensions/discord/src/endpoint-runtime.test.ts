@@ -15,7 +15,9 @@ import {
 import type { Message } from "./internal/discord.js";
 import { RequestClient } from "./internal/rest.js";
 import { resolveMediaList } from "./monitor/message-media.js";
+import { discordOutbound } from "./outbound-payload.js";
 import { fetchPluralKitMessageInfo } from "./pluralkit.js";
+import { sendWebhookMessageDiscord } from "./send.webhook.js";
 
 const servers: Server[] = [];
 const sockets = new Set<Duplex>();
@@ -103,6 +105,49 @@ describe("Discord endpoint runtime", () => {
       },
     ]);
   });
+
+  it.each(["text", "poll", "webhook"] as const)(
+    "cancels an in-flight %s send through the real transport",
+    async (kind) => {
+      const controller = new AbortController();
+      const reason = new Error("caller stopped delivery");
+      const { baseUrl, requests } = await startServer((request, response) => {
+        if (request.method === "POST") {
+          controller.abort(reason);
+        }
+        // A broken cancellation path must finish normally, not hang until a timeout.
+        response
+          .writeHead(200, { "content-type": "application/json" })
+          .end(
+            request.method === "GET"
+              ? '{"id":"42","type":0}'
+              : '{"id":"message-id","channel_id":"42"}',
+          );
+      });
+      configureEndpoint(baseUrl);
+      const cfg = { channels: { discord: { token: "proof-token" } } };
+      const ctx = { cfg, to: "channel:42", text: "x".repeat(4500), signal: controller.signal };
+      const pending =
+        kind === "webhook"
+          ? sendWebhookMessageDiscord(ctx.text, {
+              cfg,
+              webhookId: "123",
+              webhookToken: "proof-webhook-token",
+              signal: controller.signal,
+            })
+          : kind === "poll"
+            ? discordOutbound.sendPoll?.({
+                ...ctx,
+                poll: { question: "Pick one", options: ["A", "B"] },
+              })
+            : discordOutbound.sendText?.(ctx);
+      assert(pending, "expected Discord sender");
+      await expect(pending).rejects.toBe(reason);
+      expect(
+        requests.filter(({ url }) => url?.includes("/messages") || url?.includes("/webhooks/")),
+      ).toHaveLength(1);
+    },
+  );
 
   it("downloads endpoint media directly instead of through an account proxy fetcher", async () => {
     const { baseUrl, requests } = await startServer();

@@ -123,9 +123,6 @@ export async function resolveSessionEnvironmentCaller(
         }
         assertAmbient();
       }
-      if (runtime && context.validateAgentRuntimeApprovalAuthority?.(runtime) !== true) {
-        throw new Error("Conversation environment agent run is no longer active");
-      }
       const cfg = context.getRuntimeConfig();
       const facts = read.readCurrent(cfg);
       if (

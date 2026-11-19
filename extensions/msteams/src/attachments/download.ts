@@ -26,7 +26,6 @@ import {
   isDownloadableAttachment,
   isRedirectStatus,
   type MSTeamsAttachmentDownloadLogger,
-  type MSTeamsAttachmentFetchPolicy,
   normalizeContentType,
   resolveMSTeamsMediaKind,
   resolveAttachmentFetchPolicy,
@@ -156,75 +155,6 @@ async function resolveInlineDataImageMime(inline: {
   });
   const mime = normalizeOptionalLowercaseString(detectedMime ?? inline.contentType);
   return mime?.startsWith("image/") ? mime : undefined;
-}
-
-async function fetchWithAuthFallback(params: {
-  url: string;
-  tokenProvider?: MSTeamsAccessTokenProvider;
-  requestInit?: RequestInit;
-  policy: MSTeamsAttachmentFetchPolicy;
-  deadline?: MSTeamsRequestDeadline;
-  bearerToken?: string;
-}): Promise<Response> {
-  const fetchAttempt = (requestInit?: RequestInit) =>
-    safeFetchWithPolicy({
-      url: params.url,
-      policy: params.policy,
-      resolveFn: lookup,
-      requestInit,
-      timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
-    });
-  if (params.bearerToken !== undefined) {
-    const headers = ensureUserAgentHeader(params.requestInit?.headers);
-    applyAuthorizationHeaderForUrl({
-      headers,
-      url: params.url,
-      authAllowHosts: params.policy.authAllowHosts,
-      bearerToken: params.bearerToken,
-    });
-    return fetchAttempt({ ...params.requestInit, headers });
-  }
-  const firstAttempt = await fetchAttempt(params.requestInit);
-  if (firstAttempt.ok) {
-    return firstAttempt;
-  }
-  if (!params.tokenProvider) {
-    return firstAttempt;
-  }
-  const tokenProvider = params.tokenProvider;
-  if (firstAttempt.status !== 401 && firstAttempt.status !== 403) {
-    return firstAttempt;
-  }
-  if (!isUrlAllowed(params.url, params.policy.authAllowHosts)) {
-    return firstAttempt;
-  }
-  let fallbackAttempt = firstAttempt;
-  const scopes = scopeCandidatesForUrl(params.url);
-  for (const scope of scopes) {
-    try {
-      const token = await withMSTeamsRequestDeadline({
-        deadline: params.deadline,
-        label: "MS Teams attachment token",
-        work: () => tokenProvider.getAccessToken(scope),
-      });
-      const authHeaders = new Headers(params.requestInit?.headers);
-      authHeaders.set("Authorization", `Bearer ${token}`);
-      const authAttempt = await fetchAttempt({
-        ...params.requestInit,
-        headers: authHeaders,
-      });
-      await fallbackAttempt.body?.cancel().catch(() => undefined);
-      if (authAttempt.ok || isRedirectStatus(authAttempt.status)) {
-        // Redirects in guarded fetch mode must propagate to the outer guard.
-        return authAttempt;
-      }
-      fallbackAttempt = authAttempt;
-    } catch {
-      // Try the next scope.
-    }
-  }
-
-  return fallbackAttempt;
 }
 
 export async function downloadMSTeamsAttachments(params: {
@@ -362,15 +292,71 @@ export async function downloadMSTeamsAttachments(params: {
         kind: candidate.graphReference ? undefined : candidate.mediaKind,
         // `fetchImpl` below owns Teams auth fallback and enforces the
         // attachment fetch policy through `safeFetchWithPolicy`.
-        fetchImpl: (input, init) =>
-          fetchWithAuthFallback({
-            url: resolveRequestUrl(input),
-            tokenProvider: params.tokenProvider,
-            requestInit: init,
-            policy,
-            deadline: params.deadline,
-            bearerToken: candidate.graphReference ? params.graphReferenceToken : undefined,
-          }),
+        fetchImpl: async (input, init) => {
+          const url = resolveRequestUrl(input);
+          const providedTokenProvider = params.tokenProvider;
+          const deadline = params.deadline;
+          const bearerToken = candidate.graphReference ? params.graphReferenceToken : undefined;
+          const fetchAttempt = (requestInit?: RequestInit) =>
+            safeFetchWithPolicy({
+              url,
+              policy,
+              resolveFn: lookup,
+              requestInit,
+              timeoutMs: resolveMSTeamsRequestTimeoutMs(deadline),
+            });
+          if (bearerToken !== undefined) {
+            const headers = ensureUserAgentHeader(init?.headers);
+            applyAuthorizationHeaderForUrl({
+              headers,
+              url,
+              authAllowHosts: policy.authAllowHosts,
+              bearerToken,
+            });
+            return fetchAttempt({ ...init, headers });
+          }
+          const firstAttempt = await fetchAttempt(init);
+          if (firstAttempt.ok) {
+            return firstAttempt;
+          }
+          if (!providedTokenProvider) {
+            return firstAttempt;
+          }
+          const tokenProvider = providedTokenProvider;
+          if (firstAttempt.status !== 401 && firstAttempt.status !== 403) {
+            return firstAttempt;
+          }
+          if (!isUrlAllowed(url, policy.authAllowHosts)) {
+            return firstAttempt;
+          }
+          let fallbackAttempt = firstAttempt;
+          const scopes = scopeCandidatesForUrl(url);
+          for (const scope of scopes) {
+            try {
+              const token = await withMSTeamsRequestDeadline({
+                deadline,
+                label: "MS Teams attachment token",
+                work: () => tokenProvider.getAccessToken(scope),
+              });
+              const authHeaders = new Headers(init?.headers);
+              authHeaders.set("Authorization", `Bearer ${token}`);
+              const authAttempt = await fetchAttempt({
+                ...init,
+                headers: authHeaders,
+              });
+              await fallbackAttempt.body?.cancel().catch(() => undefined);
+              if (authAttempt.ok || isRedirectStatus(authAttempt.status)) {
+                // Redirects in guarded fetch mode must propagate to the outer guard.
+                return authAttempt;
+              }
+              fallbackAttempt = authAttempt;
+            } catch {
+              // Try the next scope.
+            }
+          }
+
+          return fallbackAttempt;
+        },
       });
     } catch (err) {
       if (candidate.graphReference) {

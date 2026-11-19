@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createIcaclsResetCommand, formatIcaclsResetCommand } from "@openclaw/fs-safe/advanced";
 import { modeBits } from "@openclaw/fs-safe/permissions";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
 import { listAgentIds, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -11,7 +12,6 @@ import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/p
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runExec } from "../process/exec.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../routing/session-key.js";
-import { createIcaclsResetCommand, formatIcaclsResetCommand } from "./windows-acl.js";
 
 type SecurityFixAction = {
   path: string;

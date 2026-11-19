@@ -4,12 +4,15 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import type { NodeHostConfig, NodeHostGatewayConfig } from "../node-host/config.js";
 import { encodePairingSetupCode } from "../pairing/setup-code.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerConnectCli } from "./connect-cli.js";
 
 const mocks = vi.hoisted(() => ({
   runNodeHost: vi.fn(),
+  runNodeJoin: vi.fn(),
   loadResumableNodeHostGateway: vi.fn<() => Promise<NodeHostGatewayConfig | undefined>>(
     async () => undefined,
   ),
@@ -27,6 +30,8 @@ vi.mock("../node-host/runner.js", () => ({
   loadResumableNodeHostGateway: mocks.loadResumableNodeHostGateway,
   runNodeHost: mocks.runNodeHost,
 }));
+// mock-isolation: Node enrollment is owned separately; never redeem real invitations here.
+vi.mock("../node-host/openclaw-id-join.js", () => ({ runNodeJoin: mocks.runNodeJoin }));
 vi.mock("../node-host/config.js", () => ({ loadNodeHostConfig: mocks.loadNodeHostConfig }));
 // mock-isolation: Connect fixtures capture config mutations without reading or writing operator state.
 vi.mock("../config/config.js", () => ({
@@ -67,6 +72,7 @@ function joinResponse(contentType = "application/json", finalUrl?: string) {
 }
 
 function expectFailure(message: unknown) {
+  expect(mocks.runNodeJoin).not.toHaveBeenCalled();
   expect(mocks.runtime.error).toHaveBeenCalledWith(message);
   expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
   expect(mocks.runNodeHost).not.toHaveBeenCalled();
@@ -86,6 +92,13 @@ function savedAccessGateway(
     nodeId: "node-test",
     gateway: { host, port, tls, cloudflareAccess: { clientId, clientSecret } },
   });
+}
+
+function expectBootstrap() {
+  expect(mocks.runNodeHost).toHaveBeenCalledWith(
+    expect.objectContaining({ stopAfterFirstConnect: true }),
+  );
+  expect(mocks.runNodeHost.mock.calls[0]?.[0]).not.toHaveProperty("forceWorkerRuns");
 }
 
 async function runConnect(args: string[]): Promise<void> {
@@ -108,27 +121,80 @@ describe("connect cli", () => {
   });
 
   it.each([
-    ["Application/JSON; charset=utf-8", true],
-    ["APPLICATION/JSON", true],
-    ["text/html", false],
-    ["application/json-seq", false],
-  ])("recognizes the join response media type %s", async (contentType, accepted) => {
-    const release = joinResponse(contentType);
-
-    await runConnect([`https://gateway.example/j/${"a".repeat(22)}`]);
-
-    if (accepted) {
-      expect(mocks.runNodeHost).toHaveBeenCalledOnce();
+    [[], false, undefined, undefined],
+    [
+      ["--service", "--commands", "fixture.read,fixture.list"],
+      true,
+      ["fixture.list", "fixture.read"],
+      undefined,
+    ],
+    [["--all-commands"], false, undefined, true],
+  ] as const)(
+    "routes node invitations with flags %j",
+    async (flags, service, commands, allCommands) => {
+      const link = "openclaw-node://join#synthetic-invitation";
+      await runConnect([
+        link,
+        ...flags,
+        "--discovery-url",
+        "https://discovery.example",
+        "--display-name",
+        "Build Node",
+      ]);
+      expect(mocks.runNodeJoin).toHaveBeenCalledWith(link, {
+        service,
+        discoveryUrl: "https://discovery.example",
+        displayName: "Build Node",
+        commands,
+        allCommands,
+      });
+      expect(mocks.loadNodeHostConfig).not.toHaveBeenCalled();
+      expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+      expect(mocks.runNodeHost).not.toHaveBeenCalled();
+      expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
       expect(mocks.runtime.error).not.toHaveBeenCalled();
-    } else {
-      expectFailure("Gateway join code was not found or has expired.");
-    }
-    expect(release).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["--ephemeral", "--session-host"])("rejects node invitation %s", async (flag) => {
+    await runConnect(["openclaw-node://join#synthetic-invitation", flag]);
+    expectFailure("OpenClaw ID node invitations do not support --ephemeral or --session-host.");
   });
+
+  it("rejects conflicting command selections before redeeming a node invitation", async () => {
+    await expect(
+      runConnect(["openclaw-node://join", "--commands", "fixture.read", "--all-commands"]),
+    ).rejects.toThrow(/--all-commands.*--commands/);
+    expect(mocks.runNodeJoin).not.toHaveBeenCalled();
+  });
+
+  it("reports node enrollment errors without falling back to bootstrap pairing", async () => {
+    mocks.runNodeJoin.mockRejectedValueOnce(new Error("Node invitation expired."));
+    await runConnect(["openclaw-node://join#synthetic-invitation"]);
+    expect(mocks.runtime.error).toHaveBeenCalledWith("Node invitation expired.");
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runNodeHost).not.toHaveBeenCalled();
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+  });
+
+  it("rejects Discovery routing on legacy setup targets", async () => {
+    await runConnect([setupCode(), "--discovery-url", "https://discovery.example"]);
+    expectFailure("--discovery-url requires an openclaw-node invitation link.");
+  });
+
+  it.each(["text/html", "application/json-seq"])(
+    "rejects join media type %s",
+    async (contentType) => {
+      const release = joinResponse(contentType);
+      await runConnect([`https://gateway.example/j/${"a".repeat(22)}`]);
+      expectFailure("Gateway join code was not found or has expired.");
+      expect(release).toHaveBeenCalledOnce();
+    },
+  );
 
   it("maps an HTTPS join URL into the existing node foreground runtime", async () => {
     const target = `https://gateway.example/openclaw-gw/j/${"a".repeat(22)}`;
-    joinResponse("application/json; charset=utf-8", target);
+    const release = joinResponse("Application/JSON; charset=utf-8", target);
 
     await runConnect([target, "--display-name", "Build Node"]);
 
@@ -152,10 +218,66 @@ describe("connect cli", () => {
       preferGatewayBootstrapToken: true,
       displayName: "Build Node",
     });
-    expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledOnce();
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
     expect(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0]).not.toHaveProperty("init");
     expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
   });
+
+  it.each(["before", "headers", "body", "release"])(
+    "settles join lookup interrupted during %s without entering the node runtime",
+    async (phase) => {
+      const scope = new AsyncWorkScope();
+      const release = vi.fn(async () => {
+        if (phase === "release") {
+          scope.beginClose();
+        }
+      });
+      const bodyCanceled = vi.fn();
+      if (phase === "before") {
+        scope.beginClose();
+      } else {
+        mocks.fetchWithSsrFGuard.mockImplementationOnce(async ({ signal }: GuardedFetchOptions) => {
+          if (phase === "headers") {
+            scope.beginClose();
+            signal?.throwIfAborted();
+          }
+          const response =
+            phase === "body"
+              ? new Response(
+                  new ReadableStream(
+                    {
+                      pull() {
+                        scope.beginClose();
+                      },
+                      cancel: bodyCanceled,
+                    },
+                    { highWaterMark: 0 },
+                  ),
+                  { headers: { "content-type": "application/json" } },
+                )
+              : new Response(JSON.stringify(payload), {
+                  headers: { "content-type": "application/json" },
+                });
+          return { response, release };
+        });
+      }
+
+      const flags = phase === "release" ? ["--service", "--session-host"] : [];
+      await scope.run(() => runConnect([`https://gateway.example/j/${"a".repeat(22)}`, ...flags]));
+
+      expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(phase === "before" ? 0 : 1);
+      expect(release).toHaveBeenCalledTimes(phase === "before" || phase === "headers" ? 0 : 1);
+      if (phase === "body") {
+        expect(bodyCanceled).toHaveBeenCalledOnce();
+      }
+      expect(mocks.runtime.error).not.toHaveBeenCalled();
+      expect(mocks.runtime.exit).not.toHaveBeenCalled();
+      expect(mocks.runNodeHost).not.toHaveBeenCalled();
+      expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+      expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     {
@@ -283,12 +405,7 @@ describe("connect cli", () => {
   it("authenticates before persisting hosting consent and installing the service", async () => {
     await runConnect([setupCode(), "--service", "--session-host", "--display-name", "Runner Node"]);
 
-    expect(mocks.runNodeHost).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stopAfterFirstConnect: true,
-      }),
-    );
-    expect(mocks.runNodeHost.mock.calls[0]?.[0]).not.toHaveProperty("forceWorkerRuns");
+    expectBootstrap();
     expect(mocks.mutateConfigFileWithRetry).toHaveBeenCalledWith({
       writeOptions: {
         auditOrigin: "cli",
@@ -332,10 +449,7 @@ describe("connect cli", () => {
 
     await runConnect([setupCode(), "--service", "--session-host"]);
 
-    expect(mocks.runNodeHost).toHaveBeenCalledWith(
-      expect.objectContaining({ stopAfterFirstConnect: true }),
-    );
-    expect(mocks.runNodeHost.mock.calls[0]?.[0]).not.toHaveProperty("forceWorkerRuns");
+    expectBootstrap();
     expect(mocks.mutateConfigFileWithRetry).toHaveBeenCalledTimes(mutationCalls);
     expect(mocks.runtime.error).toHaveBeenCalledWith(error);
     expect(mocks.runtime.exit).toHaveBeenCalledWith(1);

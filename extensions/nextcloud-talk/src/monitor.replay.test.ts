@@ -9,9 +9,8 @@ import { startWebhookServer as startServer, webhookRegistry } from "./monitor.te
 
 afterEach(() => vi.useRealTimers());
 const path = "/nextcloud-test";
-function startWebhookServer(
-  options: Omit<Parameters<typeof startServer>[0], "path"> & { path?: string },
-) {
+type ServerOptions = Parameters<typeof startServer>[0];
+function startWebhookServer(options: Omit<ServerOptions, "path"> & { path?: string }) {
   return startServer({ path, ...options });
 }
 async function startPair(
@@ -32,6 +31,10 @@ function postWebhook(
   request: { body: string; headers: Record<string, string> } = createSignedCreateMessageRequest(),
 ) {
   return fetch(url, { method: "POST", ...request });
+}
+
+async function expectStatus(response: Promise<{ status: number }>, status = 200) {
+  expect((await response).status).toBe(status);
 }
 
 const { readBody, legacyListeners } = vi.hoisted(() => ({
@@ -166,9 +169,9 @@ describe("Nextcloud Talk webhooks", () => {
       { path: "/nextcloud-queries?tenant=a" },
       { path: "/nextcloud-queries?tenant=b" },
     );
-    expect((await postWebhook(firstHandle.webhookUrl)).status).toBe(200);
+    await expectStatus(postWebhook(firstHandle.webhookUrl));
     expectDeliveries(1, 0);
-    expect((await postWebhook(secondHandle.webhookUrl)).status).toBe(200);
+    await expectStatus(postWebhook(secondHandle.webhookUrl));
     expectDeliveries(1, 1);
   });
 
@@ -242,7 +245,7 @@ describe("Nextcloud Talk webhooks", () => {
       const stoppingSibling = siblingHandle.stop().then(() => {
         siblingStopped = true;
       });
-      expect((await fetch(first.webhookUrl, { method: "GET" })).status).toBe(404);
+      await expectStatus(fetch(first.webhookUrl, { method: "GET" }), 404);
       expect(siblingStopped).toBe(true);
       await stoppingSibling;
       await startWebhookServer({ secret: "second-secret", onMessage: second });
@@ -278,11 +281,11 @@ describe("Nextcloud Talk webhooks", () => {
       { legacyListener: secondEndpoint, isBackendAllowed },
     );
     const invoke = createInvoker(path);
-    expect((await invoke({ legacyListener: firstEndpoint })).status).toBe(200);
+    await expectStatus(invoke({ legacyListener: firstEndpoint }));
     expectDeliveries(1, 0);
-    expect((await invoke({ legacyListener: secondEndpoint })).status).toBe(200);
+    await expectStatus(invoke({ legacyListener: secondEndpoint }));
     expectDeliveries(1, 1);
-    expect((await invoke()).status).toBe(401);
+    await expectStatus(invoke(), 401);
     expectDeliveries(1, 1);
   });
 
@@ -304,23 +307,17 @@ describe("Nextcloud Talk webhooks", () => {
     const invalidHeaders = { ...headers, "x-nextcloud-talk-signature": "invalid-signature" };
     const invoke = createInvoker(path, { body, headers });
 
-    expect((await invoke({ headers: invalidHeaders, legacyListener: firstEndpoint })).status).toBe(
-      401,
-    );
-    expect((await invoke({ legacyListener: firstEndpoint })).status).toBe(429);
+    await expectStatus(invoke({ headers: invalidHeaders, legacyListener: firstEndpoint }), 401);
+    await expectStatus(invoke({ legacyListener: firstEndpoint }), 429);
     const alternate = createInvoker(alternatePath, { body, headers });
-    expect((await alternate({ legacyListener: firstEndpoint })).status).toBe(429);
-    expect((await invoke({ headers: secondHeaders, legacyListener: secondEndpoint })).status).toBe(
-      200,
-    );
+    await expectStatus(alternate({ legacyListener: firstEndpoint }), 429);
+    await expectStatus(invoke({ headers: secondHeaders, legacyListener: secondEndpoint }));
     expect(second).toHaveBeenCalledOnce();
-    expect((await invoke()).status).toBe(200);
+    await expectStatus(invoke());
     expect(first).toHaveBeenCalledOnce();
-    expect((await invoke({ headers: invalidHeaders })).status).toBe(401);
-    expect((await invoke({ headers: secondHeaders })).status).toBe(429);
-    expect((await invoke({ headers: secondHeaders, legacyListener: secondEndpoint })).status).toBe(
-      200,
-    );
+    await expectStatus(invoke({ headers: invalidHeaders }), 401);
+    await expectStatus(invoke({ headers: secondHeaders }), 429);
+    await expectStatus(invoke({ headers: secondHeaders, legacyListener: secondEndpoint }));
     expect(second).toHaveBeenCalledTimes(2);
   });
 
@@ -395,7 +392,7 @@ describe("Nextcloud Talk webhooks", () => {
       headers: { ...headers, "x-nextcloud-talk-signature": "invalid-signature" },
     };
     const invoke = createInvoker(target.path, request);
-    expect((await invoke()).status).toBe(401);
+    await expectStatus(invoke(), 401);
     expect(vi.getTimerCount()).toBe(baselineTimerCount + 1);
     const legacyTarget = { ...target, legacyListener: { port: 8788, host: "127.0.0.1" } };
     const firstLegacy = registerNextcloudTalkWebhook(legacyTarget);
@@ -405,8 +402,8 @@ describe("Nextcloud Talk webhooks", () => {
       secret: "other",
     });
     expect(registry.httpRoutes).toHaveLength(2);
-    expect((await createInvoker("/other", request)()).status).toBe(401);
-    expect((await invoke({ legacyListener: legacyTarget.legacyListener })).status).toBe(401);
+    await expectStatus(createInvoker("/other", request)(), 401);
+    await expectStatus(invoke({ legacyListener: legacyTarget.legacyListener }), 401);
     expect(vi.getTimerCount()).toBe(baselineTimerCount + 3);
     await firstLegacy();
     expect(vi.getTimerCount()).toBe(baselineTimerCount + 3);

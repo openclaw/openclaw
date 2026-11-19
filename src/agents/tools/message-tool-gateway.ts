@@ -79,10 +79,6 @@ export function createMessageToolGateway(
           );
         }
       : undefined;
-  const callerOwnsTerminalReceipt =
-    !requireBoundScheduledGateway &&
-    !boundRequest &&
-    (target === "remote" || hasPerCallGatewayConnection);
   const identityParams = {
     opts: resolutionOpts,
     target: boundRequest ? ("local" as const) : target,
@@ -90,14 +86,12 @@ export function createMessageToolGateway(
     turnCapabilitySessionKey: options?.agentSessionKey,
     runId: options?.runId,
     sessionId: options?.sessionId,
-    callerOwnsTerminalReceipt,
   };
   return {
     ...scheduledConnection,
     clientName: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
     clientDisplayName: "agent",
     mode: GATEWAY_CLIENT_MODES.BACKEND,
-    ...(callerOwnsTerminalReceipt ? { terminalSourceReplyReceiptOwner: "caller" } : {}),
     ...(requireBoundScheduledGateway
       ? { request: requireBoundScheduledGateway }
       : boundRequest

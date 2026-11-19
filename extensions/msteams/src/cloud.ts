@@ -3,6 +3,8 @@ import type { MSTeamsCloudName, MSTeamsConfig } from "../runtime-api.js";
 const DEFAULT_MSTEAMS_CLOUD: MSTeamsCloudName = "Public";
 
 const PUBLIC_MSTEAMS_SERVICE_HOST = "smba.trafficmanager.net";
+/** Global public-cloud Bot Connector endpoint; Teams routes it to the tenant's region. */
+export const PUBLIC_MSTEAMS_SERVICE_URL = `https://${PUBLIC_MSTEAMS_SERVICE_HOST}/teams`;
 const CHINA_BOT_FRAMEWORK_SERVICE_HOST = "botframework.azure.cn";
 
 export type MSTeamsSdkCloudOptions = {
@@ -10,12 +12,10 @@ export type MSTeamsSdkCloudOptions = {
   serviceUrl?: string;
 };
 
-type NormalizedServiceUrl = {
+function normalizeOptionalServiceUrl(value: string | undefined): {
   value: string;
   host: string;
-};
-
-function normalizeOptionalServiceUrl(value: string | undefined): NormalizedServiceUrl | null {
+} | null {
   const trimmed = value?.trim();
   const parsed = trimmed ? URL.parse(trimmed) : null;
   if (!parsed) {

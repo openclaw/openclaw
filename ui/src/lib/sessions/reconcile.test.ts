@@ -140,7 +140,6 @@ test("sessions.changed deletes every nested null tombstone, not a hand-kept list
     agentStatus: { state: "needs_attention" },
     observerDigest: { headline: "Waiting" },
     controlOwnerSessionKey: "agent:main:owner",
-    restartRecoveryStatus: "pending",
     goal: "ship it",
   };
   const tombstones = Object.fromEntries(Object.keys(fields).map((field) => [field, null]));
@@ -344,9 +343,7 @@ it.each([false, true])("reconciles thinking metadata (clear override: %s)", (cle
     thinkingLevel: clear ? null : "ultra",
     ...(clear ? {} : { agentRuntime: { id: "codex", source: "model" } }),
   });
-  expect(next.row?.thinkingLevel).toBe(clear ? undefined : "ultra");
-  if (!clear) {
-    expect(next.row?.thinkingLevels).toEqual(thinkingLevels);
-    expect(next.row?.thinkingOptions).toEqual(["max", "ultra"]);
-  }
+  expect(next.result?.sessions).toEqual([
+    { ...result.sessions[0], updatedAt: 2, thinkingLevel: clear ? undefined : "ultra" },
+  ]);
 });

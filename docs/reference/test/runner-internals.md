@@ -38,6 +38,8 @@ detached descendants stopped. Before manually removing an abandoned lock directo
 inspect its `owner.json` and verify all associated build, compiler, and lint
 processes, including detached descendants, have stopped; then retry the command.
 
+The CI shard runner validates its runtime policy and plan-concurrency settings before
+preparing builds, so invalid job settings fail without acquiring artifact ownership.
 Runtime-consuming tests prepare checkout artifacts through the explicit build owner,
 not by launching the CLI with `--version`. Preparation reuses source-runner freshness
 checks and checkout artifact ownership, without updater service or database-maintenance
@@ -88,7 +90,8 @@ the owner. The content records live under
 `.artifacts/extension-package-boundary`, outside packaged build cleanup. Private
 `.inputs.json` receipts contain normalized checkout-relative source and manifest
 paths instead of native `.tsbuildinfo` state. A warm run validates the records
-without emitting declarations.
+without emitting declarations. Before validation, preparation rebinds copied
+plugin declaration dependency links to the current checkout's plugin install.
 
 Packaged declaration builds and package-boundary records accept only checkout-owned input
 realpaths, including compiler libraries, inherited config, dependency links, and

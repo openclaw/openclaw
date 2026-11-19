@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { Page } from "playwright";
 import { expect, it, onTestFinished } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
+import { makeBootRoster } from "../app/bootstrap.test-support.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -75,12 +76,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       sessionKey: "unknown",
       methodResponses: {
-        "agents.list": {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [{ id: "main" }, { id: "writer" }],
-        },
+        "agents.list": makeBootRoster({ agents: [{ id: "main" }, { id: "writer" }] }),
         "sessions.list": sessionList([row("agent:main:visible", visibleLabel)]),
       },
     });
@@ -139,7 +135,7 @@ suite.define(() => {
     const visibleResponse = sessionList([row("agent:main:page-owned", visibleLabel)]);
     const page = await newPage(captureUiProof);
     const gateway = await installMockGateway(page, {
-      deferredMethods: ["sessions.list"],
+      deferredRequests: [{ method: "sessions.list", match: { source: "sidebar" } }],
       sessionKey: "agent:main:main",
       methodResponses: {
         "sessions.list": {
@@ -174,7 +170,7 @@ suite.define(() => {
     await capture("before-startup-roster");
 
     const startupAndPageRequests = await gateway.getRequests("sessions.list");
-    expect(startupAndPageRequests[0]?.params).toEqual({
+    expect(startupAndPageRequests.map(({ params }) => params)).toContainEqual({
       agentId: "main",
       configuredAgentsOnly: true,
       excludeDock: true,
@@ -194,13 +190,11 @@ suite.define(() => {
     await visibleRow.waitFor();
     await capture("after-startup-roster");
 
-    const stabilityDeadline = Date.now() + 500;
-    do {
-      expect(await exactPageQueries()).toHaveLength(1);
-      await new Promise((resolve) => {
-        setTimeout(resolve, 50);
-      });
-    } while (Date.now() < stabilityDeadline);
+    await page
+      .locator('.sidebar-recent-session[data-session-key="agent:main:page-owned"]')
+      .getByText(visibleLabel, { exact: true })
+      .waitFor();
+    expect(await exactPageQueries()).toHaveLength(1);
   });
 
   it("keeps older Gateway sessions consistent between the sidebar and Sessions page", async () => {

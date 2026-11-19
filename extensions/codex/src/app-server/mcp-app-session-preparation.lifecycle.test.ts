@@ -132,22 +132,18 @@ async function fixture() {
       await vi.advanceTimersByTimeAsync(delay);
       return lease;
     },
-    queue: async (firstPolicy: Policy = {}, secondPolicy: Policy = {}, ...more: Policy[]) => {
+    queue: async (firstPolicy: Policy = {}, secondPolicy: Policy = {}) => {
       const first = request(firstPolicy);
       await entered.promise;
       const queued = createDeferred<void>();
       const withLease = bindingStore.withLease.bind(bindingStore);
-      let observed = 0;
       vi.spyOn(bindingStore, "withLease").mockImplementation((identity, operation) => {
-        if (++observed === 1 + more.length) {
-          queued.resolve();
-        }
+        queued.resolve();
         return withLease(identity, operation);
       });
       const second = request(secondPolicy);
-      const others = [second, ...more.map((policy) => request(policy))];
       await queued.promise;
-      return { first, second, pending: others.map(({ pending }) => pending) };
+      return { first, second };
     },
     cleanup: async () => {
       proceed.resolve();
@@ -180,19 +176,7 @@ const expectLiveOwner = () => {
 const catalog = (lease: Lease, tools: unknown[]) =>
   expect(lease!.runtime.getCatalog()).resolves.toMatchObject({ tools });
 const visibleTools = [{ serverName: "demo", toolName: "show" }];
-it("shares one native thread across concurrent cold discoveries", async () => {
-  const { first, pending } = await f.queue({}, {}, {});
-  const leases = [await f.settle(first, 2_000), ...(await Promise.all(pending))];
-  for (const lease of leases) {
-    await catalog(lease, visibleTools);
-  }
-  expectSingleOwner();
-  expect(f.bindingStore.read(f.identity)).toMatchObject({ threadId: "app-thread" });
-  expectLiveOwner();
-  expect(methods()).not.toContain("turn/start");
-});
-
-it("isolates requester and tool limits on queued and warm borrows", async () => {
+it("shares one cold native thread while isolating queued and warm requester limits", async () => {
   const restricted = { requesterId: "bob", toolOverrides: { mcpToolsDeny: { demo: ["show"] } } };
   const { first, second } = await f.queue({ requesterId: "alice" }, restricted);
   const firstLease = await f.settle(first);
@@ -208,6 +192,9 @@ it("isolates requester and tool limits on queued and warm borrows", async () => 
   expect(second.prepareSession).toHaveBeenCalledOnce();
   expect(warm.prepareSession).not.toHaveBeenCalled();
   expectSingleOwner();
+  expect(f.bindingStore.read(f.identity)).toMatchObject({ threadId: "app-thread" });
+  expectLiveOwner();
+  expect(methods()).not.toContain("turn/start");
   expect(methods()).not.toContain("thread/resume");
 });
 

@@ -13,6 +13,7 @@ import {
   mockParentedAcpSessionEntries,
   readySessionMeta,
   resolvedIdentity,
+  runtimeHandle,
   runtimeTurn as turn,
 } from "./manager.test-helpers.js";
 
@@ -56,12 +57,11 @@ describe("AcpSessionManager turn results", () => {
       }),
       sessionKey,
     );
-    state.ensureSession.mockImplementation(async (input) => ({
-      sessionKey: input.sessionKey,
-      backend: "acpx",
-      runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
-      backendSessionId: input.resumeSessionId ? "acpx-sid-stale" : "acpx-sid-fresh",
-    }));
+    state.ensureSession.mockImplementation(async (input) =>
+      runtimeHandle(input.sessionKey, `${input.sessionKey}:${input.mode}:runtime`, {
+        backendSessionId: input.resumeSessionId ? "acpx-sid-stale" : "acpx-sid-fresh",
+      }),
+    );
     state.getStatus.mockResolvedValue({
       summary: "status=alive",
       backendSessionId: "acpx-sid-fresh",

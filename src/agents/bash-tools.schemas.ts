@@ -2,6 +2,7 @@
  * Keep these schemas provider-friendly: flat fields, string enums, and explicit
  * descriptions that match runtime validation.
  */
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { isRequestedExecTargetAllowed } from "./bash-tools.exec-target.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
@@ -37,7 +38,8 @@ export const execSchema = Type.Object({
   ),
   yieldMs: Type.Optional(
     Type.Number({
-      description: "Milliseconds before returning an ordinary-command handle; default 10000.",
+      description:
+        "Milliseconds before returning an ordinary-command handle; default 10000, max 120000.",
     }),
   ),
   awaitResults: Type.Optional(
@@ -49,7 +51,13 @@ export const execSchema = Type.Object({
   background: Type.Optional(
     Type.Boolean({
       description:
-        "Start an independent service now; survives request Stop. Use yieldMs for ordinary work. timeoutSeconds applies.",
+        "Start an independent service now. It keeps running after this call, the turn, request Stop and a one-shot CLI exit; session reset, new, delete or archive stops it, and a subagent's services stop when the subagent ends; stop it earlier with process kill. Use yieldMs for ordinary work. No built-in timeout; timeoutSeconds or a configured default applies.",
+    }),
+  ),
+  durable: Type.Optional(
+    Type.Boolean({
+      description:
+        "Survive Gateway restart using Linux systemd user services or macOS launchd jobs; requires background or yieldMs. No interactive input or proxy-backed secrets.",
     }),
   ),
   timeoutSeconds: Type.Optional(
@@ -120,7 +128,7 @@ function buildExecSchemas(
       description: `Omit: named node or configured host (${configuredTarget === "auto" ? (sandboxAvailable ? "sandbox" : "gateway") : configuredTarget}). auto: configured host.`,
     }),
   });
-  return { standard, completion: Type.Omit(standard, ["yieldMs", "background"]) };
+  return { standard, completion: Type.Omit(standard, ["yieldMs", "background", "durable"]) };
 }
 
 /** Parameters exposed by node-only exec surfaces. */
@@ -135,6 +143,16 @@ export const nodeExecSchema = Type.Object({
   }),
   node: execSchema.properties.node,
 });
+
+/** list, poll and log only observe sessions: safe to interrupt and expected to repeat. */
+export const PROCESS_OBSERVATION_REPEATABLE = { actions: ["list", "poll", "log"] } as const;
+
+export function isProcessObservationAction(args: unknown): boolean {
+  const action = asNonArrayRecord(args).action;
+  return (
+    typeof action === "string" && PROCESS_OBSERVATION_REPEATABLE.actions.some((a) => a === action)
+  );
+}
 
 export const processSchema = Type.Object({
   action: Type.String({

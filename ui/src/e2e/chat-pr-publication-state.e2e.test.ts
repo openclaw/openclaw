@@ -1,7 +1,9 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import {
+  CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+} from "../../../src/gateway/control-ui-contract.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import {
@@ -315,7 +317,7 @@ suite.define(() => {
       expect(await history.evaluate((element) => element.closest("article") === null)).toBe(true);
       expect(await history.getAttribute("open")).toBeNull();
       const summary = history.locator("summary").first();
-      expect((await summary.textContent())?.trim()).toBe("Publication failed");
+      expect((await summary.textContent())?.trim()).toBe("Couldn’t publish");
       const guidance = history.getByText(failure.nextAction, { exact: true });
       expect(await guidance.isVisible()).toBe(false);
       await openChatPublication(page);
@@ -323,7 +325,7 @@ suite.define(() => {
       await guidance.waitFor();
       const account = environment.locator("[data-publication-account]");
       expect(await account.textContent()).toContain("Publish as @agent-bot");
-      expect(await account.textContent()).toContain("Agent override");
+      expect(await account.textContent()).toContain("Own account");
       const refresh = environment.getByRole("button", { name: "Refresh publication" });
       const tokens = await history.evaluate((element) => {
         const probe = document.createElement("span");

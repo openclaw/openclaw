@@ -3,6 +3,7 @@ import {
   GatewayProtocolRequestError,
   retainGatewayResponsePayload,
 } from "../../../packages/gateway-client/src/protocol-request.js";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import type { GatewayService } from "../../daemon/service.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
@@ -17,7 +18,7 @@ type PortListenerKind = ReturnType<
 export const inspectPortUsage =
   vi.fn<(port: number, options?: { probeHosts?: readonly string[] }) => Promise<PortUsage>>();
 export const monotonicClock = { nowMs: 0 };
-export const sleep = vi.fn(async (ms: number) => {
+export const sleep = vi.fn(async (ms: number, _signal?: AbortSignal) => {
   monotonicClock.nowMs += ms;
 });
 export const classifyPortListener = vi.fn<(_listener: unknown) => PortListenerKind>(
@@ -25,10 +26,37 @@ export const classifyPortListener = vi.fn<(_listener: unknown) => PortListenerKi
 );
 export const callGateway = vi.fn<(opts: CallGatewayOptions) => Promise<unknown>>();
 
-export function gatewayResponseError(message: string): GatewayProtocolRequestError {
-  const error = new GatewayProtocolRequestError({ code: "UNAVAILABLE", message });
+export function gatewayResponseError(message: string, code?: string): GatewayProtocolRequestError {
+  const error = new GatewayProtocolRequestError({
+    code: "UNAVAILABLE",
+    message,
+    details: code ? { code } : undefined,
+  });
   retainGatewayResponsePayload(error, undefined);
   return error;
+}
+
+export function gatewayProtocolMismatchError(): GatewayClientRequestError {
+  const error = new GatewayClientRequestError({
+    code: "INVALID_REQUEST",
+    message: "protocol mismatch",
+    details: {
+      code: "PROTOCOL_MISMATCH",
+      clientMinProtocol: 5,
+      clientMaxProtocol: 5,
+      expectedProtocol: 4,
+      minimumProbeProtocol: 3,
+    },
+  });
+  retainGatewayResponsePayload(error, undefined);
+  return error;
+}
+
+export function gatewayVerifiedUserRequiredError(): GatewayProtocolRequestError {
+  return gatewayResponseError(
+    "operator role policies require a verified user identity for this authentication method; reconnect through the trusted proxy or Tailscale, or use the shared gateway token/password",
+    "AUTH_VERIFIED_USER_REQUIRED",
+  );
 }
 export const requestStartupProbe = vi.fn<ConfiguredGatewayLocalProbe["requestHttp"]>();
 export const requestReadinessProbe = vi.fn<ConfiguredGatewayLocalProbe["requestHttp"]>();
@@ -69,22 +97,6 @@ export const resolveGatewayProbeAuthSafeWithSecretInputs = vi.fn<
   (_opts: unknown) => Promise<{ auth: { token?: string; password?: string } }>
 >(async () => ({ auth: {} }));
 export const hasActiveStartupMigrationLease = vi.fn<(_params?: unknown) => boolean>(() => false);
-
-export function createStartupMigrationActivityProbe(isActive: () => boolean) {
-  return vi.fn<
-    typeof import("../../infra/startup-migration-checkpoint.js").hasActiveStartupMigrationLease
-  >((params) => {
-    const active = isActive();
-    if (active) {
-      params?.onActivity?.({
-        owner: "migration-owner",
-        pid: 8000,
-        heartbeatAt: monotonicClock.nowMs,
-      });
-    }
-    return active;
-  });
-}
 export const readActiveGatewayLockIdentity = vi.fn();
 export const readGatewayOwnerLease =
   vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLease>();
@@ -120,10 +132,10 @@ vi.mock("../../gateway/probe-auth.js", () => ({
     resolveGatewayProbeAuthSafeWithSecretInputs(opts),
 }));
 
+// mock-isolation: Readiness waits must not open a real state database for lease reads.
 vi.mock("../../infra/startup-migration-checkpoint.js", () => ({
   hasActiveStartupMigrationLease: (params: unknown) => hasActiveStartupMigrationLease(params),
   STARTUP_MIGRATION_LEASE_TTL_MS: 5 * 60_000,
-  STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS: 60_000,
 }));
 
 vi.mock("../../infra/gateway-owner-lease.js", () => ({
@@ -153,14 +165,14 @@ vi.mock("../../utils.js", async () => {
   const actual = await vi.importActual<typeof import("../../utils.js")>("../../utils.js");
   return {
     ...actual,
-    sleep: (ms: number) => sleep(ms),
+    sleep: (ms: number, signal?: AbortSignal) => sleep(ms, signal),
   };
 });
 
 const originalPlatform = process.platform;
 
 export function makeGatewayService(
-  runtime: { status: "running"; pid: number } | { status: "stopped" },
+  runtime: { status: "running"; pid: number } | { status: "stopped" | "unknown" },
 ): GatewayService {
   return {
     readRuntime: vi.fn(async () => runtime),

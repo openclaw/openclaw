@@ -2,47 +2,38 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  captureSqliteDatabaseAdmissions,
-  installSqliteDatabaseAdmissions,
-  readSqliteDatabaseScopedWriteTokenForPath,
-  sqliteSessionIdWriteScope,
-} from "../../infra/sqlite-database-admission.js";
+import * as sqliteQueries from "../../infra/kysely-sync.js";
+import * as admission from "../../infra/sqlite-database-admission.js";
 import { deleteSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../../state/openclaw-state-db.js";
+import * as agentDb from "../../state/openclaw-agent-db.js";
+import * as stateDb from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
+import { loadSessionEntry, loadTranscriptEvents, replaceSessionEntry } from "./session-accessor.js";
 import * as sessionArchive from "./session-accessor.sqlite-archive.js";
 import { cleanupSessionLifecycleArtifactsCore } from "./session-accessor.sqlite-artifact-cleanup.js";
 import {
-  runSqliteSessionDeletionTransaction,
-  withSqliteSessionContextReset,
-  withSqliteSessionDeletions,
+  runSqliteSessionDeletionTransaction as transaction,
+  withSqliteSessionContextReset as resetContext,
+  withSqliteSessionDeletions as withDeletions,
 } from "./session-accessor.sqlite-deletion.js";
 import { seedPersonalGitHubDeletionReceipt } from "./session-accessor.sqlite-deletion.test-support.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
-import {
-  loadSessionEntry,
-  patchSessionEntryCore,
-  replaceSessionEntry,
-} from "./session-accessor.sqlite-entry.js";
+import * as entries from "./session-accessor.sqlite-entry.js";
 import { deleteSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.js";
 import { emptySessionEntryMaintenancePlan } from "./session-accessor.sqlite-maintenance-store.js";
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort as finalizeMaintenance } from "./session-accessor.sqlite-maintenance.js";
-import { applySessionEntryLifecycleMutation } from "./session-accessor.sqlite-projection.js";
+import { applySessionEntryLifecycleMutation as mutate } from "./session-accessor.sqlite-projection.js";
 import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
+import * as sessionReferences from "./session-accessor.sqlite-references.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
-import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
+import { mutateMemory } from "./session-actor-memory-publication.test-support.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -63,23 +54,23 @@ beforeEach(() => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
-  await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await agentDb.closeOpenClawAgentDatabasesAsync();
+  await stateDb.closeOpenClawStateDatabaseAsync();
+  agentDb.closeOpenClawAgentDatabasesForTest();
+  stateDb.closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
   resetConfigRuntimeState();
 });
 
-async function seed(key = sessionKey) {
-  await replaceSessionEntry(
+async function seed(key = sessionKey, id = sessionId, lifecycleRevision = "generation-1") {
+  await entries.replaceSessionEntry(
     { sessionKey: key, storePath },
-    { sessionId, lifecycleRevision: "generation-1", updatedAt: Date.now() },
+    { sessionId: id, lifecycleRevision, updatedAt: Date.now() },
   );
 }
 
 const read = (key = sessionKey) =>
-  loadSessionEntry({ sessionKey: key, storePath, readConsistency: "latest" });
+  entries.loadSessionEntry({ sessionKey: key, storePath, readConsistency: "latest" });
 
 const seedReceipt = (key = sessionKey) => seedPersonalGitHubDeletionReceipt(key, sessionId);
 const scope = () => resolveSqliteScope({ sessionKey, storePath });
@@ -102,26 +93,27 @@ it.each([false, true])(
       ]);
     }
     const unrelatedSessionId = "unrelated-session";
-    await replaceSessionEntry(
-      { sessionKey: baseKey, storePath },
-      { sessionId: unrelatedSessionId, lifecycleRevision: "unrelated-1", updatedAt: Date.now() },
-    );
+    await seed(baseKey, unrelatedSessionId, "unrelated-1");
     const options = toDatabaseOptions(scope());
-    const database = openOpenClawAgentDatabase(options);
-    const token = (keys: Parameters<typeof readSqliteDatabaseScopedWriteTokenForPath>[1]) =>
-      readSqliteDatabaseScopedWriteTokenForPath(database.path, keys);
+    const database = agentDb.openOpenClawAgentDatabase(options);
+    const token = (
+      keys: Parameters<typeof admission.readSqliteDatabaseScopedWriteTokenForPath>[1],
+    ) => admission.readSqliteDatabaseScopedWriteTokenForPath(database.path, keys);
     const admissions = () =>
-      captureSqliteDatabaseAdmissions().filter((record) => record.location === database.path);
-    const scopes = [sessionKey, sqliteSessionIdWriteScope(sessionId)];
-    const unrelatedScopes = [baseKey, sqliteSessionIdWriteScope(unrelatedSessionId)];
+      admission
+        .captureSqliteDatabaseAdmissions()
+        .filter((record) => record.location === database.path);
+    const scopes = [sessionKey, admission.sqliteSessionIdWriteScope(sessionId)];
+    const unrelatedScopes = [baseKey, admission.sqliteSessionIdWriteScope(unrelatedSessionId)];
     token(scopes);
     token(unrelatedScopes);
-    const scopeCount = () => admissions()[0]?.writeScopes.size;
+    const scopeCount = () =>
+      admissions()[0]?.writeScopes.reduce((size, bucket) => size + bucket.size, 0);
     const retainedBefore = scopeCount();
     expect(retainedBefore).toBeGreaterThanOrEqual(4);
     const failure = new Error("rollback receipt retirement");
     expect(() =>
-      runSqliteSessionDeletionTransaction((current) => {
+      transaction((current) => {
         deleteSessionEntryRows(current, sessionKey, { deleteOwnedWindows: true });
         throw failure;
       }, options),
@@ -166,7 +158,7 @@ it.each([false, true])(
     }
 
     expect(scopeCount()).toBe(retainedBefore! - 2);
-    installSqliteDatabaseAdmissions(stale);
+    admission.installSqliteDatabaseAdmissions(stale);
     expect(scopeCount()).toBe(retainedBefore! - 2);
     expect(read()).toBeUndefined();
     expect(token(unrelatedScopes)).toBe(unrelated);
@@ -179,20 +171,24 @@ it.each([false, true])(
 
 it("retires a replaced legacy key while retaining the transferred window scope", async () => {
   await seed();
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(scope()));
-  readSqliteDatabaseScopedWriteTokenForPath(database.path, [
+  const database = agentDb.openOpenClawAgentDatabase(toDatabaseOptions(scope()));
+  admission.readSqliteDatabaseScopedWriteTokenForPath(database.path, [
     sessionKey,
     baseKey,
-    sqliteSessionIdWriteScope(sessionId),
+    admission.sqliteSessionIdWriteScope(sessionId),
   ]);
   const scopes = () =>
-    captureSqliteDatabaseAdmissions().find((record) => record.location === database.path)!
-      .writeScopes;
+    new Map(
+      admission
+        .captureSqliteDatabaseAdmissions()
+        .find((record) => record.location === database.path)!
+        .writeScopes.flatMap((bucket) => Array.from(bucket)),
+    );
   const retained = new Map(scopes());
   expect(retained.delete(JSON.stringify(["key", sessionKey]))).toBe(true);
-  const stale = structuredClone(captureSqliteDatabaseAdmissions());
+  const stale = structuredClone(admission.captureSqliteDatabaseAdmissions());
 
-  await applySessionEntryLifecycleMutation({
+  await mutate({
     storePath,
     removals: [{ sessionKey }],
     upserts: [{ sessionKey: baseKey, entry: read()! }],
@@ -200,7 +196,7 @@ it("retires a replaced legacy key while retaining the transferred window scope",
   });
 
   expect(scopes()).toEqual(retained);
-  installSqliteDatabaseAdmissions(stale);
+  admission.installSqliteDatabaseAdmissions(stale);
   expect(scopes()).toEqual(retained);
   expect(read()).toBeUndefined();
   expect(read(baseKey)?.sessionId).toBe(sessionId);
@@ -219,17 +215,11 @@ it.each([false, true])(
     assert(binding, "Expected memory session actor");
     const owner = memorySessionActorOwners.read(binding)!;
     try {
-      const created = await binding.actor.storage.mutate(
+      const created = await mutateMemory(
+        binding.actor.storage,
+        "session.entry.create",
         {
-          type: "session.entry.create",
-          input: {
-            entry: {
-              sessionId,
-              lifecycleRevision: "generation-1",
-              updatedAt: 1,
-              incognito: true,
-            },
-          },
+          entry: { sessionId, lifecycleRevision: "generation-1", updatedAt: 1, incognito: true },
         },
         authority,
       );
@@ -243,10 +233,11 @@ it.each([false, true])(
       ];
       if (changed) {
         expect(
-          await binding.actor.storage.mutate(
+          await mutateMemory(
+            binding.actor.storage,
+            "session.entry.patch",
             {
-              type: "session.entry.patch",
-              input: { operation: { kind: "fields", patch: { label: "Concurrent update" } } },
+              operation: { kind: "fields", patch: { label: "Concurrent update" } },
             },
             authority,
           ),
@@ -283,15 +274,15 @@ it.runIf(process.platform !== "win32").each([false, true])(
     const receipt = await seedReceipt();
     const before = receipt();
     if (aborted) {
-      openOpenClawAgentDatabase({ agentId: "main", path: replacementPath });
+      agentDb.openOpenClawAgentDatabase({ agentId: "main", path: replacementPath });
     }
     // Checkpoint before copying so the replacement's same-key row is durable.
-    await closeOpenClawAgentDatabasesAsync();
+    await agentDb.closeOpenClawAgentDatabasesAsync();
     if (!aborted) {
       await fs.copyFile(originalPath, replacementPath);
     }
     await fs.symlink(originalPath, alias);
-    expect(loadSessionEntry({ sessionKey, storePath: alias })).toMatchObject({ sessionId });
+    expect(entries.loadSessionEntry({ sessionKey, storePath: alias })).toMatchObject({ sessionId });
     const failure = new Error("artifact deletion aborted before commit");
     const materialize = sessionArchive.materializeSessionStateDeletePlans;
     vi.spyOn(sessionArchive, "materializeSessionStateDeletePlans").mockImplementationOnce(
@@ -323,7 +314,7 @@ it.runIf(process.platform !== "win32").each([false, true])(
       expect(read()).toBeUndefined();
       expect(receipt()).toEqual(retired);
     }
-    expect(loadSessionEntry({ sessionKey, storePath: replacementPath })?.sessionId).toBe(
+    expect(entries.loadSessionEntry({ sessionKey, storePath: replacementPath })?.sessionId).toBe(
       aborted ? undefined : sessionId,
     );
   },
@@ -337,7 +328,7 @@ it.each(["projection", "SDK"])(
     if (entryPoint === "SDK") {
       await expect(deleteSessionEntry({ storePath, sessionKey })).resolves.toBe(true);
     } else {
-      await applySessionEntryLifecycleMutation({
+      await mutate({
         storePath,
         removals: [{ sessionKey }],
         skipMaintenance: true,
@@ -353,12 +344,12 @@ it.each(["projection", "SDK"])(
 it("settles only committed rows when a batch deletion fails partway through", async () => {
   const { removed, retained, before } = await seedPair();
   const currentScope = scope();
-  const entries = [sessionKey, baseKey].map((key) => ({ sessionKey: key, entry: read(key)! }));
+  const targets = [sessionKey, baseKey].map((key) => ({ sessionKey: key, entry: read(key)! }));
   const failure = new Error("batch deletion aborted after its first commit");
 
   await expect(
-    withSqliteSessionDeletions(currentScope, entries, async () => {
-      runSqliteSessionDeletionTransaction(
+    withDeletions(currentScope, targets, async () => {
+      transaction(
         (database) => deleteSessionEntryRows(database, sessionKey),
         toDatabaseOptions(currentScope),
       );
@@ -368,7 +359,7 @@ it("settles only committed rows when a batch deletion fails partway through", as
 
   expect(read()).toBeUndefined();
   expect(removed()).toEqual(retired);
-  expect(read(baseKey)).toEqual(entries[1]!.entry);
+  expect(read(baseKey)).toEqual(targets[1]!.entry);
   expect(retained()).toEqual(before);
 });
 
@@ -381,18 +372,171 @@ it("retains personal publication receipts when deletion aborts or the context re
   const failure = new Error("deletion aborted before commit");
 
   await expect(
-    withSqliteSessionDeletions(currentScope, [{ sessionKey, entry }], async () => {
+    withDeletions(currentScope, [{ sessionKey, entry }], async () => {
       throw failure;
     }),
   ).rejects.toBe(failure);
   expect(read()).toEqual(entry);
   expect(receipt()).toEqual(before);
 
-  await withSqliteSessionContextReset(currentScope, { sessionKey, entry }, async () => {
-    await patchSessionEntryCore({ sessionKey, storePath }, () => ({ label: "context reset" }), {
-      skipMaintenance: true,
-    });
+  await resetContext(currentScope, { sessionKey, entry }, async () => {
+    await entries.patchSessionEntryCore(
+      { sessionKey, storePath },
+      () => ({ label: "context reset" }),
+      {
+        skipMaintenance: true,
+      },
+    );
   });
   expect(read()).toMatchObject({ sessionId, label: "context reset" });
   expect(receipt()).toEqual(before);
 });
+
+it.each([
+  "a shared window",
+  "a placeholder successor",
+  "a stale successor",
+  "a duplicate timestamp successor",
+  "a plain current successor",
+] as const)(
+  "does not materialize surviving prompts when deleting a node with %s",
+  async (scenario) => {
+    const reclaimedKey = "agent:main:reclaimed-node";
+    const survivorKeys = ["agent:main:survivor-a", "agent:main:survivor-b"] as const;
+    const entry = { sessionId: "reclaimed-session", updatedAt: Date.now() };
+    const historicalId = "reclaimed-history";
+    const retainedEvent = { type: "session", id: entry.sessionId, content: "retained history" };
+    await replaceSessionEntry({ sessionKey: reclaimedKey, storePath }, entry);
+    for (const survivorKey of survivorKeys.toReversed()) {
+      await replaceSessionEntry(
+        { sessionKey: survivorKey, storePath },
+        {
+          sessionId: `${survivorKey}-session`,
+          previousSessionId: entry.sessionId,
+          usageFamilySessionIds: [historicalId],
+          updatedAt: entry.updatedAt,
+          skillsSnapshot: { prompt: "saved skill prompt".repeat(4096), skills: [] },
+          systemPromptReport: {
+            source: "run",
+            generatedAt: entry.updatedAt,
+            systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
+            injectedWorkspaceFiles: [],
+            skills: { promptChars: 0, entries: [{ name: "saved-report-skill", blockChars: 0 }] },
+            tools: { listChars: 0, schemaChars: 0, entries: [] },
+          },
+        },
+      );
+    }
+    // Large entry metadata remains in entry_json (saved prompts have a separate owner).
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:unrelated-node", storePath },
+      {
+        sessionId: "unrelated-session",
+        updatedAt: entry.updatedAt,
+        label: "unrelated metadata".repeat(4096),
+      },
+    );
+    const deletionScope = {
+      agentId: "main",
+      path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
+    };
+    const database = agentDb.openOpenClawAgentDatabase(deletionScope);
+    database.db
+      .prepare(
+        "INSERT INTO session_windows(session_id, session_key, created_at, updated_at) VALUES (?, ?, 1, 1)",
+      )
+      .run(historicalId, reclaimedKey);
+    await replaceTranscriptEvents(
+      { sessionKey: reclaimedKey, sessionId: entry.sessionId, storePath },
+      [retainedEvent],
+    );
+    if (scenario === "a placeholder successor") {
+      database.db
+        .prepare(
+          "UPDATE session_nodes SET current_session_id = ?, entry_json = '{}', entry_valid = -1 WHERE session_key = ?",
+        )
+        .run(entry.sessionId, survivorKeys[0]);
+    }
+    if (scenario === "a stale successor") {
+      database.db
+        .prepare("UPDATE session_nodes SET updated_at = updated_at + 1 WHERE session_key = ?")
+        .run(survivorKeys[0]);
+    }
+    if (scenario === "a duplicate timestamp successor") {
+      const survivor = database.db
+        .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
+        .get(survivorKeys[0]);
+      const entryJson = String(survivor?.entry_json);
+      const duplicate = entryJson.replace(
+        `"updatedAt":${entry.updatedAt}`,
+        `"updatedAt":${entry.updatedAt},"updatedAt":${entry.updatedAt + 1}`,
+      );
+      expect(duplicate).not.toBe(entryJson);
+      database.db
+        .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+        .run(duplicate, survivorKeys[0]);
+    }
+    if (scenario === "a plain current successor") {
+      database.db
+        .prepare(
+          "UPDATE session_nodes SET current_session_id = ?, entry_json = ?, has_optional_references = 0 WHERE session_key = ?",
+        )
+        .run(entry.sessionId, JSON.stringify(entry), survivorKeys[0]);
+    }
+    const readSurvivors = () =>
+      database.db
+        .prepare(
+          "SELECT session_key, current_session_id, entry_json, entry_valid FROM session_nodes WHERE session_key != ? ORDER BY session_key",
+        )
+        .all(reclaimedKey);
+    const survivorsBefore = readSurvivors();
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["nodes"],
+      (sql) =>
+        /^(?:select|with)\b/iu.test(sql) && sql.includes('"session_nodes"') ? "nodes" : null,
+    );
+    const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
+    const references = vi.spyOn(sessionReferences, "collectSessionStateIdsForEntry");
+    await withDeletions(deletionScope, [{ sessionKey: reclaimedKey, entry }], async () => {
+      transaction((current) => {
+        deleteSessionEntryRows(current, reclaimedKey, {
+          deleteOwnedWindows: scenario === "a shared window",
+        });
+      }, deletionScope);
+    });
+    counter.restore();
+    expect(counter.textBytes.nodes).toBeLessThan(16 * 1024);
+    const rows = queries.mock.results.flatMap((result) =>
+      result.type === "return" ? result.value.rows : [],
+    );
+    expect(JSON.stringify(rows)).not.toMatch(
+      /saved skill prompt|saved-report-skill|unrelated metadata/,
+    );
+    for (const survivor of survivorsBefore) {
+      expect(
+        references.mock.calls.filter(([value]) => value.sessionId === survivor.current_session_id)
+          .length,
+      ).toBeLessThanOrEqual(1);
+    }
+    expect(loadSessionEntry({ sessionKey: reclaimedKey, storePath })).toBeUndefined();
+    expect(readSurvivors()).toEqual(survivorsBefore);
+    const windowOwner = (id: string) =>
+      database.db.prepare("SELECT session_key FROM session_windows WHERE session_id = ?").get(id);
+    const currentOwner =
+      survivorKeys[
+        scenario === "a stale successor" || scenario === "a duplicate timestamp successor" ? 1 : 0
+      ];
+    expect(windowOwner(entry.sessionId)).toEqual({ session_key: currentOwner });
+    expect(windowOwner(historicalId)).toEqual({
+      session_key: survivorKeys[scenario === "a shared window" ? 0 : 1],
+    });
+    await expect(
+      loadTranscriptEvents({
+        sessionKey: currentOwner,
+        sessionId: entry.sessionId,
+        storePath,
+      }),
+    ).resolves.toEqual([retainedEvent]);
+  },
+);

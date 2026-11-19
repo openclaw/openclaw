@@ -48,7 +48,16 @@ async function mountQuestion() {
   assert(group.isConnected);
   expect(document.activeElement).toBe(group);
   expect(composer.disabled || composer.readOnly).toBe(false);
-  return { root, panel, group, composer, props, onSubmit };
+  const update = async (model: Partial<QuestionPanelProps["model"]>) => {
+    panel.props = { ...props, model: { ...props.model, ...model } };
+    await panel.updateComplete;
+  };
+  return { root, panel, group, composer, props, onSubmit, update };
+}
+const button = (panel: Element, name: string) =>
+  panel.querySelector<HTMLButtonElement>(`.chat-question-panel__${name}`)!;
+function expectDraft(props: QuestionPanelProps, ...selected: string[]) {
+  expect([...props.model.drafts.get("format")!.selected]).toEqual(selected);
 }
 
 function press(target: HTMLElement, key: string) {
@@ -63,94 +72,67 @@ function press(target: HTMLElement, key: string) {
   return event;
 }
 
-it.each(["group", "option"])("keeps answer key 2 at the focused %s", async (focus) => {
+it.each([
+  ["group", "2", "Detailed"],
+  ["option", "2", "Detailed"],
+  ["group", "3", "Compact"],
+])("keeps advertised key %s/%s in the question", async (focus, key, selected) => {
   const { panel, group, composer, props } = await mountQuestion();
   const target =
-    focus === "group" ? group : panel.querySelector<HTMLButtonElement>("[data-option-index='0']")!;
-  const event = press(target, "2");
+    focus === "group" ? group : panel.querySelector<HTMLElement>("[data-option-index='0']")!;
+  const event = press(target, key);
   await panel.updateComplete;
-  expect([...props.model.drafts.get("format")!.selected]).toEqual(["Detailed"]);
-  expect(document.activeElement).toBe(target);
+  expectDraft(props, selected);
+  expect(document.activeElement).toBe(key === "3" ? panel.querySelector("textarea") : target);
   expect(event.defaultPrevented).toBe(true);
   expect(composer.value).toBe("kept draft");
 });
 
-it("keeps Other key 3 at the expanded question", async () => {
-  const { panel, group, composer } = await mountQuestion();
-  const event = press(group, "3");
-  await panel.updateComplete;
-  expect(document.activeElement).toBe(panel.querySelector("textarea"));
-  expect(event.defaultPrevented).toBe(true);
-  expect(composer.value).toBe("kept draft");
+it.each(["disabled", "submitting"] as const)("yields disabled shortcuts while %s", async (flag) => {
+  const { group, composer, props, update } = await mountQuestion();
+  await update({ [flag]: true });
+  for (const key of ["2", "3"]) {
+    const event = press(group, key);
+    expect(document.activeElement).toBe(composer);
+    expect(event.defaultPrevented).toBe(false);
+  }
+  expectDraft(props, "Compact");
 });
 
-it.each(["disabled", "submitting"] as const)(
-  "does not claim disabled answer or Other keys while %s",
-  async (flag) => {
-    const { panel, group, composer, props } = await mountQuestion();
-    panel.props = { ...props, model: { ...props.model, [flag]: true } };
-    await panel.updateComplete;
-    for (const key of ["2", "3"]) {
-      const event = press(group, key);
-      expect(document.activeElement).toBe(composer);
-      expect(event.defaultPrevented).toBe(false);
-    }
-    expect([...props.model.drafts.get("format")!.selected]).toEqual(["Compact"]);
-  },
-);
-
-it.each(["a", "A", "0", "9"])("keeps composer typing for unadvertised key %s", async (key) => {
-  const { group, composer, props } = await mountQuestion();
-  const event = press(group, key);
-  expect(document.activeElement).toBe(composer);
-  expect(event.defaultPrevented).toBe(false);
-  expect([...props.model.drafts.get("format")!.selected]).toEqual(["Compact"]);
-});
-
-it("does not reinterpret a numeric key while editing Other", async () => {
-  const { panel, composer, props } = await mountQuestion();
-  const input = panel.querySelector<HTMLTextAreaElement>("textarea")!;
-  const event = press(input, "2");
-  expect(document.activeElement).toBe(input);
-  expect(event.defaultPrevented).toBe(false);
-  expect([...props.model.drafts.get("format")!.selected]).toEqual(["Compact"]);
-  expect(composer.value).toBe("kept draft");
-});
-
-it("does not let another question claim an unrelated control's key", async () => {
-  const { root, composer } = await mountQuestion();
-  const outside = root.appendChild(document.createElement("button"));
-  press(outside, "2");
-  expect(document.activeElement).toBe(composer);
-});
-
-it("routes numeric typing on a question link to the composer", async () => {
-  const { panel, composer, props } = await mountQuestion();
-  panel.props = {
-    ...props,
-    model: {
-      ...props.model,
+it.each([
+  ["group", "a"],
+  ["group", "0"],
+  ["group", "9"],
+  ["textarea", "2"],
+  ["outside", "2"],
+  ["link", "2"],
+  ["collapsed", "2"],
+])("routes unclaimed %s/%s without changing the answer", async (kind, key) => {
+  const { root, panel, group, composer, props, update } = await mountQuestion();
+  let target: HTMLElement = group;
+  if (kind === "textarea") {
+    target = panel.querySelector("textarea")!;
+  }
+  if (kind === "outside") {
+    target = root.appendChild(document.createElement("button"));
+  }
+  if (kind === "link") {
+    await update({
       questions: [{ ...props.model.questions[0]!, url: "https://example.test/confirm" }],
-    },
-  };
-  await panel.updateComplete;
-  const link = panel.querySelector<HTMLAnchorElement>("a[href]")!;
-  const event = press(link, "2");
-  expect(document.activeElement).toBe(composer);
+    });
+    target = panel.querySelector("a[href]")!;
+  }
+  if (kind === "collapsed") {
+    button(panel, "collapse").click();
+    await panel.updateComplete;
+    target = button(panel, "collapsed-button");
+    expect(document.activeElement).toBe(target);
+  }
+  const event = press(target, key);
+  expect(document.activeElement).toBe(kind === "textarea" ? target : composer);
   expect(event.defaultPrevented).toBe(false);
-  expect([...props.model.drafts.get("format")!.selected]).toEqual(["Compact"]);
-});
-
-it("restores collapse-button focus and stops claiming collapsed shortcuts", async () => {
-  const { panel, composer } = await mountQuestion();
-  panel.querySelector<HTMLButtonElement>(".chat-question-panel__collapse")!.click();
-  await panel.updateComplete;
-  const collapsed = panel.querySelector<HTMLButtonElement>(
-    ".chat-question-panel__collapsed-button",
-  )!;
-  expect(document.activeElement).toBe(collapsed);
-  press(collapsed, "2");
-  expect(document.activeElement).toBe(composer);
+  expectDraft(props, "Compact");
+  expect(composer.value).toBe("kept draft");
 });
 
 it("yields answer and Other ownership while submission is pending", async () => {
@@ -161,7 +143,7 @@ it("yields answer and Other ownership while submission is pending", async () => 
   });
   panel.props = { ...props, onSubmit: () => pending };
   await panel.updateComplete;
-  panel.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.click();
+  button(panel, "advance").click();
   await panel.updateComplete;
   await waitForSolid(() =>
     expect(panel.querySelector<HTMLButtonElement>("[data-option-index='1']")!.disabled).toBe(true),
@@ -176,23 +158,18 @@ it("yields answer and Other ownership while submission is pending", async () => 
 });
 
 it("claims only displayed digits when there are more than nine options", async () => {
-  const { panel, group, composer, props } = await mountQuestion();
-  panel.props = {
-    ...props,
-    model: {
-      ...props.model,
-      questions: [
-        {
-          ...props.model.questions[0]!,
-          options: Array.from({ length: 10 }, (_, index) => ({ label: `Option ${index + 1}` })),
-        },
-      ],
-    },
-  };
-  await panel.updateComplete;
+  const { panel, group, composer, props, update } = await mountQuestion();
+  await update({
+    questions: [
+      {
+        ...props.model.questions[0]!,
+        options: Array.from({ length: 10 }, (_, index) => ({ label: `Option ${index + 1}` })),
+      },
+    ],
+  });
   press(group, "9");
   await panel.updateComplete;
-  expect([...props.model.drafts.get("format")!.selected]).toEqual(["Option 9"]);
+  expectDraft(props, "Option 9");
   press(group, "0");
   expect(document.activeElement).toBe(composer);
   expect(panel.querySelectorAll("[data-shortcut]")).toHaveLength(9);

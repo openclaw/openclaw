@@ -37,9 +37,7 @@ function normalizeClaimTextKey(text: string): string {
 }
 
 function normalizeTextKey(text: string): string {
-  return normalizeLowercaseStringOrEmpty(text)
-    .replace(/[^\p{L}\p{N}\p{M}]+/gu, " ")
-    .replace(/\s+/g, " ");
+  return normalizeLowercaseStringOrEmpty(text).replace(/[^\p{L}\p{N}\p{M}]+/gu, " ");
 }
 
 function buildFreshnessFromTimestamp(params: { timestamp?: string; now?: Date }): WikiFreshness {

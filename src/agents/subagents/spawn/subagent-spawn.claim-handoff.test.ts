@@ -1,6 +1,7 @@
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
+import { expectCallCount as expectCalls } from "../../../test-utils/mock-call-assertions.js";
 import type { SubagentRegistrationScope } from "../registry/subagent-registry.types.js";
 import {
   createSubagentRegistrationScopeForTest,
@@ -53,12 +54,6 @@ beforeEach(() => {
 });
 
 afterEach(() => schedulerWork.close());
-
-function expectCalls(count: number, ...mocks: { mock: { calls: readonly unknown[] } }[]) {
-  for (const mock of mocks) {
-    expect(mock).toHaveBeenCalledTimes(count);
-  }
-}
 
 function observe(promise: Promise<unknown>) {
   const completed = vi.fn();

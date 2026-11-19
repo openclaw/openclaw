@@ -7,6 +7,7 @@ import {
 import { createGatewayMatrixFixture } from "../../scripts/lib/code-mode-matrix-gateway-fixtures.js";
 import { createMatrixPerformanceFixture } from "../../scripts/lib/code-mode-matrix-performance-fixtures.js";
 import { findLegacyConfigIssues } from "../../src/config/legacy.js";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../../src/config/validation-core.js";
 
 const MODEL = "anthropic/claude-sonnet-5-5";
@@ -23,6 +24,7 @@ function currentConfig(config: unknown) {
 
 it.each([
   ["direct", "node", false],
+  ["auto", "node", true],
   ["code", "node", true],
   ["code", "quickjs", true],
 ] as const)("preserves %s/%s config with fixture=%s", (mode, executor, withFixture) => {
@@ -50,8 +52,12 @@ it.each([
     allow: allowedTools,
     fs: { workspaceOnly: true },
     exec: { mode: "full" },
-    codeMode: { enabled: mode === "code", executor },
   });
+  if (mode === "auto") {
+    expect(config.tools).not.toHaveProperty("codeMode");
+  } else {
+    expect(config.tools.codeMode).toEqual({ enabled: mode === "code", executor });
+  }
   expect(config.gateway).toMatchObject({
     mode: "local",
     bind: "loopback",
@@ -84,6 +90,68 @@ it.each([
   if (executor === "quickjs") {
     expect(config.plugins.entries["code-mode-quickjs"]).toEqual({ enabled: true });
   }
+});
+
+it.each([
+  { tools: { codeMode: false } },
+  { tools: { codeMode: { executor: "node" } } },
+  { agents: { defaults: { models: { [MODEL]: { codeMode: false } } } } },
+  { agents: { entries: { qa: { tools: { codeMode: { enabled: true } } } } } },
+  { agents: { entries: { qa: { models: { [MODEL]: { codeMode: true } } } } } },
+  {
+    models: {
+      providers: {
+        anthropic: {
+          baseUrl: "https://api.anthropic.com",
+          models: [
+            {
+              id: "claude-sonnet-5-5",
+              name: "Fixture model",
+              reasoning: true,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 100_000,
+              maxTokens: 4096,
+              compat: { codeMode: "preferred" },
+            },
+          ],
+        },
+      },
+    },
+  },
+] satisfies OpenClawConfig[])("rejects fixture-owned activation overrides: %j", (configPatch) => {
+  for (const mode of ["direct", "auto", "code"] as const) {
+    expect(() =>
+      createGatewayMatrixConfig({
+        root: ROOT,
+        port: 18789,
+        token: "synthetic-matrix-test",
+        model: MODEL,
+        thinking: "low",
+        mode,
+        executor: "node",
+        requiredTools: [],
+        allowedTools: ["read"],
+        configPatch,
+      }),
+    ).toThrow("cannot override the selected Code Mode treatment");
+  }
+});
+
+it("rejects an executor override instead of silently changing Gateway auto", () => {
+  expect(() =>
+    createGatewayMatrixConfig({
+      root: ROOT,
+      port: 18789,
+      token: "synthetic-matrix-test",
+      model: MODEL,
+      thinking: "low",
+      mode: "auto",
+      executor: "quickjs",
+      requiredTools: [],
+      allowedTools: ["read"],
+    }),
+  ).toThrow("default executor");
 });
 
 it("keeps agent-exec model metadata valid without legacy allowlist migration", () => {

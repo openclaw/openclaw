@@ -114,8 +114,7 @@ async function withTwitchMonitor(
     await state.writeConfig(cfg);
     const rawEvidence: ReturnType<typeof readChannelContextAdmissionEvidence>[] = [];
     const evidence: ReturnType<typeof consumeChannelAdmissionEvidence>[] = [];
-    const errors: string[] = [];
-    const failure = transport.createDeferred<string>();
+    const failure = transport.createDeferred<unknown[]>();
     const audit = createChannelAdmissionAudit({ enabled: options.collectionEnabled ?? true });
     const gateway = {
       channelAdmissionAudit: audit,
@@ -159,11 +158,7 @@ async function withTwitchMonitor(
       transport.ChatClient.ready = resolve;
     });
     const runtimeEnv = createRuntimeEnv();
-    runtimeEnv.error = (...args) => {
-      const message = args.map(String).join(" ");
-      errors.push(message);
-      failure.resolve(message);
-    };
+    runtimeEnv.error = vi.fn((...args) => failure.resolve(args));
     const ctx = {
       cfg,
       accountId,
@@ -188,11 +183,10 @@ async function withTwitchMonitor(
       ]);
       if (!options.warmup) {
         client.receive(options.userId === null ? undefined : (options.userId ?? "123456"));
-        const error = await Promise.race([client.sent.promise, failure.promise]);
-        expect(error).toBeUndefined();
+        expect(await Promise.race([client.sent.promise, failure.promise])).toBeUndefined();
         expect(client.say).toHaveBeenCalledExactlyOnceWith("testchannel", "reply");
       }
-      expect(errors).toEqual([]);
+      expect(runtimeEnv.error).not.toHaveBeenCalled();
       return { rawEvidence, evidence };
     } finally {
       abort.abort();

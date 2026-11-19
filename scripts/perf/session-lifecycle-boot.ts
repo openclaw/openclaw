@@ -33,6 +33,7 @@ const { values } = parseArgs({
     agents: { type: "string", default: "1" },
     worktrees: { type: "string", default: "0" },
     "empty-transcripts": { type: "boolean", default: false },
+    "cold-archives": { type: "boolean", default: false },
     entry: { type: "string", default: "dist/entry.js" },
     "settle-seconds": { type: "string", default: "330" },
     "steady-seconds": { type: "string", default: "60" },
@@ -91,6 +92,7 @@ const env = createGatewayBenchEnv(path.join(root, "home"), configPath, {
 });
 
 if (values.mode === "seed") {
+  let archivedTranscripts = 0;
   mkdirSync(root, { mode: 0o700 });
   for (const directory of ["home", "state", "tmp", "workspace"]) {
     mkdirSync(path.join(root, directory));
@@ -182,6 +184,22 @@ if (values.mode === "seed") {
         }
       }, options);
     }
+    if (values["cold-archives"]) {
+      const { runSessionColdStorageMaintenance } =
+        await import("../../src/config/sessions/session-cold-storage.js");
+      const result = await runSessionColdStorageMaintenance({
+        config: {
+          ...config,
+          session: {
+            maintenance: { mode: "warn", coldStorage: { enabled: true, afterDays: 0 } },
+          },
+        },
+      });
+      if (result.archivedTranscripts === 0) {
+        throw new Error("Synthetic cold-archive cohort was not created");
+      }
+      archivedTranscripts = result.archivedTranscripts;
+    }
   } finally {
     await agentDb.closeOpenClawAgentDatabasesAsync();
     await stateDb.closeOpenClawStateDatabaseAsync();
@@ -192,6 +210,8 @@ if (values.mode === "seed") {
     agents: agentCount,
     worktrees,
     emptyTranscripts: values["empty-transcripts"],
+    coldArchives: values["cold-archives"],
+    archivedTranscripts,
     windows: sessions * 2,
     events: values["empty-transcripts"] ? 0 : sessions * 4,
   };
@@ -205,7 +225,8 @@ if (values.mode === "seed") {
     fixture.sessions !== sessions ||
     (fixture.agents ?? 1) !== agentCount ||
     (fixture.worktrees ?? 0) !== worktrees ||
-    (fixture.emptyTranscripts ?? false) !== values["empty-transcripts"]
+    (fixture.emptyTranscripts ?? false) !== values["empty-transcripts"] ||
+    (fixture.coldArchives ?? false) !== values["cold-archives"]
   ) {
     throw new Error("Expected matching synthetic session-lifecycle fixture");
   }

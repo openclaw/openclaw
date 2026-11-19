@@ -139,21 +139,6 @@ describe("session lifecycle persistence owner", () => {
     },
   );
 
-  it("reuses the original event's write before and after settlement", async () => {
-    const deferred = createDeferred();
-    persistLifecycle.mockReturnValue(deferred.promise);
-    const owner = createSessionLifecyclePersistenceOwner();
-    const prepared = owner.observe(terminal);
-
-    expect(owner.observe(terminal)).toBe(prepared);
-    expect(owner.persist(terminal)).toBe(prepared);
-    deferred.resolve();
-    await prepared;
-    expect(owner.persist(terminal)).toBe(prepared);
-    expect(persistLifecycle).toHaveBeenCalledOnce();
-    await owner.drain();
-  });
-
   it("keeps a prepared write available while shutdown drain waits", async () => {
     const deferred = createDeferred();
     persistLifecycle.mockReturnValue(deferred.promise);
@@ -245,11 +230,15 @@ describe("session lifecycle persistence owner", () => {
     { name: "native cancellation", data: { phase: "error", aborted: true, stopReason: "aborted" } },
     { name: "fallback exhaustion", data: { phase: "error", fallbackExhaustedFailure: true } },
     { name: "settled execution failure", data: { phase: "error", executionSettled: true } },
-  ])("reuses settled $name only for the original runtime event", async ({ data }) => {
-    persistLifecycle.mockResolvedValue(undefined);
+  ])("reuses pending and settled $name only for the original runtime event", async ({ data }) => {
+    const deferred = createDeferred();
+    persistLifecycle.mockReturnValue(deferred.promise);
     const owner = createSessionLifecyclePersistenceOwner();
     const event = { ...terminal, event: { ...terminal.event, data } };
     const prepared = owner.observe(event);
+    expect(owner.observe(event)).toBe(prepared);
+    expect(owner.persist(event)).toBe(prepared);
+    deferred.resolve();
     await prepared;
 
     expect(owner.persist(event)).toBe(prepared);
@@ -261,5 +250,6 @@ describe("session lifecycle persistence owner", () => {
       code: "ERR_STALE_GATEWAY_LIFECYCLE",
     });
     expect(persistLifecycle).toHaveBeenCalledOnce();
+    await owner.drain();
   });
 });

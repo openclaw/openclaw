@@ -205,6 +205,7 @@ export function projectSettledProviderFailureAttempt(
       bootstrap: { bootstrapPromptWarning: {} },
       systemPrompt: {},
       sessionRuntime: {
+        transport: { effectiveExtraParams: {} },
         agentSession: {
           clientToolCallSlots: [],
           hasDeliveredSourceReply: () => false,
@@ -213,7 +214,7 @@ export function projectSettledProviderFailureAttempt(
         state: {},
       },
     },
-    preparedStreamRuntime: { stream: { subscription } },
+    preparedStreamRuntime: { stream: { subscription, getFinalPresentation: () => undefined } },
   };
   return completeEmbeddedAttemptResult(input as never, settled, prompt);
 }

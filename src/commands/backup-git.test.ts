@@ -1,4 +1,4 @@
-import fsSync, { existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,9 +11,13 @@ import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, existsSync: vi.fn(actual.existsSync) };
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { existsSync: vi.fn(actual.existsSync) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
+const { existsSync: nativeExistsSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
 
 const mocks = vi.hoisted(() => ({
   createGitBackup: vi.fn(),
@@ -30,11 +34,8 @@ vi.mock("../config/config.js", async (importOriginal) => {
   const { createTestConfigReadMocks } = await import("./test-runtime-config-helpers.js");
   return {
     ...actual,
-    getRuntimeConfig: mocks.getRuntimeConfig,
-    loadConfig: mocks.getRuntimeConfig,
+    ...createTestConfigReadMocks(mocks, "getRuntimeConfig"),
     readConfigFileSnapshot: async () => ({ config: mocks.getRuntimeConfig() }),
-    captureRuntimeConfigAsyncReader: createTestConfigReadMocks(mocks, "getRuntimeConfig")
-      .captureRuntimeConfigAsyncReader,
   };
 });
 
@@ -100,7 +101,7 @@ describe("Git backup command agent selection", () => {
     const databasePath = resolveOpenClawStateSqlitePath();
     vi.mocked(existsSync)
       .mockReset()
-      .mockImplementation((value) => value === databasePath || fsSync.existsSync(value));
+      .mockImplementation((value) => value === databasePath || nativeExistsSync(value));
     mocks.restoreGitBackupRef.mockReset().mockResolvedValue({
       commit: "backup-commit",
       excludedTables: [],
@@ -269,17 +270,17 @@ describe("Git backup command agent selection", () => {
       "unknown",
       "nope-agent",
       'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
+      "Error",
     ],
-    ["whitespace-only", "   ", "--agent must not be blank"],
-  ])("rejects an %s Git create agent", async (_label, agent, message) => {
-    await expect(create({ agents: [agent] })).rejects.toThrow(message);
-
+    ["whitespace-only", "   ", "--agent must not be blank", "ExpectedCliError"],
+  ])("rejects an %s Git create agent", async (_label, agent, message, name) => {
+    await expect(create({ agents: [agent] })).rejects.toMatchObject({ name, message });
     expect(mocks.createGitBackup).not.toHaveBeenCalled();
   });
 
   it("resolves every current agent and its configured root for an all-scope backup", async () => {
-    const mainAgentDir = path.resolve("/tmp/external-main");
-    const opsAgentDir = path.resolve("/tmp/external-ops");
+    const mainAgentDir = path.resolve("external-main");
+    const opsAgentDir = path.resolve("external-ops");
     mocks.getRuntimeConfig.mockReturnValue({
       agents: {
         entries: {
@@ -310,10 +311,10 @@ describe("Git backup command agent selection", () => {
   });
 
   it("keeps the --all plus explicit-scope conflict ahead of agent validation", async () => {
-    await expect(create({ all: true, agents: ["nope-agent"] })).rejects.toThrow(
-      "Use --all by itself, or select --global and --agent scopes explicitly.",
-    );
-
+    await expect(create({ all: true, agents: ["nope-agent"] })).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: "Use --all by itself, or select --global and --agent scopes explicitly.",
+    });
     expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
     expect(mocks.createGitBackup).not.toHaveBeenCalled();
   });

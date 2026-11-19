@@ -582,18 +582,10 @@ function createEscapingEntryFixture(params: { id: string; sourceBody: string }) 
   const outsideEntry = path.join(outsideDir, "outside.cjs");
   const linkedEntry = path.join(pluginDir, "entry.cjs");
   fs.writeFileSync(outsideEntry, params.sourceBody, "utf-8");
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: params.id,
-        configSchema: EMPTY_PLUGIN_SCHEMA,
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
+  writeFixtureJson(pluginDir, "openclaw.plugin.json", {
+    id: params.id,
+    configSchema: EMPTY_PLUGIN_SCHEMA,
+  });
   return { pluginDir, outsideEntry, linkedEntry };
 }
 

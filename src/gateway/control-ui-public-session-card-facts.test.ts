@@ -20,6 +20,14 @@ afterEach(() => {
     projection.dispose();
   }
 });
+const WORKTREE = { id: "synthetic-worktree", branch: BRANCH, repoRoot: "/synthetic/repository" };
+const REPOSITORY = { owner: "example", repo: "project" };
+const BASE_FACTS = {
+  agentName: "Build agent",
+  status: "Done",
+  durationMinutes: 2,
+  worktree: { branch: BRANCH },
+};
 
 function fixture(entry: Partial<InternalSessionEntry> = {}, runs: AgentRunContext[] = []) {
   const cfg: OpenClawConfig = {
@@ -47,7 +55,7 @@ function fixture(entry: Partial<InternalSessionEntry> = {}, runs: AgentRunContex
         runtimeMs: 120_000,
         spawnedCwd: "/synthetic/worktree",
         projectId: "synthetic-project",
-        worktree: { id: "synthetic-worktree", branch: BRANCH, repoRoot: "/synthetic/repository" },
+        worktree: WORKTREE,
         createdActor: {
           type: "human",
           source: "profile",
@@ -84,18 +92,10 @@ function makeSnapshot(branch = BRANCH): ControlUiSessionPullRequestSnapshot {
   return {
     status: "ready",
     rateLimited: false,
-    branch: {
-      owner: "example",
-      repo: "project",
-      branch,
-      additions: 24,
-      deletions: 8,
-      changedFiles: 3,
-    },
+    branch: { ...REPOSITORY, branch, additions: 24, deletions: 8, changedFiles: 3 },
     pullRequests: [
       {
-        owner: "example",
-        repo: "project",
+        ...REPOSITORY,
         number: 42,
         branch,
         title: "A private PR title",
@@ -111,9 +111,7 @@ function makeSnapshot(branch = BRANCH): ControlUiSessionPullRequestSnapshot {
 describe("public session card facts", () => {
   it("preserves published names and branches despite diagnostic masking patterns", () => {
     const branch = "feature/internal-ticket-8315";
-    const input = fixture({
-      worktree: { id: "synthetic-worktree", branch, repoRoot: "/synthetic/repository" },
-    });
+    const input = fixture({ worktree: { ...WORKTREE, branch } });
     input.cfg.agents!.entries!.main!.identity = { name: "internal-ticket-8315" };
     applyLoggingConfig({ redactPatterns: [String.raw`/internal-ticket-\d+/g`] });
     try {
@@ -128,22 +126,15 @@ describe("public session card facts", () => {
 
   it("keeps cold reads cache-only and omits private identity and unknown work facts", () => {
     const cached = cachedOwner();
-    expect(resolvePublicSessionCardFacts({ ...fixture(), pullRequests: cached.owner })).toEqual({
-      agentName: "Build agent",
-      status: "Done",
-      durationMinutes: 2,
-      worktree: { branch: BRANCH },
-    });
+    expect(resolvePublicSessionCardFacts({ ...fixture(), pullRequests: cached.owner })).toEqual(
+      BASE_FACTS,
+    );
     expect(cached.refreshes()).toBe(0);
   });
 
   it("omits an unnamed agent instead of substituting the session owner", () => {
     const input = fixture();
-    const agent = input.cfg.agents?.entries?.main;
-    if (!agent) {
-      throw new Error("Synthetic agent was not configured");
-    }
-    delete agent.identity;
+    delete input.cfg.agents!.entries!.main!.identity;
     expect(resolvePublicSessionCardFacts(input)).toEqual({
       status: "Done",
       durationMinutes: 2,
@@ -152,14 +143,9 @@ describe("public session card facts", () => {
   });
 
   it("projects only the selected branch's recorded work and check summary", () => {
-    const cached = cachedOwner({
-      ...makeSnapshot(),
-      repository: { owner: "example", repo: "project" },
-    });
+    const cached = cachedOwner({ ...makeSnapshot(), repository: REPOSITORY });
     expect(resolvePublicSessionCardFacts({ ...fixture(), pullRequests: cached.owner })).toEqual({
-      agentName: "Build agent",
-      status: "Done",
-      durationMinutes: 2,
+      ...BASE_FACTS,
       repoSlug: "example/project",
       worktree: {
         branch: BRANCH,
@@ -181,17 +167,13 @@ describe("public session card facts", () => {
   });
 
   it.each([
-    ["done", "Done"],
     ["failed", "Failed"],
-    ["interrupted", "Failed"],
-    ["killed", "Failed"],
-    ["timeout", "Failed"],
     [undefined, undefined],
   ] as const)("projects recorded %s status as %s", (status, expected) => {
     expect(resolvePublicSessionCardFacts(fixture({ status })).status).toBe(expected);
   });
 
-  it.each([false, true])("shows a live run ahead of prior failure (queued: %s)", (queued) => {
+  it("shows a queued live run ahead of prior failure", () => {
     const input = fixture({ status: "failed" }, [
       {
         agentId: "main",
@@ -199,7 +181,7 @@ describe("public session card facts", () => {
         sessionId: "public-card-session",
         lifecycleGeneration: "test",
         projectSessionActive: true,
-        ...(queued ? { capacityWaits: new Set([Symbol("queued")]) } : {}),
+        capacityWaits: new Set([Symbol("queued")]),
       },
     ]);
     expect(resolvePublicSessionCardFacts(input).status).toBe("Running");

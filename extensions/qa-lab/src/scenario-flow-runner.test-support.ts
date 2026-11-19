@@ -58,7 +58,7 @@ export async function runLoadedScenarioFlow(
       state.reset();
     },
     sendInbound: async (input: Parameters<typeof state.addInboundMessage>[0]) =>
-      state.addInboundMessage(input),
+      state.addInboundMessage({ ...input, accountId: "qa-channel" }),
     sendNativeCommand: async (
       input: Omit<Parameters<typeof state.addInboundMessage>[0], "nativeCommand" | "text"> & {
         command: string;
@@ -67,6 +67,7 @@ export async function runLoadedScenarioFlow(
       const { command, ...message } = input;
       state.addInboundMessage({
         ...message,
+        accountId: "qa-channel",
         text: `/${command}`,
         nativeCommand: { name: command },
       });
@@ -91,10 +92,19 @@ export async function runLoadedScenarioFlow(
             (!input.textIncludes || candidate.text.includes(input.textIncludes)),
         );
       if (match) {
-        state.resolvePollCursor({
+        state.recordPollReceipts({
           accountId: "qa-channel",
           cursor: state.getSnapshot().cursor,
-          acknowledgedCursor: state.getSnapshot().cursor,
+          completedEventCursors: state
+            .getSnapshot()
+            .events.filter(
+              (event) =>
+                event.kind === "inbound-message" &&
+                event.accountId === "qa-channel" &&
+                event.message.conversation.kind === match.conversation.kind &&
+                event.message.conversation.id === match.conversation.id,
+            )
+            .map((event) => event.cursor),
         });
         return match;
       }

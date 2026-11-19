@@ -1,4 +1,5 @@
 // Site allocation proof, not a Gateway/GC benchmark. Run with node --expose-gc.
+// PR watcher scope checks are measured through session-pr-currency-measure.ts.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -23,7 +24,6 @@ const paths = {
   topology: "src/agents/subagents/registry/subagent-registry-read-topology.ts",
   generation: "src/agents/subagents/registry/subagent-run-generation.ts",
   numbers: "packages/normalization-core/src/number-coercion.ts",
-  scopes: "src/gateway/control-ui-session-pr-read.ts",
 };
 function between(source, start, end) {
   assert.equal(source.split(start).length, 2, `expected one ${start}`);
@@ -43,11 +43,6 @@ async function load(root) {
   );
   const sort = sources.task.match(/return sessions\.(?:toSorted|sort)\([\s\S]*?\n {2}\);/g);
   assert.equal(sort?.length, 1, "expected one task result sort");
-  const scopes = sources.scopes.match(
-    /(?:\[\.\.\.\(client\.connect\.scopes \?\? \[\]\)\]|\(client\.connect\.scopes \?\? \[\]\))\.toSorted\(\)\.join\("\\0"\)/g,
-  );
-  assert.equal(scopes?.length, 2, "expected two scope canonicalizations");
-  assert.equal(scopes[0], scopes[1], "scope sites must use identical expressions");
   // Load the complete topology owner with its exact generation-selection dependencies.
   const generation = between(
     sources.generation,
@@ -67,7 +62,6 @@ export function taskSort(input) {
   for (const row of input) sessions.push(row);
   ${sort[0]}
 }
-export function canonicalScopes(client) { return ${scopes[0]}; }
 `);
   // Heap sampling truncates data URLs; short file URLs retain exact owner attribution.
   const generatedFile = path.join(
@@ -134,32 +128,6 @@ for (const size of [100, 5000]) {
     });
   }
 }
-const initialScopes = [
-  "operator.write",
-  "operator.read",
-  "operator.sessions.write",
-  "operator.admin",
-];
-for (const [name, scopes] of Object.entries({
-  unchanged: initialScopes,
-  reordered: initialScopes.toReversed(),
-  added: [...initialScopes, "operator.approvals"],
-  removed: initialScopes.slice(1),
-  duplicate: [...initialScopes, "operator.read"],
-  absent: undefined,
-})) {
-  workloads.push({
-    name: `scopes-${name}`,
-    size: scopes?.length ?? 0,
-    calls: 100000,
-    setup(owner) {
-      const client = { connect: { scopes } };
-      const expected = (scopes ?? []).toSorted().join("\0");
-      assert.equal(owner.canonicalScopes(client), expected);
-      return () => owner.canonicalScopes(client).length;
-    },
-  });
-}
 const inspector = new Session();
 inspector.connect();
 const results = [];
@@ -172,8 +140,7 @@ try {
       samplesPerSide: samples,
       samplingInterval: interval,
       includeCollected: true,
-      scope:
-        "C5 final private-array build/sort; C6 complete topology patch; C8 one canonicalization (both source sites identical)",
+      scope: "C5 final private-array build/sort; C6 complete topology patch",
       hashes: { baseline: owners.baseline.hashes, candidate: owners.candidate.hashes },
     }),
   );

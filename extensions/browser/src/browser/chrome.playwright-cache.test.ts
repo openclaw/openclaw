@@ -39,6 +39,17 @@ function mockExecutableFiles(installed: ReadonlySet<string>) {
   vi.spyOn(fs, "accessSync").mockImplementation(() => {});
 }
 
+function expectHeadlessModes(
+  platform: NodeJS.Platform,
+  executable: { kind: string; path: string } | null,
+) {
+  for (const headless of [false, true]) {
+    expect(
+      resolveBrowserExecutableForPlatform(resolveBrowserConfig({ headless }), platform),
+    ).toEqual(executable);
+  }
+}
+
 function installFullChromium(cache: string): string {
   const directory = path.join(
     cache,
@@ -100,108 +111,45 @@ it("discovers full Chromium from the hermetic Playwright cache", () => {
 });
 
 it.each([
-  {
-    platform: "linux",
-    arch: "x64",
-    suffix: ["chrome-headless-shell-linux64", "chrome-headless-shell"],
-  },
-  {
-    platform: "linux",
-    arch: "arm64",
-    suffix: ["chrome-headless-shell-linux-arm64", "chrome-headless-shell"],
-  },
-  {
-    platform: "darwin",
-    arch: "x64",
-    suffix: ["chrome-headless-shell-mac-x64", "chrome-headless-shell"],
-  },
-  {
-    platform: "darwin",
-    arch: "arm64",
-    suffix: ["chrome-headless-shell-mac-arm64", "chrome-headless-shell"],
-  },
-  {
-    platform: "win32",
-    arch: "x64",
-    suffix: ["chrome-headless-shell-win64", "chrome-headless-shell.exe"],
-  },
+  ["linux", "x64", "Intel", "linux64"],
+  ["linux", "arm64", "Intel", "linux-arm64"],
+  ["darwin", "x64", "Intel", "mac-x64"],
+  ["darwin", "arm64", "Apple M1", "mac-arm64"],
+  ["darwin", "x64", "Apple M1", "mac-arm64"],
+  ["win32", "x64", "Intel", "win64"],
 ] as const)(
-  "does not automatically select a shell-only $platform/$arch installation",
-  ({ platform, arch, suffix }) => {
+  "selects full Chromium, never shell-only, on %s/%s (%s)",
+  (platform, arch, model, suffix) => {
     const cache = platform === "win32" ? "C:\\browsers" : "/browsers";
     const join = platform === "win32" ? path.win32.join : path.join;
-    const executablePath = join(cache, "chromium_headless_shell-100", ...suffix);
-    const installedExecutable = executablePath;
+    const full =
+      platform === "darwin"
+        ? "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+        : platform === "win32"
+          ? "chrome.exe"
+          : "chrome";
+    const fullPath = join(cache, "chromium-100", `chrome-${suffix}`, ...full.split("/"));
+    const shellPath = join(
+      cache,
+      "chromium_headless_shell-100",
+      `chrome-headless-shell-${suffix}`,
+      platform === "win32" ? "chrome-headless-shell.exe" : "chrome-headless-shell",
+    );
     vi.spyOn(process, "arch", "get").mockReturnValue(arch);
     vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", cache);
     vi.spyOn(fs, "readdirSync").mockReturnValue([
       "chromium_headless_shell-100",
       "chromium-100",
     ] as never);
-    mockExecutableFiles(new Set([installedExecutable]));
-    for (const headless of [false, true]) {
-      expect(
-        resolveBrowserExecutableForPlatform(resolveBrowserConfig({ headless }), platform),
-      ).toBeNull();
-    }
+    vi.mocked(os.cpus).mockReturnValue([{ ...cpu, model }]);
+    const installed = new Set([fullPath, shellPath]);
+    mockExecutableFiles(installed);
+    expectHeadlessModes(platform, { kind: "chromium", path: fullPath });
+    installed.delete(fullPath);
+    expectHeadlessModes(platform, null);
     expect(resolveGoogleChromeExecutableForPlatform(platform)).toBeNull();
   },
 );
-
-it.each([
-  [
-    "linux",
-    "Intel",
-    "chrome-linux64/chrome",
-    "chrome-headless-shell-linux64/chrome-headless-shell",
-  ],
-  [
-    "darwin",
-    "Intel",
-    "chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
-    "chrome-headless-shell-mac-x64/chrome-headless-shell",
-  ],
-  [
-    "darwin",
-    "Apple M1",
-    "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
-    "chrome-headless-shell-mac-arm64/chrome-headless-shell",
-  ],
-  [
-    "win32",
-    "Intel",
-    "chrome-win64/chrome.exe",
-    "chrome-headless-shell-win64/chrome-headless-shell.exe",
-  ],
-] as const)("keeps full Chromium in %s caches on %s CPUs", (platform, cpuModel, full, shell) => {
-  const cache = platform === "win32" ? "C:\\browsers" : "/browsers";
-  const join = platform === "win32" ? path.win32.join : path.join;
-  const fullPath = join(cache, "chromium-100", ...full.split("/"));
-  const shellPath = join(cache, "chromium_headless_shell-100", ...shell.split("/"));
-  vi.spyOn(process, "arch", "get").mockReturnValue("x64");
-  vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", cache);
-  vi.spyOn(fs, "readdirSync").mockReturnValue([
-    "chromium_headless_shell-100",
-    "chromium-100",
-  ] as never);
-  const installed = new Set([fullPath, shellPath]);
-  vi.mocked(os.cpus).mockReturnValue([{ ...cpu, model: cpuModel }]);
-  mockExecutableFiles(installed);
-  for (const headless of [false, true]) {
-    expect(
-      resolveBrowserExecutableForPlatform(resolveBrowserConfig({ headless }), platform),
-    ).toEqual({
-      kind: "chromium",
-      path: fullPath,
-    });
-  }
-  installed.delete(fullPath);
-  for (const headless of [false, true]) {
-    expect(
-      resolveBrowserExecutableForPlatform(resolveBrowserConfig({ headless }), platform),
-    ).toBeNull();
-  }
-});
 
 it.each([
   ["linux", false],

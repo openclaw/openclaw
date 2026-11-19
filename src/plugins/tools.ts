@@ -6,6 +6,7 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { captureAgentWorkspaceReadiness } from "../agents/workspace-readiness.js";
 import { normalizeConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveEnvironmentKey } from "../shared/environment-key.js";
 import {
   getLoadedRuntimePluginRegistry,
   createRuntimePluginManifestLookup,
@@ -18,11 +19,7 @@ import {
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import type { PluginMetadataSnapshotScopeRunner } from "./current-plugin-metadata-snapshot.js";
 import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
-import {
-  acquirePluginRegistryForInspection,
-  loadPluginRegistryHandle,
-  type PluginLoadOptions,
-} from "./loader.js";
+import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "./loader.js";
 import {
   isManifestPluginAvailableForControlPlane,
   loadManifestContractSnapshot,
@@ -33,6 +30,8 @@ import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginMetadataManifestView } from "./plugin-metadata-snapshot.types.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
+import { getPluginRegistryState, getPluginRegistryVersion } from "./runtime-state.js";
+import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 import {
   buildPluginRuntimeLoadOptions,
   setPluginRuntimeLoadContext,
@@ -47,7 +46,7 @@ import {
   bindPluginToolCallbacks,
   createPluginToolFactoryResolver,
 } from "./tool-factory-runtime.js";
-import { createPluginToolAllowlist, type PluginToolAllowlist } from "./tool-grant-allowlist.js";
+import { createPluginToolAllowlist } from "./tool-grant-allowlist.js";
 import {
   createPluginToolInspection,
   inspectionToolOwners,
@@ -89,25 +88,17 @@ function resolvePluginToolLoadState(params: {
   toolAllowlist?: string[];
   toolDenylist?: string[];
   allowGatewaySubagentBinding?: boolean;
-  hasAuthForProvider?: (providerId: string) => boolean;
+  hasAuthForProvider?: OpenClawPluginToolContext["hasAuthForProvider"];
   env?: NodeJS.ProcessEnv;
   preparedRuntime?: PreparedPluginToolRuntime;
-}):
-  | {
-      context: ReturnType<typeof resolvePluginRuntimeLoadContext>;
-      env: NodeJS.ProcessEnv;
-      loadOptions: PluginLoadOptions;
-      onlyPluginIds: string[];
-      allowlist: PluginToolAllowlist;
-      snapshot: PluginMetadataManifestView;
-    }
-  | undefined {
+}) {
   const env = params.env ?? process.env;
   const baseConfig = applyTestPluginDefaults(params.context.config ?? {}, env);
   const preparedLoadContext = params.preparedRuntime?.loadContext;
   // The prepared runtime already owns one immutable Gateway plugin generation. Per-turn config
   // and workspace projections cannot invalidate that executable graph or reopen discovery.
-  const usePreparedRuntime = preparedLoadContext !== undefined && env === preparedLoadContext.env;
+  const usePreparedRuntime =
+    preparedLoadContext && resolveEnvironmentKey(params.env) === preparedLoadContext.environmentKey;
   const context = usePreparedRuntime
     ? preparedLoadContext
     : resolvePluginRuntimeLoadContext({
@@ -217,13 +208,88 @@ type PluginToolResolutionParams = {
   toolDenylist?: string[];
   suppressNameConflicts?: boolean;
   allowGatewaySubagentBinding?: boolean;
-  hasAuthForProvider?: (providerId: string) => boolean;
+  hasAuthForProvider?: OpenClawPluginToolContext["hasAuthForProvider"];
   env?: NodeJS.ProcessEnv;
   runtimeRegistry?: PluginRegistry;
   preparedRuntime?: PreparedPluginToolRuntime;
 };
 
 type PluginToolLoadState = NonNullable<ReturnType<typeof resolvePluginToolLoadState>>;
+
+type PluginToolRegistryFacts = {
+  registrations: Map<string, PluginToolRegistration[]>;
+  findOwner: ReturnType<typeof createRuntimePluginManifestLookup>;
+  settledOutcomes: Set<string>;
+};
+
+const registryToolFacts = new WeakMap<
+  PluginRegistry,
+  {
+    version: number | undefined;
+    loaderIdentity: object | undefined;
+    snapshots: WeakMap<
+      PluginMetadataManifestView["plugins"],
+      WeakMap<PluginMetadataManifestView["byPluginId"], PluginToolRegistryFacts>
+    >;
+  }
+>();
+
+function preparePluginToolRegistry(registry: PluginRegistry, snapshot: PluginMetadataManifestView) {
+  const version = getPluginRegistryVersion(registry);
+  const loaderIdentity = getPluginRuntimeLoadContextState(registry)?.loaderCacheIdentity;
+  // Registration is mutable until publication or loader completion. Metadata views can
+  // differ within a generation; neither their source precedence nor turn authority is shared.
+  const cacheable =
+    !getPluginRegistryState()?.registrationContext &&
+    (version !== undefined || loaderIdentity !== undefined);
+  let generation = cacheable ? registryToolFacts.get(registry) : undefined;
+  if (
+    cacheable &&
+    (!generation || generation.version !== version || generation.loaderIdentity !== loaderIdentity)
+  ) {
+    generation = { version, loaderIdentity, snapshots: new WeakMap() };
+    registryToolFacts.set(registry, generation);
+  }
+  // Contract readers can project a fresh view around the same immutable metadata.
+  let snapshots = generation?.snapshots.get(snapshot.plugins);
+  if (generation && !snapshots) {
+    snapshots = new WeakMap();
+    generation.snapshots.set(snapshot.plugins, snapshots);
+  }
+  const cached = snapshots?.get(snapshot.byPluginId);
+  if (cached) {
+    return cached;
+  }
+  const registrations = new Map<string, PluginToolRegistration[]>();
+  for (const entry of registry.tools) {
+    const entries = registrations.get(entry.pluginId);
+    if (entries) {
+      entries.push(entry);
+    } else {
+      registrations.set(entry.pluginId, [entry]);
+    }
+  }
+  const facts: PluginToolRegistryFacts = {
+    registrations,
+    findOwner: createRuntimePluginManifestLookup(registry, snapshot.plugins),
+    settledOutcomes: new Set(
+      registry.plugins
+        .filter((record) => {
+          const manifest = snapshot.byPluginId.get(record.id);
+          return (
+            (record.status === "disabled" || record.status === "error") &&
+            manifest !== undefined &&
+            record.origin === manifest.origin &&
+            record.rootDir === manifest.rootDir &&
+            record.source === manifest.source
+          );
+        })
+        .map((record) => record.id),
+    ),
+  };
+  snapshots?.set(snapshot.byPluginId, facts);
+  return facts;
+}
 
 function recordToolDiagnostic(
   registry: PluginRegistry,
@@ -311,7 +377,7 @@ export type PluginToolRegistryAcquisition = {
 
 /** The serving owner retains this view before invoking factories or applying tool policy. */
 export async function acquireStandalonePluginToolRegistry(
-  params: Omit<PluginToolResolutionParams, "runtimeRegistry" | "preparedRuntime">,
+  params: Omit<PluginToolResolutionParams, "runtimeRegistry">,
 ): Promise<PluginToolRegistryAcquisition> {
   const loadState = resolvePluginToolLoadState(params);
   if (!loadState || loadState.onlyPluginIds.length === 0) {
@@ -329,7 +395,14 @@ export async function acquireStandalonePluginToolRegistry(
       }
       return resolvePluginToolsSynchronously(
         resolvePluginToolsFromRegistry(
-          { ...params, runtimeRegistry: acquisition.registry },
+          {
+            ...params,
+            preparedRuntime: {
+              loadContext: loadState.context,
+              metadataSnapshot: loadState.snapshot,
+              registry: acquisition.registry,
+            },
+          },
           loadState,
         ),
       );
@@ -383,46 +456,32 @@ function* resolvePluginToolsFromRegistry(
   inspection?.assertCurrent();
   // A supplied generation keeps its covered owners even when another plugin must
   // load. Registry caching owns reuse; every assembly calls current-context factories.
-  const toolOwners = new Map<
-    string,
-    { registry: PluginRegistry; tools: PluginToolRegistration[] }
-  >();
-  const findRuntimeOwner = runtimeRegistry
-    ? createRuntimePluginManifestLookup(runtimeRegistry, snapshot.plugins)
+  const owners = new Map<string, { registry: PluginRegistry; tools: PluginToolRegistration[] }>();
+  const runtimeFacts = runtimeRegistry
+    ? preparePluginToolRegistry(runtimeRegistry, snapshot)
     : undefined;
   for (const pluginId of onlyPluginIds) {
-    const record = findRuntimeOwner?.(pluginId);
+    const record = runtimeFacts?.findOwner(pluginId);
     const instance = record && getPluginInstance(record);
     if (
       runtimeRegistry &&
       instance &&
-      (instance.toolRegistrationComplete ||
-        runtimeRegistry.tools.some((entry) => entry.pluginId === pluginId))
+      (instance.toolRegistrationComplete || runtimeFacts?.registrations.has(pluginId))
     ) {
-      toolOwners.set(pluginId, { registry: runtimeRegistry, tools: [] });
+      owners.set(pluginId, {
+        registry: runtimeRegistry,
+        tools: runtimeFacts?.registrations.get(pluginId) ?? [],
+      });
     }
   }
   // A prepared generation already decided disabled and failed owners; reloading them would only
   // repeat that outcome synchronously on the caller's thread.
-  const settledPreparedOutcomes = new Set(
-    preparedRegistry?.plugins
-      .filter((record) => {
-        const manifest = snapshot.byPluginId.get(record.id);
-        return (
-          (record.status === "disabled" || record.status === "error") &&
-          manifest !== undefined &&
-          record.origin === manifest.origin &&
-          record.rootDir === manifest.rootDir &&
-          record.source === manifest.source
-        );
-      })
-      .map((record) => record.id),
-  );
+  const settledPreparedOutcomes = preparedRegistry ? runtimeFacts?.settledOutcomes : undefined;
   // Failed registrations are settled facts of this inspection, not new cold-load requests.
   const missingPluginIds = onlyPluginIds.filter(
     (pluginId) =>
-      !toolOwners.has(pluginId) &&
-      !settledPreparedOutcomes.has(pluginId) &&
+      !owners.has(pluginId) &&
+      !settledPreparedOutcomes?.has(pluginId) &&
       !samePluginToolSource(inspection?.manifests.get(pluginId), snapshot.byPluginId.get(pluginId)),
   );
   if (missingPluginIds.length > 0) {
@@ -430,16 +489,9 @@ function* resolvePluginToolsFromRegistry(
       ...loadState.loadOptions,
       onlyPluginIds: missingPluginIds,
     });
+    const registrations = preparePluginToolRegistry(registry, snapshot).registrations;
     for (const pluginId of missingPluginIds) {
-      toolOwners.set(pluginId, { registry, tools: [] });
-    }
-  }
-  for (const registry of new Set(Array.from(toolOwners.values(), (owner) => owner.registry))) {
-    for (const entry of registry.tools) {
-      const owner = toolOwners.get(entry.pluginId);
-      if (owner?.registry === registry) {
-        owner.tools.push(entry);
-      }
+      owners.set(pluginId, { registry, tools: registrations.get(pluginId) ?? [] });
     }
   }
   const blockedPlugins = new Set<string>();
@@ -448,11 +500,11 @@ function* resolvePluginToolsFromRegistry(
   // Loader manifest order owns duplicate precedence, independent of retained instances.
   const orderedManifests = loadState.loadOptions.manifestRegistry?.plugins ?? snapshot.plugins;
   for (const { id: pluginId } of orderedManifests) {
-    const owner = toolOwners.get(pluginId);
+    const owner = owners.get(pluginId);
     if (!owner) {
       continue;
     }
-    toolOwners.delete(pluginId);
+    owners.delete(pluginId);
     const { registry, tools: registrations } = owner;
     let trustedLocalMediaNames: Set<string> | undefined;
     const reportError = (entry: PluginToolRegistration, message: string) => {

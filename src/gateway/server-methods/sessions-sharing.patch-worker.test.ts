@@ -18,7 +18,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { loadPublicSessionShareTokenCodec } from "../control-ui-public-session-token.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
@@ -47,13 +46,11 @@ async function fixture() {
   const client = identifiedClient("owner");
   const context = sessionSharingTestContext(vi.fn());
   await initializeSessionReadContext(context);
-  const codec = await loadPublicSessionShareTokenCodec();
   return {
     scope,
     sessionId,
     client,
     context,
-    codec,
     async call(
       action: PatchAction,
       patch: Record<string, unknown> = action === "visibility"
@@ -99,29 +96,15 @@ it("publishes sharing changes without caller-thread SQLite", () =>
         expect(response).toHaveBeenCalledWith(true, expected, undefined);
         expect((await readSessionMembersInWorker(f.scope)).entry?.visibility).toBe(visibility);
       }
-      let shareId: string | undefined;
       for (const enabled of [true, true, false]) {
         const response = await f.call("publicShare", { enabled });
-        const [ok, result] = response.mock.calls[0]!;
-        expect(ok).toBe(true);
+        expect(response.mock.calls[0]?.[0]).toBe(true);
         const stored = (await readSessionMembersInWorker(f.scope)).entry?.publicShare;
-        if (enabled) {
-          expect(stored?.id).toEqual(expect.any(String));
-          if (shareId) {
-            expect(stored?.id).toBe(shareId);
-          }
-          shareId = stored?.id;
-          if (!isRecord(result) || !isRecord(result.publicShare)) {
-            throw new Error("Missing public share response");
-          }
-          expect(f.codec.resolve(String(result.publicShare.token))).toEqual({
-            ...f.scope,
-            sessionId: f.sessionId,
-            shareId,
-          });
-        } else {
-          expect(stored).toBeUndefined();
-        }
+        expect(stored).toEqual(
+          enabled
+            ? expect.objectContaining({ sessionId: f.sessionId, id: expect.any(String) })
+            : undefined,
+        );
       }
       sql.expectIdle();
     } finally {

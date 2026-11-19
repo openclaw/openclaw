@@ -32,7 +32,7 @@ public final class OpenClawChatViewModel {
     var isApplyingWebSession = false
     @ObservationIgnored
     var inputHistoriesBySession: [String: ChatInputHistory] = [:]
-    /// Native attachments, including images restored by rewind/fork, stay in memory only.
+    /// Drafts for a model without a durable draft store; see `ChatViewModel+ComposerDrafts.swift`.
     /// The staging guard prevents session switches while attachments are being prepared.
     @ObservationIgnored
     var draftsBySession: [String: String] = [:]
@@ -95,7 +95,10 @@ public final class OpenClawChatViewModel {
     var attachmentStagingCount = 0
     public private(set) var isAborting = false
     public var errorText: String?
-    public var attachments: [OpenClawPendingAttachment] = []
+    public var attachments: [OpenClawPendingAttachment] = [] {
+        didSet { self.composerAttachmentsChanged(from: oldValue) }
+    }
+
     public internal(set) var healthOK: Bool = false
     /// Bumped after every successful group-catalog mutation so views keyed on it
     /// refetch; catalog-only changes (e.g. creating an empty group) alter no
@@ -154,7 +157,13 @@ public final class OpenClawChatViewModel {
                 ? self.explicitSessionAgentID ?? self.activeAgentId : nil)
     }
 
+    var readerHistoryDeletionRevision: UInt64 = 0
+
     public private(set) var streamingAssistantText: String?
+    @ObservationIgnored private(set) var streamingAssistantRunID: String?
+    @ObservationIgnored private(set) var streamingPriorMessageIDs = Set<UUID>()
+    @ObservationIgnored var streamingRetiredFinalIDs = Set<UUID>()
+    @ObservationIgnored var streamingRetiredSource: (finalID: UUID, raw: String, displayed: String?)?
     /// What the Gateway says the selected run is doing before its first output.
     var runStartup: ChatRunStartup?
     var runStartupStatus: String? {
@@ -162,6 +171,8 @@ public final class OpenClawChatViewModel {
     }
 
     /// Presentation is paced independently; event consumers always see the newest stream text.
+    /// The live bubble renders `displayedStreamingAssistantText`; the transcript decides whether it
+    /// shows from the untracked copy (`liveTextShape`). A clear empties only the untracked copy.
     private(set) var displayedStreamingAssistantText: String?
     @ObservationIgnored private(set) var displayedStreamingAssistantTextUntracked: String?
     @ObservationIgnored var streamPacing = ChatStreamPacing()
@@ -169,6 +180,13 @@ public final class OpenClawChatViewModel {
 
     public private(set) var toolActivities: [OpenClawChatPendingToolCall] = []
     private(set) var timelineRevision: UInt64 = 0
+
+    func markTimelineChanged() {
+        self.timelineRevision &+= 1
+    }
+
+    /// Explicit local admission, not received transcript rows or outbox restoration.
+    var localSendRevision: UInt64 = 0
     // Capped or filtered rosters can omit the active row. Reset this projection with session-owned state.
     var retainedActiveSession: OpenClawChatSessionEntry?
     var legacySessions: [OpenClawChatSessionEntry] = []
@@ -224,6 +242,9 @@ public final class OpenClawChatViewModel {
     /// Guard the cache pre-paint: once a live response applied (even an empty
     /// one), a slow cache read must never paint stale rows over it.
     var hasAppliedLiveHistory = false
+    /// Canonical identity reported by accepted history, not the displayed alias. Display reuse only.
+    @ObservationIgnored
+    var transcriptPresentationTarget: OpenClawChatSessionTarget?
     var hasAppliedLiveSessions = false
     @ObservationIgnored
     var unreadPatchGuard = ChatSessionUnreadPatchGuard()
@@ -240,6 +261,14 @@ public final class OpenClawChatViewModel {
     let haptics: OpenClawChatHaptics
     let transcriptCache: (any OpenClawChatTranscriptCache)?
     let outbox: (any OpenClawChatCommandOutbox)?
+    /// The client-state store owns drafts when it is also the outbox.
+    let composerDraftStore: OpenClawChatSQLiteTranscriptCache?
+    /// Key of the stored draft now buffered in `input`/`attachments`; nil while unresolved or loading.
+    var composerDraftKey: String?
+    /// Stored position of each composer attachment; one without a position still pins this model.
+    var composerDraftAttachmentPositions: [OpenClawPendingAttachment.ID: Int] = [:]
+    @ObservationIgnored
+    var composerDraftSync = ComposerDraftSync()
     @ObservationIgnored
     let modelPickerStore: ChatModelPickerStore
     /// Per-message outbox display state; rows without an entry are normal
@@ -251,9 +280,10 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     var outboxMessageIDsByCommandID: [String: UUID] = [:]
     @ObservationIgnored
-    var outboxFailureVersionsByMessageID: [
-        UUID: (attemptVersion: Int, retryCount: Int, lastError: String?)
-    ] = [:]
+    var outboxFailuresByMessageID: [UUID: OutboxFailure] = [:]
+    @ObservationIgnored var outboxRestoreEvidence = OutboxRestoreEvidence()
+    /// "Not sent" notices for messages restored into a composer, by composer key.
+    var composerNoticesBySession: [String: String] = [:]
     /// Recent canonical keys let the MainActor resolve proof that arrives
     /// after SQLite cancellation commits but before its UI continuation runs.
     @ObservationIgnored
@@ -314,6 +344,9 @@ public final class OpenClawChatViewModel {
     nonisolated(unsafe) var bootstrapTask: Task<Void, Never>?
     @ObservationIgnored
     var historyInvalidationRefresh: (requestID: UInt64, task: Task<Void, Never>)?
+    /// Set while a reconnect waits on transcript recovery before its catalog refreshes.
+    @ObservationIgnored
+    var pendingTransportRecoveryID: UUID?
     var runOwnershipGeneration: UInt64 = 0
     var latestAppliedRunSnapshotRequestID: UInt64 = 0
     var isApplyingRunSnapshot = false
@@ -478,45 +511,31 @@ public final class OpenClawChatViewModel {
     private struct BootstrapContext {
         var id: UInt64
         var historyRequest: HistoryRequest
+        var preservingHeldHistory: Bool
 
         var session: SessionSnapshot {
             self.historyRequest.session
         }
     }
 
-    struct HistoryRequest {
-        var id: UInt64
-        var session: SessionSnapshot
-        var pendingRunIDs: Set<String>
-        var visibleMessagesByID: [UUID: OpenClawChatMessage]
-        var historyMutationGeneration: UInt64
-        var progressCardGeneration: UInt64
-        var runOwnershipGeneration: UInt64
-        var latestUserTurn: LatestUserTurn?
-    }
+    var historyDeltaCursor: String?
+    var latestAppliedHistoryCursorRequestID: UInt64 = 0
+    var historyCursorGeneration: UInt64 = 0
+    var historyDeltaMessageIDs: Set<UUID> = []
+    @ObservationIgnored
+    var historyRouteLocalUserEchoIDs: Set<UUID> = []
+    var historyRequiresCanonicalReplacement = false
+    @ObservationIgnored
+    var historyRefresh: (
+        request: HistoryRequest,
+        policy: HistoryRefreshPolicy,
+        task: Task<RunHistoryRefreshResult, Never>)?
 
-    struct RunHistoryRefreshResult {
-        let applied: Bool
-        let runSnapshotApplied: Bool
-        let supportsInFlightRunState: Bool
-        let hasInFlightRun: Bool
-        let sessionHasActiveRun: Bool
-        var retryAfterMs: Int?
-
-        static let failed = RunHistoryRefreshResult(
-            applied: false,
-            runSnapshotApplied: false,
-            supportsInFlightRunState: false,
-            hasInFlightRun: false,
-            sessionHasActiveRun: false)
-    }
-
-    struct LatestUserTurn {
-        var idempotencyKey: String?
-        var refreshKey: String?
-        var occurrence: Int
-        var timestamp: Double?
-    }
+    @ObservationIgnored
+    var completedHistoryRefresh: (
+        request: HistoryRequest,
+        policy: HistoryRefreshPolicy,
+        result: RunHistoryRefreshResult)?
 
     struct RunMessageScope {
         var session: SessionSnapshot
@@ -533,7 +552,7 @@ public final class OpenClawChatViewModel {
         didSet {
             guard self.turnToolCallsById != oldValue else { return }
             self.toolActivities = prepareToolActivities(from: oldValue)
-            markTimelineChanged()
+            self.markTimelineChanged()
         }
     }
 
@@ -569,6 +588,7 @@ public final class OpenClawChatViewModel {
         self.modelPickerFavorites = modelPickerStore.favorites
         self.modelPickerRecents = modelPickerStore.recents
         self.outbox = outbox
+        self.composerDraftStore = outbox as? OpenClawChatSQLiteTranscriptCache
         self.activeAgentId = ChatPayloadDecoding.trimmedNonEmptyString(activeAgentId)?.lowercased()
         self.sessionRoutingContract = ChatPayloadDecoding.trimmedNonEmptyString(sessionRoutingContract)
         let normalizedThinkingLevel = Self.normalizedThinkingLevel(initialThinkingLevel)
@@ -608,7 +628,8 @@ public final class OpenClawChatViewModel {
                     return
                 }
                 await MainActor.run { [weak self] in
-                    self?.handleTransportEvent(evt)
+                    guard let self else { return }
+                    self.handleTransportEvent(evt)
                 }
             }
         }
@@ -621,6 +642,7 @@ public final class OpenClawChatViewModel {
                 }
             }
         }
+        self.syncComposerDraftKey()
     }
 
     isolated deinit {
@@ -630,11 +652,15 @@ public final class OpenClawChatViewModel {
     /// Permanently retires a replaced presentation without aborting its gateway run.
     public func detachTransport() {
         guard !self.isTransportDetached else { return }
+        self.flushComposerDraftText()
+        self.composerDraftSync.load?.cancel()
         self.cancelHistoryInvalidationRefresh()
         self.retireQuestionAuthority()
         self.resetSessionReactions()
         self.isTransportDetached = true
         self.invalidateProgressCardTarget()
+        self.historyRefresh?.task.cancel()
+        self.historyRefresh = nil
         self.sidebarData?.invalidate(clear: true)
         let transport = self.transport
         Task { await transport.releaseActiveSessionSubscription() }
@@ -658,11 +684,6 @@ public final class OpenClawChatViewModel {
 
     public func load() {
         startBootstrap()
-    }
-
-    @discardableResult
-    public func resumeFromForeground() -> Task<Void, Never> {
-        Task { await self.refreshRunStateAfterForeground() }
     }
 
     public func abort() {
@@ -726,8 +747,13 @@ public final class OpenClawChatViewModel {
                 activeAgentId: self.explicitSessionAgentID ??
                     OpenClawChatSessionKey.agentID(from: self.sessionKey) ?? nextAgentId)
         }
+        let preservesTranscript = self.canRetainTranscriptPresentation(
+            sessionKey: self.sessionKey,
+            agentID: self.explicitSessionAgentID ?? nextAgentId,
+            routingContract: nextContract)
         self.activeAgentId = nextAgentId
         self.sessionRoutingContract = nextContract
+        self.syncComposerDraftKey()
         let bootstrapIdentityChanged =
             (agentChanged && self.usesMutableAgentRouting) ||
             contractRoutingChanged
@@ -740,7 +766,7 @@ public final class OpenClawChatViewModel {
         // Restart when this key depends on a changed routing value so cleared
         // state cannot remain stuck or cross session owners.
         advanceSessionGeneration()
-        clearSessionOwnedState()
+        clearSessionOwnedState(preservingTranscriptPresentation: preservesTranscript)
         startBootstrap()
     }
 
@@ -778,41 +804,40 @@ public final class OpenClawChatViewModel {
 extension OpenClawChatViewModel {
     // MARK: - Internals
 
-    func markTimelineChanged() {
-        self.timelineRevision &+= 1
-    }
-
-    func appendMessage(_ message: OpenClawChatMessage) {
-        self.messages.append(message)
-        self.markTimelineChanged()
-    }
-
-    func removeMessage(id: UUID) {
-        let previousCount = self.messages.count
-        self.messages.removeAll { $0.id == id }
-        if self.messages.count != previousCount {
-            self.markTimelineChanged()
-        }
-    }
-
     func clearStreamingActivity() {
         self.runStartup = nil
         self.turnToolCallsById = [:]
         self.updateStreamingAssistantText(nil)
     }
 
-    func updateStreamingAssistantText(_ text: String?) {
-        guard self.streamingAssistantText != text else { return }
+    func updateStreamingAssistantText(_ text: String?, runID: String? = nil) {
+        let owner = text == nil ? nil : runID
+        let ownerChanged = self.streamingAssistantRunID != owner
+        if text == nil {
+            self.streamingPriorMessageIDs.removeAll()
+        } else if ownerChanged || self.streamingAssistantText == nil {
+            self.streamingPriorMessageIDs = Set(self.messages.map(\.id))
+        }
+        if text == nil || ownerChanged || self.streamingAssistantText == nil {
+            self.streamingRetiredFinalIDs.removeAll()
+            self.streamingRetiredSource = nil
+        }
+        self.streamingAssistantRunID = owner
+        guard self.streamingAssistantText != text || ownerChanged else { return }
         self.streamingAssistantText = text
         self.scheduleStreamingAssistantDisplay(text)
+        if ownerChanged { self.markTimelineChanged() }
     }
 
     func applyStreamingAssistantDisplay(_ text: String?) {
-        guard self.displayedStreamingAssistantText != text else { return }
+        guard self.displayedStreamingAssistantTextUntracked != text else { return }
         // Compare both projections against current history: a durable row may have suppressed
         // the previous live words since the last stream update.
         let previousShape = self.streamingTextShape(self.displayedStreamingAssistantTextUntracked)
-        self.displayedStreamingAssistantText = text
+        // Keep the bubble's last words on a clear: emptied in its own observation scope, the bubble
+        // laid out at zero a pass before the transcript swapped in the final row, which collapsed
+        // the transcript and clamped the scroll offset to the top. The next run's words replace them.
+        if let text { self.displayedStreamingAssistantText = text }
         self.displayedStreamingAssistantTextUntracked = text
         guard self.streamingTextShape(text) != previousShape else { return }
         self.liveTextShape &+= 1
@@ -905,6 +930,7 @@ extension OpenClawChatViewModel {
         self.unreadPatchGuard.activate(key: self.sessionMutationIdentity(for: sessionKey))
         self.bootstrapGeneration &+= 1
         self.bootstrapTask?.cancel()
+        self.cancelHistoryInvalidationRefresh()
         self.isLoading = true
         self.errorText = nil
         self.invalidateSessionMetadataReadiness()
@@ -915,11 +941,13 @@ extension OpenClawChatViewModel {
         clearPendingRuns()
         self.clearStreamingActivity()
         self.updateActiveSessionRunWithoutChatSnapshot(false)
-        self.sessionId = nil
+        if self.historyDeltaCursor == nil { self.sessionId = nil }
+        // Session, route, and branch owners reset cursors; a same-session refresh retains its accepted tip.
         let historyRequest = self.beginHistoryRequest(captureLatestUserTurn: requestedSessionKey == nil)
         let context = BootstrapContext(
             id: bootstrapGeneration,
-            historyRequest: historyRequest)
+            historyRequest: historyRequest,
+            preservingHeldHistory: requestedSessionKey == nil && self.hasAppliedLiveHistory)
         let captureTask = Task { [weak self] in
             await self?.captureOutboxBranchState(for: context.session)
         }
@@ -945,87 +973,53 @@ extension OpenClawChatViewModel {
                 self.isLoading = false
             }
         }
-        do {
-            guard let capture = self.bootstrapOutboxBranchStateCapture,
-                  capture.generation == context.id
-            else { return }
-            let preBootstrapBranchState = await capture.task.value
-            guard self.isCurrentBootstrap(context) else { return }
-            async let branchRefresh = self.refreshSessionBranches(
-                for: context.session,
-                preBootstrapBranchState: preBootstrapBranchState)
+        guard let capture = self.bootstrapOutboxBranchStateCapture,
+              capture.generation == context.id
+        else { return }
+        let preBootstrapBranchState = await capture.task.value
+        guard self.isCurrentBootstrap(context) else { return }
+        async let branchRefresh = self.refreshSessionBranches(
+            for: context.session,
+            preBootstrapBranchState: preBootstrapBranchState)
 
-            await self.syncActiveSessionSubscription(startingWith: context.session.key)
-            guard self.isCurrentBootstrap(context) else { return }
+        await self.syncActiveSessionSubscription(startingWith: context.session.key)
+        guard self.isCurrentBootstrap(context) else { return }
 
-            Task { [weak self] in await self?.refreshQuestions() }
-            Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: context.session) }
+        Task { [weak self] in await self?.refreshQuestions() }
+        Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: context.session) }
 
-            let payload = try await transport.requestHistory(sessionKey: context.session.key)
-            guard self.isCurrentBootstrap(context) else { return }
-            _ = self.applyHistoryPayload(
-                payload,
-                for: context.historyRequest,
-                preservingOptimisticLocalMessages: false,
-                syncThinkingOptions: true)
-            _ = await branchRefresh
-            guard self.isCurrentBootstrap(context) else { return }
-            await pollHealthIfNeeded(
-                force: true,
-                sessionSnapshot: context.session,
-                refreshSessionsOnReconnect: false)
-            guard self.isCurrentBootstrap(context) else { return }
-            // A sidebar-selected row can sit outside the bootstrap's 50-row refresh.
-            // Retain its unread metadata until activation acknowledgement finishes.
-            let activationEntry = self.currentSessionEntry()
-            await self.fetchSessions(limit: 50, sessionSnapshot: context.session)
-            guard self.isCurrentBootstrap(context) else { return }
-            await self.markCurrentSessionReadAfterActivation(
-                context.session,
-                fallbackEntry: activationEntry)
-            guard self.isCurrentBootstrap(context) else { return }
-            await self.fetchModels(sessionSnapshot: context.session)
-            guard self.isCurrentBootstrap(context) else { return }
-            // An optional progress fetch may already have reported a required Gateway update.
-            if self.errorText != OpenClawChatTransportUpgradeMessage.progressCardAgentScope {
-                self.errorText = nil
-            }
-        } catch {
-            guard self.isCurrentBootstrap(context) else { return }
-            self.errorText = error.localizedDescription
-            chatUILogger.error("bootstrap failed \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
-    private func refreshRunStateAfterForeground() async {
-        if self.usesWebConversation { self.loadWebConversationChrome()
+        let history = await self.refreshHistory(
+            request: context.historyRequest,
+            policy: HistoryRefreshPolicy(
+                preservingOptimisticLocalMessages: context.preservingHeldHistory,
+                syncThinkingOptions: true))
+        guard self.isCurrentBootstrap(context) else { return }
+        guard history.applied else {
+            if let errorDescription = history.errorDescription { self.errorText = errorDescription }
             return
         }
-        let context = self.beginHistoryRequest()
-        let refresh = await refreshHistoryAfterRun(historyRequest: context)
-        guard self.isCurrentSession(context.session) else { return }
-        if refresh.applied,
-           refresh.runSnapshotApplied,
-           context.runOwnershipGeneration == self.runOwnershipGeneration,
-           !self.isSending,
-           refresh.supportsInFlightRunState,
-           !refresh.hasInFlightRun
-        {
-            if refresh.sessionHasActiveRun,
-               Self.hasUnansweredLatestUser(in: self.messages)
-            {
-                self.clearStreamingActivity()
-                // Keep a known run ID authoritative so its stream and terminal
-                // events still route here. Synthesize activity only after the
-                // client has no run identity to preserve.
-                self.updateActiveSessionRunWithoutChatSnapshot(self.pendingRuns.isEmpty)
-            } else {
-                self.updateActiveSessionRunWithoutChatSnapshot(false)
-                clearPendingRuns(hapticEvent: assistantHapticEventAfterLatestUser())
-                self.clearStreamingActivity()
-            }
+        _ = await branchRefresh
+        guard self.isCurrentBootstrap(context) else { return }
+        await pollHealthIfNeeded(
+            force: true,
+            sessionSnapshot: context.session,
+            refreshSessionsOnReconnect: false)
+        guard self.isCurrentBootstrap(context) else { return }
+        // A sidebar-selected row can sit outside the bootstrap's 50-row refresh.
+        // Retain its unread metadata until activation acknowledgement finishes.
+        let activationEntry = self.currentSessionEntry()
+        await self.fetchSessions(limit: 50, sessionSnapshot: context.session)
+        guard self.isCurrentBootstrap(context) else { return }
+        await self.markCurrentSessionReadAfterActivation(
+            context.session,
+            fallbackEntry: activationEntry)
+        guard self.isCurrentBootstrap(context) else { return }
+        await self.fetchModels(sessionSnapshot: context.session)
+        guard self.isCurrentBootstrap(context) else { return }
+        // An optional progress fetch may already have reported a required Gateway update.
+        if self.errorText != OpenClawChatTransportUpgradeMessage.progressCardAgentScope {
+            self.errorText = nil
         }
-        await pollHealthIfNeeded(force: true, sessionSnapshot: context.session)
     }
 
     private func performAbort() async {
@@ -1216,9 +1210,13 @@ extension OpenClawChatViewModel {
             return
         }
         self.deferredExternalSessionKey = nil
+        let preservesTranscript = self.canRetainTranscriptPresentation(
+            sessionKey: next,
+            agentID: nextAgentID ?? encodedAgentID ?? self.activeAgentId,
+            routingContract: self.sessionRoutingContract)
         self.prepareComposerForSessionSwitch(to: next, agentID: nextAgentID)
         self.advanceSessionGeneration()
-        self.clearSessionOwnedState()
+        self.clearSessionOwnedState(preservingTranscriptPresentation: preservesTranscript)
         if self.currentSessionSnapshot().deliveryAgentID != (nextAgentID ?? encodedAgentID ?? self.activeAgentId) {
             if self.sidebarData == nil { self.sessions = [] }
             self.hasAppliedLiveSessions = false
@@ -1269,7 +1267,12 @@ extension OpenClawChatViewModel {
     }
 
     /// Clears state owned by the current session/agent before a new identity can consume events.
-    func clearSessionOwnedState() {
+    func clearSessionOwnedState(preservingTranscriptPresentation: Bool = false) {
+        let retained = preservingTranscriptPresentation ? self.retainedTranscriptPresentation : []
+        if !preservingTranscriptPresentation { self.transcriptPresentationTarget = nil }
+        self.historyDeltaMessageIDs = []
+        self.historyRouteLocalUserEchoIDs = []
+        self.historyRequiresCanonicalReplacement = false
         self.resetSessionReactions()
         self.invalidateComposerCapabilities()
         self.modelSelectionID = Self.defaultModelSelectionID
@@ -1277,9 +1280,9 @@ extension OpenClawChatViewModel {
         self.invalidateModelChoices()
         self.modelSelectionPolicy = nil
         self.modelCatalogMessage = nil
-        replaceMessages([])
         self.narration = ChatNarration()
-        self.isShowingCachedTranscript = false
+        replaceMessages(retained)
+        self.isShowingCachedTranscript = !retained.isEmpty
         self.hasAppliedLiveHistory = false
         self.retainedActiveSession = nil
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
@@ -1319,6 +1322,7 @@ extension OpenClawChatViewModel {
         self.runMessageScopesByRunID.removeAll()
         self.provisionalFinalMessagesByID.removeAll()
         self.narration = ChatNarration()
+        self.invalidateHistoryCursor(replacingCanonicalHistory: true)
         self.startBootstrap()
     }
 
@@ -1358,6 +1362,7 @@ extension OpenClawChatViewModel {
 
         guard self.isCurrentSession(session) else { return }
         lastCompactAt = Date()
+        self.invalidateHistoryCursor(replacingCanonicalHistory: true)
         self.startBootstrap()
     }
 

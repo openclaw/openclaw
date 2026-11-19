@@ -1,6 +1,10 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { note } from "../../../../packages/terminal-core/src/note.js";
 import { listAgentEntries } from "../../../agents/agent-scope-config.js";
-import { createCronOwnerWriteRefusalError } from "../../../config/io.cron-owner-refusal.js";
+import {
+  canDeferRehearsalCronMigration,
+  createCronOwnerWriteRefusalError,
+} from "../../../config/io.cron-owner-refusal.js";
 import { resolveLegacyAgentRosterOwner } from "../../../config/legacy.roster.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import { resolveCronJobsStorePathFromConfig } from "../../../cron/store/paths.js";
@@ -23,6 +27,11 @@ export async function repairLegacyCronOwnersBeforeConfigWrite(params: {
     .map(resolveLegacyAgentRosterOwner)
     .find((owner) => owner !== undefined);
   if (!legacyOwner) {
+    return [];
+  }
+  // Old update drivers can lose the source selector. Their cron-disabled copy
+  // may validate a canonical roster, but must not guess which jobs to reassign.
+  if (await canDeferRehearsalCronMigration(source, params.snapshot.path, env)) {
     return [];
   }
   params.assertCurrent?.();
@@ -66,6 +75,9 @@ export async function repairLegacyCronOwnersBeforeConfigWrite(params: {
     legacyOwner,
   );
   assertCurrent();
+  if (result.warnings?.length) {
+    note(result.warnings.join("\n"), "Doctor warnings");
+  }
   return result.changed > 0
     ? [
         `Preserved ownership for ${result.changed} legacy cron job(s); unassigned jobs retain ${legacyOwner}.`,

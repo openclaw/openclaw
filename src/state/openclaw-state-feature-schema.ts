@@ -12,6 +12,8 @@ const featureLocalSql: Record<string, string> = {
   local_workspace_projections: [
     extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "local_workspace_projections"),
     extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "local_workspace_manifest_nodes"),
+    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "local_workspace_tree_packs"),
+    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "local_workspace_source_path_sets"),
   ].join("\n"),
   user_profiles: `
 CREATE TABLE IF NOT EXISTS user_profiles (
@@ -117,7 +119,12 @@ export function listOpenClawStateFeatureSchemas(): readonly OpenClawStateFeature
     return declarations;
   }
   const groups: Record<string, string[]> = {
-    local_workspace_projections: ["local_workspace_projections", "local_workspace_manifest_nodes"],
+    local_workspace_projections: [
+      "local_workspace_projections",
+      "local_workspace_manifest_nodes",
+      "local_workspace_tree_packs",
+      "local_workspace_source_path_sets",
+    ],
     user_profiles: ["user_profiles", "user_profile_emails", "user_profile_identities"],
     skill_library_entries: [
       "skill_library_entries",

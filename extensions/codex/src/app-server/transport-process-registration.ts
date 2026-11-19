@@ -1,11 +1,12 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { z } from "zod";
+import type { CodexStdioChild } from "./stdio-worker.js";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
 import {
   isDeadProcessState,
@@ -13,6 +14,10 @@ import {
   readCodexAppServerProcessCommand,
   readCodexAppServerProcessSnapshot,
 } from "./transport-process-snapshot.js";
+
+const loadPluginStateStoreRuntime = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/plugin-state-store-runtime"),
+);
 
 // Startup tolerates transient host load; signal containment retains its shorter budget.
 const PROCESS_REGISTRATION_INSPECTION_MS = 10_000;
@@ -54,8 +59,7 @@ function fingerprintProcessCommand(command: string): string {
 
 async function openProcessRegistrationStore() {
   const env = { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() };
-  const { createPluginStateKeyedStore } =
-    await import("openclaw/plugin-sdk/plugin-state-store-runtime");
+  const { createPluginStateKeyedStore } = await loadPluginStateStoreRuntime();
   return createPluginStateKeyedStore<ProcessRegistration>("codex", {
     namespace: "app-server-processes",
     maxEntries: 512,
@@ -159,7 +163,7 @@ export function createCodexAppServerProcessReaperService(): OpenClawPluginServic
 
 /** Reap previous owners before spawn; commit this child's identity before initialization. */
 export async function prepareCodexAppServerProcessRegistration(): Promise<
-  (child: ChildProcessWithoutNullStreams) => Promise<void>
+  (child: CodexStdioChild) => Promise<void>
 > {
   const store =
     process.platform === "win32" ? undefined : await reapRegisteredCodexAppServerOrphans();

@@ -105,18 +105,19 @@ export function freezeTrustedJsonSnapshot<T>(value: T): T {
   if (!value || typeof value !== "object" || deeplyFrozenPlainData.has(value)) {
     return value;
   }
+  Object.freeze(value);
+  deeplyFrozenPlainData.add(value);
+  frozenPlainDataAdmissions++;
   const pending: object[] = [value];
   while (pending.length) {
     const candidate = pending.pop()!;
-    if (deeplyFrozenPlainData.has(candidate)) {
-      continue;
-    }
-    Object.freeze(candidate);
-    deeplyFrozenPlainData.add(candidate);
-    frozenPlainDataAdmissions++;
     for (const key in candidate) {
       const child: unknown = Reflect.get(candidate, key);
-      if (child && typeof child === "object") {
+      if (child && typeof child === "object" && !deeplyFrozenPlainData.has(child)) {
+        // Admit before queuing so shared frozen tails and cycles need no work item.
+        Object.freeze(child);
+        deeplyFrozenPlainData.add(child);
+        frozenPlainDataAdmissions++;
         pending.push(child);
       }
     }

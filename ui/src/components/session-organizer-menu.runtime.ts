@@ -25,12 +25,61 @@ type SidebarSessionAction = Exclude<
   }
 >;
 
+// Pending work is scoped to the organizer and Gateway client, and loaded only with menus.
+const pendingNestedSessions = new WeakMap<
+  SessionOrganizer,
+  WeakMap<SidebarSessionMutationScope["client"], Set<string>>
+>();
+
+export function isCreatingNestedSession(
+  organizer: SessionOrganizer,
+  client: SidebarSessionMutationScope["client"] | null | undefined,
+  key: string,
+): boolean {
+  return Boolean(client && pendingNestedSessions.get(organizer)?.get(client)?.has(key));
+}
+
+export function createNestedSession(
+  organizer: SessionOrganizer,
+  session: SidebarRecentSession,
+): Promise<void> {
+  let pendingByClient = pendingNestedSessions.get(organizer);
+  if (!pendingByClient) {
+    pendingByClient = new WeakMap();
+    pendingNestedSessions.set(organizer, pendingByClient);
+  }
+  const clients = pendingByClient;
+  return organizer.runOperation(async (operations, scope) => {
+    let pending = clients.get(scope.client);
+    if (!pending) {
+      pending = new Set();
+      clients.set(scope.client, pending);
+    }
+    if (pending.has(session.key)) {
+      return;
+    }
+    pending.add(session.key);
+    organizer.notify();
+    try {
+      await operations.createChildSession(organizer.deps, session, scope, { fork: false });
+    } finally {
+      pending.delete(session.key);
+      organizer.notify();
+    }
+  });
+}
+
 export async function runSessionAction(
   organizer: SessionOrganizer,
   session: SidebarRecentSession,
   action: SidebarSessionAction,
 ): Promise<unknown> {
   switch (action.kind) {
+    case "rename":
+      return organizer.runOperation(
+        (operations, scope) => operations.renameSession(organizer.deps, session, scope),
+        true,
+      );
     case "toggle-pin":
       return organizer.setPersonalSessionPin(
         session.key,
@@ -41,13 +90,13 @@ export async function runSessionAction(
         ? runBatchSessionAction(organizer, action, [session], true)
         : organizer.patchSession(session, { unread: !session.unread }, { sessionScope: true });
     case "set-color":
-      return organizer.patchSession(session, { color: action.color });
+      return organizer.patchSession(session, { color: action.color }, { sessionScope: true });
     case "set-icon":
-      return organizer.patchSession(session, { icon: action.icon });
+      return organizer.patchSession(session, { icon: action.icon }, { sessionScope: true });
     case "set-communication":
       return organizer.patchSession(session, { communication: action.communication });
     case "reset-appearance":
-      return organizer.patchSession(session, { icon: null, color: null });
+      return organizer.patchSession(session, { icon: null, color: null }, { sessionScope: true });
     case "toggle-involving-me": {
       const hidden = !session.hiddenFromInvolvingMe;
       return organizer.runOperation((operations, scope) =>
@@ -70,28 +119,23 @@ export async function runSessionAction(
         ? organizer.patchSession(session, { archived: false }, { sessionScope: true })
         : organizer.archiveSessionWithUndo(session);
     default:
-      return organizer.runOperation(
-        (operations, scope) => {
-          switch (action.kind) {
-            case "rename":
-              return operations.renameSession(organizer.deps, session, scope);
-            case "assign-owner":
-              return operations.assignSessionOwner(organizer.deps, session, action.owner, scope);
-            case "fork":
-              return operations.forkSession(organizer.deps, session, scope);
-            case "snooze":
-              return operations.snoozeSessionWithUndo(organizer.deps, session, action, scope);
-            case "stop-cloud-worker":
-              return operations.stopCloudWorker(organizer.deps, session, scope);
-            case "delete":
-              // Only the sidebar offers the delete-confirm opt-out.
-              return operations.deleteSession(organizer.deps, session, scope, { offerSkip: true });
-            default:
-              return action satisfies never;
-          }
-        },
-        action.kind === "rename" || action.kind === "delete",
-      );
+      return organizer.runOperation((operations, scope) => {
+        switch (action.kind) {
+          case "assign-owner":
+            return operations.assignSessionOwner(organizer.deps, session, action.owner, scope);
+          case "fork":
+            return operations.createChildSession(organizer.deps, session, scope, { fork: true });
+          case "snooze":
+            return operations.snoozeSessionWithUndo(organizer.deps, session, action, scope);
+          case "stop-cloud-worker":
+            return operations.stopCloudWorker(organizer.deps, session, scope);
+          case "delete":
+            // Only the sidebar offers the delete-confirm opt-out.
+            return operations.deleteSession(organizer.deps, session, scope, { offerSkip: true });
+          default:
+            return action satisfies never;
+        }
+      }, action.kind === "delete");
   }
 }
 
@@ -199,6 +243,9 @@ export function setSessionsGrouping(
   organizer: SessionOrganizer,
   grouping: SidebarSessionsGrouping,
 ) {
+  if (organizer.deps.sessionsGrouping !== grouping) {
+    organizer.deps.releaseSidebarSnapshot();
+  }
   organizer.deps.sessionsGrouping = grouping;
   storeSidebarSessionsGrouping(grouping);
   organizer.notify();

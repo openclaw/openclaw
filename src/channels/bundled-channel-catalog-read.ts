@@ -52,9 +52,7 @@ function readBundledExtensionCatalogEntriesSync(
 }
 
 function readOfficialCatalogFileSync(): ChannelCatalogEntryLike[] {
-  const bundledExternalEntries = BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES.filter(
-    (entry): entry is ChannelCatalogEntryLike => typeof entry === "object" && entry !== null,
-  );
+  const bundledExternalEntries = [...BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES];
   for (const packageRoot of listPackageRoots()) {
     const candidate = path.join(packageRoot, OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH);
     const payload = readPluginCacheJsonFile(candidate);

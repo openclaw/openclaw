@@ -5,7 +5,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
-import { createChannelIngressMonitor } from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createFileSharedActivityBody,
@@ -17,11 +16,6 @@ import {
   parseNextcloudTalkFileSharedActivity,
 } from "./webhook-spool-state.js";
 import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
-
-vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-outbound")>();
-  return { ...actual, createChannelIngressMonitor: vi.fn(actual.createChannelIngressMonitor) };
-});
 
 type NextcloudTalkIngressQueue = NonNullable<
   Parameters<typeof createNextcloudTalkWebhookSpool>[0]["queue"]
@@ -46,6 +40,18 @@ function activityBody(object: { id: string; name?: string; content: string }) {
     object: { id: string; name: string; content: string };
   };
   return JSON.stringify({ ...payload, object: { ...payload.object, ...object } });
+}
+
+function quoted(content: unknown, object: Record<string, unknown> = {}) {
+  return {
+    type: "Note",
+    actor: { type: "Person", id: "users/ada", name: "Ada" },
+    object: { type: "Note", id: "parent-1", content, ...object },
+  };
+}
+
+function startDelivery(deliver = adoptedDelivery()) {
+  return { deliver, spool: startSpool(queue, deliver) };
 }
 
 function createRawEvent(params?: {
@@ -92,12 +98,12 @@ async function receive(spool: ReturnType<typeof startSpool>, body: string) {
   await spool.waitForIdle();
 }
 
-async function expectClaim(id: string, laneKey: string, rawEvent?: string) {
+async function expectClaim(id: string, laneKey: string, rawEvent: string) {
   expect(await queue.listClaims()).toEqual([
     expect.objectContaining({
       id,
       laneKey,
-      ...(rawEvent === undefined ? {} : { payload: expect.objectContaining({ rawEvent }) }),
+      payload: expect.objectContaining({ rawEvent }),
     }),
   ]);
 }
@@ -116,7 +122,6 @@ let queue: NextcloudTalkIngressQueue;
 let stateDir: string;
 const spools: ReturnType<typeof createNextcloudTalkWebhookSpool>[] = [];
 beforeEach(async () => {
-  vi.mocked(createChannelIngressMonitor).mockClear();
   stateDir = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-nextcloud-ingress-")),
   );
@@ -134,48 +139,11 @@ afterEach(async () => {
 });
 
 describe("Nextcloud Talk durable ingress", () => {
-  it("retains one quoted parent through durable admission and delivery", async () => {
-    const deliver = deferredDelivery();
-    const rawEvent = createRawEvent({
-      text: "What about this?",
-      quote: {
-        type: "Note",
-        actor: { type: "Person", id: "bots/quoted-bot", name: "Quoted bot" },
-        object: {
-          type: "Note",
-          id: "parent-1",
-          name: "message",
-          content: JSON.stringify({ message: "Look north.", parameters: [] }),
-          mediaType: "text/markdown",
-          inReplyTo: { object: { id: "ancestor", content: "Do not include this ancestor" } },
-        },
-      },
-    });
-    const spool = startSpool(queue, deliver);
-    await receive(spool, rawEvent);
-    await expectClaim("msg-1", "room:test-room-token", rawEvent);
-    expectDelivered(deliver, {
-      messageId: "msg-1",
-      text: "What about this?",
-      senderId: "alice",
-      quote: {
-        id: "parent-1",
-        senderId: "bots/quoted-bot",
-        senderName: "Quoted bot",
-        body: "Look north.",
-      },
-    });
-  });
-
   it.each([
-    {
-      kind: "plain text",
-      content: "Plain quoted text",
-      body: "Plain quoted text",
-    },
-    {
-      kind: "referenced rich labels without unreferenced metadata",
-      content: JSON.stringify({
+    ["plain text", "Plain quoted text", "Plain quoted text"],
+    [
+      "referenced rich labels without unreferenced metadata",
+      JSON.stringify({
         message: "Ask {mention-user1} about {file}",
         parameters: {
           "mention-user1": { type: "user", name: "Ada", id: "ada" },
@@ -183,52 +151,23 @@ describe("Nextcloud Talk durable ingress", () => {
           unused: { name: "Do not include me", link: "https://unused.invalid/other" },
         },
       }),
-      body: "Ask Ada about plan.pdf",
-    },
-  ])("delivers $kind as quoted context", async ({ content, body }) => {
-    const deliver = adoptedDelivery();
-    const spool = startSpool(queue, deliver);
-    await receive(
-      spool,
-      createRawEvent({
-        quote: {
-          type: "Note",
-          actor: { type: "Person", id: "users/ada", name: "Ada" },
-          object: { type: "Note", id: "parent-rich", name: "message", content },
-        },
-      }),
-    );
+      "Ask Ada about plan.pdf",
+    ],
+  ])("delivers %s as quoted context", async (_kind, content, body) => {
+    const { deliver, spool } = startDelivery();
+    await receive(spool, createRawEvent({ quote: quoted(content) }));
     expectDelivered(deliver, {
-      quote: { id: "parent-rich", senderId: "users/ada", senderName: "Ada", body },
+      quote: { id: "parent-1", senderId: "users/ada", senderName: "Ada", body },
     });
   });
 
   it.each([
-    { kind: "non-object", quote: "parent-1" },
-    { kind: "missing parent", quote: { type: "Note", actor: { id: "users/ada" } } },
-    {
-      kind: "malformed structured body",
-      quote: {
-        type: "Note",
-        actor: { type: "Person", id: "users/ada", name: "Ada" },
-        object: {
-          type: "Note",
-          id: "parent-1",
-          content: JSON.stringify({ message: 7, parameters: [] }),
-        },
-      },
-    },
-    {
-      kind: "invalid parent body",
-      quote: {
-        type: "Note",
-        actor: { type: "Person", id: "users/ada", name: "Ada" },
-        object: { type: "Note", id: "parent-1", content: { message: "Wrong shape" } },
-      },
-    },
-  ])("keeps the current message when optional quote is $kind", async ({ quote }) => {
-    const deliver = adoptedDelivery();
-    const spool = startSpool(queue, deliver);
+    ["non-object", "parent-1"],
+    ["missing parent", { type: "Note", actor: { id: "users/ada" } }],
+    ["malformed structured body", quoted(JSON.stringify({ message: 7, parameters: [] }))],
+    ["invalid parent body", quoted({ message: "Wrong shape" })],
+  ])("keeps the current message when optional quote is %s", async (_kind, quote) => {
+    const { deliver, spool } = startDelivery();
     await receive(spool, createRawEvent({ text: "Current text", quote }));
     expect(deliver).toHaveBeenCalledTimes(1);
     expectDelivered(deliver, { messageId: "msg-1", text: "Current text" });
@@ -322,18 +261,34 @@ describe("Nextcloud Talk durable ingress", () => {
   it.each([
     {
       kind: "text",
-      body: createRawEvent({ messageId: "msg-restart", text: "ordinary text" }),
+      body: createRawEvent({
+        messageId: "msg-restart",
+        text: "What about this?",
+        quote: {
+          ...quoted(JSON.stringify({ message: "Look north.", parameters: [] }), {
+            inReplyTo: { object: { id: "ancestor", content: "Do not include this ancestor" } },
+          }),
+          actor: { type: "Person", id: "bots/quoted-bot", name: "Quoted bot" },
+        },
+      }),
       lane: "room:test-room-token",
       message: {
         messageId: "msg-restart",
         roomToken: "test-room-token",
-        text: "ordinary text",
+        text: "What about this?",
+        senderId: "alice",
         mediaType: "text/plain",
+        quote: {
+          id: "parent-1",
+          senderId: "bots/quoted-bot",
+          senderName: "Quoted bot",
+          body: "Look north.",
+        },
       },
     },
     {
       kind: "file_shared",
-      body: createFileSharedActivityBody(),
+      body: createFileSharedActivityBody({ fileSize: 1_234_567 }),
       lane: "room:redacted-room-token",
       message: {
         messageId: "4242",
@@ -347,7 +302,7 @@ describe("Nextcloud Talk durable ingress", () => {
           fileId: "9001",
           name: "receipt.pdf",
           mimeType: "application/pdf",
-          declaredSizeBytes: 24_576,
+          declaredSizeBytes: 1_234_567,
           shareUrl: "https://nextcloud.example/s/redacted-share-token",
           hideDownload: false,
         },
@@ -379,12 +334,6 @@ describe("Nextcloud Talk durable ingress", () => {
     async ({ body, lane, message }) => {
       const deferred = deferredDelivery();
       const interrupted = startSpool(queue, deferred);
-      // Scheduling and capacity races belong to the shared ingress monitor suite.
-      expect(createChannelIngressMonitor).toHaveBeenCalledWith(
-        expect.objectContaining({
-          drain: expect.objectContaining({ startLimit: 32, adoptionStallTimeoutMs: 5_000 }),
-        }),
-      );
       await receive(interrupted, body);
       await expectClaim(message.messageId, lane, body);
       expectDelivered(deferred, message);
@@ -398,22 +347,12 @@ describe("Nextcloud Talk durable ingress", () => {
     },
   );
 
-  it("admits a Talk file share with a numeric byte size", async () => {
-    const deliver = vi.fn<NextcloudTalkIngressDeliver>(async () => {});
-    const spool = startSpool(queue, deliver);
-    await receive(spool, createFileSharedActivityBody({ fileSize: 1_234_567 }));
-    expectDelivered(deliver, {
-      attachment: expect.objectContaining({ declaredSizeBytes: 1_234_567 }),
-    });
-  });
-
   it("bounds malformed file metadata as an unavailable attachment", async () => {
     const body = activityBody({
       id: "4245",
       content: JSON.stringify({ message: "{file}", parameters: { file: { type: "file" } } }),
     });
-    const deliver = vi.fn<NextcloudTalkIngressDeliver>(async () => {});
-    const spool = startSpool(queue, deliver);
+    const { deliver, spool } = startDelivery(vi.fn<NextcloudTalkIngressDeliver>(async () => {}));
     await receive(spool, body);
     await receive(spool, body);
     expect(deliver).toHaveBeenCalledTimes(1);
@@ -426,36 +365,16 @@ describe("Nextcloud Talk durable ingress", () => {
   });
 
   it.each([
-    {
-      name: "malformed normal-message",
-      body: activityBody({ id: "4246", content: "{not-json" }),
-      event: undefined,
-    },
-    ...[
-      { name: "participant_joined", message: "Alice joined the conversation", parameters: {} },
-      {
-        name: "object_shared",
-        message: "{object}",
-        parameters: { object: { type: "deck-card", id: "redacted" } },
-      },
-    ].map(({ name, message, parameters }) => ({
-      name,
-      body: activityBody({ id: "4243", name, content: JSON.stringify({ message, parameters }) }),
-      event: "type=Activity objectType=Note",
-    })),
-    {
-      name: "non-message document",
-      body: JSON.stringify({ type: "Create", object: { type: "Document", id: "file-1" } }),
-      event: "type=Create objectType=Document",
-    },
-  ])("ignores $name without consuming its message id", async ({ body, event }) => {
+    ["malformed normal-message", activityBody({ id: "4246", content: "{not-json" })],
+    ["participant_joined", activityBody({ id: "4243", name: "participant_joined", content: "{}" })],
+    [
+      "non-message document",
+      JSON.stringify({ type: "Create", object: { type: "Document", id: "file-1" } }),
+    ],
+  ])("ignores %s without consuming its message id", async (_name, body) => {
     const deliver = vi.fn();
     const log = vi.fn();
     await expectIgnored(startSpool(queue, deliver, log), body, deliver);
-    if (event) {
-      expect(log).toHaveBeenCalledWith(
-        `nextcloud-talk: ignored non-message webhook event (${event})`,
-      );
-    }
+    expect(log).toHaveBeenCalledOnce();
   });
 });

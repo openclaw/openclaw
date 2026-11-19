@@ -18,6 +18,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
 import {
   resultFixture,
   stepFixture,
@@ -36,11 +37,7 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
 });
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(cleanupUpdateCommandTest);
 
 function fixture(
   existingRunId?: string,
@@ -76,12 +73,8 @@ function fixture(
     },
     databasePath: resolveOpenClawStateSqlitePath(env),
     write(sql: string, ...values: (string | number)[]) {
-      const db = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
-      try {
-        db.prepare(sql).run(...values);
-      } finally {
-        db.close();
-      }
+      using db = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
+      db.prepare(sql).run(...values);
     },
     capture: (candidate = result) =>
       captureUpdateCommandTerminalRecord(params, candidate, assertCurrent),
@@ -186,10 +179,12 @@ describe("owned completed update publication", () => {
     const before = fs.readFileSync(f.databasePath);
     f.release();
     const snapshotOwners: Array<string | undefined> = [];
-    vi.spyOn(snapshot, "prepareSqliteReadOnlyLocationSync").mockImplementation(() => {
-      snapshotOwners.push(captureGatewayStateOwner(f.databasePath)?.role);
-      throw new Error("live database is changing");
-    });
+    const snapshotRead = vi
+      .spyOn(snapshot, "prepareSqliteReadOnlyLocationSync")
+      .mockImplementation(() => {
+        snapshotOwners.push(captureGatewayStateOwner(f.databasePath)?.role);
+        throw new Error("live database is changing");
+      });
     const reportPath = path.join(root, "update-reports", `${f.run.runId}.md`);
     let savedAtPublication: string | undefined;
     const captureReport = () => {
@@ -218,9 +213,16 @@ describe("owned completed update publication", () => {
     );
     expect(jsonOutput.mock.calls[0]?.[0]).not.toHaveProperty("captured");
     // A historical report is not permission for the next update to skip admission.
-    await expect(assertUpdateRecoveryAdmission({ env: f.run.env })).rejects.toThrow(
-      "live database is changing",
+    snapshotRead.mockRestore();
+    f.write(
+      "INSERT INTO config_machine_state(state_key, value_json, updated_at_ms) VALUES(?, ?, ?)",
+      `update.recovery.${f.run.runId}`,
+      "{}",
+      Date.now(),
     );
+    await expect(assertUpdateRecoveryAdmission({ env: f.run.env })).rejects.toMatchObject({
+      name: "ZodError",
+    });
   });
 
   it.each([

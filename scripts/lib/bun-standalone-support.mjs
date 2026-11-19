@@ -280,9 +280,9 @@ export async function compileStandaloneArtifacts({
     try {
       if (artifact.mode === "aot" && compileAot) {
         await compileAot({ outfile: path.join(artifact.outputRoot, "openclaw"), buildInfo });
-      } else if (artifact.mode === "aot") {
-        // Trim feature retention is API-only; keep native compilation in a child process.
-        const driver = path.join(artifact.outputRoot, "compile-aot.mjs");
+      } else {
+        // Keep the module inventory out of argv and native compilation in a child process.
+        const driver = path.join(artifact.outputRoot, "compile-standalone.mjs");
         const options = {
           entrypoints: [
             mainEntry,
@@ -293,10 +293,10 @@ export async function compileStandaloneArtifacts({
           splitting: true,
           format: "esm",
           external,
+          ...(artifact.mode === "bytecode" ? { bytecode: true } : {}),
           compile: {
             outfile: path.join(artifact.outputRoot, "openclaw"),
-            aot: true,
-            ...aotCompileOptions,
+            ...(artifact.mode === "aot" ? { aot: true, ...aotCompileOptions } : {}),
             autoloadPackageJson: true,
             autoloadDotenv: false,
             autoloadBunfig: false,
@@ -321,34 +321,6 @@ export async function compileStandaloneArtifacts({
           }
         } finally {
           fs.unlinkSync(driver);
-        }
-      } else {
-        const compiled = spawnSync(
-          bunExecutable,
-          [
-            "build",
-            "--compile",
-            "--splitting",
-            "--format=esm",
-            `--root=${compileRoot}`,
-            "--compile-autoload-package-json",
-            "--no-compile-autoload-dotenv",
-            "--no-compile-autoload-bunfig",
-            ...artifact.compileFlags,
-            ...external.map((specifier) => `--external=${specifier}`),
-            path.relative(compileCwd, mainEntry),
-            ...compiledEntries
-              .filter((entry) => entry !== mainEntry && compileEntries.has(entry))
-              .map((entry) => path.relative(compileCwd, entry)),
-            `--outfile=${path.join(artifact.outputRoot, "openclaw")}`,
-          ],
-          { stdio: "inherit", cwd: compileCwd },
-        );
-        if (compiled.error) {
-          throw compiled.error;
-        }
-        if (compiled.status !== 0) {
-          throw new Error(`Standalone ${artifact.flavor} compilation failed (${compiled.status})`);
         }
       }
       if (artifact.flavor === "support") {

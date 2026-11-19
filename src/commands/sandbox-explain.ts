@@ -4,6 +4,7 @@ import {
   normalizeStringifiedEntries,
 } from "@openclaw/normalization-core/string-coerce";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import {
   resolveAgentConfig,
@@ -18,7 +19,8 @@ import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
-import { normalizeAnyChannelId } from "../channels/registry.js";
+import { normalizeAnyChannelId, normalizeChatChannelId } from "../channels/registry.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveAgentMainSessionKey, resolveSessionStorePathCore } from "../config/sessions.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -41,6 +43,12 @@ type SandboxExplainOptions = {
 
 const SANDBOX_DOCS_URL = "https://docs.openclaw.ai/sandbox";
 
+// `sandbox explain` runs in CLI processes whose plugin registry is scoped to
+// sandbox backends and is often empty, so bundled channels must resolve without
+// runtime channel plugin registration.
+const resolveExplainChannelId = (candidate?: string | null): string | undefined =>
+  normalizeAnyChannelId(candidate) ?? normalizeChatChannelId(candidate) ?? undefined;
+
 export async function sandboxExplainCommand(
   opts: SandboxExplainOptions,
   runtime: RuntimeEnv,
@@ -50,7 +58,7 @@ export async function sandboxExplainCommand(
   const requestedSession = opts.session?.trim();
   const requestedAgent = opts.agent?.trim();
   if (opts.agent !== undefined && !requestedAgent) {
-    throw new Error("--agent must not be blank");
+    throwExpectedCliError("--agent must not be blank");
   }
   const requestedAgentId = requestedAgent ? normalizeAgentId(requestedAgent) : undefined;
   if (requestedAgentId) {
@@ -163,7 +171,7 @@ export async function sandboxExplainCommand(
   let channel: string | undefined =
     normalizedCandidate === INTERNAL_MESSAGE_CHANNEL
       ? INTERNAL_MESSAGE_CHANNEL
-      : (normalizeAnyChannelId(normalizedCandidate) ?? undefined);
+      : resolveExplainChannelId(normalizedCandidate);
   if (channel === undefined) {
     const parsed = parseAgentSessionKey(sessionKey);
     if (parsed) {
@@ -177,7 +185,7 @@ export async function sandboxExplainCommand(
           channel =
             candidate === INTERNAL_MESSAGE_CHANNEL
               ? INTERNAL_MESSAGE_CHANNEL
-              : (normalizeAnyChannelId(candidate) ?? undefined);
+              : resolveExplainChannelId(candidate);
         }
       }
     }
@@ -285,7 +293,7 @@ export async function sandboxExplainCommand(
   const rich = isRich();
   const heading = (value: string) => colorize(rich, theme.heading, value);
   const key = (value: string) => colorize(rich, theme.muted, value);
-  const value = (val: string) => colorize(rich, theme.info, val);
+  const value = (val: string) => colorize(rich, theme.info, terminalText`${val}`);
   const ok = (val: string) => colorize(rich, theme.success, val);
   const warn = (val: string) => colorize(rich, theme.warn, val);
   const err = (val: string) => colorize(rich, theme.error, val);
@@ -314,17 +322,17 @@ export async function sandboxExplainCommand(
       lines.push(
         `    - ${value(mount.hostRoot)} -> ${value(mount.containerRoot)} ${key(
           mount.writable ? "rw" : "ro",
-        )} ${key(`(${mount.source})`)}`,
+        )} ${key(terminalText`(${mount.source})`)}`,
       );
     }
   }
   lines.push(
     "",
     heading("Sandbox tool policy:"),
-    `  ${key(`allow (${payload.sandbox.tools.sources.allow.source}):`)} ${value(
+    `  ${key(terminalText`allow (${payload.sandbox.tools.sources.allow.source}):`)} ${value(
       payload.sandbox.tools.allow.join(", ") || "(empty)",
     )}`,
-    `  ${key(`deny  (${payload.sandbox.tools.sources.deny.source}):`)} ${value(
+    `  ${key(terminalText`deny  (${payload.sandbox.tools.sources.deny.source}):`)} ${value(
       payload.sandbox.tools.deny.join(", ") || "(empty)",
     )}`,
     "",
@@ -336,7 +344,7 @@ export async function sandboxExplainCommand(
   if (payload.elevated.failures.length > 0) {
     lines.push(
       `  ${key("failing gates:")} ${warn(
-        payload.elevated.failures.map((f) => `${f.gate} (${f.key})`).join(", "),
+        terminalText`${payload.elevated.failures.map((f) => `${f.gate} (${f.key})`).join(", ")}`,
       )}`,
     );
   }
@@ -350,7 +358,7 @@ export async function sandboxExplainCommand(
   }
   lines.push("", heading("Fix-it:"));
   for (const keyLocal of payload.fixIt) {
-    lines.push(`  - ${keyLocal}`);
+    lines.push(terminalText`  - ${keyLocal}`);
   }
   lines.push("", `${key("Docs:")} ${formatDocsLink("/sandbox", "docs.openclaw.ai/sandbox")}`);
 

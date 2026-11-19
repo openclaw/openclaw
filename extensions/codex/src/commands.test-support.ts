@@ -20,15 +20,17 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
+  cleanupSessionStateForTest,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, expect, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
 import * as computerUse from "./app-server/computer-use.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
 import * as models from "./app-server/models.js";
+import type { JsonValue } from "./app-server/protocol.js";
 import type { CodexAppServerThreadBinding } from "./app-server/session-binding.js";
 import {
   buildCodexSupervisionTestConnectionFingerprint,
@@ -46,10 +48,43 @@ import * as commandRpc from "./command-rpc.js";
 import * as conversationBindingData from "./conversation-binding-data.js";
 import * as conversationControl from "./conversation-control.js";
 
-async function cleanupCodexState(restoreMocks = false) {
-  await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
-  if (restoreMocks) {
+export function skillEntry(name: string, cwd = "/repo-a", enabled = true, description = "") {
+  return {
+    name,
+    enabled,
+    description,
+    path: `${cwd}/.codex/skills/${name}/SKILL.md`,
+    scope: "repo" as const,
+  };
+}
+
+export function modelEntry(id: string) {
+  return {
+    id,
+    model: id,
+    inputModalities: ["text" as const],
+    supportedReasoningEfforts: ["medium" as const],
+  };
+}
+
+export const skillGroup = <S extends JsonValue, E extends JsonValue = never>(
+  cwd: string,
+  skills: S[],
+  errors: E[] = [],
+) => ({
+  cwd,
+  skills,
+  errors,
+});
+
+async function cleanupCodexState(options: { restoreMocks?: boolean; stateDir?: string } = {}) {
+  if (options.stateDir) {
+    await cleanupSessionStateForTest({ stateDir: options.stateDir });
+  } else {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+  }
+  if (options.restoreMocks) {
     vi.restoreAllMocks();
   }
   clearRuntimeAuthProfileStoreSnapshots();
@@ -92,7 +127,7 @@ export function useCodexControlTestState(options: {
       resetPluginRuntimeStateForTest();
     }
     options.cleanup();
-    await cleanupCodexState(options.restoreMocks);
+    await cleanupCodexState({ restoreMocks: options.restoreMocks });
     await fs.rm(root, { recursive: true, force: true });
   });
 }
@@ -101,6 +136,7 @@ export function useCodexCommandTestState(options: {
   onSetup: (tempDir: string) => void;
   beforeCleanup?: () => void;
 }): void {
+  let tempDir: string;
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(async () => {
       options.beforeCleanup?.();
@@ -110,17 +146,22 @@ export function useCodexCommandTestState(options: {
       codexDiagnosticsFeedbackState.pendingConfirmations.clear();
       codexDiagnosticsFeedbackState.pendingTokensByScope.clear();
       resetSharedCodexAppServerClientForTests();
-      await cleanupCodexState();
+      await cleanupCodexState({ stateDir: tempDir });
       cleanup();
     }),
   );
 
   beforeEach(() => {
     resetCodexTestBindingStore();
-    const tempDir = tempDirs.make("openclaw-codex-command-");
+    tempDir = tempDirs.make("openclaw-codex-command-");
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
     setRuntimeConfigSnapshot({});
     options.onSetup(tempDir);
+  });
+  afterAll(async () => {
+    // Cases release their databases; the file owns the retained worker code.
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
   });
 }
 
@@ -278,7 +319,7 @@ function ensureCodexCommandMocks(): void {
   );
 }
 
-export function installCodexCommandMocks(deps: CodexCommandDeps): CodexCommandHost {
+function installCodexCommandMocks(deps: CodexCommandDeps): CodexCommandHost {
   ensureCodexCommandMocks();
   // Direct command-handler fixtures install once per test, outside a dispatch scope.
   if (!commandFixture.getStore()) {

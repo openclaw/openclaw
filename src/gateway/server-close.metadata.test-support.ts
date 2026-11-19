@@ -26,11 +26,7 @@ import "./server-reload-managed.js";
 
 export async function createGatewayMetadataCloseFixture(label: string) {
   const original = captureActivePluginRegistrySnapshot();
-  const state = await createOpenClawTestState({
-    label,
-    layout: "home",
-    env: KERNEL_TEST_ENV,
-  });
+  const state = await createOpenClawTestState({ label, layout: "home", env: KERNEL_TEST_ENV });
   const pluginId = "metadata-fixture";
   const rootDir = state.path(pluginId);
   await fs.mkdir(rootDir);
@@ -194,8 +190,6 @@ export async function createGatewayMetadataCloseFixture(label: string) {
         auditFactory.mockRestore();
       }
     },
-  };
-  return Object.assign(fixture, {
     async startServer() {
       const port = await reservePort();
       const server = await fixture.start(port);
@@ -203,7 +197,8 @@ export async function createGatewayMetadataCloseFixture(label: string) {
       assert(kernel);
       return { server, kernel, port };
     },
-  });
+  };
+  return fixture;
 }
 
 export async function createIncognitoCloseSession(

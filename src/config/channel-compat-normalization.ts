@@ -262,7 +262,7 @@ function seedMaterializedAccountStreaming(params: {
   const rootFlat = params.rootFlat ?? {};
   // Root-first base for the merged-entry slots plus inherited root extras
   // (progress, preview.toolProgress, ...). Account values fill the gaps.
-  const seeded = { ...structuredClone(rootNested) };
+  const seeded = structuredClone(rootNested);
   // Root migration can restore mode from scalar aliases; inherit that intent too.
   for (const source of [created, rootFlat, params.rootAfter]) {
     mergeMissing(seeded, structuredClone(source));

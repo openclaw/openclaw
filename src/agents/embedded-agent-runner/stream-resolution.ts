@@ -1,11 +1,11 @@
 import type { LlmRuntime } from "@openclaw/ai";
 import { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
-import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
+import { createSystemPromptCacheBoundaryStripper } from "@openclaw/ai/internal/shared";
 import { createBoundaryAwareStreamFnForModel } from "@openclaw/ai/transports";
 import { hasNonEmptyString as hasResolvedRuntimeApiKey } from "@openclaw/normalization-core/string-coerce";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { admitProviderRateLimitStream } from "../../llm/provider-rate-limit-stream.js";
-import "../ai-transport-runtime-host.js";
+import { configureAiTransportRuntimeHost } from "../ai-transport-runtime-host.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
@@ -100,6 +100,7 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
   /** Attaches the run credential when the selected transport sends it. */
   wrapApiKey: (streamFn: StreamFn) => StreamFn;
 } {
+  configureAiTransportRuntimeHost();
   const llmRuntime = params.llmRuntime ?? getStreamLlmRuntime(params.currentStreamFn);
   if (!llmRuntime) {
     throw new Error("Embedded stream has no lifecycle runtime owner.");
@@ -128,10 +129,6 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
   });
   // Vertex and session-owned streams resolve their own auth.
   const keepStreamAuth = (streamFn: StreamFn) => streamFn;
-  const stripCacheBoundary = (context: Parameters<StreamFn>[1]) =>
-    context.systemPrompt
-      ? { ...context, systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt) }
-      : context;
   if (params.providerStreamFn) {
     // Provider stream creation owns the plugin's cache-boundary capability.
     return wrapCredentialedStream(params.providerStreamFn, wrapOptions, "provider");
@@ -163,7 +160,11 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
   ) {
     return wrapCredentialedStream(
       currentStreamFn,
-      { ...wrapOptions, sessionId: params.sessionId, transformContext: stripCacheBoundary },
+      {
+        ...wrapOptions,
+        sessionId: params.sessionId,
+        transformContext: createSystemPromptCacheBoundaryStripper(),
+      },
       "openclaw-native-codex-responses",
     );
   }

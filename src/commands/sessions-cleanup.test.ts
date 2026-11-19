@@ -4,6 +4,8 @@ import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.j
 import { GatewayCredentialsRequiredError } from "../gateway/call.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { gatewayTransportError } from "./agents.delete.test-helpers.js";
 import { sessionsCleanupLargeLabelsEntrypoint } from "./sessions-cleanup-runtime.test-support.js";
 import { cleanupSummary } from "./sessions-cleanup-summary.test-support.js";
 import { createCapturingTestRuntime as makeRuntime } from "./test-runtime-config-helpers.js";
@@ -19,9 +21,7 @@ const mocks = vi.hoisted(() => ({
 // mock-isolation: Cleanup routing fixtures supply config without reading operator state.
 vi.mock("../config/config.js", async () => {
   const { createTestConfigReadMocks } = await import("./test-runtime-config-helpers.js");
-  return {
-    ...createTestConfigReadMocks(mocks, "loadConfig"),
-  };
+  return createTestConfigReadMocks(mocks, "loadConfig");
 });
 
 vi.mock("./sessions-cleanup.runtime.js", () => ({
@@ -48,15 +48,6 @@ function expectLogsToInclude(logs: readonly string[], text: string): void {
   expect(logs.some((line) => line.includes(text))).toBe(true);
 }
 
-function gatewayTransportError(kind: "closed" | "timeout", code?: number): GatewayTransportError {
-  return new GatewayTransportError({
-    kind,
-    code,
-    message: `gateway ${kind}`,
-    connectionDetails: { url: "ws://127.0.0.1:1", urlSource: "test", message: "test gateway" },
-  });
-}
-
 function gatewayCleanupResult(
   storePath: string,
   overrides: Partial<CleanupPreview["summary"]> = {},
@@ -69,6 +60,7 @@ function gatewayCleanupResult(
       beforeCount: 3,
       afterCount: 1,
       pruned: 2,
+      unreferencedArtifacts: artifactStats(),
       ...overrides,
     }).summary,
     applied: true,
@@ -106,6 +98,10 @@ function previewEntry(sessionId: string, updatedAt: number, label?: string) {
   return { sessionId, updatedAt, model: "test:opus", ...(label === undefined ? {} : { label }) };
 }
 
+function artifactStats(scannedFiles = 0, removedFiles = 0, freedBytes = 0) {
+  return { scannedFiles, removedFiles, freedBytes, olderThanMs: 604800000 };
+}
+
 function mockPreviews(...previewResults: ReturnType<typeof cleanupPreview>[]) {
   mocks.runSessionsCleanup.mockResolvedValue({
     mode: "warn",
@@ -139,8 +135,6 @@ describe("sessionsCleanupCommand", () => {
   });
 
   it("keeps an empty explicit store local instead of delegating default cleanup to the gateway", async () => {
-    // Resolve a full result so a regression that delegates fails on the
-    // gateway assertion below instead of throwing on the beforeEach null.
     mocks.callGateway.mockResolvedValue(gatewayCleanupResult("/gateway/sessions.json"));
     await cleanup({ store: "", enforce: true });
 
@@ -184,8 +178,7 @@ describe("sessionsCleanupCommand", () => {
       ...applied,
       storePath: "/resolved/openclaw-agent.sqlite",
     });
-    expect(mocks.runSessionsCleanup).toHaveBeenCalledOnce();
-    expect(mocks.runSessionsCleanup.mock.calls[0]?.[0]).toEqual({
+    expect(mocks.runSessionsCleanup).toHaveBeenCalledExactlyOnceWith({
       cfg: { session: { store: "/cfg/sessions.json" } },
       opts: expect.objectContaining({ enforce: true, activeKey: "agent:main:main" }),
       targets: [{ agentId: "main", storePath: "/resolved/sessions.json" }],
@@ -249,23 +242,7 @@ describe("sessionsCleanupCommand", () => {
       allAgents: true,
       mode: "enforce",
       dryRun: false,
-      stores: [
-        {
-          ...gatewayCleanupResult("/gateway/main/openclaw-agent.sqlite", {
-            beforeCount: 1,
-            afterCount: 0,
-            missing: 1,
-            pruned: 0,
-            unreferencedArtifacts: {
-              scannedFiles: 0,
-              removedFiles: 0,
-              freedBytes: 0,
-              olderThanMs: 0,
-            },
-          }),
-          appliedCount: 0,
-        },
-      ],
+      stores: [{ ...gatewayCleanupResult("/gateway/main/openclaw-agent.sqlite"), appliedCount: 0 }],
       partialError: {
         failingAgentId: "work",
         failingStorePath: "/gateway/work/openclaw-agent.sqlite",
@@ -299,12 +276,7 @@ describe("sessionsCleanupCommand", () => {
           capArchived: 1,
           pruned: 1,
           capped: 1,
-          unreferencedArtifacts: {
-            scannedFiles: 5,
-            removedFiles: 2,
-            freedBytes: 128,
-            olderThanMs: 604800000,
-          },
+          unreferencedArtifacts: artifactStats(5, 2, 128),
         },
         {
           beforeStore: {
@@ -380,12 +352,7 @@ describe("sessionsCleanupCommand", () => {
           afterCount: 3,
           pruned: 3,
           capped: 1,
-          unreferencedArtifacts: {
-            scannedFiles: 0,
-            removedFiles: 0,
-            freedBytes: 0,
-            olderThanMs: 604800000,
-          },
+          unreferencedArtifacts: artifactStats(),
         },
         {
           beforeStore: {
@@ -435,11 +402,7 @@ describe("sessionsCleanupCommand", () => {
         cleanupPreview({ ...target, pruned: 1 }, { staleKeys: new Set(["stale"]) }),
       ),
     );
-    await cleanup({
-      json: true,
-      dryRun: true,
-      allAgents: true,
-    });
+    await cleanup({ json: true, dryRun: true, allAgents: true });
 
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toEqual({
@@ -455,5 +418,19 @@ describe("sessionsCleanupCommand", () => {
         },
       ],
     });
+  });
+
+  it("keeps the canonical abort outcome instead of falling back to local cleanup", async () => {
+    const scope = new AsyncWorkScope();
+    const reason = new Error("sessions cleanup interrupted");
+    mocks.callGateway.mockImplementation(async () => {
+      scope.beginClose(reason);
+      throw gatewayTransportError("closed");
+    });
+
+    await expect(scope.run(() => cleanup({}))).rejects.toBe(reason);
+    expect(mocks.runLocalSessionsCleanup).not.toHaveBeenCalled();
+    expect(logs).toEqual([]);
+    await scope.drain();
   });
 });

@@ -1,4 +1,4 @@
-import { listen } from "../lib/reactive/listener.ts";
+import { observeWindowResize } from "../lib/reactive/window-resize.ts";
 import type { DockPanelLayoutStore, DockPanelPlacement } from "./dock-panel-layout.ts";
 
 /** Geometry and open intent stay synchronous for panel actions and persistence. */
@@ -35,7 +35,7 @@ export function createDockLayout<TDock extends DockPanelPlacement>(deps: {
       dock.dock = layout.dock;
       dock.height = layout.height;
       dock.width = Math.min(layout.width, deps.layout.maxWidth());
-      stopResize = listen(window, "resize", () => {
+      stopResize = observeWindowResize(window, () => {
         const height = Math.min(dock.height, deps.layout.maxHeight());
         const width = Math.min(dock.width, deps.layout.maxWidth());
         if (height === dock.height && width === dock.width) {
@@ -144,7 +144,7 @@ export function createDockLayout<TDock extends DockPanelPlacement>(deps: {
     },
 
     get resizer() {
-      if (isFullscreen() || dock.dock === "main") {
+      if (isFullscreen() || dock.dock === "main" || (!dock.open && !deps.isEmbedded?.())) {
         return null;
       }
       const horizontal = dock.dock === "bottom";

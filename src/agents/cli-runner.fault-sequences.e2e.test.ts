@@ -401,7 +401,7 @@ describe("CLI runner fault sequences", () => {
     expect(isFailoverError(error)).toBe(true);
     expect(error).toMatchObject({ code: "cli_max_turns" });
     expect(toolEvents.filter((event) => event.phase === "result")).toEqual([
-      expect.objectContaining({ name: "mcp__openclaw__memory_search" }),
+      expect.objectContaining({ name: "memory_search" }),
     ]);
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
     expectCounts();

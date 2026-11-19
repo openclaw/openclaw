@@ -28,7 +28,7 @@ it("retains a PID with no command and continues to later holders", () => {
   members.mockReturnValue([
     { pid: process.pid, state: "S", command: { ppid: 0, argv: ["openclaw-doctor"] } },
     { pid: missing, state: "S" },
-    { pid: holder, state: "S", command: { ppid: 0, argv: ["openclaw-gateway"] } },
+    { pid: holder, state: "S", command: { ppid: 0, argv: ["openclaw"] } },
   ]);
   expect(inspectOtherOpenClawProcesses("/tmp/openclaw-update-runtime-Held01")).toEqual({
     pids: [missing, holder],

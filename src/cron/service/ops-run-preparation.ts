@@ -126,7 +126,7 @@ async function recomputeManualRunPreflight(
   mode?: CronRunMode,
 ) {
   await recomputeUnownedCronSchedules(state, {
-    ...(isImmediateCronRunMode(mode) ? { preserveExpiredPacedNextRunJobId: id } : {}),
+    ...(isImmediateCronRunMode(mode) ? { preserveDisabledJobId: id } : {}),
     skipScheduleErrorHandling: true,
   });
 }

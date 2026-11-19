@@ -11,7 +11,6 @@ import { createResourceLoader } from "./agent-session-loop-resource-loader.test-
 import type { AgentSessionEvent } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
-import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ExtensionEvent, ThinkingLevelSelectEvent } from "./extensions/types.js";
 import { ModelRegistry, type ProviderConfigInput } from "./model-registry.js";
 import { createAgentSession, type CreateAgentSessionOptions } from "./sdk.js";
@@ -74,6 +73,16 @@ export function createAssistantResultStream(message: AssistantMessage) {
   });
 }
 
+export function mockToolTurn(content: AssistantMessage["content"]) {
+  streamMocks.streamSimple
+    .mockImplementationOnce((model: Model) =>
+      createAssistantResultStream(createAssistant(model, content, "toolUse")),
+    )
+    .mockImplementation((model: Model) =>
+      createAssistantResultStream(createAssistant(model, "Done.")),
+    );
+}
+
 export function holdAssistantResponse(text: string | (() => AssistantMessage)) {
   const response = createAssistantMessageEventStream();
   let released = false;
@@ -113,21 +122,6 @@ export const createAutoCompactionSettings = (
     retry: { enabled: false },
   });
 
-export function mockInvalidThenTextSummary(recoveredText: string) {
-  let requests = 0;
-  streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
-    createAssistantResultStream(
-      createAssistant(
-        activeModel,
-        ++requests === 1
-          ? [{ type: "thinking", thinking: "internal summary reasoning" }]
-          : [{ type: "text", text: recoveredText }],
-      ),
-    ),
-  );
-  return () => requests;
-}
-
 type TestSessionOptions = Partial<
   Pick<
     CreateAgentSessionOptions,
@@ -166,7 +160,7 @@ export async function createTestSession(options: TestSessionOptions = {}) {
     ...sessionOptions,
     systemPrompt: options.systemPrompt ?? "Test session prompt",
     model,
-    thinkingLevel: settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
+    thinkingLevel: settingsManager.getDefaultThinkingLevel() ?? "medium",
     tools: options.customTools?.map((tool) => tool.name) ?? [],
     resourceLoader: options.resourceLoader ?? (await createResourceLoader(extension)),
     sessionManager,

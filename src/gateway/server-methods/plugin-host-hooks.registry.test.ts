@@ -35,7 +35,8 @@ describe("plugin host hook registry ownership", () => {
     "%s with %s selects the registry attached to the admitted request",
     async (method, scope) => {
       const pluginId = "local-host-hooks";
-      let shared = false;
+      let shared = false,
+        granted = true;
       const fixture = (label: string, requiredScope: OperatorScope) => {
         const { config, registry } = createPluginRegistryFixture();
         registerTestPlugin({
@@ -50,14 +51,23 @@ describe("plugin host hook registry ownership", () => {
               // The roster changes while the action awaits; the live check sees it.
               handler: async ({ client }) => {
                 const before = client?.isSharedGateway?.();
+                client?.assertCurrent?.();
                 await Promise.resolve();
                 shared = true;
+                granted = false;
+                let callerCurrentAfter = true;
+                try {
+                  client?.assertCurrent?.();
+                } catch {
+                  callerCurrentAfter = false;
+                }
                 return {
                   result: {
                     label,
                     sharedBefore: before ?? null,
                     sharedAfter: client?.isSharedGateway?.() ?? null,
                     allowsMain: client?.allowsAgent?.("main") ?? null,
+                    callerCurrentAfter,
                   },
                 };
               },
@@ -92,6 +102,7 @@ describe("plugin host hook registry ownership", () => {
           methodRegistry,
           client: { connect: { role: "operator", scopes: [scope] } } as GatewayClient,
           isWebchatConnect: () => false,
+          hasCurrentClientAuthority: () => granted,
           respond,
           context: {
             getRuntimeConfig: () => ({}),
@@ -109,6 +120,7 @@ describe("plugin host hook registry ownership", () => {
                   sharedBefore: false,
                   sharedAfter: true,
                   allowsMain: true,
+                  callerCurrentAfter: false,
                 },
               }
             : {

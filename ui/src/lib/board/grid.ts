@@ -88,6 +88,15 @@ export function layout(
 }
 
 function layoutCanonicalItems(items: readonly BoardGridItem[]): BoardGridRect[] {
+  if (items.every((item) => item.w === BOARD_GRID_COLUMNS)) {
+    // Full-width widgets leave no gaps for later widgets to fill.
+    let y = 0;
+    return items.map((item) => {
+      const rect = { name: item.name, x: 0, y, w: item.w, h: item.h };
+      y += item.h;
+      return rect;
+    });
+  }
   const occupied: number[] = [];
   return items.map((item) => placeFirstFit(occupied, item));
 }
@@ -107,8 +116,9 @@ export function previewDrag(
   items: readonly BoardGridItem[],
   name: string,
   target: BoardGridCell & { name: string | undefined },
+  maxItemHeight = BOARD_GRID_MAX_HEIGHT,
 ): BoardGridItem[] {
-  const canonical = canonicalItems(items);
+  const canonical = canonicalItems(items, maxItemHeight);
   const movingIndex = canonical.findIndex((item) => item.name === name);
   if (movingIndex < 0) {
     return canonical;
@@ -147,8 +157,10 @@ export function resize(
   name: string,
   w: number,
   h: number,
+  maxItemHeight = BOARD_GRID_MAX_HEIGHT,
 ): BoardGridItem[] {
-  return canonicalItems(items).map((item) =>
+  // Only the resized target becomes Fixed; expanded Auto neighbors keep their spans.
+  return canonicalItems(items, maxItemHeight).map((item) =>
     item.name === name
       ? {
           name: item.name,

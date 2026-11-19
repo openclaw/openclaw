@@ -16,8 +16,15 @@ import type {
   ModelCatalogEntry,
   ModelCatalogProviderOutcome,
 } from "../../api/types.ts";
-import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
-import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
+import {
+  providerDisplayLabel,
+  type ProviderPresentation,
+} from "../../components/provider-icon-data.ts";
+import {
+  listSelectableAgents,
+  normalizeAgentLabel,
+  resolveAgentConfig,
+} from "../../lib/agents/display.ts";
 import {
   canonicalModelAuthProviderId,
   isMonitoredAuthProvider,
@@ -33,11 +40,6 @@ import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 
 export type ModelProviderAuthKind = "ok" | "expiring" | "expired" | "missing" | "api-key";
 
-type ModelProviderAuthSummary = {
-  kind: ModelProviderAuthKind;
-  expiryLabel?: string;
-};
-
 export type ModelProviderLogoutTarget = {
   provider: string;
   profileIds: string[];
@@ -49,12 +51,16 @@ export type ModelProviderRemovalTarget = { provider: string; credentialType?: "a
 /** One account's sign-out, or a provider removal with its displayed credential scope. */
 export type ModelProviderPendingLogout = { cardId: string; label: string } & (
   | { target: ModelProviderLogoutTarget }
-  | { removeTargets: ModelProviderRemovalTarget[]; keptSource?: string; configKey?: string }
+  | {
+      removeTargets: ModelProviderRemovalTarget[];
+      keptSource?: string;
+      configKey?: string;
+      /** Names of default models this provider serves; removal leaves them selected. */
+      defaultModels?: string;
+    }
 );
 
-type ModelProviderProfileOrderLock = NonNullable<ModelAuthStatusProvider["profileOrderLocked"]>;
-
-export type ModelProviderCard = {
+export type ModelProviderCard = ProviderPresentation & {
   /** Canonical provider id used for icon + label lookup. */
   id: string;
   /** Exact config map key; provider ids are otherwise normalized for display/runtime use. */
@@ -66,7 +72,10 @@ export type ModelProviderCard = {
   /** Saved OAuth/token profiles eligible for targeted logout. */
   logoutTargets: ModelProviderLogoutTarget[];
   displayName: string;
-  auth?: ModelProviderAuthSummary;
+  auth?: {
+    kind: ModelProviderAuthKind;
+    expiryLabel?: string;
+  };
   profiles: ModelAuthStatusProfile[];
   /** Gateway auth owner used for priority changes to each visible profile. */
   profileProviderIds: Record<string, string>;
@@ -77,7 +86,7 @@ export type ModelProviderCard = {
   /** Auth owners whose stored priority can be reset. */
   profileOrderStoredProviders: string[];
   /** Configuration owner that pins priority for each auth owner. */
-  profileOrderLocks: Record<string, ModelProviderProfileOrderLock>;
+  profileOrderLocks: Record<string, NonNullable<ModelAuthStatusProvider["profileOrderLocked"]>>;
   apiKey?: ModelAuthStatusProvider["apiKey"];
   configApiKeys: Array<{ key: string; reference: boolean }>;
   modelCount: number;
@@ -88,7 +97,7 @@ export type ModelProviderCard = {
   usage?: ProviderUsageSnapshot;
 };
 
-type ConfiguredModelProvider = {
+type ConfiguredModelProvider = ProviderPresentation & {
   key: string;
   hasApiKey: boolean;
   apiKeyReference?: boolean;
@@ -101,6 +110,7 @@ type ModelProviderCardsInput = {
   providerOutcomes?: ModelCatalogProviderOutcome[];
   pendingProviders?: readonly string[];
   configProviders?: ConfiguredModelProvider[];
+  providerPresentations?: Record<string, ProviderPresentation>;
   providerUsage: UsageSummary | null;
 };
 
@@ -383,9 +393,21 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     )
     .map((draft) => {
       const apiKeySupported = apiKeyCapabilities.get(draft.card.id);
+      const presentation =
+        input.providerPresentations?.[draft.card.configKey ?? draft.card.id] ??
+        input.models?.find(
+          (model) => canonicalModelAuthProviderId(model.provider) === draft.card.id,
+        ) ??
+        input.configProviders?.find(
+          (provider) => canonicalModelAuthProviderId(provider.key) === draft.card.id,
+        );
+      const name = presentation?.providerName;
+      const icon = presentation?.providerIcon;
       return Object.assign(
         {},
         draft.card,
+        name ? { displayName: name, providerName: name } : {},
+        icon ? { providerIcon: icon } : {},
         draft.catalogOutcome ? { catalogStatus: draft.catalogOutcome.status } : {},
         apiKeySupported === undefined ? {} : { apiKeySupported },
       );
@@ -439,16 +461,26 @@ export function resolveDefaultModelPresentation(
       ...modelSettingFallbacks(defaults.utilityModel),
     ].filter((value): value is string => typeof value === "string" && value.length > 0),
   );
-  const selectable: ModelPickerEntry[] = (models ?? []).filter(
-    (model) => model.available !== false || selected.has(modelCatalogRef(model)),
-  );
-  const seen = new Set(selectable.map(modelCatalogRef));
-  // An unavailable catalog cannot establish that a saved model is unavailable.
-  const availability = models === null ? {} : { available: false as const };
-  for (const ref of selected) {
-    if (seen.has(ref)) {
+  const source = models ?? [];
+  const missing = new Set(selected);
+  let filtered: ModelPickerEntry[] | undefined;
+  for (let index = 0; index < source.length; index++) {
+    const model = source[index]!;
+    if (model.available === false && !selected.has(modelCatalogRef(model))) {
+      filtered ??= source.slice(0, index);
       continue;
     }
+    if (missing.size > 0) {
+      missing.delete(modelCatalogRef(model));
+    }
+    filtered?.push(model);
+  }
+  // Preserve catalog identity through unrelated page notifications; copy only for
+  // actual filtering or saved selections absent from the published catalog.
+  const selectable: ModelPickerEntry[] = filtered ?? (missing.size > 0 ? [...source] : source);
+  // An unavailable catalog cannot establish that a saved model is unavailable.
+  const availability = models === null ? {} : { available: false as const };
+  for (const ref of missing) {
     const { model: modelRef, profile } = splitTrailingAuthProfile(ref);
     if (profile) {
       const match = (models ?? []).find((model) => modelCatalogRef(model) === modelRef);
@@ -539,10 +571,8 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
 
 export type ProviderOption = { id: string; displayName: string };
 
-type ModelProviderCapability = NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number];
-
 export function buildUnconfiguredProviderOptions(
-  capabilities: ModelProviderCapability[] | undefined,
+  capabilities: NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number][] | undefined,
   configuredProviderIds: Iterable<string>,
 ): ProviderOption[] {
   const configured = new Set(Array.from(configuredProviderIds, canonicalModelAuthProviderId));
@@ -554,6 +584,32 @@ export function buildUnconfiguredProviderOptions(
     }
   }
   return [...options.values()].toSorted((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+export type AgentUtilityOverride = {
+  agentId: string;
+  label: string;
+  /** Own primary; "" disables utility for the agent, undefined inherits the default primary. */
+  model: string | undefined;
+  fallbacks: string[];
+};
+
+/**
+ * Agents with their own utilityModel primary or fallbacks. An explicit empty fallback
+ * chain without a primary is not listed (accepted: rare, and visible in raw config).
+ */
+export function listAgentUtilityOverrides(
+  configObject: Record<string, unknown> | null,
+  agents: AgentsListResult["agents"],
+): AgentUtilityOverride[] {
+  return agents.flatMap((agent) => {
+    const own = readModelSetting(resolveAgentConfig(configObject, agent.id).entry?.utilityModel);
+    const model = modelSettingPrimary(own);
+    const fallbacks = modelSettingFallbacks(own);
+    return model === undefined && fallbacks.length === 0
+      ? []
+      : [{ agentId: agent.id, label: normalizeAgentLabel(agent), model, fallbacks }];
+  });
 }
 
 /** Assembles admitted snapshots for the Models page without owning state or effects. */
@@ -582,6 +638,7 @@ export function buildModelProviderPresentation(params: {
   const cards = buildModelProviderCards({
     ...data,
     models: catalog.models,
+    providerPresentations: catalog.providerPresentations,
     providerOutcomes: catalog.hasSnapshot
       ? (catalog.providerOutcomes ?? [])
       : data.providerOutcomes,
@@ -607,6 +664,7 @@ export function buildModelProviderPresentation(params: {
       decisionModels: catalog.decisionModels ?? [],
       authStatus: data.authStatus,
       automaticUtilityModel: catalog.defaultModels?.automaticUtilityModel,
+      utilityOverrides: listAgentUtilityOverrides(params.configObject, agents),
       utilityRuntime: catalog.defaultModels?.utilityRuntime,
       thinkingLevel: defaults.thinkingLevel,
       thinkingOverridden: defaults.thinkingOverridden,

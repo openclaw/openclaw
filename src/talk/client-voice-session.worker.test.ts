@@ -1,4 +1,5 @@
-import { copyFileSync, existsSync, renameSync, symlinkSync, unlinkSync } from "node:fs";
+import fs, { copyFileSync, existsSync, renameSync, symlinkSync, unlinkSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
@@ -11,8 +12,12 @@ import {
   observeHostDataSql,
   observeSqliteReadSql,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { readSessionTranscriptMessageEvents } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { captureDurableSessionActor } from "../config/sessions/session-actor-durable.js";
+import { withSessionInputActor } from "../config/sessions/session-input-actor.js";
 import {
   captureExternalSessionCommitGuard,
   type SessionSourceAssertion,
@@ -21,25 +26,26 @@ import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import { createAgentCreationWitnessSource } from "../state/openclaw-agent-execution.creation-fixture.test-support.js";
-import * as agentExecution from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { prepareClientVoiceSessionClose } from "./client-voice-session-lifecycle.js";
 import { assertClientVoiceSessionOpen } from "./client-voice-session-read.js";
 import {
-  captureClientVoiceEntrySource,
   captureClientVoiceSessionSourceOptions,
   createClientVoiceSessionSource,
+  captureClientVoiceSessionWriter,
 } from "./client-voice-session-source.js";
+import * as voiceWriters from "./client-voice-session-source.js";
 import { readVoiceSessionRecord } from "./client-voice-session-store.js";
-import { captureClientVoiceSessionWriter } from "./client-voice-session-write.js";
-import * as voiceWriters from "./client-voice-session-write.js";
-import { recordMutation, seedSession } from "./client-voice-session.fixture.test-support.js";
+import {
+  recordMutation,
+  recordMutationEvents,
+  seedSession,
+} from "./client-voice-session.fixture.test-support.js";
 import {
   appendClientVoiceTranscript,
   closeClientVoiceSession,
@@ -92,15 +98,11 @@ describe("client voice session worker contract", () => {
     };
   }
   async function holdWorker(scope: Parameters<typeof runOpenClawAgentWorkerWrite>[0]) {
-    const entered = createDeferred();
-    const resume = createDeferred();
-    releaseHeldWrites.push(() => resume.resolve());
-    const blocked = runOpenClawAgentWorkerWrite(scope, async () => {
-      entered.resolve();
-      await resume.promise;
-    });
-    await entered.promise;
-    return { blocked, resume };
+    const { entered, release, wait } = createEnteredGate();
+    releaseHeldWrites.push(release);
+    const blocked = runOpenClawAgentWorkerWrite(scope, wait);
+    await entered;
+    return { blocked, release };
   }
   function mutateForeignVoice(voiceSessionId: string, change: string, ...values: string[]) {
     const database = new DatabaseSync(resolveOpenClawAgentSqlitePath(target));
@@ -117,69 +119,33 @@ describe("client voice session worker contract", () => {
     }
   }
 
-  it.each(["metadata", "entry"] as const)(
-    "joins pending agent initialization when capturing the Talk %s writer",
-    async (kind) => {
-      const options = captureClientVoiceSessionSourceOptions(target.agentId);
-      openOpenClawStateDatabase({ env: options.env });
-      const creator = agentExecution.captureOpenClawAgentDatabaseExecution(options);
-      let operation: Promise<unknown> | undefined;
-      let release: (() => Promise<void>) | undefined;
-      const source = createAgentCreationWitnessSource((request) => {
-        const facts = request.facts;
-        if (
-          !operation &&
-          request.stage === "prepare" &&
-          facts !== null &&
-          typeof facts === "object" &&
-          "kind" in facts &&
-          facts.kind === "shared-owner"
-        ) {
-          operation = (async () => {
-            if (kind === "metadata") {
-              const writer = captureClientVoiceSessionWriter(target);
-              release = () => writer.release();
-              return writer.mutate({
-                ...target,
-                kind: "create",
-                voiceSessionId: "voice-pending-agent",
-                origin: "client",
-                now: 1,
-              });
-            }
-            const selected = await captureClientVoiceEntrySource(target, () => {});
-            release = () => selected.execution.release();
-            await selected.execution.prepare(source);
-            return selected.execution.runExisting(source, (worker) =>
-              worker.execute({
-                type: "session.transcript.initialize",
-                input: { sessionKey: target.sessionKey, sessionId: "voice-entry" },
-              }),
-            );
-          })();
-          void operation.catch(() => {});
-        }
-      });
-      try {
-        await creator.prepare(source);
-        expect(operation).toBeDefined();
-        await expect(operation).resolves.toMatchObject(
-          kind === "metadata"
-            ? { voiceSessionId: "voice-pending-agent", status: "open" }
-            : { kind: "session-transcript-initialized", sessionKey: target.sessionKey },
-        );
-      } finally {
-        await operation?.catch(() => {});
-        await release?.();
-        await creator.release();
-      }
-    },
-  );
-
   it("persists admission, consult effects, transcript bookkeeping, and close off the caller thread", async () => {
     await seedSession(target.sessionKey);
     const voiceSessionId = "voice-worker-boundary";
     const observation = observeHostDataSql();
+    const previousStackLimit = Error.stackTraceLimit;
+    Error.stackTraceLimit = 50;
+    let filesystemCalls = 0;
+    const count = () => {
+      if (
+        /\/talk\/client-voice-(?:session(?:-write|-source|-read)?|mutation-digest-owner)\.ts:/.test(
+          new Error().stack ?? "",
+        )
+      ) {
+        filesystemCalls++;
+      }
+    };
+    const stat = fs.statSync;
+    const realpath = fs.realpathSync.native;
+    const statSpy = vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+      count();
+      return Reflect.apply(stat, fs, args);
+    });
+    const realpathSpy = vi.spyOn(fs.realpathSync, "native").mockImplementation((...args) => {
+      count();
+      return Reflect.apply(realpath, fs.realpathSync, args);
+    });
+    syncBuiltinESMExports();
     try {
       await createVoice({ voiceSessionId });
       await createVoice({ voiceSessionId });
@@ -187,7 +153,12 @@ describe("client voice session worker contract", () => {
       await appendTranscript(voiceSessionId, "user-1", "Send the update");
       await closeClientVoiceSession({ ...target, voiceSessionId, config: {} });
       expect(observation.queries.filter((sql) => /\bcache_entries\b/i.test(sql))).toEqual([]);
+      expect(filesystemCalls).toBe(0);
     } finally {
+      statSpy.mockRestore();
+      realpathSpy.mockRestore();
+      syncBuiltinESMExports();
+      Error.stackTraceLimit = previousStackLimit;
       observation.restore();
     }
     expect(readRecord(voiceSessionId)).toMatchObject({
@@ -219,15 +190,15 @@ describe("client voice session worker contract", () => {
           throw sourceError;
         },
       }));
-      const capture = agentExecution.captureOpenClawAgentDatabasePreparationExecution;
+      const capture = voiceWriters.captureClientVoiceSessionWriter;
       const captureSpy = vi
-        .spyOn(agentExecution, "captureOpenClawAgentDatabasePreparationExecution")
-        .mockImplementation((...args): ReturnType<typeof capture> => {
-          const execution = capture(...args);
-          failCleanup(execution, writerError, () => {
+        .spyOn(voiceWriters, "captureClientVoiceSessionWriter")
+        .mockImplementation((params) => {
+          const writer = capture(params);
+          failCleanup(writer, writerError, () => {
             released.push("writer");
           });
-          return execution;
+          return writer;
         });
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const runId = "acknowledged-cleanup-consult";
@@ -361,7 +332,7 @@ describe("client voice session worker contract", () => {
 
   it("refuses revoked admission after the FIFO wait", async () => {
     await seedSession(target.sessionKey);
-    const { blocked, resume } = await holdWorker({ agentId: target.agentId });
+    const { blocked, release } = await holdWorker({ agentId: target.agentId });
     const controller = new AbortController();
     const voiceSessionId = "voice-revoked-admission";
     const prepare = vi.fn(async () => ({ assertCurrent() {}, checks: [] }));
@@ -372,7 +343,7 @@ describe("client voice session worker contract", () => {
     });
     controller.abort(new Error("voice access revoked"));
     const rejected = expect(creating).rejects.toThrow("voice access revoked");
-    resume.resolve();
+    release();
     await blocked;
     await rejected;
     expect(prepare).not.toHaveBeenCalled();
@@ -452,7 +423,7 @@ describe("client voice session worker contract", () => {
       await seedSession("agent:main:main");
       const sdkTarget = { agentId: "cold-sdk", sessionKey: "agent:cold-sdk:main" };
       const checked = createDeferred();
-      const { blocked, resume } = await holdWorker(sdkTarget);
+      const { blocked, release } = await holdWorker(sdkTarget);
       let allowed = true;
       const writer = retained ? captureClientVoiceSessionWriter(sdkTarget) : undefined;
       const creating = createVoice(
@@ -473,7 +444,7 @@ describe("client voice session worker contract", () => {
         : expect(creating).resolves.toBe("cold-sdk-voice");
       try {
         allowed = !revoked;
-        resume.resolve();
+        release();
         await awaitGateBeforeSettlement(
           checked.promise,
           creating,
@@ -506,7 +477,7 @@ describe("client voice session worker contract", () => {
           database.close();
         }
       } finally {
-        resume.resolve();
+        release();
         await Promise.allSettled([blocked, creating, completed]);
         await writer?.release();
       }
@@ -624,20 +595,7 @@ describe("client voice session worker contract", () => {
       setTestEnvValue("OPENCLAW_STATE_DIR", path.join(originalStateDir, "successor"));
       await createVoice({ voiceSessionId });
       gate = await holdWorker({ agentId: target.agentId, env: originalEnv });
-      emitTrustedDiagnosticEvent({
-        type: "tool.execution.started",
-        runId,
-        toolCallId: "call-original-source",
-        toolName: "message",
-        mutatingAction: true,
-      });
-      emitTrustedDiagnosticEvent({
-        type: "tool.execution.completed",
-        runId,
-        toolCallId: "call-original-source",
-        toolName: "message",
-        durationMs: 5,
-      });
+      recordMutationEvents(runId, "call-original-source");
       const expectedEffects = [
         expect.objectContaining({ runId, toolName: "message", status: "succeeded" }),
       ];
@@ -654,7 +612,7 @@ describe("client voice session worker contract", () => {
       });
       // The successor worker roundtrip lets an incorrectly idle original owner settle.
       await createVoice({ voiceSessionId });
-      gate.resume.resolve();
+      gate.release();
       await gate.blocked;
       await drained;
       expect(atDrain?.effects).toEqual(expectedEffects);
@@ -665,7 +623,7 @@ describe("client voice session worker contract", () => {
       setTestEnvValue("OPENCLAW_STATE_DIR", originalStateDir);
       expect(readRecord(voiceSessionId)?.effects).toEqual(expectedEffects);
     } finally {
-      gate?.resume.resolve();
+      gate?.release();
       await gate?.blocked;
       await flushOriginalWorker();
       setTestEnvValue("OPENCLAW_STATE_DIR", originalStateDir);
@@ -675,28 +633,29 @@ describe("client voice session worker contract", () => {
     }
   });
 
-  it("reads tool facts without freshness probes and rejects a closed call", async () => {
+  it("validates the open call without Gateway-thread SQL and rejects a closed call", async () => {
     const voiceSessionId = await createVoice({ transcriptCapable: true });
     const binding = { ...target, voiceSessionId };
-    expect(assertClientVoiceSessionOpen(binding)).toBe("client");
+    await expect(assertClientVoiceSessionOpen(binding)).resolves.toBe("client");
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
-      expect(assertClientVoiceSessionOpen(binding)).toBe("client");
-      expect(readRecord(voiceSessionId)?.transcriptCapable).toBe(true);
-      expect(observation.queries).toHaveLength(2);
-      expect(observation.queries.join("\n")).not.toMatch(/\b(?:pragma_)?data_version\b/i);
+      await expect(assertClientVoiceSessionOpen(binding)).resolves.toBe("client");
+      expect(observation.queries).toEqual([]);
     } finally {
       observation.restore();
     }
+    expect(readRecord(voiceSessionId)?.transcriptCapable).toBe(true);
     await closeClientVoiceSession({ ...binding, config: {} });
-    expect(() => assertClientVoiceSessionOpen(binding)).toThrow("voice session is closed");
+    await expect(assertClientVoiceSessionOpen(binding)).rejects.toThrow("voice session is closed");
     expect(readRecord(voiceSessionId)?.transcriptCapable).toBe(true);
   });
 
   it("rejects a transcript after another connection closes the admitted call", async () => {
     await seedSession(target.sessionKey);
     const voiceSessionId = await createVoice();
-    expect(assertClientVoiceSessionOpen({ ...target, voiceSessionId })).toBe("client");
+    await expect(assertClientVoiceSessionOpen({ ...target, voiceSessionId })).resolves.toBe(
+      "client",
+    );
     mutateForeignVoice(voiceSessionId, "'$.status', 'closed', '$.closedAt', 42");
     await expect(
       appendTranscript(voiceSessionId, "foreign-close", "This call has already closed"),
@@ -710,6 +669,7 @@ describe("client voice session worker contract", () => {
   });
 
   it("publishes transcripts only after their voice bookkeeping commits", async () => {
+    const text = "Confirm both records before notifying observers";
     await seedSession(target.sessionKey);
     const voiceSessionId = await createVoice();
     const observed: Array<{
@@ -725,20 +685,17 @@ describe("client voice session worker contract", () => {
       }
     });
     try {
-      await appendTranscript(
-        voiceSessionId,
-        "committed-together",
-        "Confirm both records before notifying observers",
-      );
+      await appendTranscript(voiceSessionId, "committed-together", text);
+      expect(loadSessionEntry(target)).toMatchObject({
+        lastInteractionAt: expect.any(Number),
+      });
       expect(observed).toEqual([
         {
           transcript: [
             expect.objectContaining({
               event: expect.objectContaining({
                 message: expect.objectContaining({
-                  content: [
-                    { type: "text", text: "Confirm both records before notifying observers" },
-                  ],
+                  content: [{ type: "text", text }],
                 }),
               }),
             }),
@@ -849,6 +806,103 @@ describe("client voice session worker contract", () => {
       } finally {
         unsubscribe();
         await writer.release();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "refuses a custom transcript alias retargeted before its effect (actor=%s)",
+    async (withActor) => {
+      await seedSession(target.sessionKey);
+      const voiceSessionId = await createVoice();
+      const database = openOpenClawAgentDatabase(target);
+      const identity = readOpenClawAgentDatabaseIdentity(database);
+      const alias = path.join(path.dirname(database.path), "voice-transcript-alias.sqlite");
+      const replacement = path.join(
+        path.dirname(database.path),
+        "voice-transcript-successor.sqlite",
+      );
+      replaceSessionEntrySync(
+        { ...target, storePath: replacement },
+        { sessionId: "voice-successor", updatedAt: 1 },
+      );
+      symlinkSync(database.path, alias);
+      const scope = { ...target, storePath: database.path, sessionId: "session-agent-main-main" };
+      const actorDatabase = { agentId: target.agentId, path: database.path };
+      const actor = withActor
+        ? await captureDurableSessionActor({
+            database: actorDatabase,
+            target: {
+              sessionKey: target.sessionKey,
+              database: {
+                kind: "file",
+                physicalIdentity: identity.identity,
+                birthtime: identity.birthtime,
+                nativeLocation: identity.canonicalPath,
+              },
+            },
+            lifetime: { assertCurrent() {}, assertReadable() {} },
+          })
+        : undefined;
+      const actorReads = actor?.storage && vi.spyOn(actor.storage, "read");
+      const actualAppend = sessionTurnMocks.actualAppendSessionTranscriptTurn;
+      if (!actualAppend) {
+        throw new Error("expected the real transcript append implementation");
+      }
+      sessionTurnMocks.appendExpectedSessionTranscriptTurn.mockImplementationOnce(
+        async (...args) => {
+          unlinkSync(alias);
+          symlinkSync(replacement, alias);
+          return actualAppend(...args);
+        },
+      );
+      const append = () =>
+        appendClientVoiceTranscript({
+          ...target,
+          sessionTarget: { sessionKey: target.sessionKey, storePath: alias },
+          voiceSessionId,
+          entryId: "retargeted-custom-alias",
+          role: "user",
+          text: "Must retain its original source",
+        });
+      try {
+        const work = actor
+          ? withSessionInputActor(
+              {
+                phase: "adoptRun",
+                acquire: async () => ({
+                  actor,
+                  target: {
+                    agentId: target.agentId,
+                    storePath: database.path,
+                    target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
+                    readSource: {
+                      agentId: target.agentId,
+                      path: identity.canonicalPath,
+                      databaseIdentity: identity.identity,
+                      databaseBirthtime: identity.birthtime,
+                    },
+                  },
+                }),
+              },
+              append,
+            )
+          : append();
+        await expect(work).rejects.toThrow(/database|identity|source|selector|path/i);
+        if (actorReads) {
+          expect(actorReads).toHaveBeenCalled();
+        }
+        expect(readSessionTranscriptMessageEvents(scope)).toEqual([]);
+        expect(
+          readSessionTranscriptMessageEvents({
+            ...target,
+            storePath: replacement,
+            sessionId: "voice-successor",
+          }),
+        ).toEqual([]);
+        expect(readRecord(voiceSessionId)?.hasUserTranscript).toBeUndefined();
+      } finally {
+        await actor?.release();
       }
     },
   );

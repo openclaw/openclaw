@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { forceFullGc } from "../../../../src/test-utils/retention.js";
 import { collect } from "../../../../test/helpers/async-iterable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { Context, Model, StreamOptions } from "../types.js";
@@ -105,6 +105,7 @@ import type { ResponsesContinuationRequest } from "./openai-responses-continuati
 import { OpenAIResponsesWebSocketPostDispatchError } from "./openai-responses-contracts.js";
 import { responsesLoopbackModel } from "./openai-responses-loopback.test-support.js";
 import { createOpenAIResponsesWebSocketStream } from "./openai-responses-websocket.js";
+import { completedResponse } from "./openai-stream-cases.test-support.js";
 
 const client = {
   apiKey: "test-key",
@@ -132,10 +133,7 @@ const output = (text: string, id = "msg_1") => ({
 const completed = (
   id: string,
   result: Array<ReturnType<typeof output> | ReturnType<typeof makeToolCall>> = [output("answer")],
-) => ({
-  type: "response.completed",
-  response: { id, status: "completed", output: result },
-});
+) => completedResponse(id, result);
 const accepted = {
   type: "response.steer.accepted",
   steer: { id: "steer_1", previous_response_id: "resp_1" },
@@ -302,9 +300,9 @@ describe("Responses WebSocket steering handoff", () => {
         });
         const control = new WeakRef({ unowned: true });
         await nextTurn();
-        queryObjects(WeakRef);
+        forceFullGc();
         await nextTurn();
-        queryObjects(WeakRef);
+        forceFullGc();
         expect(control.deref()).toBeUndefined();
         expect(references.filter((reference) => reference.deref())).toHaveLength(0);
         expect(sockets.instances[0]?.closed).toBe(false);

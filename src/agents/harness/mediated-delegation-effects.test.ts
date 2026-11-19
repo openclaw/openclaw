@@ -14,6 +14,7 @@ import { revokeMcpLoopbackClientGrant } from "../../gateway/mcp-grant-store.js";
 import {
   captureGrant,
   request as requestMcp,
+  toolCall,
 } from "../../gateway/mcp-http-request.test-support.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
@@ -31,6 +32,7 @@ import { buildCliMcpGrantContext, finalizeCliMcpGrant } from "../cli-runner/mcp-
 import { resolveCliRuntimeToolPolicy } from "../cli-runner/prepare-tool-policy.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
 import * as shellSnapshot from "../shell-snapshot.js";
+import { isVisibleSpawnedSession } from "../subagents/spawn/subagent-capabilities.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import { createAgentHarnessToolExecutionBoundaryRegistry } from "./tool-execution.js";
 import { runAgentHarnessToolInvocation } from "./tool-invocation.js";
@@ -39,6 +41,9 @@ import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.
 const requester = "agent:intake:main";
 const denied = ["exec", "write"];
 type Route = "cli-loopback" | "plugin-harness";
+// A stamped visible spawn (createdVia: "spawn") skips built-in subagent denies; its
+// delegated authority must still be enforced at the final effect.
+let stamped = false;
 type Receipt = { isError: boolean; text: string };
 let state: OpenClawTestState;
 let config: OpenClawConfig;
@@ -115,6 +120,7 @@ async function createCaller(
       spawnedBy: requester,
       spawnDepth: 1,
       inheritedToolPolicyVersion: 1,
+      ...(stamped ? { createdVia: "spawn" as const } : {}),
       ...(senderRestricted ? { inheritedToolPolicySource: "sender" as const } : {}),
       inheritedToolDeny: denied,
       delegatedToolPolicy: {
@@ -126,6 +132,10 @@ async function createCaller(
     });
     sessionEntry = await readResolvedSessionEntryInWorker(scope);
   }
+  // The fixture must select the classification branch under test.
+  expect(isVisibleSpawnedSession(sessionKey, { cfg: currentConfig, entry: sessionEntry })).toBe(
+    stamped,
+  );
   const admission = prepareSystemAgentRunAdmission(
     currentConfig,
     runId,
@@ -194,33 +204,17 @@ async function createCaller(
           revokeMcpLoopbackClientGrant(token);
         }),
     );
-    const request = async (method: string, params?: object) => {
-      const response = await requestMcp(
-        runtime,
-        {
-          jsonrpc: "2.0",
-          id: ++sequence,
-          method,
-          ...(params ? { params } : {}),
-        },
-        grant,
-      );
-      expect(response.status).toBe(200);
-      return (await response.json()) as {
-        result: {
-          tools?: Array<{ name: string }>;
-          content?: Array<{ text?: string }>;
-          isError?: boolean;
-        };
-      };
-    };
-    const listed = await request("tools/list");
-    expect(listed.result.tools?.map((tool) => tool.name).toSorted()).toEqual(names.toSorted());
     return {
       sessionKey,
-      names,
       call: async (name: string, args: Record<string, unknown>): Promise<Receipt> => {
-        const reply = await request("tools/call", { name, arguments: args });
+        const response = await requestMcp(runtime, toolCall(name, args, ++sequence), grant);
+        expect(response.status).toBe(200);
+        const reply = (await response.json()) as {
+          result: {
+            content?: Array<{ text?: string }>;
+            isError?: boolean;
+          };
+        };
         return {
           isError: reply.result.isError === true,
           text: (reply.result.content ?? []).map((block) => block.text ?? "").join("\n"),
@@ -241,7 +235,6 @@ async function createCaller(
   const middleware = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, []);
   return {
     sessionKey,
-    names: tools.map((tool) => tool.name),
     call: (name: string, args: Record<string, unknown>): Promise<Receipt> =>
       runAgentHarnessToolInvocation({
         tool: tools.find((tool) => tool.name === name),
@@ -274,7 +267,7 @@ function observeLaunches() {
 
 async function prepareEffect(route: Route, suffix: string, senderRestricted = false) {
   const caller = await createCaller(route, config, "", senderRestricted);
-  const basename = route + suffix;
+  const basename = route + (stamped ? "-stamped" : "") + suffix;
   const target = path.join(state.workspaceDir, basename);
   await fs.writeFile(target, "original");
   return { caller, basename, target };
@@ -301,14 +294,21 @@ async function revokeAtGate(
 
 // Promise gates delay real preparation/I/O only. All authority, tool construction,
 // approval policy, command launch, mutation, and caller receipts remain production-owned.
-describe.each(["cli-loopback", "plugin-harness"] as const)(
-  "%s delegated final effects",
-  (route) => {
+describe.each([
+  { route: "cli-loopback", visibleSpawn: false },
+  { route: "plugin-harness", visibleSpawn: false },
+  { route: "cli-loopback", visibleSpawn: true },
+  { route: "plugin-harness", visibleSpawn: true },
+] as const)(
+  "$route delegated final effects (stamped visible spawn: $visibleSpawn)",
+  ({ route, visibleSpawn }) => {
+    beforeEach(() => {
+      stamped = visibleSpawn;
+    });
     it("executes the persisted exception, then restores the deny fallback on resume", async () => {
       const caller = await createCaller(route);
-      expect(caller.names).toEqual(expect.arrayContaining(denied));
       const launches = observeLaunches();
-      const basename = route + "-allowed.txt";
+      const basename = route + (stamped ? "-stamped" : "") + "-allowed.txt";
       const target = path.join(state.workspaceDir, basename);
       const exec = await caller.call("exec", {
         command: "printf command-effect > " + basename + "; printf launched",
@@ -322,10 +322,12 @@ describe.each(["cli-loopback", "plugin-harness"] as const)(
       expect(write.isError, write.text).toBe(false);
       expect(await fs.readFile(target, "utf8")).toBe("write-effect");
       const resumed = await createCaller(route, revoke(), caller.sessionKey);
-      expect(resumed.names).not.toContain("exec");
-      expect(resumed.names).not.toContain("write");
-      const refused = await resumed.call("write", { path: target, content: "must-not-write" });
-      expect(refused.isError).toBe(true);
+      for (const [name, args] of [
+        ["exec", { command: "printf forbidden > " + basename }],
+        ["write", { path: target, content: "must-not-write" }],
+      ] as const) {
+        expect((await resumed.call(name, args)).isError).toBe(true);
+      }
       const read = await resumed.call("read", { path: target });
       expect(read.isError, read.text).toBe(false);
       expect(read.text).toContain("write-effect");
@@ -335,8 +337,6 @@ describe.each(["cli-loopback", "plugin-harness"] as const)(
     it("does not waive sender restrictions even with a persisted delegation exception", async () => {
       const { caller, basename, target } = await prepareEffect(route, "-sender-denied.txt", true);
       const launches = observeLaunches();
-      expect(caller.names).not.toContain("exec");
-      expect(caller.names).not.toContain("write");
       for (const [name, args] of [
         ["exec", { command: "printf forbidden > " + basename }],
         ["write", { path: target, content: "forbidden" }],

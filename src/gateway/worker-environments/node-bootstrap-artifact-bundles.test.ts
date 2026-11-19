@@ -7,7 +7,6 @@ import { resolveNpmRunner } from "../../../scripts/npm-runner.mts";
 import type { NodeBootstrapArtifactWorkerTasks } from "./node-bootstrap-artifact-contract.js";
 import {
   extract,
-  readText,
   useNodeBootstrapArtifactFixtures,
   write,
   writeFiles,
@@ -25,6 +24,12 @@ vi.mock("./node-bootstrap-artifact-worker.js", async () => {
 });
 
 const { fixture, createProvider } = useNodeBootstrapArtifactFixtures();
+const cjsPackage = (name: string, extra: Record<string, unknown> = {}) => ({
+  name,
+  version: "1.2.3",
+  main: "index.cjs",
+  ...extra,
+});
 
 async function runNode(root: string) {
   const { stdout } = await promisify(execFile)(process.execPath, [path.join(root, "openclaw.mjs")]);
@@ -32,17 +37,7 @@ async function runNode(root: string) {
 }
 
 describe("node bootstrap bundled dependency ownership", () => {
-  it("preserves workspace bundles when npm bundling is disabled", async () => {
-    const { root, packageRoot, provider, sourcePackage } = await fixture();
-    await write(packageRoot, "package.json", { ...sourcePackage, bundleDependencies: false });
-
-    const target = await extract(root, await provider.prepare());
-    expect(await runNode(target)).toBe("local-ai:cloud-ready");
-    const manifest = JSON.parse(await readText(target, "package.json"));
-    expect(manifest.bundleDependencies).toEqual(["@fixture/ai"]);
-  });
-
-  it("installs a node artifact with a registry bundle's own dependency closure", async () => {
+  it("installs a registry bundle's own dependency closure, including src/node_modules", async () => {
     const { root, packageRoot, sourcePackage, options } = await fixture();
     const name = "@fixture/codec";
     await write(packageRoot, "package.json", {
@@ -52,38 +47,31 @@ describe("node bootstrap bundled dependency ownership", () => {
     });
     const bundledRoot = path.join(packageRoot, "node_modules", name);
     await writeFiles(bundledRoot, {
-      "package.json": {
-        name,
-        version: "1.2.3",
-        main: "index.cjs",
+      "package.json": cjsPackage(name, {
+        main: "./src/index.js",
         dependencies: { "transitive-runtime": "^1.2.3" },
         optionalDependencies: { "unavailable-platform-runtime": "1.0.0" },
-      },
-      "index.cjs":
-        'exports.marker = "bundle-transitive"; exports.run = () => require("transitive-runtime");',
-      "node_modules/transitive-runtime/package.json": {
-        name: "transitive-runtime",
-        version: "1.2.3",
-        main: "index.cjs",
+      }),
+      "src/index.js":
+        'exports.marker = "bundle-transitive"; exports.run = () => require("codec-internal");',
+      "src/node_modules/codec-internal/package.json": cjsPackage("codec-internal"),
+      "src/node_modules/codec-internal/index.cjs":
+        'module.exports = require("transitive-runtime");',
+      "node_modules/transitive-runtime/package.json": cjsPackage("transitive-runtime", {
         dependencies: { "@fixture/codec": "2.0.0" },
-      },
+      }),
       "node_modules/transitive-runtime/index.cjs":
         'module.exports = require("@fixture/codec").value;',
-      "node_modules/transitive-runtime/node_modules/@fixture/codec/package.json": {
-        name,
+      "node_modules/transitive-runtime/node_modules/@fixture/codec/package.json": cjsPackage(name, {
         version: "2.0.0",
-        main: "index.cjs",
         dependencies: { "leaf-runtime": "1.2.3" },
-      },
+      }),
       "node_modules/transitive-runtime/node_modules/@fixture/codec/index.cjs":
         'exports.marker = "nearer-decoy"; exports.value = require("leaf-runtime");',
       "node_modules/transitive-runtime/node_modules/@fixture/codec/node_modules/leaf-runtime/package.json":
-        {
-          name: "leaf-runtime",
-          version: "1.2.3",
-          main: "index.cjs",
+        cjsPackage("leaf-runtime", {
           dependencies: { "@fixture/codec": "1.2.3" },
-        },
+        }),
       "node_modules/transitive-runtime/node_modules/@fixture/codec/node_modules/leaf-runtime/index.cjs":
         'module.exports = require("@fixture/codec").marker;',
     });
@@ -94,11 +82,9 @@ describe("node bootstrap bundled dependency ownership", () => {
     await fs.mkdir(cycleModules, { recursive: true });
     await fs.symlink(bundledRoot, path.join(cycleModules, "codec"), "junction");
     await writeFiles(packageRoot, {
-      "node_modules/transitive-runtime/package.json": {
-        name: "transitive-runtime",
+      "node_modules/transitive-runtime/package.json": cjsPackage("transitive-runtime", {
         version: "2.0.0",
-        main: "index.cjs",
-      },
+      }),
       "node_modules/transitive-runtime/index.cjs": 'module.exports = "root-decoy";',
       "dist/entry.js": `import codec from "${name}"; console.log(codec.run());`,
     });
@@ -137,36 +123,6 @@ describe("node bootstrap bundled dependency ownership", () => {
     expect(await runNode(path.join(installRoot, "node_modules/openclaw"))).toBe(
       "bundle-transitive",
     );
-  });
-
-  it("runs package-owned modules under src/node_modules", async () => {
-    const { root, packageRoot, provider, sourcePackage } = await fixture();
-    const name = "@fixture/codec";
-    await write(packageRoot, "package.json", {
-      ...sourcePackage,
-      dependencies: { ...sourcePackage.dependencies, [name]: "1.2.3" },
-      bundleDependencies: [name],
-    });
-    const bundledRoot = path.join(packageRoot, "node_modules", name);
-    await writeFiles(bundledRoot, {
-      "package.json": {
-        name,
-        version: "1.2.3",
-        type: "commonjs",
-        main: "./src/index.js",
-      },
-      "src/index.js": 'module.exports = require("codec-internal");',
-      "src/node_modules/codec-internal/package.json": {
-        name: "codec-internal",
-        version: "1.2.3",
-        main: "./index.js",
-      },
-      "src/node_modules/codec-internal/index.js": 'module.exports = "bundled-internal";',
-    });
-    await write(packageRoot, "dist/entry.js", `import result from "${name}"; console.log(result);`);
-
-    const target = await extract(root, await provider.prepare());
-    expect(await runNode(target)).toBe("bundled-internal");
   });
 
   it.each(["source", "external-plugin"] as const)(

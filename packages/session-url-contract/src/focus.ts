@@ -9,13 +9,6 @@ type ControlUiFocusDashboardTarget = {
   path: string;
 };
 
-type ControlUiFocusDesktopBuildTarget = {
-  kind: "desktop";
-  control?: boolean;
-  source?: string | null;
-  session?: string | null;
-};
-
 type ControlUiFocusBrowserTarget = {
   kind: "browser";
   sessionKey: string;
@@ -29,7 +22,12 @@ export type ControlUiFocusBuildTarget =
   | ControlUiFocusDashboardTarget
   | ControlUiFocusBrowserTarget
   | { kind: "terminal" }
-  | ControlUiFocusDesktopBuildTarget;
+  | {
+      kind: "desktop";
+      control?: boolean;
+      source?: string | null;
+      session?: string | null;
+    };
 
 export type ControlUiFocusTarget =
   | ControlUiFocusBrowserTarget
@@ -47,8 +45,6 @@ export type ControlUiFocusTarget =
 export type ControlUiFocusLocation =
   | { status: "valid"; basePath: string; target: ControlUiFocusTarget }
   | { status: "unsupported"; basePath: string };
-
-type ControlUiFocusLocationInput = string | { pathname: string; search?: string; hash?: string };
 
 function normalizePathname(pathname: string): string {
   const trimmed = pathname.trim();
@@ -172,7 +168,7 @@ export function buildControlUiFocusPath(
 }
 
 export function parseControlUiFocusLocation(
-  input: ControlUiFocusLocationInput,
+  input: string | { pathname: string; search?: string; hash?: string },
   basePath?: string,
 ): ControlUiFocusLocation | null {
   const pathname = typeof input === "string" ? input : input.pathname;

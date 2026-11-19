@@ -6,6 +6,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { InferResult } from "kysely";
 import { sha256Hex } from "../infra/crypto-digest.js";
+import { engineLeast } from "../infra/database-engine/scalar.js";
 import { executeWithCachedStatement } from "../infra/kysely-sync-cache-state.js";
 import { compileSqliteQueryBindings, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
@@ -101,9 +102,9 @@ export class DebugProxyCaptureKernel {
         .values(values)
         .onConflict((conflict) =>
           conflict.column("id").doUpdateSet((eb) => ({
-            started_at: eb.fn<number>("min", [
-              "capture_sessions.started_at",
-              "excluded.started_at",
+            started_at: engineLeast(this.db, [
+              eb.ref("capture_sessions.started_at"),
+              eb.ref("excluded.started_at"),
             ]),
             ended_at: eb.ref("excluded.ended_at"),
             mode: eb

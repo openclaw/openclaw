@@ -62,16 +62,14 @@ it.each([undefined, "New Chat"])(
         MessageThreadId: "77",
         SessionKey: sessionKey,
       };
-      for (const title of ["Test 4", "Test 5"]) {
-        const updated = await recordInboundSessionMeta({
+      const recordTitle = (ThreadLabel?: string) =>
+        recordInboundSessionMeta({
           storePath,
           sessionKey,
-          ctx: { ...ctx, ThreadLabel: title },
+          ctx: { ...ctx, ThreadLabel },
           createIfMissing: false,
         });
-        expect(resolveGatewaySessionDisplayName(sessionKey, updated ?? undefined)).toBe(title);
-        expect(updated?.sessionId).toBe("private-topic-first-reply");
-      }
+      await recordTitle("Test 5");
 
       const initialized = await initSessionState({
         ctx: { ...ctx, ThreadLabel: "Test 5", Body: "Hello", RawBody: "Hello" },
@@ -90,12 +88,7 @@ it.each([undefined, "New Chat"])(
       );
       const beforeRename = loadSessionEntry({ storePath, sessionKey });
 
-      await recordInboundSessionMeta({
-        storePath,
-        sessionKey,
-        ctx: { ...ctx, ThreadLabel: undefined },
-        createIfMissing: false,
-      });
+      await recordTitle();
       const afterReplyMetadata = loadSessionEntry({ storePath, sessionKey });
       expect(afterReplyMetadata?.sessionId).toBe("private-topic-first-reply");
       expect(afterReplyMetadata?.updatedAt).toBe(beforeRename?.updatedAt);

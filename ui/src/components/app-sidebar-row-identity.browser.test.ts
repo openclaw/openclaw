@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "../test-helpers/load-styles.ts";
 
@@ -55,20 +54,17 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session row DOM iden
       gamma.createdAt = Date.now();
     }
     harness.publishList(next);
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
+    await waitForSolid(() => {
+      const rowKeys = Array.from(sidebar.querySelectorAll("[data-session-tree]")).map((row) =>
+        row.getAttribute("data-session-tree"),
+      );
+      expect(rowKeys[0]).toBe("agent:main:gamma");
+      expect(rowFor(alphaKey)).toBe(alphaBefore);
+      expect(rowFor("agent:main:beta")).toBe(betaBefore);
+      expect(alphaBefore?.querySelector("a")?.getAttribute("href")).toBe(
+        "/control/chat/main/renamed-board-11111111111141118111111111111111",
+      );
+      expect(betaBefore?.querySelector("a")?.getAttribute("href")).toBe("/control/chat/main/beta");
     });
-    await settleLitElement(sidebar);
-
-    const rowKeys = Array.from(sidebar.querySelectorAll("[data-session-tree]")).map((row) =>
-      row.getAttribute("data-session-tree"),
-    );
-    expect(rowKeys[0]).toBe("agent:main:gamma");
-    expect(rowFor(alphaKey)).toBe(alphaBefore);
-    expect(rowFor("agent:main:beta")).toBe(betaBefore);
-    expect(alphaBefore?.querySelector("a")?.getAttribute("href")).toBe(
-      "/control/chat/main/renamed-board-11111111111141118111111111111111",
-    );
-    expect(betaBefore?.querySelector("a")?.getAttribute("href")).toBe("/control/chat/main/beta");
   });
 });

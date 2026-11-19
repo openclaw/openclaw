@@ -9,7 +9,7 @@ import {
 import { applyGatewayToolPolicy } from "./gateway-tool-policy.js";
 import { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
-import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
+import { guardScheduledOwnerOnlyTools } from "./scheduled-owner-tool-guard.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createGatewayToolCallerWrapper } from "./tools/gateway-caller-context.js";
 
@@ -22,15 +22,18 @@ export function finalizeOpenClawTools(params: {
   gatewayCallerAccountId: string | undefined;
 }): AnyAgentTool[] {
   const { options, config, hookAgentId, gatewayCallerAccountId } = params;
-  const allTools = applyGatewayToolPolicy(
+  const allTools = guardScheduledOwnerOnlyTools(
     finalizeAgentToolAvailability(
-      filterToolsByClientCaps(
-        params.tools,
-        options?.listingClientCaps ?? options?.clientCaps,
-        options?.clientCaps,
+      applyGatewayToolPolicy(
+        filterToolsByClientCaps(
+          params.tools,
+          options?.listingClientCaps ?? options?.clientCaps,
+          options?.clientCaps,
+        ),
+        config,
       ),
     ),
-    config,
+    options?.scheduledToolTargets?.assertOwnerCurrent,
   );
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
   for (const tool of allTools) {
@@ -51,7 +54,6 @@ export function finalizeOpenClawTools(params: {
     ...(options?.agentSessionKey ? { sessionKey: options.agentSessionKey } : {}),
     ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
     ...(options?.currentChannelId ? { channelId: options.currentChannelId } : {}),
-    loopDetection: resolveToolLoopDetectionConfig({ cfg: config, agentId: hookAgentId }),
   };
   const hookContext = { ...defaultHookContext, ...options?.beforeToolCallHookContext };
   options?.recordToolPrepStage?.("openclaw-tools:tool-hooks");

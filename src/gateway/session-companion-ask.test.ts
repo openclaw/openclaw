@@ -76,7 +76,8 @@ vi.mock("../agents/sessions/index.js", () => ({
     }),
   },
 }));
-vi.mock("../agents/simple-completion-runtime.js", () => ({
+// mock-isolation: Keep synthetic companion selection independent of installed providers and auth state.
+vi.mock("../agents/simple-completion-selection.js", () => ({
   resolveSimpleCompletionSelectionForAgent: resolveSelection,
 }));
 vi.mock("../agents/cli-runner/prepare.runtime.js", () => ({ prepareCliRunContext }));
@@ -142,6 +143,7 @@ const question = {
   sessionKey: "agent:main:main",
   question: "What is it doing?",
   connId: "conn-1",
+  ownerId: "shared",
 };
 
 function expectAnswer(respond: ReturnType<typeof vi.fn>, answer: unknown = expect.any(String)) {

@@ -189,15 +189,37 @@ describe("codex media understanding provider", () => {
   });
 
   it("runs image understanding through a bounded Codex app-server turn", async () => {
-    const { provider, requests } = createFakeClient();
+    const { provider, requests, clientFactory } = createFakeClient(
+      {},
+      { pluginConfig: websocketConfig },
+    );
     const cfg = { auth: { order: { openai: ["openai:work"] } } };
+    const authStore = {
+      version: 1,
+      profiles: {
+        "openai:scoped": {
+          type: "oauth" as const,
+          provider: "openai",
+          access: "scoped-access",
+          refresh: "scoped-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
 
     const result = await provider.describeImage?.(
-      imageRequest({ prompt: "Describe briefly.", cfg }),
+      imageRequest({ prompt: "Describe briefly.", cfg, authStore }),
     );
 
     expect(result).toEqual({ text: "A red square.", model: "gpt-5.4" });
     expectStartup(cfg, "/tmp/openclaw-agent");
+    expect(clientFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileStore: authStore,
+        startOptions: expect.objectContaining(websocketConfig.appServer),
+      }),
+    );
+    expect((await clientFactory.mock.results[0]?.value)?.closeAndWait).toHaveBeenCalledOnce();
     expectBoundedThread(
       requests,
       "You are OpenClaw's bounded image-understanding worker. Describe only the provided image content. Do not call tools, edit files, or ask follow-up questions.",
@@ -218,21 +240,6 @@ describe("codex media understanding provider", () => {
 
     expectStartup(cfg);
     expect(requests[1]?.[1]).toEqual(expect.objectContaining({ cwd: process.cwd() }));
-    expect(requests[2]?.[1]).not.toHaveProperty("cwd");
-  });
-
-  it("preserves configured WebSocket transport for media turns", async () => {
-    const { provider, requests, clientFactory } = createFakeClient(
-      {},
-      { pluginConfig: websocketConfig },
-    );
-
-    await provider.describeImage?.(imageRequest());
-
-    const factoryOptions = clientFactory.mock.calls[0]?.[0];
-    expect(factoryOptions?.startOptions).toMatchObject(websocketConfig.appServer);
-    expectStartup({}, "/tmp/openclaw-agent");
-    expect(requests[1]?.[1]).toEqual(expect.objectContaining({ cwd: "/tmp/openclaw-agent" }));
     expect(requests[2]?.[1]).not.toHaveProperty("cwd");
   });
 
@@ -258,29 +265,6 @@ describe("codex media understanding provider", () => {
       method: "turn/interrupt",
       params: turnIdentity,
     });
-  });
-
-  it("passes the scoped auth store into isolated app-server startup", async () => {
-    const { provider, clientFactory } = createFakeClient();
-    const authStore = {
-      version: 1,
-      profiles: {
-        "openai:scoped": {
-          type: "oauth" as const,
-          provider: "openai",
-          access: "scoped-access",
-          refresh: "scoped-refresh",
-          expires: Date.now() + 60_000,
-        },
-      },
-    };
-
-    await provider.describeImage?.(imageRequest({ authStore }));
-
-    expect(sharedClientMocks.createIsolatedCodexAppServerClient).toHaveBeenCalledWith(
-      expect.objectContaining({ authProfileStore: authStore }),
-    );
-    expect((await clientFactory.mock.results[0]?.value)?.closeAndWait).toHaveBeenCalledOnce();
   });
 
   it("clamps oversized image understanding turn timeouts", async () => {

@@ -5,12 +5,12 @@ import { createExecTool } from "../../agents/bash-tools.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
 import { projectEffectiveExecPolicy } from "../../agents/session-permission-exec-mode.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createOrResumeClientVoiceSession,
   flushClientVoiceSessionWrites,
@@ -25,15 +25,15 @@ import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
 } from "../device-revocation.js";
-import type { GatewayRequestContext } from "../server-methods/types.js";
-import { captureSessionMutationRouting } from "../session-sharing-routing.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import {
   createTalkClientAgentConsultRunner,
   prepareTalkClientControlAuthority,
 } from "./client-agent-consult.js";
-import { resolveTalkAgentConsultAuthority } from "./client-gateway-control.js";
 import { retainTalkClientRunAuthority } from "./client-run-authority.js";
+import { resolveTalkAgentConsultAuthority } from "./client-tool-authority.js";
+import { prepareTalkSessionTarget } from "./session-target.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
 const model = vi.hoisted(() => ({ run: vi.fn() }));
@@ -65,10 +65,7 @@ describe("authenticated Talk permission parity", () => {
   }
 
   async function retainSource(isCurrent = () => true) {
-    const context = {
-      getRuntimeConfig: () => config,
-      logGateway: { warn: vi.fn() },
-    } as unknown as GatewayRequestContext;
+    const context = createDirectChatContext({ getRuntimeConfig: () => config });
     const source = captureGatewayDeviceRevocation(
       context,
       { deviceId: "parity-caller", role: "operator" },
@@ -120,21 +117,15 @@ describe("authenticated Talk permission parity", () => {
       tools: { exec: { host: "gateway", mode: "full" } },
     };
     await state.writeConfig(config);
-    const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-    sessionTarget = {
-      agentId: "main",
-      sessionKey,
-      canonicalKey: sessionKey,
-      storePath,
-      assertCurrent: captureSessionMutationRouting(config, undefined, [
-        { agentId: "main", sessionKey },
-      ]),
+    const profile = ensureProfileForEmail("talk-parity@example.test");
+    client.authenticatedUserProfile = {
+      profileId: profile.id,
+      displayName: null,
+      hasAvatar: false,
+      updatedAt: 1,
     };
-    await writeSession({
-      delivery: normalizeSessionDeliveryState({
-        context: { channel: "discord", to: "old-delivery", accountId: "old-account" },
-      }),
-    });
+    sessionTarget = await prepareTalkSessionTarget(config, sessionKey);
+    await writeSession();
     voiceSessionId = await createOrResumeClientVoiceSession({
       agentId: "main",
       sessionKey,
@@ -181,13 +172,6 @@ describe("authenticated Talk permission parity", () => {
         permissionMode: "guarded",
         execOverrides: { host: "node", node: "session-node", nodeCwd: "/node/task" },
       });
-      expect(
-        projectEffectiveExecPolicy({
-          base: { host: "gateway", mode: "full" },
-          overrides: params.execOverrides,
-          permissionPolicy: { mode: "guarded" },
-        }),
-      ).toMatchObject({ host: "node", security: "allowlist", ask: "on-miss" });
       return { payloads: [{ text: "Prepared." }], meta: {} };
     });
     const runner = createRunner({
@@ -204,12 +188,13 @@ describe("authenticated Talk permission parity", () => {
     ).toEqual({ text: "Prepared." });
   });
 
-  it("fences the native effect when the retained authenticated source is revoked", async () => {
+  it("finishes an admitted native effect after device revocation but refuses the next consult", async () => {
     await writeSession();
     const { context, source, retained } = await retainSource();
     const marker = path.join(state.workspaceDir, "revoked-effect");
     model.run.mockImplementationOnce(async (params: RunEmbeddedAgentParams) => {
       assert(params.preparedRunAdmission, "Missing Talk admission");
+      expect(params.preparedRunAdmission.readOperatorAuthority?.()).toBeDefined();
       const admittedRunContext = await params.preparedRunAdmission.admit(
         "plugin-harness",
         "parity-native-host",
@@ -230,23 +215,25 @@ describe("authenticated Talk permission parity", () => {
       try {
         // Revocation is an owner event, not a model parameter or a mock policy answer.
         invalidateGatewayDeviceRevocation(context, "parity-caller", "operator");
-        await expect(
-          tool.execute("revoked-call", {
-            command: "printf effect > revoked-effect",
-            workdir: state.workspaceDir,
-          }),
-        ).rejects.toThrow(/authority|active/);
-        await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+        const result = await tool.execute("admitted-call", {
+          command: "printf effect > revoked-effect",
+          workdir: state.workspaceDir,
+        });
+        expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
+        expect(await fs.readFile(marker, "utf8")).toBe("effect");
       } finally {
         host.close();
       }
-      return { payloads: [{ text: "Denied." }], meta: {} };
+      return { payloads: [{ text: "Completed." }], meta: {} };
     });
     try {
       const runner = createRunner({ context, runAuthority: retained });
       expect(await runner.runArgs({ question: "Carry out the action" })).toEqual({
-        text: "Denied.",
+        text: "Completed.",
       });
+      await expect(runner.runArgs({ question: "Start another action" })).rejects.toThrow(
+        /authority|active|closed/,
+      );
     } finally {
       retained.release();
       source.release();
@@ -272,8 +259,8 @@ describe("authenticated Talk permission parity", () => {
       source.release();
     }
   });
-  it("does not manufacture reply authority when the authenticated caller is missing", () => {
-    expect(() =>
+  it("does not manufacture reply authority when the authenticated caller is missing", async () => {
+    await expect(
       prepareTalkClientControlAuthority({
         config,
         sessionTarget,
@@ -281,6 +268,6 @@ describe("authenticated Talk permission parity", () => {
         authority: { senderIsOwner: false },
         agentRuntime: createPluginRuntime().agent,
       }),
-    ).toThrow("Talk chat caller authority is unavailable");
+    ).rejects.toThrow("Talk chat caller authority is unavailable");
   });
 });

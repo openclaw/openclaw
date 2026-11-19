@@ -41,6 +41,42 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
 
+async function requesterAuthority(
+  context: ReturnType<typeof createContext>,
+  sessionKey: string,
+  profileName: string,
+  deviceId: string,
+  scopes: string[],
+) {
+  const client = createOperatorClient({ profileName, scopes });
+  let connected = true;
+  const device = captureGatewayDeviceRevocation(
+    context,
+    { deviceId, role: "operator" },
+    () => connected,
+    undefined,
+    { isCurrent: () => true, subscribe: () => () => {} },
+  );
+  const source = await captureGatewayOperatorRunAuthority({
+    client,
+    context,
+    hasCurrentClientAuthority: device.isCurrent,
+  });
+  const origin = captureRequesterOrigin({
+    sessionKey,
+    operatorProfileId: client.authenticatedUserProfile?.profileId,
+  });
+  if (!source || !origin) {
+    throw new Error("Expected authenticated requester source");
+  }
+  const release = () => {
+    connected = false;
+    source.release();
+    device.release();
+  };
+  return { client, device, source, origin, release };
+}
+
 it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
   "preserves requester selection and separate-turn return after invocation closure: %s",
   async (boundary) => {
@@ -60,58 +96,26 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
       const peerEntry = { sessionId: "peer-id", lifecycleRevision: "peer-v1", updatedAt: 1 };
       await replaceSessionEntry({ agentId: "main", sessionKey }, requesterEntry);
       await replaceSessionEntry({ agentId: "main", sessionKey: peerKey }, peerEntry);
-      const client = createOperatorClient({
-        profileName: "synthetic-peer-requester",
-        scopes: ["operator.read", "operator.write"],
-      });
       const context = createContext([], () => cfg);
       const resolveGatewayContext = () => context;
       context.resolveGatewayContext = resolveGatewayContext;
-      let connected = true;
       let receiptCurrent = true;
-      const device = captureGatewayDeviceRevocation(
+      const alice = await requesterAuthority(
         context,
-        { deviceId: "synthetic-peer-device", role: "operator" },
-        () => connected,
-        undefined,
-        { isCurrent: () => true, subscribe: () => () => {} },
-      );
-      const source = await captureGatewayOperatorRunAuthority({
-        client,
-        context,
-        hasCurrentClientAuthority: device.isCurrent,
-      });
-      const origin = captureRequesterOrigin({
         sessionKey,
-        operatorProfileId: client.authenticatedUserProfile?.profileId,
-      });
-      if (!source || !origin) {
-        throw new Error("Expected authenticated requester source");
-      }
-      const bobClient = createOperatorClient({
-        profileName: "synthetic-selected-bob",
-        scopes: ["operator.read", "operator.write", "operator.approvals"],
-      });
-      let bobConnected = true;
-      const bobDevice = captureGatewayDeviceRevocation(
-        context,
-        { deviceId: "synthetic-bob-device", role: "operator" },
-        () => bobConnected,
-        undefined,
-        { isCurrent: () => true, subscribe: () => () => {} },
+        "synthetic-peer-requester",
+        "synthetic-peer-device",
+        ["operator.read", "operator.write"],
       );
-      const bobSource = await captureGatewayOperatorRunAuthority({
-        client: bobClient,
+      const bob = await requesterAuthority(
         context,
-        hasCurrentClientAuthority: bobDevice.isCurrent,
-      });
-      const bobOrigin = captureRequesterOrigin({
         sessionKey,
-        operatorProfileId: bobClient.authenticatedUserProfile?.profileId,
-      });
-      if (!bobSource || !bobOrigin) {
-        throw new Error("Expected real selected Bob source");
-      }
+        "synthetic-selected-bob",
+        "synthetic-bob-device",
+        ["operator.read", "operator.write", "operator.approvals"],
+      );
+      const { client, device, source, origin } = alice;
+      const { source: bobSource, origin: bobOrigin } = bob;
       const participants = createReplyTurnParticipants({
         operatorAuthority: source.authority,
         requesterOrigin: origin,
@@ -166,6 +170,10 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
           request.params.sessionKey === sessionKey
         ) {
           const caller = getGatewayToolCallerIdentity();
+          if (boundary === "revoked") {
+            // This port observes handoff, not target admission; another start must still refuse.
+            expect(caller?.operatorAuthority?.reauthorize).toThrow();
+          }
           effects.push({
             origin: caller?.requesterOrigin,
             profileId: caller?.operatorAuthority?.profileId,
@@ -297,12 +305,8 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
         );
         // The peer returns only after ordinary invocation and transport ownership end.
         receiptCurrent = false;
-        connected = false;
-        source.release();
-        device.release();
-        bobConnected = false;
-        bobSource.release();
-        bobDevice.release();
+        alice.release();
+        bob.release();
         participants.close();
         if (boundary === "revoked") {
           invalidateGatewayDeviceRevocation(context, "synthetic-peer-device", "operator");
@@ -314,7 +318,7 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
         }
         releasePeer.resolve();
         await returned.promise;
-        if (boundary === "revoked" || boundary === "session changed") {
+        if (boundary === "session changed") {
           expect(effects).toEqual([]);
           return;
         }
@@ -350,10 +354,8 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
         });
       } finally {
         releasePeer.resolve();
-        source.release();
-        device.release();
-        bobSource.release();
-        bobDevice.release();
+        alice.release();
+        bob.release();
         participants.close();
       }
     });

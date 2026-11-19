@@ -1,14 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createUpdateDoctorSectionTiming } from "../../infra/update-doctor-section-timing.js";
 import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import { getUpdateRunForProgressAsync } from "../../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+import { createUpdateRunRecordFixture } from "../../infra/update-run-record.test-support.js";
 import { UPDATE_RUN_HEARTBEAT_MS } from "../../infra/update-run-timeouts.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import type { CommandOptions } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliJsonFailure } from "../failure-output.js";
-import { createUpdateProgress, prepareResult, printResult } from "./progress.js";
+import { createCliTtyMock } from "../test-runtime-capture.js";
+import {
+  createUpdateDoctorProgress,
+  createUpdateProgress,
+  prepareResult,
+  printResult,
+} from "./progress.js";
 import { stepFixture } from "./update-command-fixtures.test-support.js";
 import {
   reportUpdateCommandPendingRecovery,
@@ -41,6 +51,60 @@ const recoveryStep = (overrides: Partial<UpdateRunResult["steps"][number]> = {})
     exitCode: 0,
     ...overrides,
   });
+
+describe("activation Doctor diagnostic display", () => {
+  afterEach(() => {
+    resetLogger();
+    vi.restoreAllMocks();
+  });
+
+  it.each(["pretty", "compact", "json"] as const)("uses %s stderr without JSON stdout", (style) => {
+    setLoggerOverride({ consoleLevel: "info", consoleStyle: style });
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const display = createUpdateDoctorProgress();
+    expect(display).toBeTypeOf("function");
+    display?.("Doctor: state schema");
+    expect(stderr).toHaveBeenCalledOnce();
+    const line = String(stderr.mock.calls[0]?.[0]);
+    if (style === "json") {
+      expect(JSON.parse(line)).toEqual({
+        time: expect.any(String),
+        level: "info",
+        message: "Doctor: state schema",
+      });
+    } else {
+      expect(line).toBe("Doctor: state schema\n");
+    }
+    expect(stdout).not.toHaveBeenCalled();
+  });
+
+  it.each(["warn", "error", "fatal", "silent"] as const)(
+    "respects %s filtering",
+    (consoleLevel) => {
+      setLoggerOverride({ consoleLevel });
+      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      expect(createUpdateDoctorProgress()).toBeUndefined();
+      expect(stderr).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a synchronous stderr failure outside child cancellation", async () => {
+    setLoggerOverride({ consoleLevel: "info", consoleStyle: "compact" });
+    vi.spyOn(process.stderr, "write").mockImplementation(() => {
+      throw new Error("synchronous display failure");
+    });
+    const observer = vi.fn();
+    const timing = createUpdateDoctorSectionTiming({}, createUpdateDoctorProgress());
+    await expect(
+      timing.wrap(async (_argv: string[], options: CommandOptions) => {
+        options.onOutputChunk?.(Buffer.from("Doctor: state schema\n"), "stderr");
+        return { stderr: "captured diagnostic", exitCode: 0 };
+      })([], { onOutputChunk: observer }),
+    ).resolves.toEqual({ stderr: "captured diagnostic", exitCode: 0 });
+    expect(observer).toHaveBeenCalledOnce();
+  });
+});
 function observed(version: string, overrides: UpdateRunRecord["verification"] = {}) {
   return {
     serviceRunning: true,
@@ -65,31 +129,22 @@ const timeline = (phase: UpdateRunRecord["phase"], ...completed: UpdateRunRecord
 });
 
 function runRecord(): UpdateRunRecord {
-  return {
-    runId,
+  return createUpdateRunRecordFixture(runId, {
     createdAtMs: 100,
     updatedAtMs: 100,
-    trigger: "cli",
     status: "running",
     phase: "requested",
-    reason: null,
     before: { version: "2026.9.2" },
-    after: {},
     target: { version: "2026.9.3" },
-    origin: {},
     steps: [{ step: "requested", status: "in_progress", startedAtMs: 100 }],
-    verification: {},
-    repair: [],
-    confirmedAtMs: null,
     finishedAtMs: null,
-    downtimeMs: null,
-  };
+  });
 }
 
 describe("update progress", () => {
   let run: UpdateRunRecord;
   let presentation: ReturnType<typeof createUpdateProgress> | undefined;
-  const tty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  const tty = createCliTtyMock([process.stdout]);
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -101,7 +156,7 @@ describe("update progress", () => {
       .mockImplementation(async () => structuredClone(run));
     vi.mocked(writeUpdateRunReportArtifact).mockReset().mockResolvedValue(reportPath);
     vi.mocked(getUpdateRun).mockImplementation(() => run);
-    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
+    tty.set(false);
   });
 
   async function observe(...args: Parameters<typeof createUpdateProgress>) {
@@ -124,11 +179,7 @@ describe("update progress", () => {
   afterEach(() => {
     presentation?.dispose();
     presentation = undefined;
-    if (tty) {
-      Object.defineProperty(process.stdout, "isTTY", tty);
-    } else {
-      Reflect.deleteProperty(process.stdout, "isTTY");
-    }
+    tty.restore();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -208,7 +259,7 @@ describe("update progress", () => {
   it("cancels an in-flight read and releases the terminal spinner on disposal", async () => {
     const error = silenceErrors();
     vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+    tty.set(true);
     const timerCount = vi.getTimerCount();
     const signals = ["SIGINT", "SIGTERM"] as const;
     const listenerCounts = signals.map((signal) => process.listenerCount(signal));
@@ -506,7 +557,7 @@ describe("update progress", () => {
         expect(output).toContain(
           serviceRunning
             ? "verified serving 2026.9.5; restart remains unsafe (state-migration-started)"
-            : "not serving (service-not-running)",
+            : "readiness unverified (service-not-running)",
         );
       }
       expect(run).toEqual(saved);

@@ -29,10 +29,16 @@ export async function installUsageOverviewGateway(
     return configured;
   }
   function project(value: unknown, params: SessionsUsageParams, browserTimeZone: string) {
-    if (!isRecord(value) || !Array.isArray(value.sessions) || params.projection !== "overview") {
+    if (!isRecord(value) || !Array.isArray(value.sessions)) {
       return value;
     }
     const response = value as SessionsUsageResult;
+    if (params.key) {
+      return { ...response, sessions: response.sessions.filter((row) => row.key === params.key) };
+    }
+    if (params.projection !== "overview") {
+      return value;
+    }
     const rows = response.sessions.map((session): SessionUsageEntry => {
       const usage = session.usage;
       const firstActivity =
@@ -102,4 +108,35 @@ export async function installUsageOverviewGateway(
       await gateway.resolveDeferred(method, resolved, options);
     },
   };
+}
+
+export async function openUsageFilter(page: Page, field?: string) {
+  const trigger = page.locator(".usage-filter-menu__trigger");
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+    await trigger.click();
+  }
+  if (!field) {
+    return page.locator(".usage-filter-menu__query input");
+  }
+  const submenu = page.getByRole("menuitem", { name: field, exact: true });
+  await submenu.click();
+  return page.locator(`[id="${await submenu.getAttribute("aria-controls")}"]`);
+}
+
+export async function applyUsageQuery(page: Page, value: string) {
+  const input = await openUsageFilter(page);
+  await input.fill(value);
+  await input.press("Enter");
+  await page.locator(".usage-filter-menu__trigger").click();
+}
+
+export async function selectUsageTimeZone(page: Page, timeZone: "local" | "utc") {
+  await page.getByRole("button", { name: "Display", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Time zone", exact: true }).click();
+  const option = page.getByRole("menuitemradio", {
+    name: timeZone === "utc" ? "UTC" : "Local",
+    exact: true,
+  });
+  await option.click();
+  await option.waitFor({ state: "hidden" });
 }

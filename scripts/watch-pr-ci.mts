@@ -12,6 +12,7 @@ import {
   type RollupPayload,
   type RollupPage,
 } from "./lib/watch-pr-ci-rollup.mts";
+import { createCiRunReader } from "./lib/watch-pr-ci-run.mts";
 import { createPrMetadataReader } from "./pr-lib/github.mjs";
 
 const USAGE =
@@ -361,9 +362,10 @@ function readPr(
 ) {
   // Repository resolution and metadata share one read budget, including diagnostics.
   const readDeadline = Date.now() + ghReadOptions(deadline).timeout;
-  return RollupPageSchema.parse(
-    readMetadata(pr, ["state", "mergeable", "headRefOid"], () => ghReadOptions(readDeadline)),
+  const metadata = readMetadata(pr, ["state", "mergeable", "headRefOid", "url"], () =>
+    ghReadOptions(readDeadline),
   );
+  return { ...RollupPageSchema.parse(metadata), url: metadata.url };
 }
 const buildFindRunArgs = (repo: string, sha: string) =>
   workflowRunsApiArgs(repo, sha, "pull_request", 20);
@@ -385,18 +387,13 @@ function findRun(repo: string, sha: string, after?: number, pr?: number) {
   }
   return { run, runs: new Map(runs.map((item) => [item.id, item])) };
 }
-const readRun = (repo: string, runId: number, deadline?: number, includeJobs = false) =>
+const readRun = (repo: string, runId: number, deadline?: number) =>
   RunStatusSchema.parse(
-    execGhJson(
-      `run view ${runId} --repo ${repo} --json status,conclusion${includeJobs ? ",jobs" : ""}`.split(
-        " ",
-      ),
-      {
-        ...ghReadOptions(deadline),
-        // Revalidate changing run status instead of reusing a cached snapshot.
-        env: { ...process.env, OCTOPOOL_FRESH: "1" },
-      },
-    ),
+    execGhJson(`run view ${runId} --repo ${repo} --json status,conclusion`.split(" "), {
+      ...ghReadOptions(deadline),
+      // Revalidate changing run status instead of reusing a cached snapshot.
+      env: { ...process.env, OCTOPOOL_FRESH: "1" },
+    }),
   );
 
 function formatRunJobs(run: RunStatus) {
@@ -731,6 +728,7 @@ function precheck(pr: RollupPage, sha: string, midWait = false) {
 async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const readMetadata = createPrMetadataReader(args.repo);
+  const readCiRun = createCiRunReader(args.repo, args.headSha, ghReadOptions);
   const readRollup = createPrRollupReader(
     args.pr,
     args.repo,
@@ -799,15 +797,12 @@ async function main(argv = process.argv.slice(2)) {
     poll: () => {
       try {
         if (args.completion === "ci-run") {
-          const blocked = precheck(
-            readPr(args.pr, readMetadata, watchDeadline),
-            args.headSha,
-            true,
-          );
+          const currentPr = readPr(args.pr, readMetadata, watchDeadline);
+          const blocked = precheck(currentPr, args.headSha, true);
           if (blocked !== null) {
             return blocked;
           }
-          const run = readRun(args.repo, runId, watchDeadline, true);
+          const run = RunStatusSchema.parse(readCiRun(runId, currentPr.url, watchDeadline));
           const result = classifyAttachedCiRun(run);
           const runStatus = run.status ?? "undefined";
           const runConclusion = run.conclusion ?? "pending";

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import {
   enqueueMessageInjection,
   MessageInjectionAcceptedUnconfirmedError,
+  MessageInjectionClosedError,
   withMessageInjectionAdmission,
 } from "../../auto-reply/reply/message-injection-authority.js";
 import { throwCollectedErrors } from "../../infra/error-graph-internal.js";
@@ -9,6 +10,7 @@ import type { ImageContent, TextContent } from "../../llm/types.js";
 import { attachRuntimePromptMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { readRuntimePromptImageFactIndexes } from "../../media/runtime-prompt-image-provenance.js";
+import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
 import {
   mergePreparedUserTurnMessageForRuntime,
@@ -535,7 +537,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       try {
         await withMessageInjectionAdmission(prepareInjection, () => {
           if (canInject && !canInject()) {
-            throw new Error("active session is finalizing");
+            throw new MessageInjectionClosedError();
           }
           notify = this.queueSteer(message, expandedText);
           onAccepted?.();
@@ -587,7 +589,12 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     queueIdentity?: string,
     currentInboundContext?: CurrentInboundPromptContext,
   ): AgentMessage {
-    const runtimeMessage = this.createUserMessage(text, images, transcriptContext?.message);
+    // Cold replay adds this same source envelope; include it before the first model request.
+    const runtimeMessage = this.createUserMessage(
+      annotateInterSessionPromptText(text, transcriptContext?.message.provenance),
+      images,
+      transcriptContext?.message,
+    );
     const promptMessage = media?.length
       ? attachRuntimePromptMediaFacts(runtimeMessage, media, imageOrder)
       : runtimeMessage;

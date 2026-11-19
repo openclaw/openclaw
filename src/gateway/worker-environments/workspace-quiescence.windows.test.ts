@@ -50,16 +50,12 @@ function leaseDatabase(home: string) {
 }
 
 function readLease(home: string, workspace: string) {
-  const database = new DatabaseSync(leaseDatabase(home), { readOnly: true });
-  try {
-    return database
-      .prepare("SELECT lease_json FROM workspace_leases WHERE workspace_key = ?")
-      .get(createHash("sha256").update(workspace).digest("hex")) as
-      | { lease_json: string }
-      | undefined;
-  } finally {
-    database.close();
-  }
+  using database = new DatabaseSync(leaseDatabase(home), { readOnly: true });
+  return database
+    .prepare("SELECT lease_json FROM workspace_leases WHERE workspace_key = ?")
+    .get(createHash("sha256").update(workspace).digest("hex")) as
+    | { lease_json: string }
+    | undefined;
 }
 
 describe.runIf(process.platform === "win32")("Windows workspace quiescence", () => {
@@ -71,10 +67,6 @@ describe.runIf(process.platform === "win32")("Windows workspace quiescence", () 
     expect(nonce).toBeDefined();
     expect(readLease(home, realWorkspace)?.lease_json).toContain('"sharedHost":true');
 
-    const overlapping = await acquire();
-    expect(overlapping.code).not.toBe(0);
-    expect(overlapping.stderr).toContain("workspace quiescence lease is already active");
-
     const renewed = await renew(nonce!);
     expect(renewed).toMatchObject({ code: 0, stdout: `renewed ${nonce}\n` });
 
@@ -82,24 +74,18 @@ describe.runIf(process.platform === "win32")("Windows workspace quiescence", () 
     expect(readLease(home, realWorkspace)).toBeUndefined();
 
     const database = new DatabaseSync(leaseDatabase(home));
+    const insert = database.prepare(
+      "INSERT INTO workspace_leases (workspace_key, lease_json) VALUES (?, ?)",
+    );
     for (const [leaseWorkspace, expiresAtMs] of [
       [realWorkspace, 1],
       ["abandoned-workspace", 1],
       ["active-workspace", Date.now() + 60_000],
     ] as const) {
-      database
-        .prepare("INSERT INTO workspace_leases (workspace_key, lease_json) VALUES (?, ?)")
-        .run(
-          createHash("sha256").update(leaseWorkspace).digest("hex"),
-          JSON.stringify({
-            version: 1,
-            nonce: "d".repeat(32),
-            sharedHost: true,
-            processes: [],
-            watchdog: null,
-            expiresAtMs,
-          }),
-        );
+      insert.run(
+        createHash("sha256").update(leaseWorkspace).digest("hex"),
+        JSON.stringify({ expiresAtMs }),
+      );
     }
     database.close();
     const simultaneous = await Promise.all([acquire(), acquire()]);

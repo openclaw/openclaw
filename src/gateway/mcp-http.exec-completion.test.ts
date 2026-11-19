@@ -39,6 +39,11 @@ const admissions: PreparedAgentRunAdmission[] = [];
 const receipts: sessionEvents.SessionEventReceipt[] = [];
 const sessionKeys: string[] = [];
 const workspacePath = (name: string) => path.join(state.workspaceDir, name);
+const expectMissing = (name: string) =>
+  expect(fs.stat(workspacePath(name))).rejects.toMatchObject({ code: "ENOENT" });
+const writeCommand = (name: string, text: string) => ({
+  command: `node -e "require('node:fs').writeFileSync('${name}', '${text}')"`,
+});
 
 beforeAll(async () => {
   state = await testState.createOpenClawTestState({
@@ -127,7 +132,7 @@ async function readToolSurface(context: PreparedCliRunContext, signal: AbortSign
 it.for<[string, string, string, string, string[] | undefined]>([
   ["no caller cap", "exec-full", "text", "completed", undefined],
   ["a finite caller cap", "exec-capped", "text", "failed", ["exec", "process", "session_status"]],
-  ["an empty CLI final", "exec-empty", "empty", "failed", undefined],
+  ["an empty CLI final", "exec-empty", "empty", "completed", undefined],
   ["a failed CLI final", "exec-failed", "failed", "failed", undefined],
 ])(
   "retains the CLI surface and enforces completion effects with %s",
@@ -191,9 +196,7 @@ it.for<[string, string, string, string, string[] | undefined]>([
         const allowedName = `allowed-${sessionId}.txt`;
         const deniedName = `denied-${sessionId}.txt`;
         try {
-          const allowed = await call("tools/call", {
-            command: `node -e "require('node:fs').writeFileSync('${allowedName}', 'allowed')"`,
-          });
+          const allowed = await call("tools/call", writeCommand(allowedName, "allowed"));
           expect(allowed).toMatchObject({ status: 200, body: { result: { isError: false } } });
           expect(await fs.readFile(workspacePath(allowedName), "utf8")).toBe("allowed");
           expect(launches).toHaveBeenCalledOnce();
@@ -209,20 +212,14 @@ it.for<[string, string, string, string, string[] | undefined]>([
               isError: true,
               content: [{ type: "text", text: "Tool not available: apply_patch" }],
             });
-            await expect(fs.stat(workspacePath(deniedName))).rejects.toMatchObject({
-              code: "ENOENT",
-            });
+            await expectMissing(deniedName);
             await updateSessionEntry({ agentId: "main", sessionKey }, () => ({
               permissionMode: "read-only",
             }));
-            const revoked = await call("tools/call", {
-              command: `node -e "require('node:fs').writeFileSync('${deniedName}', 'forbidden')"`,
-            });
+            const revoked = await call("tools/call", writeCommand(deniedName, "forbidden"));
             expect(revoked).toEqual({ status: 401, body: { error: "unauthorized" } });
             expect(launches).not.toHaveBeenCalled();
-            await expect(fs.stat(workspacePath(deniedName))).rejects.toMatchObject({
-              code: "ENOENT",
-            });
+            await expectMissing(deniedName);
           }
         } finally {
           launches.mockRestore();
@@ -243,9 +240,7 @@ it.for<[string, string, string, string, string[] | undefined]>([
       expect(response.status).toBe(200);
       expect(response.body.result).toMatchObject({
         isError: false,
-        content: [
-          expect.objectContaining({ text: expect.stringContaining("Command still running") }),
-        ],
+        content: [{ text: expect.stringContaining("Command still running") }],
       });
       await withinTest(waitForExecScope(sessionKey), signal);
       const receipt = expectDefined(receipts[receiptIndex], "background exec completion");
@@ -254,6 +249,10 @@ it.for<[string, string, string, string, string[] | undefined]>([
       expect(outcome).toMatchObject({ status: expectedStatus, executionStarted: true });
       if (expectedStatus === "failed") {
         expect(outcome.error).toBeTruthy();
+        expect(outcome).toMatchObject({ delivered: false, deliveryAttempted: false });
+      }
+      if (terminal === "empty") {
+        expect(outcome.error).toBeUndefined();
         expect(outcome).toMatchObject({ delivered: false, deliveryAttempted: false });
       }
       if (toolsAllow) {

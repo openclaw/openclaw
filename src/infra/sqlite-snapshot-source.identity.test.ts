@@ -17,11 +17,7 @@ let cleanupJoined = true;
 const directories = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
     vi.unstubAllEnvs();
-    if (!cleanupJoined) {
-      throw new Error(
-        `Snapshot cleanup did not join; retained fixtures: ${[...directories.dirs].join(", ")}`,
-      );
-    }
+    expect(cleanupJoined, "snapshot cleanup must join before fixture removal").toBe(true);
     cleanup();
   });
 });

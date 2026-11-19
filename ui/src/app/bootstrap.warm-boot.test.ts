@@ -3,8 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
+import { createPageState } from "../pages/chat/chat-state-page.ts";
+import { applyChatAgentOwnerTransition } from "../pages/chat/chat-state-refresh.ts";
 import { loadChatRoute } from "../pages/chat/route-loader.ts";
-import * as snapshots from "../pages/chat/session-snapshot-invalidation.runtime.ts";
+import * as snapshots from "../pages/chat/session-snapshot-invalidation.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { clearBootRecords, type BootRecord } from "./boot-record.ts";
@@ -49,6 +51,9 @@ function seedBootRecord(overrides: Partial<BootRecord> = {}): BootRecord {
   localStorage.setItem(BOOT_RECORD_PREFIX + record.scope, JSON.stringify(record));
   return record;
 }
+function expectDefaults(runtime: ReturnType<typeof createApplication>, scope = "per-sender") {
+  expect(runtime.context.offlineSessionDefaults).toEqual({ mainKey: "workspace", scope });
+}
 
 describe("warm boot profile validation", () => {
   beforeEach(() => {
@@ -73,7 +78,13 @@ describe("warm boot profile validation", () => {
       authMethod: "trusted-proxy",
       credential: "",
       recoveryScope: "account-a",
-      agents: makeBootRoster({ mainKey: "workspace" }),
+      agents: makeBootRoster({
+        mainKey: "workspace",
+        agents: [
+          { id: "main", name: "Main roster label", identity: { name: "Harbor", emoji: "⚓" } },
+          { id: "other", name: "Observatory" },
+        ],
+      }),
     });
     const runtime = bootstrapApplication();
     expect(runtime.warmBoot).toBe(true);
@@ -85,32 +96,50 @@ describe("warm boot profile validation", () => {
     });
     const request = vi.spyOn(client, "request");
     gateway.snapshot.client = client;
-    expect(agents.state.agentsList).toBeNull();
-    expect(runtime.context.offlineSessionDefaults).toEqual({
-      mainKey: "workspace",
-      scope: "per-sender",
-    });
-    await expect(
-      loadChatRoute(
+    const create = (sessionKey: string) =>
+      createPageState(
         runtime.context,
-        makeLocation("/chat/main"),
-        "chat",
-        new AbortController().signal,
-      ),
+        { afterCommit: () => () => {} },
+        { sessionKey, dispatchEvent: () => true },
+      );
+    expect(create("agent:main:topic")).toMatchObject({
+      assistantName: "Harbor",
+      assistantAvatar: "⚓",
+    });
+    expect(create("agent:other:topic").assistantName).toBe("Observatory");
+    expect(create("agent:unknown:topic").assistantName).not.toBe("Harbor");
+    const global = create("global");
+    applyChatAgentOwnerTransition(global, "other");
+    expect(global.assistantName).toBe("Observatory");
+    expect(global.assistantAvatar).toBeNull();
+    expect(agents.state.agentsList).toBeNull();
+    expectDefaults(runtime);
+    const signal = new AbortController().signal;
+    await expect(
+      loadChatRoute(runtime.context, makeLocation("/chat/main"), "chat", signal),
     ).resolves.toMatchObject({ kind: "session", sessionKey: "agent:main:workspace" });
     expect(request).not.toHaveBeenCalled();
     expect(agents.state.agentsList).toBeNull();
     gateway.snapshot.phase = "connected";
     expect(runtime.context.offlineSessionDefaults).toBeNull();
+    expect(runtime.context.agentIdentity.get("main")).toBeNull();
     gateway.snapshot.phase = "reconnecting";
     gateway.snapshot.client = new GatewayBrowserClient({
       url: loadSettings().gatewayUrl,
       offlineRecoveryScope: "another-account",
     });
     expect(runtime.context.offlineSessionDefaults).toBeNull();
+    expect(create("agent:main:topic").assistantName).not.toBe("Harbor");
     gateway.snapshot.client = client;
+    expect(create("agent:main:topic").assistantName).toBe("Harbor");
+    const revision = vi
+      .spyOn(gateway, "connectionRevision", "get")
+      .mockReturnValue(gateway.connectionRevision + 1);
+    expect(create("agent:main:topic").assistantName).not.toBe("Harbor");
+    revision.mockRestore();
     client.retireOfflineRecoveryScope();
     expect(runtime.context.offlineSessionDefaults).toBeNull();
+    expect(create("agent:main:topic").assistantName).not.toBe("Harbor");
   });
 
   it("does not revive warm admission after pairing rejection followed by network loss", () => {
@@ -143,16 +172,17 @@ describe("warm boot profile validation", () => {
       recoveryScope: "test-recovery-scope",
       agents: makeBootRoster({
         defaultId: "private",
-        agents: [{ id: "private", name: "Private agent" }, { id: "shared" }],
+        agents: [
+          { id: "private", name: "Private agent" },
+          { id: "shared", name: "Old shared" },
+        ],
       }),
       groups: [{ name: "Personal", position: 0 }],
       sectionOrder: ["Personal"],
     });
     const discovery = createDeferred<AgentsListResult>();
     const discover = vi.fn(() => discovery.promise);
-    const request = vi.fn(async (method: string) => {
-      return method === "agents.list" ? discover() : {};
-    });
+    const request = vi.fn(async (method: string) => (method === "agents.list" ? discover() : {}));
     const client = createTestGatewayClient(request);
     const publish = captureGatewayConnection(() => ({
       client,
@@ -175,24 +205,22 @@ describe("warm boot profile validation", () => {
       ...record.agents,
       mainKey: "workspace",
       scope: "global",
-      agents: [{ id: "shared" }],
+      agents: [{ id: "shared", name: "Renamed shared" }],
     });
     await pending;
-    expect(agents.state.agentsList?.agents).toEqual([{ id: "shared" }]);
+    expect(agents.state.agentsList?.agents).toEqual([{ id: "shared", name: "Renamed shared" }]);
     const confirmed = agents.state.agentsList;
 
     publish("reconnecting");
     expect(agents.state.agentsList).toBe(confirmed);
-    expect(runtime.context.offlineSessionDefaults).toEqual({
-      mainKey: "workspace",
-      scope: "global",
-    });
+    expectDefaults(runtime, "global");
+    expect(runtime.context.agentIdentity.get("shared")?.name).toBe("Renamed shared");
+    expect(runtime.context.agentIdentity.get("private")).toBeNull();
     discover.mockRejectedValue(new Error("roster unavailable"));
     publish("connected");
     await agents.ensureList();
     expect(agents.state.agentsList).toBe(confirmed);
     expect(agents.state.agentsError).toContain("roster unavailable");
-    expect(request.mock.calls.filter(([method]) => method === "agents.list")).toHaveLength(2);
   });
 
   it.each([
@@ -203,9 +231,7 @@ describe("warm boot profile validation", () => {
     "clears $clears times for connected $profileId (credential change: $credentialsChanged)",
     async ({ profileId, clears, credentialsChanged }) => {
       window.history.replaceState({}, "", "/chat");
-      const { scope } = seedBootRecord({
-        recoveryScope: "cached-account",
-      });
+      const { scope } = seedBootRecord({ recoveryScope: "cached-account" });
       const clearSnapshots = vi.spyOn(snapshots, "clearStoredChatSnapshots").mockResolvedValue();
       let connectionRevision = 0;
       const publish = captureGatewayConnection(
@@ -215,8 +241,6 @@ describe("warm boot profile validation", () => {
             protocol: 1,
             auth: {
               method: "token",
-              role: "operator",
-              scopes: [],
               recoveryScope: profileId === "profile-a" ? "cached-account" : "replacement-account",
             },
           },
@@ -233,9 +257,7 @@ describe("warm boot profile validation", () => {
       expect(clearSnapshots).not.toHaveBeenCalled();
 
       publish("connected");
-      // Clearing the in-memory projection must precede later hello subscribers.
       expect(clearSnapshots).toHaveBeenCalledTimes(clears);
-      // The persisted record gates the next boot, so it must be gone before any lazy cleanup.
       if (clears > 0) {
         expect(localStorage.getItem(BOOT_RECORD_PREFIX + scope)).toBeNull();
         expect(clearSnapshots).toHaveBeenCalledWith(

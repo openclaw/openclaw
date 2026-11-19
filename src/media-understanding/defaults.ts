@@ -12,7 +12,8 @@ import {
   resolveAutoMediaKeyProvidersFromRegistry,
   resolveDefaultMediaModelFromRegistry,
 } from "./provider-registry-metadata.js";
-import type { MediaUnderstandingCapability, MediaUnderstandingProvider } from "./types.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
+import type { MediaUnderstandingCapability } from "./types.js";
 export { CLI_OUTPUT_MAX_BUFFER } from "./defaults.constants.js";
 
 // Defaults follow the selected immutable manifest generation, including retained
@@ -143,19 +144,18 @@ export function resolveAutoMediaKeyProviders(params: {
     return prioritized;
   }
   const configured = resolveConfiguredImageProviderIds(params.cfg);
-  const merged = [...prioritized];
   for (const providerId of configured.filter(isExecutionAliasProvider)) {
-    const canonicalIndex = merged.indexOf(normalizeMediaProviderId(providerId));
+    const canonicalIndex = prioritized.indexOf(normalizeMediaProviderId(providerId));
     if (canonicalIndex >= 0) {
-      merged.splice(canonicalIndex, 0, providerId);
+      prioritized.splice(canonicalIndex, 0, providerId);
     } else {
-      merged.unshift(providerId);
+      prioritized.unshift(providerId);
     }
   }
   for (const providerId of configured.filter((id) => !isExecutionAliasProvider(id))) {
-    merged.push(providerId);
+    prioritized.push(providerId);
   }
-  return uniqueStrings(merged);
+  return uniqueStrings(prioritized);
 }
 
 /** Returns whether provider metadata declares native PDF document input support. */

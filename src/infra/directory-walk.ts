@@ -29,7 +29,11 @@ export class DirectoryWalkLimitError extends Error {
   }
 }
 
-function createWalk(root: string, options: DirectoryWalkOptions) {
+function createWalk(
+  root: string,
+  options: DirectoryWalkOptions,
+  visit: (entry: DirectoryWalkEntry) => void,
+) {
   const maxDepth = options.maxDepth ?? 64;
   const maxEntries = options.maxEntries ?? 100_000;
   for (const [name, value] of Object.entries({ maxDepth, maxEntries })) {
@@ -37,21 +41,21 @@ function createWalk(root: string, options: DirectoryWalkOptions) {
       throw new RangeError(name + " must be a nonnegative safe integer");
     }
   }
-  const entries: DirectoryWalkEntry[] = [];
+  let visited = 0;
   const pending = [{ relativePath: "", depth: 1 }];
   return {
-    entries,
     pending,
     add(dirent: Dirent, parent: { relativePath: string; depth: number }) {
       if (parent.depth > maxDepth) {
         throw new DirectoryWalkLimitError(root, "maxDepth", maxDepth);
       }
-      if (entries.length >= maxEntries) {
+      if (visited >= maxEntries) {
         throw new DirectoryWalkLimitError(root, "maxEntries", maxEntries);
       }
+      visited += 1;
       const relativePath = path.join(parent.relativePath, dirent.name);
       const entry = { relativePath, dirent };
-      entries.push(entry);
+      visit(entry);
       if (dirent.isDirectory() && !options.skipDirectory?.(entry)) {
         pending.push({ relativePath, depth: parent.depth + 1 });
       }
@@ -75,7 +79,8 @@ export async function listDirectoryTreeStrict(
   root: string,
   options: DirectoryWalkOptions = {},
 ): Promise<DirectoryWalkEntry[]> {
-  const walk = createWalk(root, options);
+  const entries: DirectoryWalkEntry[] = [];
+  const walk = createWalk(root, options, (entry) => entries.push(entry));
   if ((await fs.promises.lstat(path.resolve(root))).isSymbolicLink()) {
     throw Object.assign(new Error("Directory scan root must not be a symlink: " + root), {
       code: "ERR_DIRECTORY_WALK_ROOT_SYMLINK",
@@ -87,15 +92,16 @@ export async function listDirectoryTreeStrict(
       walk.add(entry, parent);
     }
   }
-  return walk.entries.toSorted(compareEntries);
+  return entries.toSorted(compareEntries);
 }
 
-/** Synchronous counterpart of listDirectoryTreeStrict, for bootstrap and script callers. */
-export function listDirectoryTreeStrictSync(
+/** Visit descendants without retaining an inventory, using the same traversal budgets. */
+export function visitDirectoryTreeStrictSync(
   root: string,
+  visit: (entry: DirectoryWalkEntry) => void,
   options: DirectoryWalkOptions = {},
-): DirectoryWalkEntry[] {
-  const walk = createWalk(root, options);
+): void {
+  const walk = createWalk(root, options, visit);
   if (fs.lstatSync(path.resolve(root)).isSymbolicLink()) {
     throw Object.assign(new Error("Directory scan root must not be a symlink: " + root), {
       code: "ERR_DIRECTORY_WALK_ROOT_SYMLINK",
@@ -111,5 +117,14 @@ export function listDirectoryTreeStrictSync(
       directory.closeSync();
     }
   }
-  return walk.entries.toSorted(compareEntries);
+}
+
+/** Synchronous counterpart of listDirectoryTreeStrict, for bootstrap and script callers. */
+export function listDirectoryTreeStrictSync(
+  root: string,
+  options: DirectoryWalkOptions = {},
+): DirectoryWalkEntry[] {
+  const entries: DirectoryWalkEntry[] = [];
+  visitDirectoryTreeStrictSync(root, (entry) => entries.push(entry), options);
+  return entries.toSorted(compareEntries);
 }

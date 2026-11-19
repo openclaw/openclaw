@@ -16,6 +16,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { managedWorktrees, WorktreeSnapshotError } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
+import { runGitReadOperation } from "../../infra/git-read-cache.js";
 import { resolveRecordedProjectRoot } from "../../projects/project-registry.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { requestGatewayWorktreeMaintenance } from "../worktree-maintenance.js";
@@ -123,10 +124,14 @@ function worktreeHandler<T>(
 }
 
 export const worktreesHandlers: GatewayRequestHandlers = {
-  "worktrees.list": worktreeHandler(validateWorktreesListParams, async ({ respond }) => {
+  "worktrees.list": worktreeHandler(validateWorktreesListParams, async ({ respond, client }) => {
     respond(
       true,
-      { worktrees: (await managedWorktrees.list()).map((record) => publicWorktreeRecord(record)) },
+      {
+        worktrees: (await managedWorktrees.list()).map((record) =>
+          publicWorktreeRecord(record, client?.connect.scopes?.includes(ADMIN_SCOPE)),
+        ),
+      },
       undefined,
     );
   }),
@@ -173,7 +178,10 @@ export const worktreesHandlers: GatewayRequestHandlers = {
   }),
   "worktrees.remove": worktreeHandler(validateWorktreesRemoveParams, async (opts, params) => {
     const { respond } = opts;
-    if ([params.force, params.ifLossless, params.exactState].filter(Boolean).length > 1) {
+    if (
+      [params.force, params.ifLossless, params.exactState].filter(Boolean).length > 1 ||
+      (params.ifLossless && params.retryPreserved)
+    ) {
       invalidParams(respond);
       return;
     }
@@ -197,6 +205,7 @@ export const worktreesHandlers: GatewayRequestHandlers = {
         id,
         reason: "manual-delete",
         allowSnapshotLoss: params.force,
+        retryPreserved: params.retryPreserved,
         ...(params.exactState ? { exactState: params.exactState } : {}),
         ...guard,
       });
@@ -207,6 +216,7 @@ export const worktreesHandlers: GatewayRequestHandlers = {
           ? result
           : {
               removed: result.removed,
+              ...(result.preserved ? { preserved: result.preserved } : {}),
               ...(result.snapshotRef ? { snapshotRef: result.snapshotRef } : {}),
               ...(result.snapshotError ? { snapshotError: result.snapshotError } : {}),
             },
@@ -248,11 +258,30 @@ export const worktreesHandlers: GatewayRequestHandlers = {
     if (!repoRoot) {
       return;
     }
-    const result = params.includeRepositoryStatus
-      ? await managedWorktrees.listRepositoryBranches(repoRoot, {
-          includeRepositoryStatus: true,
-        })
-      : await managedWorktrees.listRepositoryBranches(repoRoot);
+    const cfg = opts.context.getRuntimeConfig();
+    const result = await runGitReadOperation(
+      {
+        type: "repository.branches",
+        input: { repoRoot, includeRepositoryStatus: params.includeRepositoryStatus },
+      },
+      {
+        snapshot: true,
+        signal: opts.signal,
+        onRefresh: () => {
+          if (
+            opts.client?.connId &&
+            opts.hasCurrentClientAuthority?.() !== false &&
+            opts.context.getRuntimeConfig() === cfg
+          ) {
+            opts.context.broadcastToConnIds(
+              "worktrees.branches.changed",
+              { repoRoot: params.repoRoot },
+              new Set([opts.client.connId]),
+            );
+          }
+        },
+      },
+    );
     respond(true, result, undefined);
   }),
   "worktrees.gc": worktreeHandler(validateWorktreesGcParams, async (opts, params) => {

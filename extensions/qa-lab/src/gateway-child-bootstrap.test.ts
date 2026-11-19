@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import fsSync, { existsSync, readFileSync, writeSync } from "node:fs";
+import { existsSync, readFileSync, writeSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { clearTimeout as clearRealTimeout, setTimeout as realTimeout } from "node:timers";
@@ -14,12 +14,15 @@ import { inspectLinuxProcessGroup, isQaPosixProcessGroupAlive } from "./posix-pr
 import { runQaCli } from "./qa-cli-process.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
-// Intercept the named ESM export consumed by the bootstrap owners; the default
-// fs object remains native so unrelated fixture writes still reach the filesystem.
+// Observe bootstrap writes on both builtin surfaces, retaining native passthrough.
 vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, writeSync: vi.fn(actual.writeSync) };
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { writeSync: vi.fn(actual.writeSync) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
+const nativeFs = await vi.importActual<typeof import("node:fs")>("node:fs");
 
 // RPC is outside these process-lifetime tests. HTTP readiness and all processes stay real.
 vi.mock("./gateway-rpc-client.js", () => ({
@@ -206,7 +209,7 @@ afterEach(async () => {
 
 function captureBootstrapBoundaries(failSink = false) {
   const messages: Array<{ command: string; event: string; [key: string]: unknown }> = [];
-  const write = fsSync.writeSync;
+  const write = nativeFs.writeSync;
   vi.mocked(writeSync).mockImplementation((...args) => {
     const line = args[1];
     if (args[0] === 2 && typeof line === "string" && line.startsWith("[qa-bootstrap] ")) {
@@ -216,7 +219,7 @@ function captureBootstrapBoundaries(failSink = false) {
       }
       return Buffer.byteLength(line);
     }
-    return Reflect.apply(write, fsSync, args);
+    return Reflect.apply(write, nativeFs, args);
   });
   return messages;
 }
@@ -688,4 +691,98 @@ describe.skipIf(process.platform === "win32")("packaged QA bootstrap lifetime", 
     f.assertStopped();
     expect(existsSync(ready!.tempRoot!)).toBe(false);
   });
+});
+
+it.each([
+  {
+    file: "hook-agent-account-routing",
+    shared: true,
+    load: () => import("./hook-agent-account-routing.e2e.test.js"),
+  },
+  {
+    file: "managed-gateway-service-lifecycle",
+    shared: false,
+    load: () => import("./managed-gateway-service-lifecycle.e2e.test.js"),
+  },
+])("registers cleanup before $file startup settles", async ({ shared, load }) => {
+  const starts: Array<() => Promise<void>> = [];
+  const teardownHooks: Array<() => Promise<void>> = [];
+  const cleaned: string[] = [];
+  const entered = createDeferred<void>();
+  const startup = createDeferred<never>();
+  let pending: Promise<void> | undefined;
+  try {
+    // mock-isolation: Hold startup without launching another Gateway or touching real state.
+    vi.doMock("./gateway-child.js", () => ({
+      createQaGatewayChild: () => ({
+        start: () => {
+          entered.resolve();
+          return startup.promise;
+        },
+        stop: async () => {
+          cleaned.push("gateway");
+          return { errors: [] };
+        },
+      }),
+    }));
+    // mock-isolation: Track provider disposal without opening a network listener.
+    vi.doMock("./providers/server-runtime.js", () => ({
+      startQaProviderServer: async () => ({
+        baseUrl: "http://127.0.0.1:1",
+        stop: async () => {
+          cleaned.push("provider");
+        },
+      }),
+    }));
+    // mock-isolation: Track lab disposal without creating a workspace or server.
+    vi.doMock("./lab-server.js", () => ({
+      startQaLabServer: async () => ({
+        state: {},
+        listenUrl: "http://127.0.0.1:1",
+        stop: async () => {
+          cleaned.push("lab");
+        },
+      }),
+    }));
+    // mock-isolation: The pending-start proof never delivers a channel message.
+    vi.doMock("./qa-channel-transport.js", () => ({ createQaChannelTransport: () => ({}) }));
+    vi.doMock("vitest", () => ({
+      describe: (_name: string, body: () => void) => body(),
+      beforeAll: (body: () => Promise<void>) => starts.push(body),
+      afterAll: (body: () => Promise<void>) => teardownHooks.push(body),
+      afterEach: (body: () => Promise<void>) => teardownHooks.push(body),
+      it: (_name: string, _options: unknown, body: () => Promise<void>) => {
+        if (!shared) {
+          starts.push(body);
+        }
+      },
+      expect,
+      vi,
+    }));
+    await load();
+    pending = starts[0]!();
+    await bounded(
+      Promise.race([
+        entered.promise,
+        pending.then(() => {
+          throw new Error("fixture completed before Gateway startup");
+        }),
+      ]),
+    );
+    expect(cleaned).toEqual([]);
+    for (const cleanup of teardownHooks) {
+      await cleanup();
+    }
+    expect(cleaned).toEqual(shared ? ["gateway", "provider", "lab"] : ["gateway", "provider"]);
+  } finally {
+    // Release the synthetic hold and join the fixture before retiring its mocks.
+    startup.reject(new Error("synthetic pending-start release"));
+    await Promise.allSettled([startup.promise, pending]);
+    vi.doUnmock("vitest");
+    vi.doUnmock("./gateway-child.js");
+    vi.doUnmock("./providers/server-runtime.js");
+    vi.doUnmock("./lab-server.js");
+    vi.doUnmock("./qa-channel-transport.js");
+    vi.resetModules();
+  }
 });

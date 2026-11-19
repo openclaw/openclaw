@@ -1,8 +1,9 @@
 import { expect } from "vitest";
+import { findMarkdownCodeRegions as resolveTestFenceRanges } from "../../markdown-core/src/reasoning-tags.js";
 import { parseStandalonePlainTextToolCallBlocks } from "./payload.js";
 import {
   normalizePlainTextToolCallStreamEvents,
-  projectScrubbedPlainTextToolCallMessage,
+  projectScrubbedPlainTextToolCallMessage as scrubMessage,
   type PlainTextToolCallNameMatcher,
 } from "./stream-normalizer.js";
 
@@ -17,24 +18,7 @@ type Events = Event[];
 type Stream = readonly Event[];
 type NormalizeOptions = Parameters<typeof normalizePlainTextToolCallStreamEvents>[1];
 
-export function resolveTestFenceRanges(text: string): Array<{ end: number; start: number }> {
-  const ranges: Array<{ end: number; start: number }> = [];
-  let cursor = 0;
-  while (cursor < text.length) {
-    const backtick = text.indexOf("```", cursor);
-    const tilde = text.indexOf("~~~", cursor);
-    const start = backtick === -1 ? tilde : tilde === -1 ? backtick : Math.min(backtick, tilde);
-    if (start === -1) {
-      break;
-    }
-    const marker = text.slice(start, start + 3);
-    const close = text.indexOf(marker, start + marker.length);
-    const end = close === -1 ? text.length : close + marker.length;
-    ranges.push({ start, end });
-    cursor = end;
-  }
-  return ranges;
-}
+export { resolveTestFenceRanges };
 
 export function parseSplitCall(parts: readonly string[]) {
   let offset = 0;
@@ -78,13 +62,11 @@ export async function collectNormalizedEvents(
   async function* source() {
     yield* events;
   }
-  const normalized: Events = [];
+  const normalized: unknown[] = [];
   for await (const event of normalizePlainTextToolCallStreamEvents(source(), options)) {
-    if (event && typeof event === "object") {
-      normalized.push(event as Event);
-    }
+    normalized.push(event);
   }
-  return normalized;
+  return normalized.filter((event): event is Event => event !== null && typeof event === "object");
 }
 
 export async function normalize(
@@ -98,13 +80,8 @@ export async function normalize(
   return collectNormalizedEvents(events, {
     matcher,
     createPromotedToolCallEvents: () => [],
-    normalizeTerminalMessage: ({ message, preserveEmptyTextBlocks }) => {
-      const scrubbed = projectScrubbedPlainTextToolCallMessage({
-        matcher,
-        message,
-        preserveEmptyTextBlocks,
-        resolveProtectedRanges,
-      });
+    normalizeTerminalMessage: (params) => {
+      const scrubbed = scrubMessage({ ...params, matcher, resolveProtectedRanges });
       return scrubbed ? { kind: "scrubbed", ...scrubbed } : undefined;
     },
     // Custom resolvers must explicitly opt into the carried fence scan.

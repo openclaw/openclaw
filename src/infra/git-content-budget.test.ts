@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { WorkerTaskPoolCore } from "@openclaw/worker-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -15,7 +16,6 @@ import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.j
 import { withContentGitSlot } from "./git-content-budget.js";
 import { runGitWorkerOperation } from "./git-worker.js";
 import { resolveWorkerPoolSize } from "./worker-pool-sizing.js";
-import { WorkerTaskPool } from "./worker-task-pool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -167,7 +167,7 @@ it("bounds content/removal through cancellation while metadata stays responsive"
     }
   };
   // Exercise host batch admission without starting a worker or child process.
-  vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async (request, options) => {
+  vi.spyOn(WorkerTaskPoolCore.prototype, "run").mockImplementation(async (request, options) => {
     const command = typeof request === "function" ? await request() : request;
     const input = asOptionalRecord(asOptionalRecord(command)?.input);
     const cwd = input?.cwd ?? input?.root ?? input?.repoRoot;

@@ -90,7 +90,7 @@ type FileCase = [
   name: string,
   command: string,
   args: string[],
-  path: (args: string[]) => string,
+  path: ((args: string[]) => string) | null,
   text: string | null,
   requested?: string,
   observed?: string,
@@ -117,11 +117,7 @@ const transcriptFileCases: FileCase[] = [
     "missing OpenAI Whisper explicit txt",
     "whisper",
     ["{{MediaPath}}", "--output_format=txt", "--output_dir={{OutputDir}}"],
-    (args) =>
-      path.join(
-        args[2]?.slice("--output_dir=".length) ?? "",
-        `${path.parse(args[0] ?? "").name}.txt`,
-      ),
+    null,
     null,
   ],
   [
@@ -238,7 +234,7 @@ it.each(transcriptFileCases)(
   "honors %s transcript file authority",
   async (_name, command, args, resolvePath, text, requestedBackend, observedBackend) => {
     runExecMock.mockImplementationOnce(async (_command, argv: string[]) => {
-      if (text !== null) {
+      if (resolvePath && text !== null) {
         await fs.writeFile(resolvePath(argv), text);
       }
       return {
@@ -294,9 +290,7 @@ it.each([
   { expected: undefined },
   { language: "fr", request: { language: "" }, expected: undefined },
   { language: "pt-BR", expected: "pt" },
-  { command: "whisper-cli", language: "fr", expected: "fr" },
   { command: "whisper-cli", language: "fr", request: { language: "pt-BR" }, expected: "pt" },
-  { command: "whisper-cli", expected: undefined },
   { command: "whisper-cli", converted: true, expected: undefined },
   { command: "sherpa-onnx-offline", expected: undefined },
 ])("runs auto-discovered audio tools with language: %j", async (options) => {

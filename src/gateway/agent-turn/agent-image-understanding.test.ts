@@ -6,7 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { OpenClawConfig } from "../../config/types.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import type { MediaExecutionContext } from "../../media-understanding/provider-execution.js";
-import type { MediaUnderstandingProvider } from "../../media-understanding/types.js";
+import type { MediaUnderstandingProvider } from "../../media-understanding/provider-types.js";
 // Include the shared runtime in the compiled fixture instead of compiling its lazy import mid-test.
 import "../../media-understanding/apply.runtime.js";
 import { prepareAgentImageUnderstanding } from "./agent-image-understanding.js";
@@ -82,17 +82,8 @@ beforeEach(() => {
   resolveImageCompressionModelPolicy.mockReset().mockResolvedValue({});
 });
 
-it("sends pixels to the configured vision provider and gives the text primary its description", async () => {
+it("gives the text primary a description while retaining suppressed image media", async () => {
   const result = await prepare();
-
-  expect(describeImage).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({
-      buffer: imageBytes,
-      mime: "image/png",
-      provider: "fixture-vision",
-      model: "fixture-image-model",
-    }),
-  );
   expect(result).toEqual({
     message: "[Image]\nUser text:\nWhat color is the square?\nDescription:\nA red square.",
     media: [
@@ -115,20 +106,19 @@ it.each([
   if (failure === "empty response") {
     describeImage.mockResolvedValue({ text: "   " });
   }
-  const cfg: OpenClawConfig =
-    failure === "missing provider"
+  const cfg: OpenClawConfig = source
+    ? {
+        ...configuredVision,
+        tools: {
+          media: {
+            ...configuredVision.tools?.media,
+            image: { scope: { default: "allow", rules: [{ action: "deny", match: source }] } },
+          },
+        },
+      }
+    : failure === "missing provider"
       ? {}
-      : source
-        ? {
-            ...configuredVision,
-            tools: {
-              media: {
-                ...configuredVision.tools?.media,
-                image: { scope: { default: "allow", rules: [{ action: "deny", match: source }] } },
-              },
-            },
-          }
-        : configuredVision;
+      : configuredVision;
   await expect(prepare(cfg, undefined, source)).rejects.toThrow(
     failure === "missing provider"
       ? "Configure agents.defaults.imageModel or tools.media.models with an available vision model, then retry."
@@ -176,9 +166,7 @@ it.each(["preparation", "adapter"] as const)(
       });
     }
 
-    await expect(prepare(configuredVision, execution)).rejects.toThrow(
-      "Image attachments could not be analyzed.",
-    );
+    await expect(prepare(configuredVision, execution)).rejects.toThrow("Request authority expired");
     expect(describeImage).toHaveBeenCalledTimes(phase === "adapter" ? 1 : 0);
     expect(sendPixels).not.toHaveBeenCalled();
     if (phase === "adapter") {

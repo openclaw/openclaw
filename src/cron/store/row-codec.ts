@@ -4,7 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { operatorStandingGrantPublication } from "../../gateway/operator-approval-store.publication.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { jsonSetPath } from "../../infra/database-engine/json-values.js";
+import { jsonSetPath, jsonValue } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -70,13 +70,13 @@ function bindCronJobRow(storeKey: string, job: CronStoredJob, sortOrder: number)
     grant_definition_updated_at: job.updatedAtMs,
     state_json: serializeCronJobState(job.state ?? {}),
     runtime_updated_at_ms: job.updatedAtMs,
-    schedule_identity: tryCronScheduleIdentity({ ...job }) ?? null,
+    schedule_identity: tryCronScheduleIdentity(job) ?? null,
     sort_order: sortOrder,
   };
 }
 
 function normalizeCronJobForSqlite(job: CronStoreFile["jobs"][number]): CronStoredJob | null {
-  const raw: Record<string, unknown> = { ...structuredClone(job) };
+  const raw: Record<string, unknown> = structuredClone(job);
   const hadDeleteAfterRun = Object.hasOwn(raw, "deleteAfterRun");
   raw.id = normalizeOptionalString(raw.id);
   delete raw.jobId;
@@ -653,7 +653,7 @@ export function updateCronRuntimeRow(
       .set((eb) => ({
         state_json: serializeCronJobState(job.state ?? {}),
         runtime_updated_at_ms: job.updatedAtMs,
-        schedule_identity: tryCronScheduleIdentity({ ...job }),
+        schedule_identity: tryCronScheduleIdentity(job),
         ...(enabledChanged
           ? {
               enabled: enabled ? 1 : 0,
@@ -661,7 +661,7 @@ export function updateCronRuntimeRow(
                 db,
                 eb.ref("job_json"),
                 eb.val("$.enabled"),
-                eb.fn<string>("json", [eb.val(enabled ? "true" : "false")]),
+                jsonValue(db, eb.val(enabled ? "true" : "false")),
                 true,
               ),
             }

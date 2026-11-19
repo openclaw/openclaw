@@ -1,4 +1,5 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { patchSettings } from "../app/settings.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import {
   mountRoster,
@@ -16,14 +17,51 @@ import "../test-helpers/load-styles.ts";
 
 setupSidebarTest();
 
-it("indexes sections once across a large mounted roster", async () => {
-  const agents = Array.from({ length: 40 }, (_, i) => ({
+async function prepareRoster(count: number, pinnedAgentIds: string[] = []) {
+  const agents = Array.from({ length: count }, (_, i) => ({
     id: i === 0 ? "main" : `agent-${i}`,
     name: `Agent ${i}`,
   }));
   const { sidebar, context } = await mountRoster({ ...roster, agents });
+  if (pinnedAgentIds.length) {
+    context.navigation.update({ pinnedAgentIds });
+  }
   sidebar.sidebarAgentsMode = "roster";
   await settleRoster(sidebar);
+  return { agents, context, owner: getAppSidebarOwner(sidebar.hostElement)! };
+}
+
+async function mountViewport(pinnedAgentIds: string[] = []) {
+  const { context, owner } = await prepareRoster(100, pinnedAgentIds);
+  let viewport!: HTMLDivElement;
+  const mounted = mountSolid(() => (
+    <ApplicationProvider value={context}>
+      <div
+        ref={(element) => (viewport = element)}
+        style={{ width: "280px", height: "230px", overflow: "auto" }}
+      >
+        <SidebarScrollContext
+          value={{
+            element: () => viewport,
+            content: () => undefined,
+            rowFloor: () => 32,
+            captureRowFloor: () => {},
+            registerWindow: () => () => {},
+            readAnchor: () => undefined,
+            captureAnchor() {},
+            subscribeScroll: () => () => {},
+          }}
+        >
+          <SidebarAgentRoster host={owner} active={true} sections={[]} />
+        </SidebarScrollContext>
+      </div>
+    </ApplicationProvider>
+  ));
+  return { ...mounted, viewport };
+}
+
+it("indexes sections once across a large mounted roster", async () => {
+  const { agents, context, owner } = await prepareRoster(40);
   let sectionReads = 0;
   let summaryRowReads = 0;
   const sections: SidebarVisibleSections["sections"] = agents.flatMap((agent) =>
@@ -43,7 +81,6 @@ it("indexes sections once across a large mounted roster", async () => {
       renderHeader: false,
     })),
   );
-  const owner = getAppSidebarOwner(sidebar.hostElement)!;
   const mounted = mountSolid(() => (
     <ApplicationProvider value={context}>
       <SidebarAgentRoster host={owner} active={true} sections={sections} />
@@ -57,35 +94,7 @@ it("indexes sections once across a large mounted roster", async () => {
 });
 
 it("mounts only viewport roster rows and retains the focused row while scrolling", async () => {
-  const agents = Array.from({ length: 100 }, (_, index) => ({
-    id: index === 0 ? "main" : `agent-${index}`,
-    name: `Agent ${index}`,
-  }));
-  const { sidebar, context } = await mountRoster({ ...roster, agents });
-  sidebar.sidebarAgentsMode = "roster";
-  await settleRoster(sidebar);
-  const owner = getAppSidebarOwner(sidebar.hostElement)!;
-  let viewport!: HTMLDivElement;
-  const mounted = mountSolid(() => (
-    <ApplicationProvider value={context}>
-      <div
-        ref={(element) => (viewport = element)}
-        style={{ width: "280px", height: "230px", overflow: "auto" }}
-      >
-        <SidebarScrollContext
-          value={{
-            element: () => viewport,
-            content: () => undefined,
-            readAnchor: () => undefined,
-            captureAnchor() {},
-            subscribeScroll: () => () => {},
-          }}
-        >
-          <SidebarAgentRoster host={owner} active={true} sections={[]} />
-        </SidebarScrollContext>
-      </div>
-    </ApplicationProvider>
-  ));
+  const { viewport, ...mounted } = await mountViewport();
   const groups = () => mounted.container.querySelectorAll<HTMLElement>("[data-agent-group]");
   await waitForSolid(() => {
     expect(groups().length).toBeGreaterThan(0);
@@ -120,36 +129,7 @@ it("mounts only viewport roster rows and retains the focused row while scrolling
 });
 
 it("restores focus when unpinning an agent outside the roster viewport", async () => {
-  const agents = Array.from({ length: 100 }, (_, index) => ({
-    id: index === 0 ? "main" : `agent-${index}`,
-    name: `Agent ${index}`,
-  }));
-  const { sidebar, context } = await mountRoster({ ...roster, agents });
-  context.navigation.update({ pinnedAgentIds: ["agent-99"] });
-  sidebar.sidebarAgentsMode = "roster";
-  await settleRoster(sidebar);
-  const owner = getAppSidebarOwner(sidebar.hostElement)!;
-  let viewport!: HTMLDivElement;
-  const mounted = mountSolid(() => (
-    <ApplicationProvider value={context}>
-      <div
-        ref={(element) => (viewport = element)}
-        style={{ width: "280px", height: "230px", overflow: "auto" }}
-      >
-        <SidebarScrollContext
-          value={{
-            element: () => viewport,
-            content: () => undefined,
-            readAnchor: () => undefined,
-            captureAnchor() {},
-            subscribeScroll: () => () => {},
-          }}
-        >
-          <SidebarAgentRoster host={owner} active={true} sections={[]} />
-        </SidebarScrollContext>
-      </div>
-    </ApplicationProvider>
-  ));
+  const mounted = await mountViewport(["agent-99"]);
   const pinned = mounted.container.querySelector<HTMLAnchorElement>(
     '[data-pinned-agent="agent-99"] a',
   )!;
@@ -167,4 +147,68 @@ it("restores focus when unpinning an agent outside the roster viewport", async (
     expect(document.activeElement).toBe(row);
     expect(pinned.isConnected).toBe(false);
   });
+});
+
+it("retires inactive session body work across roster and chip mode changes", async () => {
+  patchSettings({ gatewayUrl: "ws://gateway.test", sidebarAgentsMode: "roster" });
+  const { sidebar, context } = await mountRoster(roster);
+  await settleRoster(sidebar);
+  await waitForSolid(() => expect(sidebar.querySelector("[data-agent-group]")).not.toBeNull());
+  const owner = getAppSidebarOwner(sidebar.hostElement)!;
+  const groups = vi.spyOn(owner, "personalGroupSessionRows");
+  const body = sidebar.querySelector(".sidebar-shell__body");
+  expect(body).not.toBeNull();
+  const initialRoster = sidebar.querySelector("openclaw-sidebar-agent-roster");
+  const record = (phase: string) =>
+    console.log(
+      "inactive-sidebar-counts",
+      JSON.stringify({
+        phase,
+        groups: groups.mock.calls.length,
+      }),
+    );
+  record("cold-roster");
+  const update = async (phase: string, expectedGroups: number) => {
+    groups.mockClear();
+    for (let i = 0; i < 10; i++) {
+      sidebar.devGitBranch = `${phase}-${i}`;
+      await settleRoster(sidebar);
+      expect(sidebar.textContent).toContain(`${phase}-${i}`);
+    }
+    record(phase);
+    expect.soft(groups).toHaveBeenCalledTimes(expectedGroups);
+  };
+  await update("ten-cold-roster-updates", 0);
+
+  sidebar.sidebarEntries = ["session:agent:main:pinned"];
+  context.navigation.update({
+    personalSessionGroups: [
+      { id: "project", label: "Project", sessionKeys: ["agent:main:recent"] },
+    ],
+  });
+  const expectRows = () => {
+    expect(sidebar.querySelectorAll('[data-session-section="pinned"]')).toHaveLength(1);
+    expect(sidebar.querySelectorAll('[data-personal-session-group="project"]')).toHaveLength(1);
+    expect(sidebar.querySelectorAll('[data-session-key="agent:main:pinned"]')).toHaveLength(1);
+    expect(
+      sidebar.querySelectorAll(
+        '[data-personal-session-group="project"] [data-session-key="agent:main:recent"]',
+      ),
+    ).toHaveLength(1);
+  };
+  await settleRoster(sidebar);
+  await waitForSolid(expectRows);
+  // Each group has owner bookkeeping.
+  await update("ten-roster-updates-with-pins", 40);
+  for (const [index, mode] of (["chip", "roster", "chip", "roster"] as const).entries()) {
+    groups.mockClear();
+    sidebar.sidebarAgentsMode = mode;
+    await settleRoster(sidebar);
+    await waitForSolid(expectRows);
+    expect(sidebar.querySelector(".sidebar-shell__body")).toBe(body);
+    expect(Boolean(sidebar.querySelector("openclaw-sidebar-agent-roster"))).toBe(mode === "roster");
+    record(`switch-${index}-${mode}`);
+    await update(`ten-${index}-${mode}-updates-with-pins`, mode === "roster" ? 40 : 50);
+  }
+  expect(initialRoster?.isConnected).toBe(false);
 });

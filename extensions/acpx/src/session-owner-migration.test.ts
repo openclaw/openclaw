@@ -24,6 +24,11 @@ const directories = useAutoCleanupTempDirTracker(afterEach);
 const target = { ...fixtureSession("global"), agentId: "work" };
 const ownerResource = resolveAcpxSessionResource(target);
 afterEach(() => resetPluginStateStoreForTests());
+const ownedRecord = (raw: Record<string, unknown>, resource: string) => ({
+  ...raw,
+  name: resource,
+  acpx_record_id: resource,
+});
 
 async function expectNoMigrationStaging(sourcePath: string) {
   const files = await fs.readdir(path.dirname(sourcePath));
@@ -153,11 +158,7 @@ async function fixture(mode: "persistent" | "oneshot" = "persistent", sessionKey
     async expectPublished() {
       const resource = resolveAcpxSessionResource(claim);
       await expectNoMigrationStaging(sourcePath);
-      expect(JSON.parse(await read(file(resource)))).toEqual({
-        ...raw,
-        name: resource,
-        acpx_record_id: resource,
-      });
+      expect(JSON.parse(await read(file(resource)))).toEqual(ownedRecord(raw, resource));
       return resource;
     },
     async expectRetained(before?: string) {
@@ -226,15 +227,7 @@ it.each(["source", "destination"] as const)(
     const source = await fs.readFile(f.sourcePath);
     const targetPath = location === "source" ? f.sourcePath : f.file(resource);
     const targetBytes = Buffer.from(
-      JSON.stringify(
-        location === "source"
-          ? f.raw
-          : {
-              ...f.raw,
-              acpx_record_id: resource,
-              name: resource,
-            },
-      ),
+      JSON.stringify(location === "source" ? f.raw : ownedRecord(f.raw, resource)),
     );
     const replacement = targetBytes.indexOf(Buffer.from("\ufffd"));
     const malformed = Buffer.concat([

@@ -1,11 +1,16 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { getInitialHistoryRequests } from "./chat-initial-history.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
@@ -13,7 +18,7 @@ import {
 } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI immediate agent creation" });
-const greeting = "Hi, I’m New agent. Happy to help.";
+const creationStatus = "Creating new agent";
 const previousMessage = "Synthetic Harbor conversation before agent creation.";
 const pendingSelector = 'openclaw-pending-session-create[aria-hidden="false"]';
 const pageOptions = {
@@ -56,6 +61,9 @@ suite.define(() => {
         methodResponses: { "config.get": { exists: true, valid: true, sourceConfig: {} } },
       });
       const dialog = await openCreationDialog(page);
+      expect(await dialog.evaluate((form) => form.closest("dialog")?.open)).toBe(true);
+      const name = dialog.locator('input[name="name"]');
+      await name.fill("Harbor guide");
       const presets = dialog.locator(".avatar-picker__preset");
       await presets.first().click();
       await expect.poll(() => presets.first().getAttribute("aria-pressed")).toBe("true");
@@ -72,6 +80,7 @@ suite.define(() => {
       const during = await bounds();
       await expect.poll(() => presets.nth(1).getAttribute("aria-pressed")).toBe("true");
       const after = await bounds();
+      expect(await name.inputValue()).toBe("Harbor guide");
       const frames = [before, during, after];
       for (const dimension of ["height", "top"] as const) {
         const values = frames.map((frame) => frame[dimension]);
@@ -95,7 +104,9 @@ suite.define(() => {
         },
       });
       const dialog = await openCreationDialog(page);
-      await page.waitForTimeout(250);
+      await expect
+        .poll(() => dialog.evaluate((element) => element.closest("dialog")?.dataset.phase))
+        .toBe("open");
       const initialHeight = await dialog.evaluate(
         (element) => element.getBoundingClientRect().height,
       );
@@ -134,7 +145,7 @@ suite.define(() => {
     });
   });
 
-  it("prepares creation from the cold selector and immediately previews its own chat before admission", async () => {
+  it("prepares creation from the cold selector and immediately paints its own pending chat before admission", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       await page.addInitScript(
         ({ key }) => localStorage.setItem(key, JSON.stringify({ sidebarAgentsMode: "chip" })),
@@ -156,7 +167,7 @@ suite.define(() => {
       const originalPane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
       await originalPane.getByText(previousMessage, { exact: true }).waitFor();
       const originalUrl = page.url();
-      const startupRequests = await gateway.getRequests("chat.startup");
+      const historySubscriptions = await getInitialHistoryRequests(gateway);
       const sidebar = page.locator("openclaw-app-sidebar");
       const selectorButton = sidebar.locator(".sidebar-agent-card__main");
       await selectorButton.click();
@@ -174,6 +185,10 @@ suite.define(() => {
       await dialog.waitFor({ state: "visible" });
       await dialog.locator('input[name="name"]').fill("New agent");
       const submit = dialog.locator('button[type="submit"]');
+      const proofTime = Date.now();
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.clock.setFixedTime(proofTime);
+      }
 
       const [firstPaint] = await Promise.all([
         page.evaluate(
@@ -182,13 +197,13 @@ suite.define(() => {
               const started = performance.now();
               const sample = () => {
                 const host = document.querySelector(pending);
-                const message = host?.querySelector(".chat-group.assistant .chat-text");
+                const status = host?.querySelector(".chat-working-indicator__status > span");
                 const elapsedMs = performance.now() - started;
                 const presented =
                   host &&
                   getComputedStyle(host).opacity === "1" &&
-                  message?.textContent?.trim() === text &&
-                  message.getBoundingClientRect().height > 0 &&
+                  status?.textContent?.trim() === text &&
+                  status.getBoundingClientRect().height > 0 &&
                   location.pathname !== originalPath &&
                   !document.querySelector(".sidebar-agent-menu");
                 if (presented || elapsedMs >= 5_000) {
@@ -205,16 +220,30 @@ suite.define(() => {
             }),
           {
             pending: pendingSelector,
-            text: greeting,
+            text: creationStatus,
             originalPath: new URL(originalUrl).pathname,
           },
         ),
         submit.click(),
       ]);
-      // This bounds automation-to-painted-preview time; it makes no provider/persistence claim.
+      // This bounds automation-to-painted-pending-state time, before provider/persistence work.
       expect(firstPaint.elapsedMs).toBeGreaterThanOrEqual(0);
       expect(firstPaint.elapsedMs).toBeLessThan(5_000);
       expect(firstPaint.previousPanePresented).toBe(false);
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.clock.setFixedTime(proofTime + 4_000);
+        const pending = page.locator(pendingSelector);
+        const status = pending.locator(".chat-working-indicator__status");
+        await expect.poll(() => status.textContent()).toContain("4s");
+        const artifacts = createControlUiE2eArtifactDir("agent-creation-status-copy");
+        const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [status], {
+          animations: "disabled",
+          elements: [pending.locator(".chat-working-indicator")],
+        });
+        await writeFile(path.join(artifacts, "creation.png"), frame.png);
+        await writeFile(path.join(artifacts, "creation-status.png"), frame.elements[0]!.png);
+        console.log("Creation copy proof:", artifacts);
+      }
       const request = await gateway.waitForRequest("agents.create");
       if (
         !request.params ||
@@ -227,7 +256,7 @@ suite.define(() => {
       const agentId = request.params.agentId;
       expect(new URL(page.url()).pathname).toBe(`/chat/${agentId}`);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      expect(await gateway.getRequests("chat.startup")).toEqual(startupRequests);
+      expect(await getInitialHistoryRequests(gateway)).toEqual(historySubscriptions);
       await selectorButton.click();
       const firstAgent = selector.locator('[data-value^="agent:"]').first();
       await expect.poll(() => firstAgent.getAttribute("data-value")).toBe(`agent:${agentId}`);
@@ -243,7 +272,7 @@ suite.define(() => {
       await originalPane.getByText(previousMessage, { exact: true }).waitFor();
       expect(await page.locator("openclaw-pending-session-create").count()).toBe(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      expect(await gateway.getRequests("chat.startup")).toEqual(startupRequests);
+      expect(await getInitialHistoryRequests(gateway)).toEqual(historySubscriptions);
       await selectorButton.click();
       await selector.waitFor({ state: "visible" });
       expect(await selector.locator(`[data-value="agent:${agentId}"]`).count()).toBe(0);

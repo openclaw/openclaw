@@ -18,6 +18,7 @@ import {
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
 import * as allocation from "./allocation.js";
 import { captureWorktreeMutationHeartbeat } from "./allocation.test-support.js";
+import * as capacityStore from "./capacity-store.js";
 import * as capacity from "./capacity.js";
 import {
   createWorktreeCapacityStatfs,
@@ -442,28 +443,111 @@ describe("ManagedWorktreeService capacity", () => {
     expect(await git(repo, "branch", "--list", "openclaw/unknown-space")).toBe("");
   });
 
-  it("serializes distinct repositories competing for disk headroom", async () => {
+  it("rejects insufficient headroom without waiting for a debt-free repository", async ({
+    signal,
+  }) => {
+    const otherRepo = await initializeRepository(path.join(root, "other"));
+    const planning = createDeferred();
+    const release = createDeferred();
+    const waiting = createDeferred<string>();
+    const estimate = capacity.estimateWorktreeGitBytes;
+    vi.spyOn(capacity, "estimateWorktreeGitBytes").mockImplementation(async (...args) => {
+      if (args[0] === repo) {
+        planning.resolve();
+        await withinTest(release.promise, signal);
+      }
+      return estimate(...args);
+    });
+    const wait = allocation.waitForWorktreeCapacity;
+    vi.spyOn(allocation, "waitForWorktreeCapacity").mockImplementation(async (...args) => {
+      waiting.resolve(args[0].reservationKey);
+      return wait(...args);
+    });
+    const first = service.create({ repoRoot: repo, name: "planning", baseRef: "HEAD", signal });
+    const controller = new AbortController();
+    let second: ReturnType<typeof service.create> | undefined;
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          planning.promise,
+          first,
+          "First repository did not reach planning",
+        ),
+        signal,
+      );
+      availableBytes = 4 * GiB;
+      second = service.create({
+        repoRoot: otherRepo,
+        name: "no-headroom",
+        baseRef: "HEAD",
+        signal: controller.signal,
+      });
+      await expect(
+        withinTest(
+          Promise.race([
+            second,
+            waiting.promise.then((key) => {
+              throw new Error(`Blocked on debt-free reservation ${key}`);
+            }),
+          ]),
+          signal,
+        ),
+      ).rejects.toThrow(/Insufficient disk space/);
+      expect(await git(otherRepo, "branch", "--list", "openclaw/*")).toBe("");
+    } finally {
+      controller.abort();
+      availableBytes = 100 * GiB;
+      release.resolve();
+      await Promise.allSettled([first, second]);
+    }
+    expect(await first).toMatchObject({ name: "planning" });
+    expect(await readPendingWorktrees(env)).toEqual([]);
+  });
+
+  it("serializes distinct repositories competing for disk headroom", async ({ signal }) => {
     const otherRepo = await initializeRepository(path.join(root, "other"));
     const otherService = new ManagedWorktreeService({
       env,
       getConfig: () => ({ worktreeAcceleration: false }),
     });
+    // One tracked 4 KiB blob, with the allocation's two-copy allowance, fits once.
+    availableBytes = 4 * GiB + 8 * 1024;
+    const release = createDeferred();
+    const waiting = createDeferred();
+    const wait = allocation.waitForWorktreeCapacity;
+    vi.spyOn(allocation, "waitForWorktreeCapacity").mockImplementation(async (...args) => {
+      waiting.resolve();
+      return wait(...args);
+    });
     const realRun = commandExec.runCommandWithTimeout;
     let pressureInjected = false;
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+      if (isWorktreeHydration(argv)) {
+        await withinTest(release.promise, signal);
+      }
       const result = await realRun(argv, options);
       if (isWorktreeHydration(argv) && result.code === 0) {
         // The first checkout still passes its postchecks, but a second checkout
-        // cannot fit its estimate. Without the shared lease both materializations can start.
+        // cannot fit its estimate after waiting for the first reservation to settle.
         availableBytes = 4 * GiB;
         pressureInjected = true;
       }
       return result;
     });
-    const outcomes = await Promise.allSettled([
+    const creating = Promise.allSettled([
       service.create({ repoRoot: repo, name: "last-one", baseRef: "HEAD" }),
       otherService.create({ repoRoot: otherRepo, name: "last-two", baseRef: "HEAD" }),
     ]);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(waiting.promise, creating, "Contender did not wait for headroom"),
+        signal,
+      );
+    } finally {
+      release.resolve();
+      await creating;
+    }
+    const outcomes = await creating;
     expect(pressureInjected).toBe(true);
     expect(outcomes.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(outcomes.filter((result) => result.status === "rejected")).toEqual([
@@ -635,11 +719,29 @@ describe("ManagedWorktreeService capacity", () => {
       baseRef: "HEAD",
     });
     await git(created.path, "config", "diff.autoRefreshIndex", "false");
-    await fs.writeFile(path.join(created.path, "uncommitted.txt"), "preserved delta\n");
+    const dirtyContent = "preserved delta\n";
+    await fs.writeFile(path.join(created.path, "uncommitted.txt"), dirtyContent);
     availableBytes = 144 * 1024 ** 2;
+    const admissions = vi.mocked(capacityStore.reserveWorktreeCapacity);
+    admissions.mockClear();
 
     await service.remove({ id: created.id, reason: "archive" });
 
+    const snapshots = admissions.mock.calls
+      .map(([input]) => input.request)
+      .filter((request) => request.snapshot);
+    expect.soft(snapshots).toHaveLength(1);
+    expect(snapshots.at(-1)?.demands).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: path.join(repo, ".git"),
+          bytes: expect.any(Number),
+        }),
+      ]),
+    );
+    expect(
+      snapshots.at(-1)?.demands.find((demand) => demand.path === path.join(repo, ".git"))?.bytes,
+    ).toBeGreaterThanOrEqual(2 * Buffer.byteLength(dirtyContent));
     const removed = getRegistryWorktree(env, created.id)!;
     await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await git(repo, "show", `${removed.snapshotRef}:uncommitted.txt`)).toBe(
@@ -651,7 +753,7 @@ describe("ManagedWorktreeService capacity", () => {
       true,
     );
     expect(await fs.readFile(path.join(restored.path, "uncommitted.txt"), "utf8")).toBe(
-      "preserved delta\n",
+      dirtyContent,
     );
   });
 

@@ -74,6 +74,7 @@ async function expectSize(file: string, size: number) {
 }
 const readConfig = async (file: string): Promise<OpenClawConfig> =>
   JSON.parse(await fs.readFile(file, "utf8"));
+const readFiles = (files: string[]) => Promise.all(files.map((file) => fs.readFile(file)));
 function readDatabase(file: string, query: string) {
   using db = openNodeSqliteDatabase(file, { readOnly: true });
   return db.prepare(query).get();
@@ -96,6 +97,23 @@ async function fixture(sizeMiB = 0, ids = ["main"], worker = true) {
   }
   return { root, stateDir, files, file: files[0]! };
 }
+
+it("records deferred credential availability in the snapshot receipt", async () => {
+  const f = await fixture();
+  const config: OpenClawConfig = {
+    secrets: {
+      providers: { vault: { source: "exec", command: path.join(f.root, "missing-resolver") } },
+    },
+  };
+  const original = structuredClone(config);
+  await withRehearsal(prepare(f, { config }), async (rehearsal) => {
+    expect(rehearsal.snapshotWarnings).toContain(
+      "Update rehearsal leaves exec SecretRef providers cold; credential availability is not verified.",
+    );
+    expect((await readConfig(rehearsal.configPath)).secrets).toEqual(config.secrets);
+    expect(config).toEqual(original);
+  });
+});
 
 it.each([
   { table: "retained", index: "retained_value", fullIntegrityCheck: undefined, rejects: false },
@@ -179,6 +197,7 @@ it("reaps an expired snapshot worker before removing its database and WAL scratc
   const now = Date.now.bind(Date);
   let elapsed = 0;
   vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+  vi.spyOn(performance, "now").mockImplementation(() => now() + elapsed);
   const ready = createDeferred();
   const run = exec.runUtf8CommandWithTimeout;
   vi.spyOn(exec, "runUtf8CommandWithTimeout").mockImplementation((argv, options) => {
@@ -380,78 +399,53 @@ const capacityFailure = { capacity: { reason: "snapshot-capacity-insufficient" }
 async function capacityFixture(mebibytes: number | null, worker = false) {
   const f = await fixture(8, ["main", "second"], worker);
   capacity(() => (mebibytes === null ? null : mebibytes * 1024 ** 2));
-  const hashes = () =>
-    Promise.all(
-      f.files.map(async (file) =>
-        createHash("sha256")
-          .update(await fs.readFile(file))
-          .digest("hex"),
-      ),
-    );
+  const hashes = async () =>
+    (await readFiles(f.files)).map((bytes) => createHash("sha256").update(bytes).digest("hex"));
   const before = await hashes();
   return {
     ...f,
-    assess: () =>
-      assessInitialUpdateSnapshotCapacity({
-        config: {},
-        stateDir: f.stateDir,
-        env: {},
-      }),
     prepare: (options: Partial<Parameters<typeof prepareUpdateCandidateRehearsal>[0]> = {}) =>
       prepare(f, options),
     unchanged: async () => expect(await hashes()).toEqual(before),
   };
 }
 
-it.each([
-  { space: 100, exitCode: 0, diagnostic: "" },
-  { space: 70, exitCode: 1, diagnostic: "snapshot-capacity-insufficient" },
-  { space: null, exitCode: 0, diagnostic: "free space unknown" },
-])(
-  "preflights one generation with $space MiB free (exit=$exitCode)",
-  async ({ space, exitCode, diagnostic }) => {
-    const f = await capacityFixture(space);
-    const result = await f.assess();
-    expect(result.exitCode, result.stderrTail ?? undefined).toBe(exitCode);
-    if (diagnostic) {
-      expect(result.stderrTail ?? result.diagnostics?.join("\n")).toContain(diagnostic);
-    }
-    await f.unchanged();
-  },
-);
-
-it("preflights activation backup separately from candidate copy capacity", async () => {
+it("preflights the pre-migration image without refusing or changing anything", async () => {
   const f = await fixture(0, ["main", "second"], false);
   // Admission measures family lengths; sparse tails avoid writing payloads this check never reads.
   for (const file of f.files) {
     await fs.truncate(file, 8 * 1024 ** 2);
   }
   const backupDirectory = path.join(f.root, "backup");
-  let freeMiB: number | null = 100;
+  let freeMiB: number | null = 80;
   capacity((target) =>
     target === backupDirectory ? (freeMiB === null ? null : freeMiB * 1024 ** 2) : 140 * 1024 ** 2,
   );
-  const before = await Promise.all(f.files.map((file) => fs.readFile(file)));
-  for (freeMiB of [100, 140, null]) {
-    const result = await assessInitialUpdateSnapshotCapacity({
+  const before = await readFiles(f.files);
+  for (freeMiB of [80, 140, null]) {
+    const { step, shortfall } = await assessInitialUpdateSnapshotCapacity({
       config: {},
       stateDir: f.stateDir,
       env: {},
       backupDirectory,
     });
-    expect(result.exitCode, result.stderrTail ?? undefined).toBe(freeMiB === 100 ? 1 : 0);
-    if (freeMiB === 100) {
-      expect(result.stderrTail).toContain("Update database backup");
-      expect(result.stderrTail).toContain("125829120 bytes");
-      expect(result.stderrTail).toContain("104857600 bytes");
-      for (const file of f.files) {
-        expect(result.stderrTail).toContain(file);
-      }
+    // The image is skipped below its need; the migration's own room fits on the state volume.
+    expect(step.exitCode, step.stderrTail ?? undefined).toBe(0);
+    expect(shortfall).toBe(freeMiB === 80);
+    expect(step.warnings).toEqual(
+      freeMiB === 80
+        ? [expect.stringMatching(/^No pre-migration database image: it needs 88 MiB near /u)]
+        : freeMiB === null
+          ? [expect.stringContaining("could not be measured")]
+          : undefined,
+    );
+    for (const file of f.files) {
+      expect(step.diagnostics?.join("\n")).toContain(file);
     }
   }
   await expect(fs.stat(backupDirectory)).rejects.toMatchObject({ code: "ENOENT" });
-  for (const [index, file] of f.files.entries()) {
-    expect((await fs.readFile(file)).equals(before[index]!)).toBe(true);
+  for (const [index, contents] of (await readFiles(f.files)).entries()) {
+    expect(contents.equals(before[index]!)).toBe(true);
   }
 });
 
@@ -477,6 +471,16 @@ it("keeps the larger allowance when the candidate omits the copy capability", as
   const f = await capacityFixture(100, true);
   const worker = path.join(f.root, "dist", "infra", "update-candidate-state.worker.js");
   // Exercise the real worker, but present the inventory contract of an older candidate.
+  const run = exec.runUtf8CommandWithTimeout;
+  vi.spyOn(exec, "runUtf8CommandWithTimeout").mockImplementation((argv, options) => {
+    if (typeof options === "number" || typeof options.input !== "string") {
+      return run(argv, options);
+    }
+    const input = JSON.parse(options.input);
+    // Older workers also ignore the opt-in result transport and reply on stdout.
+    delete input.resultPath;
+    return run(argv, { ...options, input: JSON.stringify(input) });
+  });
   const source = await fs.readFile(worker, "utf8");
   await fs.writeFile(
     worker,
@@ -604,33 +608,28 @@ it.each(["token", "password"] as const)(
       );
     expect((await lint(config, path.join(root, "openclaw.json"))).findings).toEqual([]);
 
-    const rehearsal = await prepareUpdateCandidateRehearsal({
-      config,
-      stateDir: source,
-      candidateRoot: root,
-      env: {
-        ...process.env,
-        OPENCLAW_GATEWAY_TOKEN: "synthetic-environment-token",
-        OPENCLAW_GATEWAY_PASSWORD: "synthetic-environment-password",
+    const rehearsal = await prepare(
+      { root, stateDir: source },
+      {
+        config,
+        env: {
+          ...process.env,
+          OPENCLAW_GATEWAY_TOKEN: "synthetic-environment-token",
+          OPENCLAW_GATEWAY_PASSWORD: "synthetic-environment-password",
+        },
       },
-    });
+    );
     try {
       const copied = await readConfig(rehearsal.configPath);
       const result = await lint(copied, rehearsal.configPath);
       expect(result.findings).toEqual([]);
       expect(exitCodeFromFindings(result.findings)).toBe(0);
-      expect(copied.gateway).toEqual({
-        ...config.gateway,
-        auth: { ...config.gateway?.auth, token: expect.any(String) },
-      });
       expect(copied.gateway?.auth?.token).not.toBe(config.gateway?.auth?.token);
-      expect(copied.diagnostics).toEqual({
-        ...config.diagnostics,
-        otel: {
-          ...config.diagnostics?.otel,
-          headers: { Authorization: expect.any(String), "X-Reference": "${OTEL_SECRET}" },
-        },
-      });
+      const expected = structuredClone(config);
+      expected.gateway!.auth!.token = expect.any(String);
+      expected.diagnostics!.otel!.headers!.Authorization = expect.any(String);
+      expect(copied.gateway).toEqual(expected.gateway);
+      expect(copied.diagnostics).toEqual(expected.diagnostics);
       expect(copied.diagnostics?.otel?.headers?.Authorization).not.toBe("synthetic-otel-secret");
       const copiedDatabase = path.join(rehearsal.stateDir, path.relative(source, database));
       expect(readDatabase(copiedDatabase, "PRAGMA user_version")).toEqual({ user_version: 25 });

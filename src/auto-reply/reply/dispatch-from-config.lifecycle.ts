@@ -3,6 +3,7 @@ import { readChannelContextGatewayContextResolver } from "../../channels/message
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import { logVerbose } from "../../globals.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { withSessionControllerSource } from "../../sessions/session-controller.context.js";
 import {
@@ -34,6 +35,7 @@ import {
   DispatchReplyOperationAbortedError,
   isDispatchReplyOperationAbortedError,
 } from "./dispatch-from-config.abort.js";
+import { deferLifecycleBlockedDispatchClaim } from "./dispatch-from-config.claim-retry.js";
 import {
   resolveDispatchResetAdmission,
   shouldLetSlackRoutedThreadBypassBusyReplyOperation,
@@ -65,6 +67,7 @@ export function createDispatchReplyOperationCoordinator(
 ) {
   let dispatchReplyOperation: ReplyOperation | undefined;
   let admittedExpectedSessionId: string | undefined;
+  let admittedDatabaseIncarnation: string | undefined;
   let dispatchAbortOperation: ReplyOperation | undefined;
   let preDispatchAbortOperation: ReplyOperation | undefined;
   let preDispatchLifecycleAdmission: SessionEffectRef | undefined;
@@ -73,8 +76,6 @@ export function createDispatchReplyOperationCoordinator(
   let dispatchLifecycleAbortController: AbortController | undefined;
   let preDispatchLifecycleInterrupted = false;
   let dispatchResetTriggered = false;
-  let allowRestartTombstoneParentFork = false;
-  let allowRestartTombstoneReset = false;
   const dispatchLifecycleWork = {
     owner: new Set<Promise<void>>(),
     delivery: new Set<Promise<void>>(),
@@ -253,18 +254,13 @@ export function createDispatchReplyOperationCoordinator(
         sessionKey: params.dispatchOperationSessionKey,
         storePath: params.operationSessionStoreEntry.storePath,
       });
-      ({
-        resetTriggered: dispatchResetTriggered,
-        allowRestartTombstoneParentFork,
-        allowRestartTombstoneReset,
-      } = await resolveDispatchResetAdmission({
+      ({ resetTriggered: dispatchResetTriggered } = await resolveDispatchResetAdmission({
         agentId: params.agentId,
         cfg: params.cfg,
         ctx: params.ctx,
         entry: params.operationSessionStoreEntry.entry,
         hasPluginOwnedBinding,
         sessionKey: params.dispatchOperationSessionKey,
-        storePath: params.operationSessionStoreEntry.storePath,
       }));
     }
     if (phase !== "pre_dispatch" && preDispatchLifecycleInterrupted) {
@@ -413,8 +409,14 @@ export function createDispatchReplyOperationCoordinator(
         return { status: "ready" };
       }
       if (!mailboxClaim) {
+        // Commands skip ingress staging; a blocked turn still needs visible input custody.
+        await params.replyOptions?.userTurnTranscriptRecorder?.stageApproved?.({
+          runId: params.replyOptions?.runId ?? input.instance.id,
+          assertCurrent: assertRequestCurrent,
+        });
         const selected = claimSessionControllerTask(input, () => {}, replyTurnKind);
         try {
+          using _ = observeDiagnosticsTimelinePhases("reply.admission.mailbox_wait");
           mailboxClaim = await selected;
         } catch (error) {
           if (input.abortSignal.aborted) {
@@ -446,10 +448,9 @@ export function createDispatchReplyOperationCoordinator(
           params.initialDispatchReplyOperation,
         ].filter((operation): operation is ReplyOperation => operation !== undefined),
         storePath: params.operationSessionStoreEntry.storePath,
+        expectedDatabaseIncarnation: admittedDatabaseIncarnation,
         kind: replyTurnKind,
         resetTriggered: dispatchResetTriggered,
-        allowRestartTombstoneParentFork,
-        allowRestartTombstoneReset,
         routeThreadId: params.routeThreadId,
         originatingLeafEntryId: params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId,
         upstreamAbortSignal: input?.abortSignal ?? params.replyOptions?.abortSignal,
@@ -468,6 +469,14 @@ export function createDispatchReplyOperationCoordinator(
         }
       }
     } catch (error) {
+      const deferred = await deferLifecycleBlockedDispatchClaim(error, mailboxClaim);
+      if (deferred) {
+        if (input?.abortSignal.aborted || input?.retirementRequested) {
+          return { status: "aborted" };
+        }
+        admittedDatabaseIncarnation ??= deferred.databaseIncarnation;
+        return await ensureDispatchReplyOperation(phase, hasPluginOwnedBinding);
+      }
       if (mailboxClaim) {
         releaseSessionControllerClaim(mailboxClaim);
       }

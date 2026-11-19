@@ -4,6 +4,7 @@ import type {
   CronAddJobResultSchema,
   CronAddParamsSchema,
   CronAddResultSchema,
+  CronBindParamsSchema,
   CronDeliveryPreviewSchema,
   CronDeclarativeAddResultSchema,
   CronGetParamsSchema,
@@ -31,9 +32,11 @@ export type CronCompactJob = Pick<
   | "displayName"
   | "owner"
   | "agentId"
+  | "cyberAccessProgram"
   | "enabled"
   | "updatedAtMs"
   | "streamExecutionHost"
+  | "reauthorizationRequired"
 > &
   Pick<
     CronJob["state"],
@@ -42,6 +45,7 @@ export type CronCompactJob = Pick<
     | "lastTriggerEvalAtMs"
     | "runningAtMs"
     | "autoDisabled"
+    | "admissionDeferred"
     | "lastDelivered"
     | "lastDeliveryStatus"
     | "lastDeliveryError"
@@ -70,6 +74,7 @@ export type CronDeliveryPreview = Static<typeof CronDeliveryPreviewSchema>;
 export type CronDeclarativeAddResult = Static<typeof CronDeclarativeAddResultSchema>;
 export type CronUpdateParams = Static<typeof CronUpdateParamsSchema>;
 export type CronRemoveParams = Static<typeof CronRemoveParamsSchema>;
+export type CronBindParams = Static<typeof CronBindParamsSchema>;
 export type CronRunParams = Static<typeof CronRunParamsSchema>;
 export type CronRunsParams = Static<typeof CronRunsParamsSchema>;
 export type CronScratchGetParams = Static<typeof CronScratchGetParamsSchema>;

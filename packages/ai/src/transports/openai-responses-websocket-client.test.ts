@@ -15,6 +15,7 @@ import { isRetryableAssistantError } from "../../../../src/llm/utils/retry.js";
 import { createEmptyPluginRegistry } from "../../../../src/plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../../../src/plugins/runtime/generation-scope.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { createOpenAIResponsesClient as createClient } from "../providers/openai-provider-client.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import {
@@ -110,10 +111,7 @@ vi.mock("openai/resources/responses/ws.js", () => ({
   },
 }));
 
-import {
-  createOpenAIResponsesClient as createClient,
-  createOpenAIResponsesTransportStreamFn as createStreamFn,
-} from "./openai-responses-client.js";
+import { createOpenAIResponsesTransportStreamFn as createStreamFn } from "./openai-responses-client.js";
 import { createOpenAIResponsesWebSocketStream as createSocketStream } from "./openai-responses-websocket.js";
 import { collectEventTypes } from "./openai-stream-cases.test-support.js";
 
@@ -725,9 +723,12 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     expect(result.stopReason).toBe("error");
     expectCounts(1, 0);
     expect(transport.closeCount).toBe(1);
-    const line = logWarn.mock.calls.find(([, text]) => text.startsWith("[responses] error "))?.[1];
-    expect(line).toContain("abortReason=request_deadline");
-    expect(line).not.toContain("abortMessage=");
+    expect(logWarn).toHaveBeenCalledExactlyOnceWith(
+      "provider-error",
+      "Model request failed",
+      expect.objectContaining({ abortReason: "request_deadline" }),
+    );
+    expect(JSON.stringify(logWarn.mock.calls)).not.toContain("abortMessage");
 
     transport.sdkOutcomes.push(sdkCompletion("resp_sse"));
     const next = await run(history(user("next", 2)));

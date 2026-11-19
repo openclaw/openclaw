@@ -6,7 +6,7 @@ import * as ledger from "../../infra/update-run-ledger.js";
 import * as reports from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
 import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import { observeUpdateGatewayReadiness } from "./update-command-readiness.js";
 import { recordUpdateResultNextAction } from "./update-command-result.js";
@@ -128,11 +128,7 @@ beforeEach(() => {
   vi.mocked(isContainerEnvironment).mockReturnValue(true);
   vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "");
 });
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(cleanupUpdateCommandTest);
 
 it("reports an untouched Gateway after a capacity refusal without recommending recovery", () => {
   const action = guidance(failure({ reason: "snapshot-capacity-insufficient" }), {
@@ -158,6 +154,10 @@ it.each(["not-needed", "not-attempted", "succeeded", "failed"] as const)(
       }),
     );
     expect(action).toContain("installed Gateway is healthy");
+    // `gateway stop` refuses a non-interactive shell without --force; repair names the same command.
+    expect(action).toContain(
+      "stop the Gateway through its service owner first (`openclaw gateway stop --force` for the managed service), then run `openclaw update repair`",
+    );
     if (status === "not-attempted" || status === "failed") {
       expect(action).toContain(
         `Rollback ${status === "failed" ? "failed" : "not attempted"}: recorded rollback detail.`,

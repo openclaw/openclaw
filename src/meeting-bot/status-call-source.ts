@@ -1,6 +1,6 @@
 import { createMeetingRoutingOwnershipSource } from "./status-call-ownership-source.js";
 
-type MeetingStatusCallSourceOptions = {
+export function createMeetingStatusCallSource(options: {
   captionEnableSource: string;
   captionSettleMs?: number;
   platform: {
@@ -19,9 +19,7 @@ type MeetingStatusCallSourceOptions = {
   /** In-page statements run once audio routing settles, before captions and the status result. */
   afterAudioRoutingSource?: string;
   transcriptMaxLines?: number;
-};
-
-export function createMeetingStatusCallSource(options: MeetingStatusCallSourceOptions): string {
+}): string {
   const captionSettleMs = options.captionSettleMs ?? 1_000;
   const audioOutputsGlobal = JSON.stringify(options.platform.globals.audioOutputs);
   const captionsGlobal = JSON.stringify(options.platform.globals.captions);

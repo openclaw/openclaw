@@ -1,8 +1,10 @@
 import { expect, it } from "vitest";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { board as createBoardSnapshot } from "./chat-layout-fixtures.test-support.ts";
 import { focusChatSidePanel } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -16,26 +18,17 @@ const sessionRow = {
   ...createControlUiSessionRow(sessionKey, "Service status", Date.now()),
   boardFace: "dashboard",
 };
-const snapshot = {
-  sessionKey,
-  revision: 1,
-  tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-  widgets: [
-    {
-      name: "website",
-      tabId: "main",
-      title: "Service status",
-      contentKind: "plugin",
-      pluginKind: "session:website",
-      props: { url: websiteUrl },
-      sizeW: 12,
-      sizeH: 8,
-      position: 0,
-      grantState: "none",
-      revision: 1,
-    },
-  ],
-};
+const snapshot = createBoardSnapshot(sessionKey, [
+  createBoardWidget({
+    name: "website",
+    title: "Service status",
+    contentKind: "plugin",
+    pluginKind: "session:website",
+    props: { url: websiteUrl },
+    sizeW: 12,
+    sizeH: 8,
+  }),
+]);
 const website = `<!doctype html><html lang="en"><meta name="viewport" content="width=device-width"><title>Service status</title>
 <style>body{margin:0;background:#102820;color:#e8fff2;font:16px system-ui}main{padding:clamp(24px,5vw,64px)}h1{font-size:clamp(32px,5vw,58px);margin:10px 0 24px}p{color:#a9c9b8}input,button,a{font:inherit}input{display:block;max-width:85%;margin:20px 0;padding:10px}button{padding:10px 16px;background:#b4f9bf;border:0;border-radius:8px}a{color:#b4f9bf}#status{font-size:24px;color:#b4f9bf}</style>
 <main><p>OPERATIONS / SERVICE STATUS</p><h1>Everything in view.</h1><p id="status">Loading status…</p><input aria-label="Status note" placeholder="Add a local note"><button id="refresh">Refresh status</button><p><a href="/details">View details</a></p></main>
@@ -87,24 +80,10 @@ suite.define(() => {
         const content = page.frameLocator(".board-website__frame");
         await content.getByText("All systems operational", { exact: true }).waitFor();
         const sidebar = page.locator("openclaw-app-sidebar");
-        await sidebar
-          .locator(".sidebar-rail")
-          .getByRole("button", { name: "Pages", exact: true })
-          .click();
-        const pages = sidebar.locator(".sidebar-pages");
-        const catalogRow = pages.locator(".sidebar-pages__entry").filter({
-          has: page.locator(`[data-sidebar-entry="session:${sessionKey}"]`),
-        });
-        await catalogRow.hover();
-        await catalogRow.getByRole("button", { name: "Pin", exact: true }).click();
-        expect(await catalogRow.getByRole("button", { name: "Unpin", exact: true }).count()).toBe(
-          1,
-        );
-        const showView = (name: "Pages" | "Sessions") =>
-          sidebar.locator(".sidebar-rail").getByRole("button", { name, exact: true }).click();
-        // Pinned dashboards join the Sessions list's Pinned section, not the rail.
-        expect(await sidebar.locator(".sidebar-rail__pin").count()).toBe(0);
-        await showView("Sessions");
+        // A personal pin moves the dashboard's Sessions row into the Pinned section.
+        const row = sidebar.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
+        await row.hover();
+        await row.getByRole("button", { name: "Pin session", exact: true }).click();
         const pinned = sidebar
           .locator(`[data-session-section="pinned"] [data-session-key="${sessionKey}"]`)
           .locator("a.sidebar-recent-session__link");
@@ -160,10 +139,13 @@ suite.define(() => {
             "*",
           );
         });
-        await showView("Pages");
-        await pages.getByRole("link", { name: "Sessions", exact: true }).click();
-        await page.waitForURL(`${suite.server.baseUrl}sessions`);
-        await showView("Sessions");
+        // Leave the dashboard for Usage, one of the rail's default pins, and come back.
+        await sidebar
+          .locator('.sidebar-rail__pin[data-sidebar-entry="route:usage"] a')
+          .first()
+          .click();
+        await page.waitForURL(`${suite.server.baseUrl}usage`);
+        await sidebar.locator('[data-navigation-view="sessions"]').click();
         await pinned.click();
         await frame.waitFor();
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);

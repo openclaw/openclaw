@@ -7,8 +7,9 @@ import { createApplicationGateway } from "../../test-helpers/application-context
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createAgentCapability } from "../agents/index.ts";
 import { rosterActivityStore } from "../agents/roster-activity-store.ts";
+import { sessionRequest as gatewayRequest } from "./hydration-family.test-support.ts";
 import { createTestSessionCapability, sessionsResult } from "./session-capability.test-support.ts";
-import { gatewayRequest, sessionRow } from "./session-fixtures.test-support.ts";
+import { sessionRow } from "./session-fixtures.test-support.ts";
 
 it("bounds list reads across two viewers and three streaming sessions for three minutes", async () => {
   vi.useFakeTimers();

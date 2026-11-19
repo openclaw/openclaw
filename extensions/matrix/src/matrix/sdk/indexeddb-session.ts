@@ -1,4 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 
 type SessionState = "active" | "retiring" | "retired" | "failed";
@@ -89,6 +90,7 @@ function openForSession(
           request.result.close();
         }
       } catch (error) {
+        materializeErrorStack(error);
         session.failure = { error };
         session.state = "failed";
       } finally {
@@ -173,6 +175,7 @@ export function beginMatrixSdkIndexedDbSession(
           // retired session. The registry remains closed until a successor begins.
           session.connections.clear();
         } catch (error) {
+          materializeErrorStack(error);
           session.state = "failed";
           throw error;
         }

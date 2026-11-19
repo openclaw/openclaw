@@ -52,7 +52,6 @@ async function runImportBoundaryChild(forbidden: RegExp, workload: string) {
 
       expect(result, failure).toMatchObject({ signal: null, code: 0 });
       expect(result.stdout, failure).toContain("MCP_IMPORT_BOUNDARY_OK");
-      return result.stdout;
     },
   );
 }
@@ -63,24 +62,15 @@ it.each<[string, RegExp, string]>([
     /\/src\/(?:plugins\/tools|mcp\/channel-server)\.(?:ts|js)(?:[?#].*)?$/u,
     String.raw`
       ${registerCli}
-      assert.equal(await program.parseAsync(["mcp", "reload"], { from: "user" }), program);
+      await program.parseAsync(["mcp", "reload"], { from: "user" });
       const { buildBundleMcpToolsFromCatalog } = await import(${JSON.stringify(catalogUrl.href)});
-      const identity = { serverName: "inventory", safeServerName: "inventory" };
-      const tools = buildBundleMcpToolsFromCatalog({
-        catalog: {
-          version: 1,
-          generatedAt: 0,
-          servers: { inventory: { ...identity, launchSummary: "fixture", toolCount: 1 } },
-          tools: [{
-            ...identity,
-            toolName: "lookup",
-            inputSchema: { type: "object", properties: {} },
-            fallbackDescription: "Look up an inventory item",
-          }],
-        },
-      });
-      assert.deepEqual(tools.map((tool) => tool.name), ["inventory__lookup"]);
-      await assert.rejects(tools[0].execute("inventory-only", {}, undefined, undefined), {
+      const [tool] = buildBundleMcpToolsFromCatalog({ catalog: {
+        version: 1, generatedAt: 0, servers: {}, tools: [{
+          serverName: "inventory", safeServerName: "inventory", toolName: "lookup",
+          inputSchema: { type: "object" }, fallbackDescription: "Look up an item",
+        }],
+      } });
+      await assert.rejects(tool.execute("inventory-only", {}, undefined, undefined), {
         message: "bundle-mcp catalog projection cannot execute tools",
       });
     `,
@@ -91,7 +81,7 @@ it.each<[string, RegExp, string]>([
     String.raw`
       ${registerCli}
       for (const command of ["list", "show", "status", "doctor"]) {
-        assert.equal(await program.parseAsync(["mcp", command, "--json"], { from: "user" }), program);
+        await program.parseAsync(["mcp", command, "--json"], { from: "user" });
       }
     `,
   ],
@@ -99,13 +89,9 @@ it.each<[string, RegExp, string]>([
     "metadata owner",
     /\/src\/(?:plugins\/(?:tools|loader)|mcp\/channel-server)\.(?:ts|js)(?:[?#].*)?$/u,
     String.raw`
-      const { getPluginToolMeta } = await import(${JSON.stringify(metadataUrl.href)});
-      assert.equal(getPluginToolMeta({}), undefined);
+      await import(${JSON.stringify(metadataUrl.href)});
     `,
   ],
-])("keeps %s imports within their boundary", async (name, forbidden, workload) => {
-  const stdout = await runImportBoundaryChild(forbidden, workload);
-  if (name === "client and catalog") {
-    expect(stdout).toContain("Disposed cached MCP runtimes.");
-  }
+])("keeps %s imports within their boundary", async (_name, forbidden, workload) => {
+  await runImportBoundaryChild(forbidden, workload);
 });

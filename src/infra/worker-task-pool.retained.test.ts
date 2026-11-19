@@ -1,17 +1,20 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import type { WorkerOptions } from "node:worker_threads";
 import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import {
   installDatabaseEngineSelection,
   withDatabaseEngineSelection,
 } from "./database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
+import { prepareSqliteDatabaseAdmissionAsync } from "./sqlite-database-admission.js";
 import type {
   AdmissionTaskInput,
   AdmissionTaskResult,
@@ -213,6 +216,38 @@ it("enforces the existing task deadline while the caller cannot run timers and j
   }
 });
 
+it.each(["service", "timer"] as const)(
+  "starts an owned task deadline after queueing and enforces it through %s",
+  async (expiry) => {
+    const pool = fixture();
+    const preceding = pool.startTask({}, {});
+    read(preceding);
+    const barrier = blockingInput();
+    const now = performance.now();
+    const clock = vi.spyOn(performance, "now").mockReturnValue(now);
+    const queued = pool.startTask(barrier.input, { timeoutMs: 100, timeoutFrom: "dispatch" });
+    void queued.result.catch(() => {});
+    try {
+      clock.mockReturnValue(now + 1_000);
+      queued.service();
+      expect(queued.read().status).toBe("pending");
+      read(preceding.release());
+      serviceUntil(queued, barrier.entered);
+      if (expiry === "service") {
+        clock.mockReturnValue(now + 1_101);
+        expect(() => read(queued)).toThrow("worker task timed out");
+      } else {
+        await expect(queued.result).rejects.toThrow("worker task timed out");
+      }
+      read(queued.release());
+      expect(pool.getSnapshot().workers).toBe(0);
+    } finally {
+      clock.mockRestore();
+      barrier.release();
+    }
+  },
+);
+
 it("answers an earlier task's synchronous host exchange while servicing a queued task", () => {
   const pool = taskFixture();
   const context = new AsyncLocalStorage<string>();
@@ -248,7 +283,9 @@ it("answers an earlier task's synchronous host exchange while servicing a queued
   read(second.release({ retire: true }));
 });
 
-it("services a sibling pool's database facts while the host event loop is blocked", async () => {
+it("services a sibling pool's database facts while the host event loop is blocked", async ({
+  signal,
+}) => {
   const blockedPool = fixture();
   const admissionPool = createPool<AdmissionTaskInput, AdmissionTaskResult>(
     "./sqlite-database-admission.task.test-support.ts",
@@ -258,6 +295,11 @@ it("services a sibling pool's database facts while the host event loop is blocke
   const database = new DatabaseSync(location);
   database.exec("CREATE TABLE proof (value INTEGER)");
   database.close();
+  await prepareSqliteDatabaseAdmissionAsync({
+    location,
+    assertCurrent: () => signal.throwIfAborted(),
+  });
+  using observed = observeMainThreadFs();
   const barrier = blockingInput();
   const blocked = blockedPool.startTask(barrier.input, {});
   const admission = admissionPool.startTask({ path: location }, {});
@@ -273,6 +315,7 @@ it("services a sibling pool's database facts while the host event loop is blocke
     read(blocked);
     read(blocked.release());
   }
+  expect(observed.calls()).toEqual({});
 });
 
 it("serializes resource cleanup after an asynchronous task without cancelling it", async () => {

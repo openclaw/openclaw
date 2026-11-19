@@ -7,7 +7,27 @@ import {
   readLastAnthropicIterationUsage,
 } from "./anthropic-usage.js";
 
-describe("readAnthropicCacheWriteUsage", () => {
+const buckets = (values?: readonly [number?, number?]) =>
+  values && {
+    ephemeral_5m_input_tokens: values[0],
+    ephemeral_1h_input_tokens: values[1],
+  };
+const iteration = (
+  type: string,
+  input: number,
+  output: number,
+  write: number,
+  cache?: unknown,
+) => ({
+  type,
+  input_tokens: input,
+  output_tokens: output,
+  cache_read_input_tokens: 0,
+  cache_creation_input_tokens: write,
+  cache_creation: cache,
+});
+
+describe("Anthropic usage", () => {
   it("keeps a valid bucket when its sibling is absent or malformed", () => {
     expect(
       readAnthropicCacheWriteUsage({
@@ -19,25 +39,13 @@ describe("readAnthropicCacheWriteUsage", () => {
     ).toEqual({ cacheWrite1h: 12 });
     expect(readAnthropicCacheWriteUsage({})).toEqual({});
   });
-});
-
-describe("readLastAnthropicIterationUsage", () => {
   it("rejects a final iteration with incomplete cache usage", () => {
     expect(
       readLastAnthropicIterationUsage({
-        iterations: [
-          {
-            type: "message",
-            input_tokens: 12,
-            output_tokens: 15_104,
-          },
-        ],
+        iterations: [{ type: "message", input_tokens: 12, output_tokens: 15_104 }],
       }),
     ).toEqual({ state: "invalid" });
   });
-});
-
-describe("applyAnthropicMessageDeltaUsage", () => {
   it("settles usage after zero placeholders when the provider never writes cache", () => {
     const usage = createZeroUsage();
     const start = applyAnthropicMessageStartUsage(usage, { input_tokens: 0, output_tokens: 0 });
@@ -53,23 +61,20 @@ describe("applyAnthropicMessageDeltaUsage", () => {
       contextUsage: { state: "available", promptTokens: 1763, totalTokens: 1765 },
     });
   });
-});
-
-describe("reported Anthropic TTL buckets", () => {
   it("carries both reported buckets through start and delta while omitted breakdowns preserve them", () => {
     const usage = createZeroUsage();
     const start = applyAnthropicMessageStartUsage(usage, {
       input_tokens: 10,
       output_tokens: 0,
       cache_creation_input_tokens: 10,
-      cache_creation: { ephemeral_5m_input_tokens: 6, ephemeral_1h_input_tokens: 4 },
+      cache_creation: buckets([6, 4]),
     });
     expect(usage).toMatchObject({ cacheWrite5m: 6, cacheWrite1h: 4 });
     applyAnthropicMessageDeltaUsage(
       usage,
       {
         cache_creation_input_tokens: 20,
-        cache_creation: { ephemeral_5m_input_tokens: 12, ephemeral_1h_input_tokens: 8 },
+        cache_creation: buckets([12, 8]),
       },
       start,
     );
@@ -83,73 +88,28 @@ describe("reported Anthropic TTL buckets", () => {
   });
 
   it.each([
-    {
-      name: "omitted iteration breakdowns preserve message-start buckets",
-      startTopLevel: { ephemeral_5m_input_tokens: 6, ephemeral_1h_input_tokens: 4 },
-      topLevel: undefined,
-      first: undefined,
-      second: undefined,
-      expected: { cacheWrite5m: 6, cacheWrite1h: 4 },
-    },
-    {
-      name: "omitted iteration breakdowns preserve top-level buckets",
-      topLevel: { ephemeral_5m_input_tokens: 6, ephemeral_1h_input_tokens: 4 },
-      first: undefined,
-      second: undefined,
-      expected: { cacheWrite5m: 6, cacheWrite1h: 4 },
-    },
-    {
-      name: "reported iteration breakdowns sum both buckets",
-      topLevel: undefined,
-      first: { ephemeral_5m_input_tokens: 6, ephemeral_1h_input_tokens: 4 },
-      second: { ephemeral_5m_input_tokens: 12, ephemeral_1h_input_tokens: 8 },
-      expected: { cacheWrite5m: 18, cacheWrite1h: 12 },
-    },
-    {
-      name: "reported zero overrides a top-level bucket without replacing its omitted sibling",
-      topLevel: { ephemeral_5m_input_tokens: 6, ephemeral_1h_input_tokens: 4 },
-      first: { ephemeral_5m_input_tokens: 0 },
-      second: undefined,
-      expected: { cacheWrite5m: 0, cacheWrite1h: 4 },
-    },
-    {
-      name: "reported one-hour zero leaves an unreported five-minute bucket absent",
-      topLevel: undefined,
-      first: undefined,
-      second: { ephemeral_1h_input_tokens: 0 },
-      expected: { cacheWrite1h: 0 },
-    },
-  ])(
-    "$name across compaction iterations",
-    ({ startTopLevel, topLevel, first, second, expected }) => {
+    ["start fallback", [6, 4], undefined, undefined, undefined, [6, 4]],
+    ["top-level fallback", undefined, [6, 4], undefined, undefined, [6, 4]],
+    ["summed buckets", undefined, undefined, [6, 4], [12, 8], [18, 12]],
+    ["zero overrides one", undefined, [6, 4], [0], undefined, [0, 4]],
+    ["absent stays absent", undefined, undefined, undefined, [undefined, 0], [undefined, 0]],
+  ] as const)(
+    "%s across compaction iterations",
+    (_name, startTopLevel, topLevel, first, second, expected) => {
       const usage = createZeroUsage();
       const start = applyAnthropicMessageStartUsage(usage, {
         input_tokens: 10,
         output_tokens: 0,
         cache_creation_input_tokens: 10,
-        cache_creation: startTopLevel,
+        cache_creation: buckets(startTopLevel),
       });
       applyAnthropicMessageDeltaUsage(
         usage,
         {
-          cache_creation: topLevel,
+          cache_creation: buckets(topLevel),
           iterations: [
-            {
-              type: "compaction",
-              input_tokens: 10,
-              output_tokens: 2,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 10,
-              cache_creation: first,
-            },
-            {
-              type: "message",
-              input_tokens: 5,
-              output_tokens: 3,
-              cache_read_input_tokens: 0,
-              cache_creation_input_tokens: 20,
-              cache_creation: second,
-            },
+            iteration("compaction", 10, 2, 10, buckets(first)),
+            iteration("message", 5, 3, 20, buckets(second)),
           ],
         },
         start,
@@ -161,11 +121,12 @@ describe("reported Anthropic TTL buckets", () => {
         cacheWrite: 30,
         totalTokens: 50,
         contextUsage: { state: "available", promptTokens: 25, totalTokens: 28 },
-        ...expected,
       });
-      for (const key of ["cacheWrite5m", "cacheWrite1h"] as const) {
-        if (!(key in expected)) {
+      for (const [index, key] of ["cacheWrite5m", "cacheWrite1h"].entries()) {
+        if (expected[index] === undefined) {
           expect(usage).not.toHaveProperty(key);
+        } else {
+          expect(usage).toHaveProperty(key, expected[index]);
         }
       }
     },

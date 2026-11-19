@@ -10,6 +10,7 @@ import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { expectMessages, expectMissing, expectNoCalls } from "./update-boundary.test-support.js";
 import { resultFixture, stepFixture } from "./update-command-fixtures.test-support.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
@@ -113,13 +114,10 @@ async function createManagedTriageTarget() {
   await fs.mkdir(handoffDir, { mode: 0o700 });
   const contextPath = path.join(handoffDir, "update-failure.json");
   const metaPath = path.join(handoffDir, "sentinel-meta.json");
-  await fs.writeFile(
-    metaPath,
-    JSON.stringify({
-      version: 1,
-      meta: { handoffId: "fixture-handoff", triageContextPath: contextPath },
-    }),
-  );
+  await writeFixtureJson(metaPath, {
+    version: 1,
+    meta: { handoffId: "fixture-handoff", triageContextPath: contextPath },
+  });
   Object.assign(target.env, {
     OPENCLAW_UPDATE_RUN_HANDOFF: "1",
     [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
@@ -216,7 +214,7 @@ it("exports the final managed failure after cleanup without launching triage", a
     recovery: { serviceRestartSafe: true, version: "2026.9.1" },
   };
   const targetWithResult: UpdateTriageTarget = { ...target, failureResult: result };
-  await fs.writeFile(contextPath, JSON.stringify({ error: "Stale pre-recovery result" }));
+  await writeFixtureJson(contextPath, { error: "Stale pre-recovery result" });
   const secret = "sk-test-managed-triage-secret-1234567890";
   const detail = `Fresh Doctor failed token=${secret}; original Doctor diagnostic`;
   const failure = new UpdateCommandFailure(result, 1, detail);

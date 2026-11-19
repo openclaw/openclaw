@@ -24,6 +24,7 @@ export {
   isTalkClientToolCallParams,
   isTalkClientToolCallResult,
   isTalkClientTranscriptParams,
+  isTalkClientSayParams,
   isTalkClientSteerParams,
   isTalkSessionCreateParams,
   isTalkSessionAppendAudioParams,

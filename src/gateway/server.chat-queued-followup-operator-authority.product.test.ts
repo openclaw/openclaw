@@ -1,9 +1,7 @@
 // Load real Gateway/model owners before the fixture deadline.
 import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
-import assert from "node:assert/strict";
 import { randomUUID, X509Certificate } from "node:crypto";
-import { once } from "node:events";
 import { createServer } from "node:http";
 import { expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
@@ -21,25 +19,23 @@ import { defaultRuntime } from "../runtime.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
+import {
+  closeProvider,
+  listenProvider,
+  writeToolCall,
+} from "./gateway-provider-fixture.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
-import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
+import { kernelGatewayTestStateOptions } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 it(
   "finishes queued operator auto-fast progress after its predecessor completes",
   { timeout: 90_000 },
   async ({ signal }) => {
-    const state = await createOpenClawTestState({
-      label: "queued-authority",
-      env: {
-        ...KERNEL_TEST_ENV,
-        VITEST: process.env.VITEST,
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
-    });
+    const waitForGate = (gate: PromiseLike<unknown>, work: PromiseLike<unknown>, message: string) =>
+      withinTest(awaitGateBeforeSettlement(gate, work, message), signal);
+    const state = await createOpenClawTestState(kernelGatewayTestStateOptions("queued-authority"));
     const firstReached = createDeferred();
     const releaseFirst = createDeferred();
     const toolReached = createDeferred();
@@ -82,22 +78,17 @@ it(
         if (++calls === 1) {
           firstReached.resolve();
           await releaseFirst.promise;
-          writeOpenAiResponsesText(response, {
-            text: "First turn complete.",
-            messageId: randomUUID(),
-            responseId: randomUUID(),
-          });
         } else if (calls === 2) {
           writeToolCall(response, "exec", {
             command: `node -e 'fetch("${providerUrl}/tool").then(r=>r.text()).then(console.log)'`,
           });
-        } else {
-          writeOpenAiResponsesText(response, {
-            text: "Follow-up completed successfully.",
-            messageId: randomUUID(),
-            responseId: randomUUID(),
-          });
+          return;
         }
+        writeOpenAiResponsesText(response, {
+          text: calls === 1 ? "First turn complete." : "Follow-up completed successfully.",
+          messageId: randomUUID(),
+          responseId: randomUUID(),
+        });
       })().catch((error: unknown) => {
         providerErrors.push(error);
         response.writeHead(500).end("fixture failure");
@@ -105,11 +96,9 @@ it(
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     try {
-      await once(server.listen(0, "127.0.0.1"), "listening");
-      const address = server.address();
-      assert(address && typeof address !== "string");
-      providerUrl = `http://127.0.0.1:${address.port}`;
-      const model = buildMockOpenAiResponsesProvider(`${providerUrl}/v1`, "queued-authority");
+      const baseUrl = await listenProvider(server);
+      providerUrl = baseUrl.replace(/\/v1$/, "");
+      const model = buildMockOpenAiResponsesProvider(baseUrl, "queued-authority");
       const certPath = await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM);
       const keyPath = await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM);
       const scopes: OperatorScope[] = ["operator.read", "operator.write"];
@@ -216,25 +205,19 @@ it(
         });
       const first = await send("Synthetic first turn");
       const firstTerminal = terminalFor(first.runId).promise;
-      await withinTest(
-        awaitGateBeforeSettlement(
-          firstReached.promise,
-          firstTerminal,
-          "First turn settled before reaching the provider",
-        ),
-        signal,
+      await waitForGate(
+        firstReached.promise,
+        firstTerminal,
+        "First turn settled before reaching the provider",
       );
       const followup = await send("Synthetic queued follow-up", true);
       await withinTest(enqueued.promise, signal);
       releaseFirst.resolve();
       const terminal = terminalFor(followup.runId).promise;
-      await withinTest(
-        awaitGateBeforeSettlement(
-          toolReached.promise,
-          terminal,
-          "Follow-up settled before executing its tool",
-        ),
-        signal,
+      await waitForGate(
+        toolReached.promise,
+        terminal,
+        "Follow-up settled before executing its tool",
       );
       expect(await withinTest(firstTerminal, signal)).toBe("final");
       // Cross the auto-fast cutoff without sleeping or changing timer scheduling.
@@ -251,10 +234,7 @@ it(
         await disconnectGatewayClient(gateway.client);
       }
       await gateway?.server.close({ reason: "queued operator authority test complete" });
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await closeProvider(server);
       observeQueue.mockRestore();
       logError.mockRestore();
       await state.cleanup();

@@ -150,7 +150,7 @@ it.each(
             },
             isInternalTextSlashCommandTurn: false,
             replyOptionImages: image
-              ? [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png", sourceIndex: 0 }]
+              ? [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]
               : [],
             replyOptionMedia: [],
           },

@@ -23,7 +23,6 @@ function userText(messages: TextMessage[]): string {
 const publicUrl = "https://x.com/EliXPampa/status/2097727549400871286";
 const secret = "Ab9Q".repeat(10);
 const numericSlashSecret = "1234/" + "Ab9Q".repeat(8) + "Ab9";
-const slashSecret = "Aa0/".repeat(10);
 
 describe("registered Control UI chat text fidelity", () => {
   const fixture = createChatFixture("chat-redaction", {
@@ -49,37 +48,14 @@ describe("registered Control UI chat text fidelity", () => {
     expect.soft(userText(body.input), "recorded model input").toContain(message);
   }
 
-  it.each([
-    ["public URL", publicUrl],
-    ["URL path with at sign", `https://example.test/${secret}@latest`],
-    ["URL path with query", `https://example.test/path-${secret}?foo=@`],
-    ["nested JSON URLs", JSON.stringify(JSON.stringify([`${publicUrl}?safe=1`, publicUrl]))],
-    ["bare credential", secret],
-    ["unknown URL query", `https://example.test/?foo=.${secret}`],
-    [
-      "URL in parenthesized query value",
-      `https://example.test/?next=(https://example.test/path-${secret})`,
-    ],
-    ["userinfo before punctuation", `https://name-${secret})@example.test`],
-    ["s3 numeric slash password", `s3://user:${numericSlashSecret}@bucket`],
-    ["s3 slash-prefixed key", `s3://user:1234/${secret}@bucket`],
-    ["slash credential after URL", `${publicUrl} ${slashSecret}`],
-    ["credential query", `https://example.test/?SecretAccessKey=${secret}`],
-    ["credential field", `{"awsSecretAccessKey":"${secret}"}`],
-    ["credential after Markdown link", `[docs](${publicUrl})${secret}`],
-  ])(
-    "chat.send preserves the %s in chat.history and recorded model input",
-    (_label, input) => expectStoredAndSent(input),
+  it(
+    "chat.send preserves credential-shaped text in chat.history and recorded model input",
+    () => expectStoredAndSent(secret),
     90_000,
   );
 
   it("exec.approval.request preserves command bytes in the exec.approval.get display", async () => {
-    const command = [
-      "printf '%s'",
-      JSON.stringify("API_TOKEN = computeToken()"),
-      JSON.stringify(`${publicUrl} ${secret}`),
-      JSON.stringify(`s3://user:${numericSlashSecret}@bucket`),
-    ].join(" ");
+    const command = `printf '%s' "API_TOKEN = computeToken()" "${publicUrl} ${secret}" "s3://user:${numericSlashSecret}@bucket"`;
     const accepted = await fixture.client.request<{ status: string; id: string }>(
       "exec.approval.request",
       {

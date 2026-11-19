@@ -68,11 +68,8 @@ export async function withCronGatewayState(
     const logger = createNoopLogger();
     const finishedJobs = new Map<string, ReturnType<typeof createDeferredCore<CronEvent>>>();
     const finished = (id: string) => {
-      let entry = finishedJobs.get(id);
-      if (!entry) {
-        entry = createDeferredCore<CronEvent>();
-        finishedJobs.set(id, entry);
-      }
+      const entry = finishedJobs.get(id) ?? createDeferredCore<CronEvent>();
+      finishedJobs.set(id, entry);
       return entry;
     };
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
@@ -134,6 +131,8 @@ export async function occupyWorkers(
     createDueIsolatedJob({ id: `capacity-${index}`, nowMs: now, nextRunAtMs: now }),
   );
   await saveCronStore(fixture.storePath, { version: 1, jobs: [...blockerJobs, job] });
+  // No spare memory, so exactly the default run slots fill.
+  vi.spyOn(process, "availableMemory").mockReturnValue(0);
   const held = createHeldCronRunner(blockerJobs.length);
   vi.mocked(fixture.runIsolatedAgentJob).mockImplementation((input) =>
     input.job.id === job.id ? runTarget(input) : held.runner(input),

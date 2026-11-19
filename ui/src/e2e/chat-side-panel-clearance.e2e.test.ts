@@ -21,7 +21,11 @@ const suite = createControlUiE2eSuite({
   name: "chat side-panel shell clearance",
   startServerBeforeBrowser: true,
 });
-const withPage = setupPages(suite, () => ({ locale: "en-US", serviceWorkers: "block" }));
+const withPage = setupPages(suite, () => ({
+  locale: "en-US",
+  reducedMotion: "reduce",
+  serviceWorkers: "block",
+}));
 
 const sessionKey = "agent:main:side-panel-clearance";
 const limitedScopes = ["operator.read", "operator.write"];
@@ -141,13 +145,15 @@ suite.define(() => {
             shell.evaluate(
               (element) => window.innerHeight - element.getBoundingClientRect().bottom,
             );
+          const restingGap = await bottomGap();
+          expect(restingGap).toBeGreaterThan(0);
           for (const safeArea of [0, 24]) {
             await protocol.send("Emulation.setSafeAreaInsetsOverride", {
               insets: { bottom: safeArea },
             });
-            expect(await bottomGap()).toBe(10 + safeArea);
+            expect(await bottomGap()).toBe(restingGap + safeArea);
             await textarea.focus();
-            expect(await bottomGap()).toBe(10 + safeArea);
+            expect(await bottomGap()).toBe(restingGap + safeArea);
             await textarea.blur();
           }
           await protocol.send("Emulation.setSafeAreaInsetsOverride", { insets: { bottom: 0 } });
@@ -328,14 +334,17 @@ suite.define(() => {
         const expandedCenter = await rowCenter();
         expect(expandedCenter).toBeGreaterThan(24);
 
-        await page.locator('[data-navigation-view][aria-pressed="true"]').click();
+        await page
+          .locator("openclaw-app-sidebar")
+          .getByRole("button", { name: "Collapse sidebar", exact: true })
+          .click();
         await polledAttribute(shell, "class").toContain("shell--nav-collapsed");
         await expect.poll(rowCenter).toBeGreaterThanOrEqual(expandedCenter);
         const controls = page.locator(".sidebar-rail [data-navigation-view]");
         const controlBoxes = await controls.evaluateAll((buttons) =>
           buttons.map((button) => button.getBoundingClientRect()),
         );
-        expect(controlBoxes).toHaveLength(3);
+        expect(controlBoxes).toHaveLength(2);
         const tabsBox = (await tabs.boundingBox())!;
         for (const box of controlBoxes) {
           expect(box.width).toBeGreaterThan(0);
@@ -379,7 +388,10 @@ suite.define(() => {
             deviceLess ? "rtl" : "ltr",
           );
           if (navCollapsed) {
-            await page.locator('[data-navigation-view][aria-pressed="true"]').click();
+            await page
+              .locator("openclaw-app-sidebar")
+              .getByRole("button", { name: "Collapse sidebar", exact: true })
+              .click();
             await polledAttribute(page.locator(".shell"), "class").toContain(
               "shell--nav-collapsed",
             );

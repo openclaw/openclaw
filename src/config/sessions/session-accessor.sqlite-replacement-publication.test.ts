@@ -1,10 +1,11 @@
-import "./session-accessor.sqlite-replacement-publication.test-support.js";
 import { afterEach, expect, it, vi } from "vitest";
+import "./session-accessor.sqlite-replacement-publication.test-support.js";
 import { createSessionMembershipProjection } from "../../gateway/session-membership-projection.js";
 import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
 import { isSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import * as logging from "../../logging/logger.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import {
   onSessionIdentityMutation,
   type SessionIdentityMutation,
@@ -14,6 +15,7 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -35,9 +37,12 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-replacement-projection.js";
-import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
+import { prepareChatDeliveryLease } from "./session-delivery-generation.js";
 import { captureSessionEntryCurrentCheckAsyncInternal } from "./session-entry-current-check.js";
+import { sealSessionEntryPublicationSource } from "./session-entry-publication-source.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
+import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 import type { SessionEntry } from "./types.js";
 
@@ -114,6 +119,177 @@ function retainSharing(
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+it("publishes full replacement snapshots without returning unused historical rows", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { scope, write, read } = setup("replacement-reply-payload");
+    const skillsSnapshot = { prompt: "synthetic saved instructions ".repeat(1024), skills: [] };
+    write(makeEntry("replacement-reply-payload", { label: "before", skillsSnapshot }));
+    const replies: unknown[] = [];
+    const publications: Array<ReturnType<typeof readPreparedSessionEntryChange>> = [];
+    const stop = sessionChanges.subscribeFacts((change) => {
+      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+        publications.push(readPreparedSessionEntryChange(change, scope.sessionKey));
+      }
+    });
+    delivery.afterResult = (result) => {
+      replies.push(result);
+    };
+    try {
+      const result = await applySessionEntryExactReplacements({
+        ...scope,
+        sessionKeys: [scope.sessionKey],
+        update: ([row]) => ({
+          result: "replacement result",
+          replacements: [
+            { sessionKey: scope.sessionKey, entry: { ...row!.entry, label: "after" } },
+          ],
+        }),
+      });
+      expect(result).toBe("replacement result");
+      expect(read()).toMatchObject({ label: "after", skillsSnapshot });
+      expect(publications).toEqual([
+        expect.objectContaining({
+          entry: expect.objectContaining({ label: "after" }),
+          fullEntry: expect.objectContaining({ label: "after", skillsSnapshot }),
+        }),
+      ]);
+      expect(replies).toEqual([
+        { maintenancePlans: expect.any(Array), publication: expect.any(Object) },
+      ]);
+    } finally {
+      delivery.afterResult = undefined;
+      stop();
+    }
+  });
+});
+
+it.each(["full entry", "write token", "receipt"])(
+  "invalidates an unchanged publication missing its %s",
+  async (missing) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const { database, scope, write, read } = setup("incomplete-retention");
+      write(makeEntry("incomplete-retention", { label: "initial" }));
+      const entry = read()!;
+      const receipt = runOpenClawAgentWriteTransaction(
+        (current) => {
+          const postimages: SessionEntryWritePostimages = new Map();
+          const written = writeSessionEntry(current, scope.sessionKey, entry, { postimages });
+          return prepareSessionEntryReplacementPublication(
+            {
+              previous: new Map([[scope.sessionKey, entry]]),
+              current: new Map([[scope.sessionKey, written]]),
+              pendingArchiveRecovery: false,
+              maintenancePlans: [],
+              membershipInvalidatedKeys: [],
+            },
+            current,
+            { captureFullFacts: missing !== "full entry", postimages },
+          );
+        },
+        { agentId: scope.agentId, path: database.path },
+      );
+      expect(receipt.changedKeys).toEqual([]);
+      const source = receipt.source;
+      if (!source || typeof source.identity !== "string") {
+        throw new Error("Expected a durable publication source");
+      }
+      sealSessionEntryPublicationSource(source);
+      expect(source.writeToken).toBeDefined();
+      if (missing === "write token") {
+        delete source.writeToken;
+      }
+      const publication = retainSessionEntryWorkerPublication({
+        ...scope,
+        databaseIdentity: source.identity,
+      });
+      const changes: string[] = [];
+      const stop = sessionChanges.subscribe((change) => {
+        if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+          changes.push(change.sessionKey);
+        }
+      });
+      try {
+        publication.begin(
+          [],
+          [],
+          receipt.sharingUnchangedKeys,
+          receipt.generationUnchangedKeys,
+          undefined,
+          receipt.current,
+          undefined,
+          receipt.fullEntries,
+        );
+        publication.settle(missing === "receipt" ? undefined : receipt, false);
+        expect(changes).toEqual([scope.sessionKey]);
+      } finally {
+        publication.settle(undefined, false);
+        stop();
+      }
+    });
+  },
+);
+
+it.each(["changed", "initial"])("publishes a repeated replacement ending at %s", async (label) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { scope, write, read } = setup("repeated-replacement");
+    const initial = makeEntry("repeated-replacement", { label: "initial" });
+    write(initial);
+    const changed = { ...initial, label: "changed" };
+    const changes: string[] = [];
+    const stop = sessionChanges.subscribe((change) => {
+      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+        changes.push(change.scope ?? "unspecified");
+      }
+    });
+    try {
+      await applySessionEntryExactReplacements({
+        ...scope,
+        sessionKeys: [scope.sessionKey],
+        update: () => ({
+          result: undefined,
+          replacements: [
+            { sessionKey: scope.sessionKey, entry: changed },
+            { sessionKey: scope.sessionKey, entry: { ...initial, label } },
+            { sessionKey: scope.sessionKey, entry: { ...initial, label } },
+          ],
+        }),
+      });
+      expect(read()?.label).toBe(label);
+      expect(changes).toEqual(["session-entry"]);
+    } finally {
+      stop();
+    }
+  });
+});
+
+it("does not restore retained-only sharing facts after a successor write", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { database, scope, write, read, replace } = setup("retained-successor");
+    const initial = makeEntry("retained-successor", { visibility: "shared" as const });
+    write(initial);
+    const { sharing } = retainSharing(database, scope.sessionKey, initial);
+    const observed: Array<string | undefined> = [];
+    const stop = sessionChanges.subscribe((change) => {
+      if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
+        observed.push(sharing.readCurrent()?.entry?.visibility);
+      }
+    });
+    delivery.afterResult = () => {
+      write({ ...initial, updatedAt: 2, visibility: "draft" });
+    };
+    try {
+      await replace({});
+      expect(read()?.visibility).toBe("draft");
+      expect(sharing.readCurrent()?.entry?.visibility).toBe("draft");
+      expect(observed).toEqual(["draft", "draft"]);
+    } finally {
+      delivery.afterResult = undefined;
+      stop();
+      sharing.release();
+    }
+  });
 });
 
 it("publishes successive replacement identities without changing folded siblings", async () => {
@@ -406,11 +582,11 @@ it.each(["metadata only", "lost result", "callback failure", "release failure"] 
       writeSessionEntry(database, sessionKey, original);
       addSessionMember(scope, { identityId: "member", addedBy: "owner", addedAt: 1 });
       const { identity, sharing } = retainSharing(database, sessionKey, original);
-      const generation = await prepareSessionDeliveryGeneration({
-        ...scope,
-        sessionId: original.sessionId,
-        lifecycleRevision: original.lifecycleRevision,
-      });
+      const generation = await prepareChatDeliveryLease(
+        chatRef({
+          ...scope,
+        }),
+      );
       generation.assertCurrent();
       const projection = createSessionMembershipProjection();
       projection.updateTargets([

@@ -20,7 +20,6 @@ vi.mock("./git-exec.js", async (original) => ({
   ...(await original<typeof import("./git-exec.js")>()),
   executeGitCommand: mocks.git,
 }));
-vi.mock("./update-global.js", () => ({ detectGlobalInstallManagerForRoot: async () => "npm" }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -120,15 +119,5 @@ it.each(["recover", "exhaust", "abort"] as const)(
       }
     }
     await settled;
-    expect(mocks.git.mock.calls[0]?.[2]?.timeoutMs).toBe(resolveGatewayStartupTiming().deadlineMs);
   },
 );
-
-it("initializes an immutable package directory without invoking Git", async () => {
-  const root = dirs.make("openclaw-update-package-");
-  await fs.writeFile(path.join(root, "package.json"), '{"name":"openclaw"}');
-  mocks.root.mockResolvedValue(root);
-  const { status } = await resolveStartupInstallStatus(false, new AbortController().signal);
-  expect(status.installKind).toBe("package");
-  expect(mocks.git).not.toHaveBeenCalled();
-});

@@ -211,6 +211,21 @@ function entryMatches(
   if (sameAssistantPersistenceReceipt(left.identity, right.identity)) {
     return true;
   }
+  // Cached user sends retain their send identity even after the local pending
+  // owner is gone. Promote only an unrecorded copy, never two durable rows.
+  if (
+    left.identity?.role === "user" &&
+    right.identity?.role === "user" &&
+    !left.identity.isImported &&
+    !right.identity.isImported &&
+    left.identity.idempotencyKey &&
+    right.identity.idempotencyKey &&
+    left.identity.sendId === right.identity.sendId &&
+    ((!left.identity.id && left.identity.sequence === null) ||
+      (!right.identity.id && right.identity.sequence === null))
+  ) {
+    return true;
+  }
   if (
     left.identity?.role === "assistant" &&
     right.identity?.role === "assistant" &&
@@ -593,23 +608,23 @@ function updateRun(
     incoming.status === "completed" || incoming.status === "yielded"
       ? readSessionProjectionFinalMessageIdentity(incoming.message)
       : null;
+  const runs = {
+    ...previousRuns,
+    [incoming.runId]: {
+      ...(resumesErrorProjection ? {} : current),
+      ...normalizedIncoming,
+      ...(acceptedFinalIdentity ? { acceptedFinalMessageIdentities: [acceptedFinalIdentity] } : {}),
+      ...(!resumesErrorProjection &&
+      incoming.message === undefined &&
+      current?.message !== undefined
+        ? { message: current.message }
+        : {}),
+    },
+  };
   return {
     ...resumedState,
-    runs: retainSessionProjectionRuns({
-      ...previousRuns,
-      [incoming.runId]: {
-        ...(resumesErrorProjection ? {} : current),
-        ...normalizedIncoming,
-        ...(acceptedFinalIdentity
-          ? { acceptedFinalMessageIdentities: [acceptedFinalIdentity] }
-          : {}),
-        ...(!resumesErrorProjection &&
-        incoming.message === undefined &&
-        current?.message !== undefined
-          ? { message: current.message }
-          : {}),
-      },
-    }),
+    // Continuing a run changes neither membership nor the retention partition.
+    runs: current?.status === incoming.status ? runs : retainSessionProjectionRuns(runs),
   };
 }
 

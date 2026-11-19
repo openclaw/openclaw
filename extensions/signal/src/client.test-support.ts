@@ -88,6 +88,8 @@ export async function expectPreparedHandoff(
     if (!revoked) {
       await arrived.promise;
       expect(settled).toBe(false);
+      // Transmission owns settlement even if its caller closes before the reply.
+      caller.abort(failure);
       response.resolve();
     }
     expect(await sending).toEqual(revoked ? { error: failure } : { value: fixture.result });

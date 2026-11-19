@@ -9,7 +9,7 @@ it("keeps paging and searching older native rows beyond the retained window afte
   const native = Array.from({ length: total }, (_, index) =>
     idleThread({
       id: `thread-${index}`,
-      name: `${index >= 20_000 ? "Older" : "Recent"} investigation ${index}${index === 0 || index === total - 1 ? " sparse" : ""}`,
+      name: `${index >= 20_000 ? "Cafe\u0301 older" : "Recent"} investigation ${index}${index === 0 || index === total - 1 ? " sparse" : ""}`,
       cwd: index >= 20_000 ? "/workspace/older" : "/workspace/recent",
       source: "cli",
       originator: "codex_cli_rs",
@@ -74,11 +74,11 @@ it("keeps paging and searching older native rows beyond the retained window afte
     const again = await list({ cursor: previous.nextCursor });
     expect(again.sessions).toEqual(page.sessions);
     const expected = native.slice(20_000).map((thread) => thread.id);
-    let searched = await list({ searchTerm: "older investigation" });
+    let searched = await list({ searchTerm: "CAFÉ older investigation" });
     expect(searched.nextCursor).toEqual(expect.any(String));
     while (!searched.sessions.length && searched.nextCursor) {
       searched = await list({
-        searchTerm: "older investigation",
+        searchTerm: "CAFÉ older investigation",
         cursor: searched.nextCursor,
       });
     }

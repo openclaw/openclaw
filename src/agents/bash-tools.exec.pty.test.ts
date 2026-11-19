@@ -15,7 +15,7 @@ test.skipIf(process.platform !== "linux").each([false, true])(
   "kills a memory-hog descendant and preserves the background diagnostic (PTY=%s)",
   async (usePty) => {
     // Scale the real host-derived default, never allocate the machine's actual budget.
-    vi.spyOn(os, "totalmem").mockReturnValue(1024 ** 3);
+    vi.spyOn(os, "totalmem").mockReturnValue(512 * 1024 ** 2);
     vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
     vi.spyOn(process.memoryUsage, "rss").mockReturnValue(64 * 1024 ** 2);
     const hog = `console.log('hog-started'); globalThis.held = Buffer.alloc(384 * 1024 * 1024, 1); setInterval(() => {}, 1000);`;
@@ -27,27 +27,27 @@ test.skipIf(process.platform !== "linux").each([false, true])(
         status: "failed",
         exitReason: "memory-limit",
         timedOut: false,
-        reason: expect.stringContaining("256 MiB limit"),
+        reason: expect.stringContaining("shared host exec memory budget was exceeded"),
       });
       expect(outcome.aggregated).toContain("hog-started");
       expect(outcome.aggregated).toContain(`terminal=${usePty}`);
       const result = await processTool.execute("memory-poll", { action: "poll", sessionId });
       expect(result.details).toMatchObject({ status: "failed", exitReason: "memory-limit" });
-      expect(JSON.stringify(result.content)).toContain("256 MiB limit");
-      expect(JSON.stringify(result.content)).toContain("Reduce concurrency");
+      expect(JSON.stringify(result.content)).toContain(
+        "shared host exec memory budget was exceeded",
+      );
+      expect(JSON.stringify(result.content)).toContain("Reduce concurrent work or input size");
+      expect(JSON.stringify(result.content)).toContain("commands are never automatically replayed");
     } finally {
       await stopProcess(run);
     }
   },
 );
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
-}
-
 function currentNodeEvalCommand(source: string): string {
-  const node = shellQuote(process.execPath);
-  const script = shellQuote(source);
+  const [node, script] = [process.execPath, source].map(
+    (value) => `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`,
+  );
   return process.platform === "win32" ? `& ${node} -e ${script}` : `${node} -e ${script}`;
 }
 

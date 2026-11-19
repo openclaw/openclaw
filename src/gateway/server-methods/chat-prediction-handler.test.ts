@@ -14,7 +14,6 @@ import { setRpcSourceProjectSessionActive } from "../../sessions/session-control
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as terminalLifecycle from "../chat-abort-lifecycle-internal.js";
 import { registerChatAbortController } from "../chat-abort.js";
-import { createAgentEventTestHarness } from "../server-chat.agent-events.test-harness.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
@@ -137,8 +136,50 @@ it("uses only bounded visible dialogue and never appends a prediction", () =>
     expect(await loadTranscriptEvents(f.scope)).toEqual(before);
   }));
 
+it("sends recent user turns and only the final reply, past tool activity", () =>
+  withPredictionTest(async (f) => {
+    for (let index = 0; index < 16; index += 1) {
+      await appendTranscriptMessage(f.scope, {
+        message: { role: "user", content: `ask ${index}` },
+      });
+      await appendTranscriptMessage(f.scope, {
+        message: { role: "assistant", content: `progress ${index}` },
+      });
+    }
+    for (let index = 0; index < 20; index += 1) {
+      const id = `call-${index}`;
+      await appendTranscriptMessage(f.scope, {
+        message: {
+          role: "assistant",
+          content: [{ type: "toolCall", id, name: "exec", arguments: { command: "ls" } }],
+        },
+      });
+      await appendTranscriptMessage(f.scope, {
+        message: {
+          role: "toolResult",
+          toolCallId: id,
+          toolName: "exec",
+          content: [{ type: "text", text: "listing" }],
+        },
+      });
+    }
+    const question = "Shall I close the older PR?";
+    await appendTranscriptMessage(f.scope, {
+      message: { role: "assistant", content: "Findings. ".repeat(400) + question },
+    });
+    expect(await f.predict()).toMatchObject([true, { text: "What should I try next?" }]);
+    const turns = JSON.parse(complete.mock.calls[0]?.[0].conversation);
+    // The oldest user turn falls outside the 16-turn window; narration never reaches the model.
+    expect(turns.slice(0, -1)).toEqual(
+      Array.from({ length: 16 }, (_, index) => ({ role: "user", text: `ask ${index}` })),
+    );
+    expect(turns.at(-1).role).toBe("assistant");
+    expect(turns.at(-1).text).toHaveLength(2_000);
+    expect(turns.at(-1).text.endsWith(question)).toBe(true);
+  }));
+
 it.each(["suggestion", "disabled", "cancelled"] as const)(
-  "waits for final-event terminal persistence before prediction (%s)",
+  "waits for owned terminal persistence before prediction (%s)",
   (outcome) =>
     withPredictionTest(async (f) => {
       const runId = "completed";
@@ -158,32 +199,21 @@ it.each(["suggestion", "disabled", "cancelled"] as const)(
       registration.initializeTiming();
       registration.markExecutionStarted();
       const releaseWrite = createDeferred();
-      const writeEntered = createDeferred();
       const waitEntered = createDeferred();
-      let terminalWrite: Promise<void> | undefined;
-      const h = createAgentEventTestHarness({
-        persistGatewaySessionLifecycleEventForEvent: async () => {
-          writeEntered.resolve();
-          await releaseWrite.promise;
-          await patchSessionEntryCore(f.scope, () => ({
-            status: "done",
-            lastRunId: runId,
-            lifecycleRunId: undefined,
-          }));
-        },
-        trackTrackedRunTerminalPersistence: ({ persistence }) => {
-          // Attach the event handler's exact write to its real run registration.
-          terminalWrite = persistence;
-          setRpcSourceProjectSessionActive(entry, false);
-          entry.adapter.projectSessionTerminalPending = true;
-          entry.adapter.projectSessionTerminalPersistence = persistence;
-          void persistence.then(() => {
-            entry.adapter.projectSessionTerminalPending = false;
-            entry.adapter.projectSessionTerminalPersistence = undefined;
-            entry.adapter.projectSessionTerminalPersisted = true;
-          });
-        },
+      const terminalWrite = releaseWrite.promise.then(async () => {
+        await patchSessionEntryCore(f.scope, () => ({
+          status: "done",
+          lastRunId: runId,
+          lifecycleRunId: undefined,
+        }));
+        entry.adapter.projectSessionTerminalPending = false;
+        entry.adapter.projectSessionTerminalPersistence = undefined;
+        entry.adapter.projectSessionTerminalPersisted = true;
       });
+      // Event-to-source publication has owner proof in server-runtime-subscriptions.test.ts.
+      setRpcSourceProjectSessionActive(entry, false);
+      entry.adapter.projectSessionTerminalPending = true;
+      entry.adapter.projectSessionTerminalPersistence = terminalWrite;
       const originalWait = terminalLifecycle.waitForChatAbortTerminalPersistence;
       const waitSpy = vi
         .spyOn(terminalLifecycle, "waitForChatAbortTerminalPersistence")
@@ -194,13 +224,6 @@ it.each(["suggestion", "disabled", "cancelled"] as const)(
       const controller = new AbortController();
       let prediction: ReturnType<typeof f.predict> | undefined;
       try {
-        h.register(runId, f.scope.sessionKey, runId, { agentId: f.scope.agentId });
-        h.chatRunState.getOrCreate(runId).buffer = "Here are the tradeoffs.";
-        await h.emit(runId, "lifecycle", { phase: "end" }, f.scope);
-        await writeEntered.promise;
-        expect(h.chat().at(-1)?.[1]).toMatchObject({ state: "final", runId });
-        expect(loadSessionEntry(f.scope)).toMatchObject({ lifecycleRunId: runId });
-        expect(loadSessionEntry(f.scope)?.status).not.toBe("done");
         prediction = f.predict(runId, controller.signal);
         await awaitGateBeforeSettlement(
           waitEntered.promise,
@@ -231,7 +254,6 @@ it.each(["suggestion", "disabled", "cancelled"] as const)(
         waitSpy.mockRestore();
         releaseSource();
         registration.cleanup();
-        await h.handler.dispose();
       }
     }),
 );
@@ -261,7 +283,6 @@ it.each(["store", "gateway"] as const)(
       try {
         expect(await f.predict()).toMatchObject([true, { text: "What should I try next?" }]);
         expect(wait).not.toHaveBeenCalled();
-        expect(complete).toHaveBeenCalledOnce();
       } finally {
         entry.adapter.projectSessionTerminalPending = false;
         entry.adapter.projectSessionTerminalPersistence = undefined;

@@ -1,4 +1,4 @@
-// Commits detached background results into an existing conversation generation.
+// Commits detached background results into an existing conversation.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
@@ -17,34 +17,31 @@ import type { SessionTranscriptAssistantMessage } from "../config/sessions/trans
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
 import {
+  AUTOMATION_RESULT_MODEL,
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
+  type SUBAGENT_COMPLETION_RESULT_KIND,
 } from "../shared/transcript-only-openclaw-assistant.js";
+import { isSessionControllerWorkActive } from "./session-controller.lifecycle-observation.js";
 import { captureSessionTarget, runSessionMutation } from "./session-controller.lifecycle.js";
-
-// Background completions are durable conversation output, so this identity
-// must stay outside the transcript-only delivery-mirror model set.
-const AUTOMATION_RESULT_MODEL = "automation-result" as const;
 
 type BackgroundSessionResultCommit = { ok: true } | { ok: false; reason: string };
 
-type BackgroundSessionResultProvenance = {
-  kind: "cron";
-  jobId: string;
-  runId: string;
-};
+/** Identifies which background producer wrote a result row. */
+export type BackgroundSessionResultProvenance =
+  | { kind: "cron"; jobId: string; runId: string }
+  | { kind: typeof SUBAGENT_COMPLETION_RESULT_KIND };
 
 /** Appends a background result without waiting for the target conversation's active turn. */
 export async function commitBackgroundResultToSession(params: {
   agentId: string;
+  /** The result follows the key to the conversation's current transcript. */
   sessionKey: string;
-  /** Pins output to the conversation generation that admitted the background run. */
-  expectedGeneration: { sessionId: string; lifecycleRevision: string | undefined };
   text: string;
   prepareDisplayContent?: () => Promise<readonly Record<string, unknown>[] | undefined>;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
   idempotencyKey: string;
-  provenance: BackgroundSessionResultProvenance;
+  provenance?: BackgroundSessionResultProvenance;
   config: OpenClawConfig;
   signal?: AbortSignal;
   /** Revalidate the producer after preparation and inside the transcript commit. */
@@ -60,14 +57,6 @@ export async function commitBackgroundResultToSession(params: {
   const storePath = resolveSessionStorePathCore(params.config.session?.store, {
     agentId: params.agentId,
   });
-  const expectedSessionId = normalizeOptionalString(params.expectedGeneration.sessionId);
-  if (!expectedSessionId) {
-    return { ok: false, reason: "background session result has an invalid expected generation" };
-  }
-  const expectedLifecycleRevision = normalizeOptionalString(
-    params.expectedGeneration.lifecycleRevision,
-  );
-  const identities = [sessionKey, expectedSessionId];
 
   params.assertCurrent?.();
   return await runSessionMutation({
@@ -76,8 +65,6 @@ export async function commitBackgroundResultToSession(params: {
     target: captureSessionTarget({
       storeScope: storePath,
       sessionKey,
-      aliases: identities,
-      incarnation: expectedSessionId,
       agentId: params.agentId,
     }),
     signal: params.signal,
@@ -101,14 +88,12 @@ export async function commitBackgroundResultToSession(params: {
             throw read.error;
           }
           const current = read.value;
-          if (
-            current?.sessionId !== expectedSessionId ||
-            normalizeOptionalString(current.lifecycleRevision) !== expectedLifecycleRevision
-          ) {
-            return { ok: false, reason: `session rebound for sessionKey: ${sessionKey}` };
+          if (!current?.sessionId) {
+            return { ok: false, reason: `session deleted for sessionKey: ${sessionKey}` };
           }
+          const sessionId = current.sessionId;
           const unavailable = resolveSessionWorkStartError(sessionKey, current, {
-            expectedSessionId,
+            expectedSessionId: sessionId,
             purpose: "accepted-result-settlement",
           });
           if (unavailable) {
@@ -117,15 +102,17 @@ export async function commitBackgroundResultToSession(params: {
           const scope = {
             agentId: params.agentId,
             sessionKey,
-            sessionId: expectedSessionId,
+            sessionId,
             storePath,
           };
           // A retry owns the original committed payload, including its managed-media IDs.
           // Restaging media would conflict with the transcript's exact replay contract.
-          const prior = await findTranscriptEvent(scope, {
-            kind: "idempotency",
-            key: idempotencyKey,
-          });
+          const prior = await findTranscriptEvent(
+            scope,
+            { kind: "idempotency", key: idempotencyKey },
+            undefined,
+            "background-result",
+          );
           const priorMessage = prior && readTranscriptEventMessage(prior.event);
           const priorId = prior && readTranscriptEventId(prior.event);
           if (prior && (!priorMessage || !priorId)) {
@@ -145,17 +132,21 @@ export async function commitBackgroundResultToSession(params: {
             stopReason: "stop",
             timestamp: Date.now(),
             idempotencyKey,
-            openclawAutomation: params.provenance,
+            ...(isSessionControllerWorkActive(storePath, [sessionKey, sessionId], params.agentId)
+              ? { excludeFromContext: true, openclawModelPlacement: "pending" as const }
+              : {}),
+            ...(params.provenance ? { openclawAutomation: params.provenance } : {}),
           } satisfies SessionTranscriptAssistantMessage & {
             idempotencyKey: string;
-            openclawAutomation: BackgroundSessionResultProvenance;
+            openclawAutomation?: BackgroundSessionResultProvenance;
+            openclawModelPlacement?: "pending";
           };
           owner.assertCurrent();
           params.assertCurrent?.();
           const committed = await persistSessionTranscriptTurn(scope, {
             cwd: current.spawnedCwd,
-            expectedSessionId,
-            expectedLifecycleRevision: expectedLifecycleRevision ?? null,
+            expectedSessionId: sessionId,
+            expectedLifecycleRevision: current.lifecycleRevision ?? null,
             assertCurrent: () => {
               owner.assertCurrent();
               params.assertCurrent?.();
@@ -167,7 +158,7 @@ export async function commitBackgroundResultToSession(params: {
                   ? {
                       ...priorMessage,
                       content: message.content,
-                      openclawAutomation: params.provenance,
+                      ...(params.provenance ? { openclawAutomation: params.provenance } : {}),
                     }
                   : message,
                 idempotencyLookup: "scan",

@@ -9,7 +9,6 @@ import {
   onSettled,
   Show,
 } from "solid-js";
-import { isQuestionThumbnail } from "../../../packages/gateway-protocol/src/question-media.js";
 import type {
   McpAppDiscoveredEntrypoint,
   McpAppDiscoveredServer,
@@ -22,44 +21,26 @@ import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { generateUUID } from "../lib/uuid.ts";
+import { McpAppIcon } from "./mcp-app-icon.tsx";
 import { requestMcpAppOpen } from "./mcp-app-launch.ts";
 import { Icon } from "./solid/icon.tsx";
 import { McpAppOperationError } from "./solid/mcp-app-operation-error.tsx";
 
 const DiscoveryStatus = lazy(() => import("./mcp-app-discovery-status.tsx"));
 
-type McpAppCatalogProps = {
-  sessionKey?: string;
-  agentId?: string;
-  surface?: "global" | "thread" | "sidebar" | "file";
-  filePath?: string;
-};
-
 function CatalogIcon(props: { server: McpAppDiscoveredServer; entry: McpAppDiscoveredEntrypoint }) {
-  const icon = () =>
-    [...(props.entry.icons ?? []), ...(props.server.icons ?? [])].find(
-      (candidate) =>
-        (!candidate.theme || candidate.theme === document.documentElement.dataset.themeMode) &&
-        isQuestionThumbnail(candidate.src),
-    );
-  return (
-    <Show when={icon()} fallback={<Icon name="puzzle" />}>
-      {(image) => (
-        <img class="mcp-app-icon" src={image().src} alt="" referrerpolicy="no-referrer" />
-      )}
-    </Show>
-  );
+  return <McpAppIcon icons={[...(props.entry.icons ?? []), ...(props.server.icons ?? [])]} />;
 }
 
-export function McpAppCatalogView(
-  props: McpAppCatalogProps & {
-    host: () => HTMLElement;
-    catalog: ReturnType<typeof createMcpAppCatalog>;
-    visible: boolean;
-    rows: { server: McpAppDiscoveredServer; entry: McpAppDiscoveredEntrypoint }[];
-    entries: (server: McpAppDiscoveredServer) => McpAppDiscoveredEntrypoint[];
-  },
-) {
+export function McpAppCatalogView(props: {
+  surface?: "global" | "thread" | "sidebar" | "file";
+  filePath?: string;
+  host: () => HTMLElement;
+  catalog: ReturnType<typeof createMcpAppCatalog>;
+  visible: boolean;
+  rows: { server: McpAppDiscoveredServer; entry: McpAppDiscoveredEntrypoint }[];
+  entries: (server: McpAppDiscoveredServer) => McpAppDiscoveredEntrypoint[];
+}) {
   const surface = () => props.surface ?? "global";
   const context = useApplication();
   const [expanded, setExpanded] = createSignal(false);
@@ -74,19 +55,15 @@ export function McpAppCatalogView(
   onSettled(() => () => {
     active = false;
   });
-  const target = () => ({
-    sessionKey: props.sessionKey || context.gateway.snapshot.sessionKey || "",
-    agentId: props.agentId || context.agentSelection.state.selectedId || undefined,
-  });
   function captureOperation() {
     const client = context.gateway.snapshot.client;
-    const initialTarget = target();
+    const initialTarget = props.catalog.target();
     const scope = gatewayPresentationScope(context.gateway).key;
     return {
       client,
       selected: initialTarget,
       current: () => {
-        const destination = target();
+        const destination = props.catalog.target();
         return (
           active &&
           context.gateway.snapshot.client === client &&
@@ -132,7 +109,7 @@ export function McpAppCatalogView(
       });
     } else if (
       requestMcpAppOpen(props.host(), {
-        ...target(),
+        ...props.catalog.target(),
         owner: context.gateway.snapshot.client,
         serverName: server.serverName,
         entrypoint,
@@ -220,103 +197,105 @@ export function McpAppCatalogView(
                     onRetry={() => void props.catalog.refresh()}
                     retryDisabled={!props.catalog.available()}
                   />
-                </Loading>
-                <For
-                  each={props.rows}
-                  keyed={(row) => JSON.stringify([row.server.serverName, row.entry.toolName])}
-                >
-                  {(row) => {
-                    const quickAction = createMemo(() => {
-                      const entrypoint = row().entry.entrypoint;
-                      return entrypoint.type === "global" && entrypoint.quickAction;
-                    });
-                    return (
-                      <div class="mcp-app-catalog__entry">
+                  <For
+                    each={props.rows}
+                    keyed={(row) => JSON.stringify([row.server.serverName, row.entry.toolName])}
+                  >
+                    {(row) => {
+                      const quickAction = createMemo(() => {
+                        const entrypoint = row().entry.entrypoint;
+                        return entrypoint.type === "global" && entrypoint.quickAction;
+                      });
+                      return (
+                        <div class="mcp-app-catalog__entry">
+                          <button
+                            class="btn"
+                            type="button"
+                            disabled={!props.catalog.available()}
+                            onClick={() => open(row().server, row().entry)}
+                          >
+                            <CatalogIcon server={row().server} entry={row().entry} />
+                            <span>
+                              <strong>{row().entry.title}</strong>
+                              <small>{row().server.label}</small>
+                            </span>
+                          </button>
+                          <Show when={quickAction()}>
+                            {(shortcut) => (
+                              <button
+                                class="btn btn--sm"
+                                type="button"
+                                disabled={!props.catalog.available()}
+                                onClick={() => open(row().server, row().entry, false, true)}
+                              >
+                                {shortcut().title}
+                              </button>
+                            )}
+                          </Show>
+                          <Show when={row().server.settings}>
+                            <button
+                              type="button"
+                              class="btn btn--sm"
+                              aria-label={`${t("mcpApp.settings")}: ${row().entry.title}`}
+                              disabled={!props.catalog.available()}
+                              onClick={() => open(row().server, row().entry, true)}
+                            >
+                              {t("mcpApp.settings")}
+                            </button>
+                          </Show>
+                        </div>
+                      );
+                    }}
+                  </For>
+                  <Show when={surface() !== "file"}>
+                    <For
+                      each={props.catalog
+                        .snapshot()
+                        .servers.filter(
+                          (server) => server.settings && !props.entries(server).length,
+                        )}
+                    >
+                      {(server) => (
                         <button
                           class="btn"
                           type="button"
                           disabled={!props.catalog.available()}
-                          onClick={() => open(row().server, row().entry)}
+                          onClick={() =>
+                            open(
+                              server,
+                              {
+                                toolName: server.settings!.readTool,
+                                title: server.label,
+                                resourceUri: "",
+                                entrypoint: { type: "settings" },
+                              },
+                              true,
+                            )
+                          }
                         >
-                          <CatalogIcon server={row().server} entry={row().entry} />
-                          <span>
-                            <strong>{row().entry.title}</strong>
-                            <small>{row().server.label}</small>
-                          </span>
+                          {server.label} · {t("mcpApp.settings")}
                         </button>
-                        <Show when={quickAction()}>
-                          {(shortcut) => (
-                            <button
-                              class="btn btn--sm"
-                              type="button"
-                              disabled={!props.catalog.available()}
-                              onClick={() => open(row().server, row().entry, false, true)}
-                            >
-                              {shortcut().title}
-                            </button>
-                          )}
-                        </Show>
-                        <Show when={row().server.settings}>
-                          <button
-                            type="button"
-                            class="btn btn--sm"
-                            aria-label={`${t("mcpApp.settings")}: ${row().entry.title}`}
-                            disabled={!props.catalog.available()}
-                            onClick={() => open(row().server, row().entry, true)}
-                          >
-                            {t("mcpApp.settings")}
-                          </button>
-                        </Show>
-                      </div>
-                    );
-                  }}
-                </For>
-                <Show when={surface() !== "file"}>
-                  <For
-                    each={props.catalog
-                      .snapshot()
-                      .servers.filter((server) => server.settings && !props.entries(server).length)}
-                  >
-                    {(server) => (
+                      )}
+                    </For>
+                  </Show>
+                  <For each={props.catalog.snapshot().onboarding}>
+                    {(plugin) => (
                       <button
                         class="btn"
                         type="button"
-                        disabled={!props.catalog.available()}
-                        onClick={() =>
-                          open(
-                            server,
-                            {
-                              toolName: server.settings!.readTool,
-                              title: server.label,
-                              resourceUri: "",
-                              entrypoint: { type: "settings" },
-                            },
-                            true,
-                          )
-                        }
+                        disabled={onboardingBusy() || !props.catalog.available()}
+                        onClick={() => void onboard(plugin.pluginId)}
                       >
-                        {server.label} · {t("mcpApp.settings")}
+                        {t("mcpApp.onboarding")} · {plugin.title}
                       </button>
                     )}
                   </For>
-                </Show>
-                <For each={props.catalog.snapshot().onboarding}>
-                  {(plugin) => (
-                    <button
-                      class="btn"
-                      type="button"
-                      disabled={onboardingBusy() || !props.catalog.available()}
-                      onClick={() => void onboard(plugin.pluginId)}
-                    >
-                      {t("mcpApp.onboarding")} · {plugin.title}
+                  <Show when={!compact()}>
+                    <button class="btn btn--sm" onClick={() => context.navigate("mcp")}>
+                      {t("mcpApp.configure")}
                     </button>
-                  )}
-                </For>
-                <Show when={!compact()}>
-                  <button class="btn btn--sm" onClick={() => context.navigate("mcp")}>
-                    {t("mcpApp.configure")}
-                  </button>
-                </Show>
+                  </Show>
+                </Loading>
               </div>
             </Show>
             <Show when={currentOperation()} keyed>

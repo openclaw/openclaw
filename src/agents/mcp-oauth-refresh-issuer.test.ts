@@ -95,7 +95,7 @@ function createOAuthNetwork(
 }
 
 async function seedAuthorizedStore(
-  order: "discovery-then-tokens" | "tokens-then-discovery",
+  order?: "discovery-then-tokens" | "tokens-then-discovery",
   expiresIn = 3600,
 ) {
   await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) => {
@@ -114,7 +114,9 @@ async function seedAuthorizedStore(
       await provider.saveTokens(tokens);
     } else {
       await provider.saveTokens(tokens);
-      await provider.saveDiscoveryState?.(discoveryState);
+      if (order) {
+        await provider.saveDiscoveryState?.(discoveryState);
+      }
     }
   });
 }
@@ -285,15 +287,7 @@ describe("MCP OAuth refresh issuer binding", () => {
 
   it("fails closed for a token-only legacy store with no recoverable issuer", async () => {
     await withTempHome(async () => {
-      await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) => {
-        await provider.saveClientInformation?.({ client_id: "stored-client-id" });
-        await provider.saveTokens({
-          access_token: STORED_ACCESS,
-          refresh_token: STORED_REFRESH,
-          token_type: "Bearer",
-          expires_in: 3600,
-        });
-      });
+      await seedAuthorizedStore();
       expect((await readStore()).discoveryState).toBeUndefined();
       expect((await readStore()).tokensAuthorizationServerUrl).toBeUndefined();
       const network = createOAuthNetwork();

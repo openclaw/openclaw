@@ -11,7 +11,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readTranscriptEventRows } from "../config/sessions/session-accessor.sqlite-read.js";
 import { appendExpectedSessionTranscriptTurn as appendTurn } from "../config/sessions/session-accessor.sqlite-transcript-turn.js";
-import { appendTranscriptMessageSnapshotSync } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSnapshotSync } from "../config/sessions/session-accessor.sqlite-transcript-write.kernel.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { captureSessionEntryReadSource } from "../config/sessions/session-entry-read-source.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";

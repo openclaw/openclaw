@@ -2,10 +2,7 @@ import { afterEach, expect, vi } from "vitest";
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../../agents/agent-scope-config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import {
-  loadSessionEntry,
-  replaceSessionEntrySync,
-} from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onUserProfilesChanged } from "../../state/user-profile-events.js";
@@ -185,9 +182,6 @@ export async function seedSessions(activityTimes = false): Promise<OpenClawConfi
       entry.updatedAt = updatedAt;
     }
     replaceSessionEntrySync(scope, entry);
-    if (activityTimes && agentId === "main") {
-      expect(loadSessionEntry(scope)?.updatedAt).toBe(updatedAt);
-    }
   }
   return config;
 }

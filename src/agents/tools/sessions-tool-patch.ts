@@ -19,12 +19,8 @@ const SESSIONS_TOOL_RESULT_MAX_BYTES = 3_840;
 const RESOLVED_OMITTED_REASON = "response_budget_exceeded";
 
 function sessionsToolResultFitsBudget(payload: Record<string, unknown>): boolean {
-  const compactSize = boundedJsonUtf8Bytes(payload, SESSIONS_TOOL_RESULT_MAX_BYTES);
-  return (
-    compactSize.complete &&
-    compactSize.bytes <= SESSIONS_TOOL_RESULT_MAX_BYTES &&
-    Buffer.byteLength(JSON.stringify(payload, null, 2), "utf8") <= SESSIONS_TOOL_RESULT_MAX_BYTES
-  );
+  const size = boundedJsonUtf8Bytes(payload, SESSIONS_TOOL_RESULT_MAX_BYTES);
+  return size.complete && size.bytes <= SESSIONS_TOOL_RESULT_MAX_BYTES;
 }
 
 export function withBoundedSessionsResolved(
@@ -89,16 +85,14 @@ export function readSessionsToolPatch(params: Record<string, unknown>): Sessions
   return patch;
 }
 
-type ResolvedPatchTarget = {
-  agentId: string;
-  key: string;
-  isRequesterSession: boolean;
-};
-
 export async function runSessionsToolPatchMany(params: {
   targets: unknown;
   patch: SessionsPatchMutation;
-  resolveTarget: (sessionKey: string) => Promise<ResolvedPatchTarget>;
+  resolveTarget: (sessionKey: string) => Promise<{
+    agentId: string;
+    key: string;
+    isRequesterSession: boolean;
+  }>;
   callGateway: AgentToolGatewayRequestCaller;
 }) {
   if (

@@ -1,8 +1,4 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  getPreparedModelRuntimeBorrowedSnapshot,
-  getPreparedModelRuntimePluginGeneration,
-} from "../agents/prepared-model-runtime-generation-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -16,37 +12,57 @@ import {
 import type { PluginHostCleanupResult } from "../plugins/host-hook-cleanup.types.js";
 import { withPluginHttpRouteRegistry } from "../plugins/http-registry.js";
 import { PluginInstanceDrainTimeoutError } from "../plugins/plugin-instance-error.js";
-import { getPluginInstance, type PluginInstanceHandle } from "../plugins/plugin-instance-scope.js";
-import { collectRegistryInvocationInstances } from "../plugins/plugin-invocation-scope.js";
+import {
+  getPluginInstance,
+  pluginInvocationContext,
+  type PluginInstanceHandle,
+} from "../plugins/plugin-instance-scope.js";
+import { pluginHandsOverTurns } from "../plugins/plugin-turn-handover-eligibility.js";
+import { getPluginRegistryGatewayOwner } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { disposePluginRegistryInstances } from "../plugins/runtime.js";
+import { getRetiringPluginRegistries } from "../plugins/runtime-state.js";
+import {
+  disposePluginRegistryInstances,
+  waitForPluginRegistryRetirement,
+} from "../plugins/runtime.js";
 import {
   PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
   getPluginServiceCleanupSettlement,
   type PluginServicesHandle,
 } from "../plugins/services.js";
+import { formatPluginReloadDrainReason } from "./plugin-reload-drain-reason.js";
 import type { GatewayPluginReloadStatus } from "./server-plugin-reload-status.types.js";
 
 const PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS = 60_000;
 
-// Logs/readiness have broader readership than admin inspection: never project owner IDs here.
+// Keep acquisition facts in raw logs; each egress applies its own redaction policy.
 function logRetainedReferences(
   instances: readonly PluginInstanceHandle[],
   phase: "queued" | "timeout",
-  log: Pick<ReturnType<typeof createSubsystemLogger>, "info">,
+  log: Pick<ReturnType<typeof createSubsystemLogger>, "info" | "warn">,
 ): void {
   const selected = instances
     .slice(0, 8)
-    .map((instance) => instance.retentionSnapshot({ limit: 8, includeOwners: false }));
-  log.info(
-    `Plugin retained references (${phase}): ${JSON.stringify({ instances: selected, omittedInstances: Math.max(0, instances.length - selected.length) })}. Use administrator plugins.inspect runtimeRetention for acquisition owners; a turn awaiting its own retained work cannot drain.`,
+    .map((instance) => instance.retentionSnapshot({ limit: 8 }));
+  log[phase === "timeout" ? "warn" : "info"](
+    `Plugin retained references (${phase}); a turn awaiting its own retained work cannot drain.`,
+    { instances: selected, omittedInstances: Math.max(0, instances.length - selected.length) },
   );
 }
 
-export class PluginAdmittedWorkTimeoutError extends Error {
-  /** Previous-generation instances whose pre-stop drain expired, from the failing registry. */
-  readonly instances: readonly PluginInstanceHandle[];
+export class PluginAdmittedWorkDeferredError extends Error {
+  /** Instances from the current generation and blocking predecessor retirement transactions. */
+  constructor(
+    message: string,
+    readonly instances: readonly PluginInstanceHandle[],
+    options?: ErrorOptions,
+    readonly retirements: readonly Promise<unknown>[] = [],
+  ) {
+    super(message, options);
+  }
+}
 
+class PluginAdmittedWorkTimeoutError extends PluginAdmittedWorkDeferredError {
   constructor(
     pluginIds: ReadonlySet<string>,
     instances: readonly PluginInstanceHandle[],
@@ -56,9 +72,9 @@ export class PluginAdmittedWorkTimeoutError extends Error {
     const ids = [...pluginIds].join(", ");
     super(
       `plugin ${ids} admitted work did not settle within ${timeoutMs / 1_000}s; the previous plugin generation stays active. Retry \`openclaw plugins reload ${[...pluginIds].join(" ")}\` after the work finishes, or use --wait for a bounded 10-minute drain that blocks new agent runs. If an agent turn holds this plugin, end that turn first or use the plugins tool with action reloadAndResume; waiting inside the same turn cannot make progress.`,
+      instances,
       { cause },
     );
-    this.instances = instances;
   }
 }
 
@@ -74,8 +90,10 @@ export function createPluginReloadCleanup({
   recordCleanup,
   recordWarning,
   retainRetirement,
+  replacementOperation,
   waitForDrain = false,
 }: {
+  replacementOperation?: import("../plugins/plugin-instance.js").PluginReplacementOperation;
   waitForDrain?: boolean;
   previousRegistry: PluginRegistry;
   changedPluginIds: Set<string>;
@@ -241,7 +259,9 @@ export function createPluginReloadCleanup({
     await withPluginHttpRouteRegistry(registry, () =>
       start
         ? hooks.runGatewayStart({ port }, context)
-        : hooks.runGatewayStop({ reason: "plugin replacement" }, context),
+        : pluginInvocationContext.exit(() =>
+            hooks.runGatewayStop({ reason: "plugin replacement" }, context),
+          ),
     );
   };
   const prepareRegistrationFailureCleanup =
@@ -317,6 +337,23 @@ export function createPluginReloadCleanup({
       const instance = pluginIds.has(record.id) && getPluginInstance(record);
       return instance ? [instance] : [];
     });
+  const pendingPredecessors = () => {
+    const gatewayOwner = getPluginRegistryGatewayOwner(previousRegistry);
+    return getRetiringPluginRegistries().flatMap((registry) => {
+      if (!gatewayOwner || getPluginRegistryGatewayOwner(registry) !== gatewayOwner) {
+        return [];
+      }
+      const instances = registry.plugins.flatMap((record) => {
+        const instance = getPluginInstance(record);
+        return instance?.owner?.registry === registry ? [instance] : [];
+      });
+      // One captured service-stop transaction owns all these instances. A changed
+      // instance may still depend on a sibling's holder before that transaction runs.
+      return instances.some((instance) => changedPluginIds.has(instance.pluginId))
+        ? [{ registry, instances }]
+        : [];
+    });
+  };
   const drainRetainedWork = async (
     pluginIds: ReadonlySet<string>,
     signal: AbortSignal,
@@ -324,19 +361,33 @@ export function createPluginReloadCleanup({
     { includeConsumers = false, includeCalls = false } = {},
   ) => {
     const instances = previousInstances(pluginIds);
-    const count = instances.reduce(
+    const predecessors = pendingPredecessors();
+    const observedInstances = [...instances, ...predecessors.flatMap((owner) => owner.instances)];
+    const holds = instances.map((instance) => ({
+      pluginId: instance.pluginId,
+      count: instance.retainedWorkCount + (includeCalls ? instance.ordinaryCallCount : 0),
+      turnHandover: pluginHandsOverTurns(instance.owner?.record),
+    }));
+    const count = observedInstances.reduce(
       (total, instance) =>
         total + instance.retainedWorkCount + (includeCalls ? instance.ordinaryCallCount : 0),
       0,
     );
-    if (!instances.length || (!count && !includeConsumers)) {
+    if (!predecessors.length && (!instances.length || (!count && !includeConsumers))) {
       return;
     }
     retainedWorkQueued ||= count > 0;
     const deadlineAtMs = admittedWorkDeadline();
-    const reason = count
-      ? `Plugin replacement queued behind ${count} ${includeCalls ? "admitted" : "retained"} work item(s) for plugin ${[...pluginIds].join(", ")}; new agent runs wait up to the ${admittedWorkTimeoutMs / 1_000}s drain budget.${waitForDrain ? " Press Ctrl+C to cancel the waiting reload." : ""}`
-      : "Waiting for admitted plugin cleanup before replacing it.";
+    const reason = predecessors.length
+      ? "Waiting for predecessor plugin generations to retire before replacement."
+      : count
+        ? formatPluginReloadDrainReason({
+            holds,
+            includeCalls,
+            drainBudgetSeconds: admittedWorkTimeoutMs / 1_000,
+            cancellable: waitForDrain,
+          })
+        : "Waiting for admitted plugin cleanup before replacing it.";
     reportStatus({
       phase: "reloading",
       pluginIds: [...changedPluginIds],
@@ -344,23 +395,36 @@ export function createPluginReloadCleanup({
       reason,
     });
     log.info(reason);
-    logRetainedReferences(instances, "queued", log);
+    logRetainedReferences(observedInstances, "queued", log);
     try {
       await observeDrain("retained plugin work", signal, deadlineAtMs, (current) =>
-        Promise.all(
-          instances.map((instance) =>
+        Promise.all([
+          ...instances.map((instance) =>
             includeConsumers
               ? instance.waitForIdle(current)
               : instance.waitForRetainedWork(current, { includeConsumers: false, includeCalls }),
           ),
-        ),
+          ...predecessors.map(async ({ registry }) => {
+            const result = await racePromiseWithAbortSignal(
+              waitForPluginRegistryRetirement(registry),
+              current,
+            );
+            recordCleanup(result);
+            if (result.failures.length) {
+              throw new AggregateError(
+                result.failures.map(({ error }) => error),
+                "Predecessor plugin cleanup failed",
+              );
+            }
+          }),
+        ]),
       );
     } catch (error) {
       if (error instanceof PluginHostCleanupTimeoutError) {
-        logRetainedReferences(instances, "timeout", log);
+        logRetainedReferences(observedInstances, "timeout", log);
         throw new PluginAdmittedWorkTimeoutError(
           pluginIds,
-          instances,
+          observedInstances,
           error,
           admittedWorkTimeoutMs,
         );
@@ -370,6 +434,57 @@ export function createPluginReloadCleanup({
   };
   return {
     attempt,
+    canOverlap: (
+      nextRegistry: PluginRegistry,
+      hasChannelHandoff: boolean,
+      restartServiceIds?: ReadonlySet<string>,
+    ) => {
+      if (
+        hasChannelHandoff ||
+        !previousRegistry.plugins.some(
+          (record) => changedPluginIds.has(record.id) && getPluginInstance(record),
+        )
+      ) {
+        return false;
+      }
+      const registries = [previousRegistry, nextRegistry];
+      if (
+        registries.some((registry) =>
+          registry.services.some(
+            (entry) => changedPluginIds.has(entry.pluginId) && restartServiceIds?.has(entry.id),
+          ),
+        )
+      ) {
+        return false;
+      }
+      // The old declaration authorizes its remaining lifetime; adding the flag to
+      // a successor cannot make an already-running exclusive predecessor safe.
+      if (
+        registries.some((registry) =>
+          registry.plugins.some(
+            (record) =>
+              changedPluginIds.has(record.id) &&
+              record.enabled &&
+              record.status === "loaded" &&
+              record.generationOverlap !== true,
+          ),
+        )
+      ) {
+        return false;
+      }
+      // These host owners retain shared or exclusive resources across plugin
+      // instances. Their existing drain/stop/start transaction stays serialized.
+      return !registries.some((registry) =>
+        [
+          ...registry.channels,
+          ...registry.embeddingProviders,
+          ...registry.decisionProviders,
+          ...registry.transcriptSourceProviders,
+          ...registry.nodeHostCommands,
+          ...registry.gatewayDiscoveryServices,
+        ].some((entry) => changedPluginIds.has(entry.pluginId)),
+      );
+    },
     drainRetainedWork,
     stopPreviousServices: async (
       services: PluginServicesHandle | null,
@@ -429,35 +544,42 @@ export function createPluginReloadCleanup({
       pendingServiceCleanup && pendingServiceCleanup.error !== error
         ? new AggregateError([pendingServiceCleanup.error, error], "Previous plugin cleanup failed")
         : error,
-    assertResourceHandoff: (pluginIds: ReadonlySet<string>) => {
+    assertResourceHandoff: (pluginIds: ReadonlySet<string>, automatic = false) => {
       const releases: Array<() => void> = [];
-      const generation = getPreparedModelRuntimePluginGeneration();
-      const heldInstances =
-        generation && getPreparedModelRuntimeBorrowedSnapshot(generation)
-          ? new Set(
-              [generation.pluginRegistry, generation.inboundPluginRegistry].flatMap((registry) =>
-                registry ? Array.from(collectRegistryInvocationInstances(registry)) : [],
-              ),
-            )
-          : undefined;
-      for (const record of previousRegistry.plugins) {
-        if (pluginIds.has(record.id)) {
-          const instance = getPluginInstance(record);
-          if (instance?.hasActiveCall) {
-            throw new Error(
-              `Plugin ${record.id} cannot replace itself from its own active call; retry after the call finishes.`,
-            );
-          }
-          // A turn retains its instances between callbacks; waiting here would wait on itself.
-          if (instance && heldInstances?.has(instance)) {
-            throw new Error(
-              `Plugin ${record.id} cannot replace itself from its own active turn; retry after the turn finishes.`,
-            );
-          }
+      const heldInstances = new Set(pluginInvocationContext.getStore()?.retainedInstances);
+      const predecessors = pendingPredecessors();
+      const instances = [
+        ...previousInstances(pluginIds),
+        ...predecessors.flatMap((owner) => owner.instances),
+      ];
+      // Automatic edits must not fence unrelated turns while waiting for plugin work.
+      if (
+        automatic &&
+        (predecessors.length ||
+          instances.some((instance) => instance.retainedWorkCount || instance.ordinaryCallCount))
+      ) {
+        throw new PluginAdmittedWorkDeferredError(
+          `Plugin ${[...pluginIds].join(", ")} reload is waiting for retained work, calls, or previous-generation cleanup; the previous plugin configuration remains active.`,
+          instances,
+          undefined,
+          predecessors.map(({ registry }) => waitForPluginRegistryRetirement(registry)),
+        );
+      }
+      for (const instance of instances) {
+        if (instance.hasActiveCall) {
+          throw new Error(
+            `Plugin ${instance.pluginId} cannot replace itself from its own active call; retry after the call finishes.`,
+          );
+        }
+        // A turn retains its instances between callbacks; waiting here would wait on itself.
+        if (heldInstances.has(instance)) {
+          throw new Error(
+            `Plugin ${instance.pluginId} cannot replace itself from its own active turn; retry after the turn finishes.`,
+          );
         }
       }
       for (const instance of previousInstances(pluginIds)) {
-        releases.push(instance.reserveReplacement());
+        releases.push(instance.reserveReplacement(replacementOperation));
       }
       return () => releases.forEach((release) => release());
     },

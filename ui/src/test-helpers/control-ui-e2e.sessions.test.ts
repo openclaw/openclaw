@@ -8,6 +8,127 @@ import { sessionClient } from "./session-gateway-client.test-support.ts";
 
 const notes = { key: "agent:ops:notes", sessionId: "notes-generation-1", label: "Notes" };
 
+it("derives history metadata from configured transcripts without overriding explicit facts", async ({
+  connect,
+}) => {
+  const messages = [{ role: "assistant", content: "Saved conversation" }];
+  const rows = [
+    notes,
+    { key: "agent:ops:empty" },
+    { key: "agent:ops:saved" },
+    { key: "agent:ops:explicit-empty", hasMessages: false },
+    { key: "agent:ops:explicit-saved", hasMessages: true },
+  ];
+  const connection = await connect({
+    sessions: rows,
+    historyMessages: messages,
+    sessionTranscripts: {
+      [rows[1]!.key]: { messages: [] },
+      [rows[2]!.key]: { messages },
+      [rows[4]!.key]: { messages: [] },
+    },
+  });
+  const expected = [true, false, true, false, true];
+  for (const [index, row] of rows.entries()) {
+    const client = sessionClient(connection, row.key);
+    expect(await client.session()).toMatchObject({ hasMessages: expected[index] });
+    expect(await client.transcript()).toMatchObject({
+      sessionInfo: { hasMessages: expected[index] },
+    });
+  }
+  const client = sessionClient(connection, notes.key);
+  expect(await client.rows()).toMatchObject(expected.map((hasMessages) => ({ hasMessages })));
+  client.controls.setSessionRow({ ...notes, hasMessages: undefined });
+  expect(await client.session()).not.toHaveProperty("hasMessages");
+  client.controls.setMethodResponse("sessions.describe", { session: notes });
+  expect(await client.session()).not.toHaveProperty("hasMessages");
+});
+
+it("refreshes history metadata after committed input and display-history replacement", async ({
+  connect,
+}) => {
+  const client = sessionClient(await connect({ sessions: [notes] }), notes.key);
+  expect(await client.session()).toMatchObject({ hasMessages: false });
+  await client.sendChat("saved-input");
+  expect(await client.session()).toMatchObject({ hasMessages: true });
+  expect(await client.rows()).toMatchObject([{ hasMessages: true }]);
+  client.controls.setHistoryMessages([]);
+  expect(await client.session()).toMatchObject({ hasMessages: false });
+  expect(await client.rows()).toMatchObject([{ hasMessages: false }]);
+  client.controls.setHistoryMessages([{ role: "assistant", content: "Replacement" }]);
+  expect(await client.session()).toMatchObject({ hasMessages: true });
+});
+
+it.for(["chat.startup", "chat.history"])(
+  "derives scoped metadata from $0 fixtures without consuming their responses",
+  async (method, { connect }) => {
+    const messages = [{ role: "assistant", content: "Wire conversation" }];
+    const sibling = { key: "agent:ops:other" };
+    const connection = await connect({
+      sessions: [notes, sibling],
+      methodResponses: {
+        [method]: { cases: [{ match: { sessionKey: notes.key }, response: { messages } }] },
+      },
+    });
+    const client = sessionClient(connection, notes.key);
+    expect(await client.session()).toMatchObject({ hasMessages: true });
+    expect(await sessionClient(connection, sibling.key).session()).toMatchObject({
+      hasMessages: false,
+    });
+    client.controls.setMethodResponse(method, { sequence: [{ messages }, { messages: [] }] });
+    expect(await client.session()).toMatchObject({ hasMessages: true });
+    expect(await client.rows()).toMatchObject([{ hasMessages: true }, { hasMessages: true }]);
+    expect(await client.transcript(method)).toMatchObject({ messages });
+    expect(await client.session()).toMatchObject({ hasMessages: false });
+    expect(await client.transcript(method)).toMatchObject({ messages: [] });
+    client.controls.setMethodResponse(method, { messages });
+    expect(await client.session()).toMatchObject({ hasMessages: true });
+    client.controls.setHistoryMessages([]);
+    expect(await client.session()).toMatchObject({ hasMessages: false });
+    client.controls.setMethodResponse(method, { messages: [], hasMore: true });
+    expect(await client.session()).toMatchObject({ hasMessages: true });
+  },
+);
+
+it("serves requested initial history through the startup response owner", async ({ connect }) => {
+  const messages = [{ role: "assistant", content: "Cached conversation" }];
+  const client = sessionClient(
+    await connect({ sessions: [notes], sessionTranscripts: { [notes.key]: { messages } } }),
+    notes.key,
+  );
+  const subscribe = (initialHistory?: Record<string, unknown>) =>
+    client.payload("sessions.messages.subscribe", { key: notes.key, initialHistory });
+  expect(await subscribe()).not.toHaveProperty("initialHistory");
+  expect(await subscribe({})).toMatchObject({
+    key: notes.key,
+    initialHistory: {
+      ok: true,
+      payload: { messages, sessionId: notes.sessionId, sessionInfo: notes },
+    },
+  });
+  const delta = { kind: "delta", deltaCursor: "next", messages: [] };
+  client.controls.setMethodResponse("chat.startup", {
+    cases: [{ match: { sessionKey: notes.key, cursor: "cached" }, response: delta }],
+  });
+  expect(await subscribe({ cursor: "cached" })).toMatchObject({
+    initialHistory: { ok: true, payload: delta },
+  });
+  const error = { code: "UNAVAILABLE", message: "History is not ready", retryable: true };
+  client.controls.setMethodResponse("chat.startup", { __mockError: error });
+  expect(
+    await client.request("sessions.messages.subscribe", { key: notes.key, initialHistory: {} }),
+  ).toMatchObject({ ok: true, payload: { initialHistory: { ok: false, error } } });
+});
+
+it("omits initial history only when the scenario explicitly exercises the fallback", async ({
+  connect,
+}) => {
+  const client = sessionClient(await connect({ subscriptionInitialHistory: false }), notes.key);
+  expect(
+    await client.payload("sessions.messages.subscribe", { key: notes.key, initialHistory: {} }),
+  ).not.toHaveProperty("initialHistory");
+});
+
 it("preserves stale wire responses without consuming sequences or replacing canonical identity", async ({
   connect,
 }) => {
@@ -126,8 +247,9 @@ it("replaces canonical rows and membership without retaining omitted fields", as
       path: "",
       ts: expect.any(Number),
     });
-    expect(list.sessions).toEqual([{ ...replacement, snapshotAt: expect.any(Number) }]);
-    expect(await client.session()).toEqual({ ...replacement, snapshotAt: expect.any(Number) });
+    const expected = { ...replacement, hasMessages: false, snapshotAt: expect.any(Number) };
+    expect(list.sessions).toEqual([expected]);
+    expect(await client.session()).toEqual(expected);
     for (const method of ["chat.history", "chat.startup"]) {
       expect(await client.transcript(method)).toMatchObject({
         sessionId: notes.sessionId,

@@ -125,21 +125,10 @@ it.each([
   [{ status: "cancelled", reason: "run-aborted" }, "Cancelled"],
 ] as const)("renders canonical result %j as %s", async (outcome, title) => {
   registerCardBinding("token-terminal", "approval-terminal");
+  const resolved = resolveResult({ applied: false, approvalId: "approval-terminal" });
   resolveApprovalOverGateway.mockResolvedValueOnce({
-    applied: false,
-    approval: {
-      id: "approval-terminal",
-      urlPath: "/approve/approval-terminal",
-      createdAtMs: 1,
-      expiresAtMs: 10_000,
-      resolvedAtMs: 2,
-      presentation: {
-        kind: "exec",
-        commandText: "echo approved",
-        allowedDecisions: ["allow-once", "allow-always", "deny"],
-      },
-      ...outcome,
-    },
+    ...resolved,
+    approval: { ...resolved.approval, ...outcome },
   });
   await expect(click("token-terminal")).resolves.toBe(true);
   const cards = updateGoogleChatMessage.mock.calls[0]?.[0].cardsV2;
@@ -214,11 +203,8 @@ it("does not consume the token when an unauthorized user clicks", async () => {
   });
 
   await expect(click(createCardClickEvent("token-2", "users/999"))).resolves.toBe(true);
-
   expect(resolveApprovalOverGateway).not.toHaveBeenCalled();
-
   await expect(click("token-2")).resolves.toBe(true);
-
   expectResolved("plugin:approval-2", "deny", "plugin");
 });
 
@@ -234,14 +220,12 @@ it("consumes stale card tokens for approval-not-found gateway detail and ignores
   const event = createCardClickEvent(token);
 
   await expect(click(event, target)).resolves.toBe(true);
-
   expect(googleChatApprovalControls.get(token)).toBeNull();
   expect(target.runtime.log).toHaveBeenCalledWith(
     expect.stringContaining("approval expired or no longer exists"),
   );
 
   await expect(click(event, target)).resolves.toBe(true);
-
   expect(resolveApprovalOverGateway).toHaveBeenCalledTimes(1);
   expect(updateGoogleChatMessage).not.toHaveBeenCalled();
   expect(target.runtime.log).toHaveBeenCalledWith(

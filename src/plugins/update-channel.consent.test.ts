@@ -5,6 +5,7 @@ import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../packages/gateway-proto
 import { resolvePluginArtifactDeclaredSurface } from "./capability-artifact.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 import { makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import { singleInstallConfig } from "./update-authority.test-support.js";
 import { syncPluginsForUpdateChannel } from "./update-channel.js";
@@ -44,25 +45,17 @@ it.each([
     const installedDir = path.join(root, "extensions", pluginId);
     const stagedDir = path.join(root, "stage");
     function writeArtifact(dir: string, version: string, providers: string[]) {
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(
-        path.join(dir, "package.json"),
-        JSON.stringify({ name: packageName, version, openclaw: { extensions: ["./index.js"] } }),
-      );
-      fs.writeFileSync(
-        path.join(dir, "index.js"),
-        `export default () => ${JSON.stringify(version)};`,
-      );
-      fs.writeFileSync(
-        path.join(dir, "openclaw.plugin.json"),
-        JSON.stringify({
+      writeArtifacts(dir, {
+        "package.json": { name: packageName, version, openclaw: { extensions: ["./index.js"] } },
+        "index.js": `export default () => ${JSON.stringify(version)};`,
+        "openclaw.plugin.json": {
           id: pluginId,
           providers,
           kind: "context-engine",
           contextEngineIds: [`engine-${version}`],
           configSchema: { type: "object" },
-        }),
-      );
+        },
+      });
     }
     writeArtifact(installedDir, "1.0.0", ["existing-provider"]);
     writeArtifact(stagedDir, "2.0.0", ["existing-provider", "new-provider"]);

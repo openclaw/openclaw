@@ -21,18 +21,17 @@ type PaneMethods = Pick<
   | "captureNavigationFace"
   | "focusComposerInput"
 >;
-type PaneFacts = Pick<
-  ChatPaneRuntime,
-  | "transcriptLoading"
-  | "transcriptReady"
-  | "historyRecovering"
-  | "conversationPresented"
-  | "hasQueuedMessageEdit"
-  | "runActivity"
-  | "composerReady"
->;
 export type ChatPaneElement = SolidBridgeElement<ChatPaneProps, PaneMethods> &
-  PaneFacts & {
+  Pick<
+    ChatPaneRuntime,
+    | "transcriptLoading"
+    | "transcriptReady"
+    | "historyRecovering"
+    | "conversationPresented"
+    | "hasQueuedMessageEdit"
+    | "runActivity"
+    | "composerReady"
+  > & {
     readonly composerElement: HTMLTextAreaElement | null;
     readonly headerElement: HTMLElement | null;
   };

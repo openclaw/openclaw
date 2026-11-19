@@ -10,26 +10,6 @@ import { setFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-tar
 
 const FEISHU_MEETING_NUMBER_PATTERN = /^\d{9}$/;
 
-type FeishuVcIdentity = {
-  open_id?: string | null;
-  user_id?: string | null;
-  union_id?: string | null;
-};
-
-type FeishuVcMeetingInvitedEvent = {
-  event_id?: string;
-  call_id?: string;
-  meeting?: {
-    meeting_no?: string;
-    topic?: string;
-  };
-  inviter?: {
-    id?: FeishuVcIdentity;
-    user_name?: string;
-  };
-  invite_time?: string;
-};
-
 function parseInviteTimestamp(value: string | undefined): number {
   const parsed = Number.parseInt(value ?? "", 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -64,7 +44,23 @@ export function createFeishuVcMeetingInvitedHandler(params: {
       return;
     }
     try {
-      const invite = data as FeishuVcMeetingInvitedEvent;
+      const invite = data as {
+        event_id?: string;
+        call_id?: string;
+        meeting?: {
+          meeting_no?: string;
+          topic?: string;
+        };
+        inviter?: {
+          id?: {
+            open_id?: string | null;
+            user_id?: string | null;
+            union_id?: string | null;
+          };
+          user_name?: string;
+        };
+        invite_time?: string;
+      };
       const meetingNo = pickString(invite.meeting?.meeting_no);
       const id = invite.inviter?.id;
       const openId = pickString(id?.open_id);

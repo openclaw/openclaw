@@ -40,7 +40,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     serviceRestart,
     mockGetSelfAndAncestorPidsSync,
     pluginAvailabilityPreflight,
-    candidateValidation,
+    candidateCheck,
     nodeVersionSatisfiesEngine,
     databasePreflightMocks,
     readConfigFileSnapshot,
@@ -58,9 +58,13 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     freshRestartCalls,
     lastWriteJsonCall,
     getErrorOutput,
-    getTriageFailures,
+    runUpdateFailureTriage,
     expectNoSideEffects,
   } = f;
+
+  // Failure assertions must not render the triage target's inherited environment.
+  const getTriageFailures = () =>
+    vi.mocked(runUpdateFailureTriage).mock.calls.map(([call]) => call.failure);
 
   const { prepareCandidateAdmissionFixture, candidateAdmissionVerdict } =
     createCandidateAdmissionFixtures(f);
@@ -130,7 +134,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
         expect(events).toEqual(["admission"]);
         expect(fsSync.existsSync(databasePath)).toBe(false);
         expect(lastWriteJsonCall()).toMatchObject({ status: "error", reason: "invalid-config" });
-        expectNoSideEffects(candidateValidation, replaceConfigFile, serviceStop);
+        expectNoSideEffects(candidateCheck, replaceConfigFile, serviceStop);
         await expectVersion(pkgRoot, "1.0.0");
       } else {
         expect(events.slice(0, marker ? 3 : 2)).toEqual(
@@ -198,7 +202,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
         serviceStop,
         serviceStart,
         serviceRestart,
-        candidateValidation,
+        candidateCheck,
         replaceConfigFile,
       );
       expect(doctorCommandCall()).toBeUndefined();
@@ -367,7 +371,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
         status: "ok",
         run: { admission: { owner: "candidate" }, origin: { candidateAdmission: verdict } },
       });
-      expect(candidateValidation).toHaveBeenCalledWith(
+      expect(candidateCheck).toHaveBeenCalledWith(
         expect.objectContaining({ nodeRunner: recoveredNode }),
       );
     },
@@ -401,7 +405,20 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     expect(process.exitCode).toBe(75);
     expect(listUpdateRuns({ limit: 1 })[0]).toMatchObject({ status: "running" });
     expect(getTriageFailures()).toEqual([]);
-    expectNoSideEffects(serviceStop, serviceStart, serviceRestart, candidateValidation);
+    expectNoSideEffects(serviceStop, serviceStart, serviceRestart, candidateCheck);
+  });
+
+  it("candidate admission: stages the package with the managed service Node on PATH", async () => {
+    const { pkgRoot, stages } = await prepare();
+    const serviceNode = path.join(makeTempDir("candidate-service-node-"), "bin", "node");
+    primeServiceCommand([serviceNode, path.join(pkgRoot, "dist", "index.js"), "gateway", "run"]);
+
+    await update().catch(() => undefined);
+
+    expect(stages).toHaveLength(1);
+    const [, options] = expectDefined(packageInstallCommandCall(), "staged package install");
+    const env = options.env as NodeJS.ProcessEnv | undefined;
+    expect(env?.PATH?.split(path.delimiter)[0]).toBe(path.dirname(serviceNode));
   });
 
   it("candidate admission: refuses managed ancestry before spawning candidate code and disposes staging", async () => {
@@ -425,7 +442,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
       status: "error",
       reason: "managed-service-preflight",
     });
-    expectNoSideEffects(spawn, serviceStop, serviceStart, serviceRestart, candidateValidation);
+    expectNoSideEffects(spawn, serviceStop, serviceStart, serviceRestart, candidateCheck);
   });
 
   it("candidate admission: keeps dry-run on installed checks without staging", async () => {
@@ -443,7 +460,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
         expect.objectContaining({ reason: "preflight-node-runtime-incompatible" }),
       ]),
     });
-    expectNoSideEffects(serviceStop, candidateValidation);
+    expectNoSideEffects(serviceStop, candidateCheck);
   });
 
   it("refuses incompatible shared caller and managed schemas before stopping the package service", async () => {
@@ -526,20 +543,20 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     );
 
     expectNoSideEffects(updateGitCheckout, defaultRuntime.exit);
-    expectNoSideEffects(serviceStop, candidateValidation);
+    expectNoSideEffects(serviceStop, candidateCheck);
     expect(stages).toEqual([]);
     expect(contexts).toEqual([]);
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
     expect(listUpdateRuns({ limit: 1 })[0]?.reason).toBe("preflight-node-runtime-incompatible");
-    const refusal = "Failing check node-runtime (node-runtime-preflight); key engines.node: ";
-    expect(defaultRuntime.log).toHaveBeenCalledWith(
-      [
-        `${refusal}Required: openclaw@2026.3.23-2 Node >=22.19.0; detected: Node ${process.versions.node} at ${process.execPath}`,
-        `${refusal}Update install root: ${fsSync.realpathSync(root)}`,
-        `${refusal}Update binary: ${path.join(root, "openclaw.mjs")}`,
-        `${refusal}Gateway install root: unresolved`,
-        `${refusal}${runtimeRecovery.expectedPlainRecovery("2026.3.23-2", "24.22.1", "absent", undefined, root)}`,
-      ].join("\n"),
+    // The terminal shows the one-line refusal and the owner's recovery steps; the diagnostics
+    // stay in the saved report.
+    const logged = vi.mocked(defaultRuntime.log).mock.calls.map(([line]) => line);
+    expect(logged).toEqual(
+      expect.arrayContaining([
+        `⚠️ Update refused: openclaw@2026.3.23-2 needs Node >=22.19.0, but this updater runs Node ${process.versions.node} at ${process.execPath}. No changes were made.`,
+        "2. Install and select Node 24.16.0 using your system package manager or https://nodejs.org/en/download.",
+        `3. Run \`node ${path.join(root, "openclaw.mjs")} update --tag 2026.3.23-2\`.`,
+      ]),
     );
   });
 }

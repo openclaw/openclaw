@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
@@ -8,6 +9,8 @@ import {
   loadApnsRegistrations,
   type ApnsRegistration,
 } from "./push-apns-store.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type Execute = (
   context: OpenClawStateWorkerContext,
@@ -32,7 +35,9 @@ vi.mock("../state/openclaw-state-worker-store.js", () => ({
 vi.mock("../state/openclaw-state-db.js", () =>
   mocks.forbid("openOpenClawStateDatabase", "runOpenClawStateWriteTransaction"),
 );
+// mock-isolation: Synthetic APNs admission must not inspect the real shared-state cache.
 vi.mock("../state/openclaw-state-db-cache.js", () => ({
+  openClawStateDatabaseCache: { getKnownOpenClawStateDatabaseIdentity: () => undefined },
   captureOpenClawStateDatabaseReadAdmission: (databasePath: string) => ({
     databasePath,
     identity: { key: `path:${databasePath}`, canonicalPath: databasePath },
@@ -42,10 +47,6 @@ vi.mock("../state/openclaw-state-db-cache.js", () => ({
 vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
   getOpenClawDatabaseMaintenanceScope: () => undefined,
 }));
-// mock-isolation: Worker-read forwarding must not decode or validate APNs rows on the host.
-vi.mock("./push-apns-relay-url.js", () =>
-  mocks.forbid("normalizeApnsRelayBaseUrl", "normalizePersistedApnsRelayBaseUrl"),
-);
 // mock-isolation: APNs rows are decoded in the worker, never on this host path.
 vi.mock("./kysely-sync.js", () =>
   mocks.forbid("executeSqliteQuerySync", "executeSqliteQueryTakeFirstSync", "getNodeSqliteKysely"),
@@ -89,24 +90,31 @@ it.each([
   expectCommand("apns.registration.read", nodeId);
 });
 it("captures the original inputs and relative state path before waiting", async () => {
-  const ready = createDeferredCore<Map<string, ApnsRegistration>>();
-  mocks.execute.mockReturnValue(ready.promise);
-  const cwd = vi.spyOn(process, "cwd").mockReturnValue("/synthetic/original");
-  vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/ambient-a");
-  const inputs = [" device-a ", "missing", "device-a", "", "x".repeat(257)];
-  const pending = loadApnsRegistrations(inputs, "relative-state");
-  inputs.splice(0, inputs.length, "replacement");
-  cwd.mockReturnValue("/synthetic/replacement");
-  vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/ambient-b");
-  ready.resolve(new Map([["device-a", registration]]));
-  await expect(pending).resolves.toEqual([
-    { nodeId: " device-a ", registration },
-    { nodeId: "device-a", registration },
-  ]);
-  expect(mocks.execute.mock.calls[0]?.[0].admission.databasePath).toBe(
-    path.join("/synthetic/original/relative-state", "state/openclaw.sqlite"),
-  );
-  expectCommand("apns.registrations.read", ["device-a", "missing"]);
+  const originalDirectory = tempDirs.make("apns-original-");
+  const replacementDirectory = tempDirs.make("apns-replacement-");
+  const originalCwd = process.cwd();
+  process.chdir(originalDirectory);
+  try {
+    const ready = createDeferredCore<Map<string, ApnsRegistration>>();
+    mocks.execute.mockReturnValue(ready.promise);
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/ambient-a");
+    const inputs = [" device-a ", "missing", "device-a", "", "x".repeat(257)];
+    const pending = loadApnsRegistrations(inputs, "relative-state");
+    inputs.splice(0, inputs.length, "replacement");
+    process.chdir(replacementDirectory);
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/ambient-b");
+    ready.resolve(new Map([["device-a", registration]]));
+    await expect(pending).resolves.toEqual([
+      { nodeId: " device-a ", registration },
+      { nodeId: "device-a", registration },
+    ]);
+    expect(mocks.execute.mock.calls[0]?.[0].admission.databasePath).toBe(
+      path.join(originalDirectory, "relative-state", "state/openclaw.sqlite"),
+    );
+    expectCommand("apns.registrations.read", ["device-a", "missing"]);
+  } finally {
+    process.chdir(originalCwd);
+  }
 });
 it.each([false, new Error("cleanup refused")])(
   "awaits conditional cleanup without host SQLite: %s",
@@ -115,24 +123,25 @@ it.each([false, new Error("cleanup refused")])(
     void ready.promise.catch(() => {});
     mocks.execute.mockReturnValue(ready.promise);
     const observed = { ...registration };
-    const completed = vi.fn();
+    let settled = false;
     const pending = clearApnsRegistrationIfCurrent({
       nodeId: " device-a ",
       registration: observed,
       baseDir: "/synthetic/apns-a",
     });
-    const outcome = pending.then(completed, (error: unknown) => error);
+    const outcome = pending
+      .catch((error: unknown) => error)
+      .finally(() => {
+        settled = true;
+      });
     observed.updatedAtMs += 1;
-    expect(completed).not.toHaveBeenCalled();
+    expect(settled).toBe(false);
     if (result instanceof Error) {
       ready.reject(result);
-      expect(await outcome).toBe(result);
-      expect(completed).not.toHaveBeenCalled();
     } else {
       ready.resolve(result);
-      await outcome;
-      expect(completed).toHaveBeenCalledWith(result);
     }
+    expect(await outcome).toBe(result);
     expectCommand("apns.registration.clearIfCurrent", {
       nodeId: "device-a",
       registration,

@@ -128,12 +128,9 @@ function createRetainedDuplicateArchives(state: OpenClawTestState) {
   };
 }
 
-async function retainDatabase(
-  env: NodeJS.ProcessEnv,
-  agentId: string,
-  sqlitePath: string,
-  storePath: string,
-) {
+async function retainDatabase(state: OpenClawTestState, agentId: string) {
+  const { env } = state;
+  const sqlitePath = path.join(state.agentDir(agentId), "openclaw-agent.sqlite");
   openOpenClawAgentDatabase({ agentId, path: sqlitePath, env });
   const operationId = `retain-${agentId}`;
   beginAgentDeletionJournal(
@@ -142,7 +139,7 @@ async function retainDatabase(
       operationId,
       agentDir: path.dirname(sqlitePath),
       workspaceDir: path.join(env.OPENCLAW_STATE_DIR!, `workspace-${agentId}`),
-      sessionsDir: path.dirname(storePath),
+      sessionsDir: state.sessionsDir(agentId),
       deleteFiles: false,
     },
     { env },
@@ -161,12 +158,7 @@ it.skipIf(process.platform === "win32").each(["import", "publication"] as const)
       const { target, archives } = createRetainedDuplicateArchives(state);
       openOpenClawAgentDatabase({ agentId: "main", path: target.sqlitePath, env: state.env });
       const held = path.join(state.agentDir("retired"), "openclaw-agent.sqlite");
-      await retainDatabase(
-        state.env,
-        "retired",
-        held,
-        path.join(state.sessionsDir("retired"), "sessions.json"),
-      );
+      await retainDatabase(state, "retired");
       const sidecar = `${target.sqlitePath}-journal`;
       fs.writeFileSync(sidecar, Buffer.alloc(512));
       fs.unlinkSync(held);
@@ -319,6 +311,37 @@ it.each(["disposal", "manifest-publication"] as const)(
         expect(after.references.get(survivorPath)?.length).toBeGreaterThan(1);
       }
       expect((await doctor("dry-run")).totals.issues).toBe(0);
+    });
+  },
+);
+
+it.each([0, 1])(
+  "settles missing retained duplicate %i without losing rollback bytes",
+  async (index) => {
+    await withOpenClawTestState({ label: "doctor-missing-duplicate" }, async (state) => {
+      const { archives, bytes, doctor, inventory } = createRetainedDuplicateArchives(state);
+      const before = inventory();
+      // Exercise either ordering in the persisted inventory, not filesystem creation order.
+      const ordered = [...before.references.keys()].filter((file) => archives.includes(file));
+      const missing = ordered[index]!;
+      const survivor = ordered[1 - index]!;
+      fs.unlinkSync(missing);
+      const recovered = await doctor("recover");
+      expect(recovered.targets.flatMap((target) => target.issues.map(({ code }) => code))).toEqual([
+        "historical_duplicate_settled",
+      ]);
+      for (const file of before.manifestPaths) {
+        const manifest = migrationRun.readSessionSqliteMigrationManifest(file)!;
+        for (const target of manifest.targets) {
+          for (const move of [...target.plannedMoves, ...target.completedMoves]) {
+            expect(move.archivePath).toBe(survivor);
+            expect(move.artifact?.disposal).toEqual({ state: "retained" });
+          }
+        }
+      }
+      expect(fs.readFileSync(survivor, "utf8")).toBe(bytes);
+      expect((await doctor("dry-run")).totals.issues).toBe(0);
+      expect((await doctor("recover")).totals.issues).toBe(0);
     });
   },
 );

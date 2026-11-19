@@ -206,6 +206,29 @@ function isGatewayAuthRejection(reason: string): boolean {
   );
 }
 
+// Mirrors the canonical auth-rejection classification in
+// packages/gateway-protocol/src/connect-error-details.ts (the `authRejected`
+// predicate used by the Gateway's own auth-failure message owner). The hand
+// copied text allowlist in isGatewayAuthRejection drifts whenever a new auth
+// failure reason is added, so prefer the structured code the Gateway already
+// correlates with each refusal. This is correlation, not authentication: a
+// local listener that echoes a request can return a matching response ID and an
+// AUTH_/DEVICE_AUTH_ detail code, and PendingGatewayRequests.handleResponse
+// constructs and marks that error without authenticating the listener through
+// this marker. The probe treats a correlated structured refusal (the Gateway
+// paired the error with this specific request) as a terminal auth rejection; it
+// does not treat the code as proof of Gateway identity.
+function isGatewayAuthRejectionError(error: unknown): boolean {
+  if (!isGatewayProtocolResponseError(error)) {
+    return false;
+  }
+  const code = readConnectErrorDetailCode(error.details);
+  if (code === null || code === undefined) {
+    return false;
+  }
+  return code.startsWith("AUTH_") || code.startsWith("DEVICE_AUTH_");
+}
+
 function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] {
   const errors = asOptionalRecord(asOptionalRecord(health)?.plugins)?.errors;
   if (!Array.isArray(errors)) {
@@ -233,41 +256,6 @@ function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] 
     }
     return [error];
   });
-}
-
-function readChannelProbeFailures(health: unknown) {
-  const errors: GatewayReachability["channelProbeErrors"] = [];
-  const timeouts: GatewayReachability["channelProbeErrors"] = [];
-  const warnings: GatewayReachability["channelProbeErrors"] = [];
-  const channels = asOptionalRecord(asOptionalRecord(health)?.channels);
-  for (const [id, summary] of Object.entries(channels ?? {})) {
-    const accounts = Object.entries(asOptionalRecord(asOptionalRecord(summary)?.accounts) ?? {});
-    for (const [accountId, value] of accounts.length ? accounts : Object.entries({ "": summary })) {
-      const account = asOptionalRecord(value);
-      if (account?.enabled === false || account?.configured === false) {
-        continue;
-      }
-      if (account?.running === false || account?.healthState === "not-running") {
-        warnings.push({
-          id: accountId ? `${id}/${accountId}` : id,
-          error:
-            typeof account.lastError === "string" && account.lastError.trim()
-              ? account.lastError
-              : "not running",
-        });
-      }
-    }
-    const probe = asOptionalRecord(asOptionalRecord(summary)?.probe);
-    if (!probe || (probe.timedOut !== true && probe.ok !== false)) {
-      continue;
-    }
-    // Retain the explicit timeout marker from older Gateways that also sent ok:false.
-    (probe.timedOut === true ? timeouts : errors).push({
-      id,
-      error: typeof probe.error === "string" && probe.error.trim() ? probe.error : "check failed",
-    });
-  }
-  return { errors, timeouts, warnings };
 }
 
 function readUnavailablePlugins(health: unknown): UnavailablePluginHealthSummary[] {
@@ -352,7 +340,39 @@ export async function confirmGatewayReachable(params: {
     result.reachable = true;
     result.activatedPluginErrors = readActivatedPluginErrors(health);
     result.unavailablePlugins = readUnavailablePlugins(health);
-    const { errors, timeouts, warnings } = readChannelProbeFailures(health);
+    const errors: GatewayReachability["channelProbeErrors"] = [];
+    const timeouts: GatewayReachability["channelProbeErrors"] = [];
+    const warnings: GatewayReachability["channelProbeErrors"] = [];
+    const channels = asOptionalRecord(asOptionalRecord(health)?.channels);
+    for (const [id, summary] of Object.entries(channels ?? {})) {
+      const accounts = Object.entries(asOptionalRecord(asOptionalRecord(summary)?.accounts) ?? {});
+      for (const [accountId, value] of accounts.length
+        ? accounts
+        : Object.entries({ "": summary })) {
+        const account = asOptionalRecord(value);
+        if (account?.enabled === false || account?.configured === false) {
+          continue;
+        }
+        if (account?.running === false || account?.healthState === "not-running") {
+          warnings.push({
+            id: accountId ? `${id}/${accountId}` : id,
+            error:
+              typeof account.lastError === "string" && account.lastError.trim()
+                ? account.lastError
+                : "not running",
+          });
+        }
+      }
+      const probe = asOptionalRecord(asOptionalRecord(summary)?.probe);
+      if (!probe || (probe.timedOut !== true && probe.ok !== false)) {
+        continue;
+      }
+      // Retain the explicit timeout marker from older Gateways that also sent ok:false.
+      (probe.timedOut === true ? timeouts : errors).push({
+        id,
+        error: typeof probe.error === "string" && probe.error.trim() ? probe.error : "check failed",
+      });
+    }
     result.channelProbeErrors = errors;
     result.channelRuntimeWarnings = warnings.length ? warnings : undefined;
     if (timeouts.length) {
@@ -366,7 +386,11 @@ export async function confirmGatewayReachable(params: {
       : isGatewayTransportError(error) && error.code === 1008
         ? error.reason
         : undefined;
-    if ((reason && isGatewayAuthRejection(reason)) || isGatewayCredentialsRequiredError(error)) {
+    if (
+      (reason && isGatewayAuthRejection(reason)) ||
+      isGatewayCredentialsRequiredError(error) ||
+      isGatewayAuthRejectionError(error)
+    ) {
       result.authenticationError = formatGatewayRestartProbeError(reason ?? error);
     }
     // Updates verify with the previous package, so any protocol change between it and the
@@ -450,17 +474,20 @@ export async function resolveGatewayRestartProbeContext(
   env: NodeJS.ProcessEnv | undefined,
   explicitAuth?: GatewayRestartProbeAuth,
   signal?: AbortSignal,
+  config?: OpenClawConfig,
 ): Promise<GatewayRestartProbeContext> {
   signal?.throwIfAborted();
   const mergedEnv: NodeJS.ProcessEnv = { ...process.env, ...env };
-  const cfg = await createConfigIO({
-    env: mergedEnv,
-    observe: false,
-    pluginValidation: "skip",
-    suppressFutureVersionWarning: true,
-  })
-    .readBestEffortConfig()
-    .catch((): OpenClawConfig => ({}));
+  const cfg =
+    config ??
+    (await createConfigIO({
+      env: mergedEnv,
+      observe: false,
+      pluginValidation: "skip",
+      suppressFutureVersionWarning: true,
+    })
+      .readBestEffortConfig()
+      .catch((): OpenClawConfig => ({})));
   signal?.throwIfAborted();
   const resolved = await resolveGatewayProbeAuthSafeWithSecretInputs({
     cfg,
@@ -478,7 +505,10 @@ export async function inspectGatewayPortHealth(params: {
   config?: OpenClawConfig;
   configuredProbe?: ConfiguredGatewayLocalProbe;
   expectedListenerPid?: number;
+  /** Command-owned cancellation for the in-flight listener probe. */
+  signal?: AbortSignal;
 }): Promise<GatewayPortHealthSnapshot> {
+  params.signal?.throwIfAborted();
   let portUsage: PortUsage;
   try {
     portUsage = await inspectPortUsage(params.port, {
@@ -494,6 +524,7 @@ export async function inspectGatewayPortHealth(params: {
     };
   }
 
+  params.signal?.throwIfAborted();
   if (portUsage.status !== "busy") {
     return { portUsage, healthy: false };
   }
@@ -508,6 +539,7 @@ export async function inspectGatewayPortHealth(params: {
     ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
     env: process.env,
     allowDeviceIdentityRequired: listenerOwnershipVerified,
+    signal: params.signal,
   });
   return { portUsage, healthy: reachable, ...(probeError ? { probeError } : {}) };
 }

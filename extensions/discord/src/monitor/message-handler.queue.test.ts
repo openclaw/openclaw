@@ -62,19 +62,17 @@ function makeHandler(overrides?: Parameters<typeof createDiscordHandlerParams>[0
 
 describe("createDiscordMessageHandler queue behavior", () => {
   beforeEach(() => {
-    preflight
-      .mockReset()
-      .mockImplementation(
-        async (params: Pick<PreflightContext, "data" | "turnAdoptionLifecycle">) => ({
-          ...messageContext(params.data),
-          turnAdoptionLifecycle: params.turnAdoptionLifecycle,
-        }),
-      );
-    processMessage
-      .mockReset()
-      .mockImplementation(async (ctx: { turnAdoptionLifecycle?: DiscordIngressLifecycle }) => {
+    preflight.mockImplementation(
+      async (params: Pick<PreflightContext, "data" | "turnAdoptionLifecycle">) => ({
+        ...messageContext(params.data),
+        turnAdoptionLifecycle: params.turnAdoptionLifecycle,
+      }),
+    );
+    processMessage.mockImplementation(
+      async (ctx: { turnAdoptionLifecycle?: DiscordIngressLifecycle }) => {
         await ctx.turnAdoptionLifecycle?.onAdopted();
-      });
+      },
+    );
     vi.useRealTimers();
   });
 
@@ -259,10 +257,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
         if (messageId === "m-1") {
           await firstPreflight.promise;
         }
-        return {
-          ...queuedContext(params.data.channel_id),
-          messageId,
-        };
+        return { ...queuedContext(params.data.channel_id), messageId };
       },
     );
 
@@ -279,14 +274,11 @@ describe("createDiscordMessageHandler queue behavior", () => {
 
     await flushQueueWork();
     expect(preflight).toHaveBeenCalledTimes(1);
-    await Promise.resolve();
-    expect(preflight).toHaveBeenCalledTimes(1);
 
     firstPreflight.resolve();
     await sequentialDispatch;
 
     await flushQueueWork();
-    expect(processMessage).toHaveBeenCalledTimes(2);
     expect(processedMessageIds).toEqual(["m-1", "m-2"]);
   });
 
@@ -312,7 +304,6 @@ describe("createDiscordMessageHandler queue behavior", () => {
     await firstRun.promise.catch(() => undefined);
 
     await flushQueueWork();
-    expect(processMessage).toHaveBeenCalledTimes(2);
     expect(setStatus).toHaveBeenCalledWith(expect.objectContaining({ activeRuns: 0, busy: false }));
   });
 

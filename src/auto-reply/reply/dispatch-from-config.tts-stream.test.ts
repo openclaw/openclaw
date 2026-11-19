@@ -8,11 +8,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
-import * as directives from "../../tts/directives.js";
+import * as directives from "../../tts/directive-facts.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import { pendingFinalSessionEntry } from "./dispatch-from-config.session-fixtures.test-support.js";
 import {
   describe0BeforeEach0,
   dispatchReplyFromConfig,
@@ -95,7 +96,7 @@ it.each(["See [", "Example:\n```text\nkeep two spaces  \nkeep a tab\t\n```"])(
     });
     await dispatchReplyFromConfig({
       ctx: buildTestCtx({ Provider: "telegram", Surface: "telegram" }),
-      cfg: emptyConfig,
+      cfg: { tts: { auto: "always" } },
       dispatcher,
       replyResolver: async (_ctx, opts) => {
         await opts?.onBlockReply?.({ text });
@@ -335,17 +336,17 @@ describe("source completion", () => {
                   deliveryId: "source-delivery",
                 },
               });
-              await actualSessions.replaceSessionEntry(preparedScope, {
-                sessionId: "source-session",
-                updatedAt: Date.now(),
-                pendingFinalDelivery: {
-                  kind: "replayable",
-                  text: "See [",
-                  createdAt: Date.now(),
-                  intentId: "source-intent",
-                  deliveries: [{ id: "source-delivery", state: "prepared" }],
-                },
-              });
+              await actualSessions.replaceSessionEntry(
+                preparedScope,
+                pendingFinalSessionEntry(
+                  {
+                    sessionId: "source-session",
+                    intentId: "source-intent",
+                    deliveryId: "source-delivery",
+                  },
+                  "See [",
+                ),
+              );
               expect(
                 actualSessions.loadSessionEntry(preparedScope)?.pendingFinalDelivery?.deliveries,
               ).toEqual([{ id: "source-delivery", state: "prepared" }]);

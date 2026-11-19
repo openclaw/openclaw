@@ -6,6 +6,18 @@ import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engi
 import { assert, describe, expect, it, vi } from "vitest";
 import { collectMemoryStatusSnapshot, resolveStatusProviderInfo } from "./manager-status-state.js";
 
+const counts = (source: string, files: number, chunkBytes?: number) => ({
+  source,
+  files,
+  chunks: files,
+  ...(chunkBytes === undefined ? {} : { chunkBytes }),
+});
+const aggregate = (files: number, ...sourceCounts: ReturnType<typeof counts>[]) => ({
+  files,
+  chunks: files,
+  sourceCounts,
+});
+
 describe("memory manager status state", () => {
   it("distinguishes retained cache payload, WAL, and reusable space without changing the database", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "memory-storage-status-"));
@@ -102,14 +114,7 @@ describe("memory manager status state", () => {
     });
 
     expect(payloadReads).toBe(0);
-    expect(status.aggregate).toEqual({
-      files: 2,
-      chunks: 2,
-      sourceCounts: [
-        { source: "memory", files: 1, chunks: 1 },
-        { source: "sessions", files: 1, chunks: 1 },
-      ],
-    });
+    expect(status.aggregate).toEqual(aggregate(2, counts("memory", 1), counts("sessions", 1)));
   });
 
   it("reports stored payload bytes by source without counting characters or other sources", () => {
@@ -124,30 +129,17 @@ describe("memory manager status state", () => {
     insertChunk.run("memory", "🦞", encodeMemoryEmbedding([1, 2]));
     insertChunk.run("memory", "abc", encodeMemoryEmbedding([]));
     insertChunk.run("sessions", "session", encodeMemoryEmbedding([3]));
-    const aggregate = (sources: Array<"memory" | "sessions">) =>
+    const readAggregate = (sources: Array<"memory" | "sessions">) =>
       collectMemoryStatusSnapshot(db, ":memory:", {
         cacheEnabled: false,
         includeStorage: true,
         sources,
       }).aggregate;
-    expect(aggregate(["memory", "sessions"])).toEqual({
-      files: 3,
-      chunks: 3,
-      sourceCounts: [
-        { source: "memory", files: 2, chunks: 2, chunkBytes: 23 },
-        { source: "sessions", files: 1, chunks: 1, chunkBytes: 15 },
-      ],
-    });
-    expect(aggregate(["memory"])).toEqual({
-      files: 2,
-      chunks: 2,
-      sourceCounts: [{ source: "memory", files: 2, chunks: 2, chunkBytes: 23 }],
-    });
+    expect(readAggregate(["memory", "sessions"])).toEqual(
+      aggregate(3, counts("memory", 2, 23), counts("sessions", 1, 15)),
+    );
+    expect(readAggregate(["memory"])).toEqual(aggregate(2, counts("memory", 2, 23)));
     db.exec("DELETE FROM memory_index_sources; DELETE FROM memory_index_chunks;");
-    expect(aggregate(["memory"])).toEqual({
-      files: 0,
-      chunks: 0,
-      sourceCounts: [{ source: "memory", files: 0, chunks: 0, chunkBytes: 0 }],
-    });
+    expect(readAggregate(["memory"])).toEqual(aggregate(0, counts("memory", 0, 0)));
   });
 });

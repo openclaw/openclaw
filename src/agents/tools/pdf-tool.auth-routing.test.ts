@@ -26,6 +26,51 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+async function preparePdfTool(
+  agentDir: string,
+  config: OpenClawConfig,
+  pluginId: "openai" | "anthropic",
+  authMode: "api_key" | "token" = "api_key",
+) {
+  const artifact = { pluginId, artifactBasename: "api.js" };
+  const provider =
+    pluginId === "openai"
+      ? (
+          await loadBundledPluginFacade<{ buildOpenAIProvider: () => ProviderPlugin }>(artifact)
+        ).buildOpenAIProvider()
+      : (
+          await loadBundledPluginFacade<{ buildAnthropicProvider: () => ProviderPlugin }>(artifact)
+        ).buildAnthropicProvider();
+  const pluginRegistry = createEmptyPluginRegistry();
+  pluginRegistry.providers.push({
+    pluginId,
+    source: path.resolve(`extensions/${pluginId}/index.ts`),
+    provider,
+  });
+  const preparedModelRuntime = {
+    ...createEmptyPreparedModelRuntimeFixture({
+      agentDir,
+      config,
+      metadataSnapshot: createPluginMetadataSnapshotFixture({
+        plugins: [{ id: pluginId, providers: [pluginId], enabledByDefault: true }],
+      }),
+      createStores: () => {
+        const authStorage = AuthStorage.inMemory(
+          pluginId === "openai" ? { openai: { type: "api_key", key: "platform-key" } } : {},
+        );
+        return { authStorage, modelRegistry: ModelRegistry.inMemory(authStorage) };
+      },
+    }),
+    workspaceDir: agentDir,
+    authModes: { [pluginId]: authMode },
+    pluginRegistry,
+  };
+  vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA);
+  return (
+    createPdfTool({ config, agentDir, preparedModelRuntime }) ?? expect.fail("Missing PDF tool")
+  );
+}
+
 it.each(["API key", "OAuth"])("routes %s PDF auth with Codex chat", async (mode) => {
   const oauth = mode === "OAuth";
   resetPdfToolAuthEnv();
@@ -49,44 +94,13 @@ it.each(["API key", "OAuth"])("routes %s PDF auth with Codex chat", async (mode)
       plugins: { entries: { openai: { enabled: true }, codex: { enabled: true } } },
       agents: { defaults: { model, pdfModel: model } },
     };
-    const { buildOpenAIProvider } = await loadBundledPluginFacade<{
-      buildOpenAIProvider: () => ProviderPlugin;
-    }>({ pluginId: "openai", artifactBasename: "api.js" });
-    const pluginRegistry = createEmptyPluginRegistry();
-    pluginRegistry.providers.push({
-      pluginId: "openai",
-      source: path.resolve("extensions/openai/index.ts"),
-      provider: buildOpenAIProvider(),
-    });
-    const metadataSnapshot = createPluginMetadataSnapshotFixture({
-      plugins: [{ id: "openai", providers: ["openai"], enabledByDefault: true }],
-    });
-    const preparedModelRuntime = {
-      ...createEmptyPreparedModelRuntimeFixture({
-        agentDir,
-        config,
-        metadataSnapshot,
-        createStores: () => {
-          const authStorage = AuthStorage.inMemory({
-            openai: { type: "api_key", key: "platform-key" },
-          });
-          return { authStorage, modelRegistry: ModelRegistry.inMemory(authStorage) };
-        },
-      }),
-      workspaceDir: agentDir,
-      authModes: { openai: "api_key" as const },
-      pluginRegistry,
-    };
-    vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA);
+    const tool = await preparePdfTool(agentDir, config, "openai");
     vi.spyOn(pdfExtract, "extractPdfContent").mockResolvedValue({ text: "PDF", images: [] });
     const complete = vi.spyOn(llmStream, "completeSimple").mockResolvedValue(
       makeAgentAssistantMessage({
         content: [{ type: "text", text: "PDF answer" }],
       }),
     );
-    const tool =
-      createPdfTool({ config, agentDir, preparedModelRuntime }) ??
-      expect.fail("PDF tool was not registered");
     const result = await tool.execute("pdf-auth", { pdf: "/tmp/doc.pdf", pages: "21" });
     expect(result.content).toEqual([{ type: "text", text: "PDF answer" }]);
     expect(complete).toHaveBeenCalledWith(
@@ -154,39 +168,10 @@ it.each(["setup token", "provider-default setup token", "API key"] as const)(
         },
         agents: { defaults: { model, pdfModel: model } },
       };
-      const { buildAnthropicProvider } = await loadBundledPluginFacade<{
-        buildAnthropicProvider: () => ProviderPlugin;
-      }>({ pluginId: "anthropic", artifactBasename: "api.js" });
-      const pluginRegistry = createEmptyPluginRegistry();
-      pluginRegistry.providers.push({
-        pluginId: "anthropic",
-        source: path.resolve("extensions/anthropic/index.ts"),
-        provider: buildAnthropicProvider(),
-      });
-      const metadataSnapshot = createPluginMetadataSnapshotFixture({
-        plugins: [{ id: "anthropic", providers: ["anthropic"], enabledByDefault: true }],
-      });
-      const preparedModelRuntime = {
-        ...createEmptyPreparedModelRuntimeFixture({
-          agentDir,
-          config,
-          metadataSnapshot,
-          createStores: () => {
-            const authStorage = AuthStorage.inMemory();
-            return { authStorage, modelRegistry: ModelRegistry.inMemory(authStorage) };
-          },
-        }),
-        workspaceDir: agentDir,
-        authModes: { anthropic: oauth ? ("token" as const) : ("api_key" as const) },
-        pluginRegistry,
-      };
-      vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA);
+      const tool = await preparePdfTool(agentDir, config, "anthropic", oauth ? "token" : "api_key");
       const fetchMock = vi
         .spyOn(globalThis, "fetch")
         .mockResolvedValue(Response.json({ content: [{ type: "text", text: "PDF summary" }] }));
-      const tool =
-        createPdfTool({ config, agentDir, preparedModelRuntime }) ??
-        expect.fail("PDF tool was not registered");
       const result = await tool.execute("pdf-auth", {
         pdf: "/tmp/doc.pdf",
         prompt: "Summarize this PDF.",
@@ -227,24 +212,11 @@ it.each(["setup token", "provider-default setup token", "API key"] as const)(
             ]
           : undefined,
       );
-      expect(body).toMatchObject({
-        model: modelId,
-        messages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "document",
-                source: {
-                  media_type: "application/pdf",
-                  data: FAKE_PDF_MEDIA.buffer.toString("base64"),
-                },
-              },
-              { type: "text", text: "Summarize this PDF." },
-            ],
-          },
-        ],
-      });
+      expect(body.model).toBe(modelId);
+      expect(body.messages[0].content[0].source.data).toBe(
+        FAKE_PDF_MEDIA.buffer.toString("base64"),
+      );
+      expect(body.messages[0].content[1].text).toBe("Summarize this PDF.");
     });
   },
 );

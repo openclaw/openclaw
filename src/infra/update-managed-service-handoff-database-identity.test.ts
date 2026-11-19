@@ -2,10 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectFilesEqual } from "../../test/helpers/file-snapshots.js";
 import { createHotSqliteRollbackJournal } from "../../test/helpers/sqlite-hot-journal.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
+import * as fileLocks from "./file-lock-sync.js";
 import * as rollback from "./sqlite-rollback-recovery.js";
 import { recoverManagedUpdateLeaseJournal } from "./update-managed-service-handoff-database-recovery.js";
 import {
@@ -99,12 +100,31 @@ it.each([prepareManagedHandoffLeaseDatabase, createManagedHandoffLeaseDatabase])
   },
 );
 
-it.skipIf(isWindows)(
-  "preserves original admission through an aliased prepared parent",
-  async () => {
+it.each([false, true])(
+  "preserves original admission through an aliased prepared parent (ordinary path retains alias: %s)",
+  async (retainsOrdinaryAlias) => {
     fs.mkdirSync(directory, { mode: 0o700 });
+    const alias = aliasedPath();
+    const canonicalDatabasePath = path.join(
+      fs.realpathSync.native(directory),
+      path.basename(databasePath),
+    );
+    if (retainsOrdinaryAlias) {
+      const ordinaryRealpath = fs.realpathSync;
+      // Windows S4U can retain a short TEMP spelling while native Root expands it.
+      vi.spyOn(fs, "realpathSync").mockImplementation((...args) => {
+        const resolved = ordinaryRealpath(...args);
+        return args[0] === alias && typeof resolved === "string" ? alias : resolved;
+      });
+      fs.realpathSync.native = ordinaryRealpath.native;
+    }
+    const acquireLock = fileLocks.acquireFileLockSyncWithRetry;
+    // Keep genuine self-contention deterministic without waiting for the retry budget.
+    vi.spyOn(fileLocks, "acquireFileLockSyncWithRetry").mockImplementation((file, options) =>
+      acquireLock(file, { ...options, timeoutMs: 0 }),
+    );
     const store = await prepareManagedHandoffLeaseStore({
-      databasePath: aliasedPath(),
+      databasePath: alias,
       serviceManagerEnv: process.env,
       originalUpdateKey: root,
     });
@@ -112,9 +132,9 @@ it.skipIf(isWindows)(
     if (acquired.kind !== "acquired" || !acquired.originalDatabaseIdentity) {
       throw new Error("Original owner was not admitted");
     }
-    expect(acquired.originalDatabaseIdentity.databasePath).toBe(databasePath);
+    expect(acquired.originalDatabaseIdentity.databasePath).toBe(canonicalDatabasePath);
     const pinned = await prepareManagedHandoffLeaseStore({
-      databasePath,
+      databasePath: canonicalDatabasePath,
       existingIdentity: acquired.originalDatabaseIdentity,
       serviceManagerEnv: process.env,
     });
@@ -160,7 +180,9 @@ it("preserves a bound ordinary-path receipt when native resolution expands its p
   const identity = captureManagedUpdateLeaseDatabaseIdentity(alias);
   expect(identity.databasePath).toBe(alias);
   const pinned = await prepareManagedHandoffLeaseDatabase(alias, identity);
-  pinned(true, () => undefined);
+  const canonical = await prepareManagedHandoffLeaseDatabase(databasePath);
+  // A pinned alias must inherit this call chain's writer as well as original acquisition.
+  canonical(true, () => pinned(true, () => undefined));
   expect(captureManagedUpdateLeaseDatabaseIdentity(alias)).toEqual(identity);
   expect(fs.existsSync(databasePath + ".lock")).toBe(false);
 });
@@ -204,9 +226,6 @@ describe("older writer contention", () => {
     }
     throw new Error("Expected the SQLite operation to fail");
   }
-  const warning = (details: Record<string, unknown>) =>
-    ["SQLite transaction lock wait failed", expect.objectContaining(details)] as const;
-
   it.each(["existing identity", "original acquisition"] as const)(
     "reports older-writer contention for %s",
     async (kind) => {
@@ -217,8 +236,7 @@ describe("older writer contention", () => {
           ? { existingIdentity: captureManagedUpdateLeaseDatabaseIdentity(databasePath) }
           : { originalUpdateKey: root }),
       };
-      const logger = { warn: vi.fn() };
-      const store = await prepareManagedHandoffLeaseStore(options, logger);
+      const store = await prepareManagedHandoffLeaseStore(options);
       // Published writers hold SQLite directly and never participate in the new file mutex.
       using holder = new DatabaseSync(databasePath);
       holder.exec("BEGIN IMMEDIATE");
@@ -227,14 +245,6 @@ describe("older writer contention", () => {
       expect(failure.message).toMatch(/another OpenClaw update or Doctor from an older release/i);
       expect(failure.message).toMatch(/wait for it to finish, then rerun this command/i);
       expect(failure.cause).toMatchObject({ message: "database is locked", errcode: 5 });
-      expect([failure, failure.cause].map(isSqliteLockError)).toEqual([true, true]);
-      expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
-        ...warning({
-          step: "begin",
-          failureKind: "lock-contention",
-          beginAdmission: expect.objectContaining({ nativeAttempts: 1 }),
-        }),
-      );
       expect(store.read(root)).toEqual({ kind: "absent" });
 
       const legacy = createManagedHandoffLeaseStore(options, { warn: vi.fn() });
@@ -254,7 +264,6 @@ describe("older writer contention", () => {
 
   it.each(["callback", "commit"] as const)("preserves native %s lock errors", async (phase) => {
     const owner = await prepareManagedHandoffLeaseDatabase(databasePath);
-    const logger = { warn: vi.fn() };
     let original: Error | undefined;
     if (phase === "callback") {
       using holder = new DatabaseSync(databasePath);
@@ -278,16 +287,12 @@ describe("older writer contention", () => {
       insert.run(root, "rolled-back");
     };
     const failure = captureError(() =>
-      owner(true, (db) => owner.transact(db, () => write(db), { logger })),
+      owner(true, (db) => owner.transact(db, () => write(db), {})),
     );
     expect([failure.message, failure.cause]).toEqual(["database is locked", undefined]);
     if (phase === "callback") {
       expect(failure).toBe(original);
     } else {
-      expect(isSqliteLockError(failure)).toBe(true);
-      expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
-        ...warning({ step: "commit", failureKind: "lock-contention" }),
-      );
       reader?.exec("ROLLBACK");
       expect(reader?.prepare("SELECT owner FROM managed_update_handoffs").all()).toEqual([]);
     }
@@ -328,7 +333,10 @@ describe("cold journal recovery", () => {
       mutationSql: "UPDATE managed_update_handoffs SET owner='uncommitted-owner'",
     });
   const bytes = () =>
-    [databasePath, `${databasePath}-journal`].map((file) => fs.readFileSync(file));
+    [databasePath, `${databasePath}-journal`].map((file) => ({
+      file,
+      bytes: fs.readFileSync(file),
+    }));
 
   beforeEach(() => {
     installKey = path.join(root, "installation");
@@ -376,7 +384,7 @@ describe("cold journal recovery", () => {
         });
       }
       await expect(recover()).rejects.toThrow("definitely dead original executor");
-      expect(bytes()).toEqual(before);
+      expectFilesEqual(bytes(), before);
     },
   );
 
@@ -425,6 +433,9 @@ describe("cold journal recovery", () => {
       return prepared;
     });
     await expect(recover()).rejects.toThrow("database or journal changed");
-    expect(bytes()).toEqual([mainBytes, changedJournal]);
+    expectFilesEqual(bytes(), [
+      { file: databasePath, bytes: mainBytes },
+      { file: `${databasePath}-journal`, bytes: changedJournal ?? null },
+    ]);
   });
 });

@@ -26,6 +26,15 @@ struct TextSummarySupportTests {
         #expect(TextSummarySupport.summarizeLastLine(output) == expected)
     }
 
+    @Test(arguments: ["OpenClaw app", "Control UI"])
+    func `keeps the failure before a log recovery footer`(appName: String) {
+        let output = """
+        Error: Gateway connection failed.
+        [openclaw] For details, open Settings → Logs in the \(appName) or run `openclaw logs --follow`.
+        """
+        #expect(TextSummarySupport.summarizeLastLine(output) == "Error: Gateway connection failed.")
+    }
+
     @Test func `keeps the last line for plain output`() {
         #expect(TextSummarySupport.summarizeLastLine("first\nsecond") == "second")
     }

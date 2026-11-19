@@ -232,10 +232,10 @@ function snapshotAgentEventMetadata(event: AgentEventPayload): AgentEventPayload
       typeof value === "boolean" ||
       (typeof value === "string" && value.length <= 256)
     ) {
-      Object.defineProperty(data, key, { value, enumerable: true });
+      Object.defineProperty(data, key, { ...descriptor, configurable: true, writable: true });
     }
   }
-  return structuredClone({ ...event, data });
+  return { ...event, data, ...(event.preamble && { preamble: { ...event.preamble } }) };
 }
 
 export function dispatchPluginAgentEventSubscriptions(params: {
@@ -391,22 +391,6 @@ export function deletePluginSessionSchedulerJob(params: {
   }
 }
 
-function getPluginSessionSchedulerJobGeneration(params: {
-  pluginId: string;
-  jobId: string;
-  sessionKey?: string;
-}): number | undefined {
-  const state = getPluginHostRuntimeState();
-  const record = state.schedulerJobsByPlugin.get(params.pluginId)?.get(params.jobId);
-  if (!record) {
-    return undefined;
-  }
-  if (params.sessionKey && record.job.sessionKey !== params.sessionKey) {
-    return undefined;
-  }
-  return record.generation;
-}
-
 export function makePluginSessionSchedulerJobKey(pluginId: string, jobId: string): string {
   return JSON.stringify([pluginId, jobId]);
 }
@@ -483,13 +467,13 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
       if (params.sessionKey && sessionKey !== params.sessionKey) {
         continue;
       }
-      const liveGeneration = getPluginSessionSchedulerJobGeneration({
-        pluginId: record.pluginId,
-        jobId,
-        sessionKey,
-      });
+      const liveRecord = state.schedulerJobsByPlugin.get(record.pluginId)?.get(jobId);
       // Unpublished candidates have no generation and must never clean a live predecessor.
-      if (record.generation === undefined || liveGeneration === undefined) {
+      if (
+        record.generation === undefined ||
+        !liveRecord ||
+        liveRecord.job.sessionKey !== sessionKey
+      ) {
         continue;
       }
       const preserveJob = params.preserveJobIds?.has(jobId) ?? false;
@@ -501,7 +485,7 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
         // newer-generation registration that took over this jobId.
         continue;
       }
-      if (liveGeneration === record.generation) {
+      if (liveRecord.generation === record.generation) {
         registryRecordKeys.add(schedulerJobKey(record.pluginId, jobId, sessionKey));
       }
       // A newer generation may already own this id. The old cleanup callback can

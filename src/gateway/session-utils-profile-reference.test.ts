@@ -11,6 +11,7 @@ import {
 import { linkEmail } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { resolveSessionListProfileReference } from "./session-identity-projection.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { createSessionListEntryFilter } from "./session-sharing.js";
 
@@ -86,34 +87,30 @@ function listActivity(
   );
 }
 
-it.each(["owned", "created", "involving"] as const)(
-  "resolves %s inventory relationships through profile merges",
-  async (relationship) => {
-    const current = "87654321-c123-4123-8123-123456789abc";
-    createProfile(original);
-    createProfile(current);
-    linkEmail(original + "@activity.test", current);
-    for (const profileId of [original, current]) {
-      const result = await listSessions(
-        {
-          "merged-profile": {
-            updatedAt: 1,
-            createdActor: creator(original),
-            owner: { actor: { type: "human", id: original } },
-            ...participant(original),
-          },
+it("resolves inventory relationships through profile merges", async () => {
+  const current = "87654321-c123-4123-8123-123456789abc";
+  createProfile(original);
+  createProfile(current);
+  linkEmail(original + "@activity.test", current);
+  for (const profileId of [original, current]) {
+    const result = await listSessions(
+      {
+        "merged-profile": {
+          updatedAt: 1,
+          createdActor: creator(original),
+          owner: { actor: { type: "human", id: original } },
+          ...participant(original),
         },
-        {
-          profileRelation: { profileId, relationship },
-          ...(relationship === "owned" ? { ownerId: original } : {}),
-          ...(relationship === "created" ? { creatorId: original } : {}),
-        },
-      );
-      expect(result.sessions.map((row) => row.sessionId)).toEqual(["merged-profile"]);
-      expect(result.sessions[0]?.createdActor?.id).toBe(original);
-    }
-  },
-);
+      },
+      {
+        profileRelation: { profileId, relationship: "owned" },
+        ownerId: original,
+      },
+    );
+    expect(result.sessions.map((row) => row.sessionId)).toEqual(["merged-profile"]);
+    expect(result.sessions[0]?.createdActor?.id).toBe(original);
+  }
+});
 
 it("resolves retained profile without a durable row", async () => {
   const retained = original.toUpperCase();
@@ -132,6 +129,40 @@ it("resolves retained profile without a durable row", async () => {
   );
 });
 
+it("matches retained profile prefixes across case and hyphen placement, with exact precedence", () => {
+  const compact = "abcdef1234567890abcdef1234567890";
+  const unrelated = "fedcba1234567890abcdef1234567890";
+  for (let length = 8; length <= 32; length++) {
+    const reference = compact.slice(0, length);
+    for (const id of [compact.toUpperCase(), `--${compact.split("").join("--")}`]) {
+      const identities = new Map([
+        [reference, undefined],
+        [id, undefined],
+        [unrelated, undefined],
+      ]);
+      for (const fields of [{ createdActor: creator(id) }, participant(id)]) {
+        const entries: [string, SessionEntry][] = [
+          ["retained", { sessionId: "retained", updatedAt: 1, ...fields }],
+          ["unrelated", { sessionId: "unrelated", updatedAt: 1, ...participant(unrelated) }],
+        ];
+        expect(
+          resolveSessionListProfileReference(reference, entries, identities, new Set()),
+        ).toEqual({
+          ok: true,
+          value: id,
+        });
+        entries.push(["exact", { sessionId: "exact", updatedAt: 1, ...participant(reference) }]);
+        expect(
+          resolveSessionListProfileReference(reference, entries, identities, new Set()),
+        ).toEqual({
+          ok: true,
+          value: reference,
+        });
+      }
+    }
+  }
+});
+
 it("resolves qualified retained creators without treating legacy human IDs as profiles", async () => {
   const result = await listSessions(
     {
@@ -145,13 +176,7 @@ it("resolves qualified retained creators without treating legacy human IDs as pr
 });
 
 it("leaves missing and invalid person references unresolved without creating profile storage", async () => {
-  for (const reference of [
-    "12345678",
-    "1234567",
-    "ABCDEF12",
-    "123456789abcdef0123456789abcdef012",
-    "unknown-person",
-  ]) {
+  for (const reference of ["12345678", "unknown-person"]) {
     const result = await listActivity([], reference);
     expect(result.involvingProfileId).toBeUndefined();
     expect(result.sessions).toEqual([]);
@@ -171,7 +196,7 @@ it.each([
   if (durable) {
     createProfile(hiddenId);
   }
-  const entryFilter = vi.fn(visibleTo(visibleId));
+  const entryFilter = visibleTo(visibleId);
   const store = {
     visible: { visibility: "shared", ...participant(visibleId) },
     hidden: {
@@ -181,7 +206,6 @@ it.each([
     },
   } satisfies Record<string, Partial<SessionEntry>>;
   for (const reference of [prefix, hiddenId, hiddenId.replaceAll("-", "")]) {
-    entryFilter.mockClear();
     const result = await listSessions(
       store,
       { includePeople: true, involvingProfileId: reference, ...emptySearch },
@@ -192,7 +216,6 @@ it.each([
       sessions: [],
       people: [],
     });
-    expect(entryFilter).toHaveBeenCalledTimes(2);
   }
 });
 

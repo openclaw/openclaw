@@ -5,6 +5,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { decodeResumeHandoff } from "../shared/resume-handoff.js";
+import type { GatewayChatClient } from "../tui/gateway-chat.js";
 import {
   buildSessionChoices,
   loadRecentSessions,
@@ -12,6 +13,7 @@ import {
   type SessionPickerChoice,
 } from "../tui/tui-session-picker.js";
 import type { ResumeCliOptions } from "./resume-cli.js";
+import { registerSignalExitGate } from "./signal-exit-barrier.js";
 import { isTerminalInteractive } from "./terminal-interactivity.js";
 
 const RESUME_INTERACTIVE_TERMINAL_GUIDANCE =
@@ -48,18 +50,58 @@ async function connectResumeGateway(opts: ResumeCliOptions, handoffTarget: boole
       ? { allowConfiguredAuthForExactTarget: true, suppressEnvAuthFallback: true }
       : {}),
   });
+  // The transport exists before the handshake completes, so cancellation must be
+  // registered here: the reported interruption arrives while the peer withholds it.
+  let interrupted = false;
+  let signalInterrupted = () => {};
+  const interruptedWait = new Promise<void>((resolve) => {
+    signalInterrupted = resolve;
+  });
+  const clientOwner = trackResumeClientGate(client, () => {
+    interrupted = true;
+    signalInterrupted();
+  });
   try {
-    await new Promise<void>((resolve, reject) => {
+    const handshake = new Promise<void>((resolve, reject) => {
       client.onConnected = resolve;
       client.onConnectError = reject;
       client.onDisconnected = (reason) => reject(new Error(reason || "Gateway connection closed"));
       client.start();
     });
-    return client;
+    await Promise.race([handshake, interruptedWait]);
+    if (interrupted) {
+      throw new Error("Gateway connection interrupted.");
+    }
+    return { client, clientOwner };
   } catch (error) {
-    await client.stop();
+    try {
+      await clientOwner.stop();
+    } finally {
+      clientOwner.release();
+    }
     throw await formatResumeConnectionError(error);
   }
+}
+
+/** Retain transport cleanup until its owning branch settles, even if stop rejects. */
+function trackResumeClientGate(client: GatewayChatClient, onInterrupt: () => void) {
+  let releaseGate = () => {};
+  const gateFinished = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  let stopping: Promise<void> | undefined;
+  const stop = () => (stopping ??= Promise.resolve().then(() => client.stop()));
+  const unregisterGate = registerSignalExitGate(gateFinished, () => {
+    onInterrupt();
+    void stop().catch(() => undefined);
+  });
+  return {
+    stop,
+    release() {
+      releaseGate();
+      unregisterGate();
+    },
+  };
 }
 
 function formatResumeCandidate(candidate: SessionPickerChoice): string {
@@ -80,11 +122,11 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
   const resolvedQuery = query?.trim();
   const parsedQuery = parseAgentSessionKey(resolvedQuery);
   const explicitGlobalSession = parsedQuery?.rest === "global" ? parsedQuery : undefined;
-  let connection: Awaited<ReturnType<typeof connectResumeGateway>>["connection"];
+  let connection: GatewayChatClient["connection"];
   let sessionKey: string | null;
   if (handoff) {
     const parsed = parseAgentSessionKey(handoff.sessionKey)!;
-    const client = await connectResumeGateway(
+    const { client, clientOwner } = await connectResumeGateway(
       { ...connectionOptions, url: handoff.gatewayUrl },
       true,
     );
@@ -110,10 +152,14 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
       connection = client.connection;
       sessionKey = result.key;
     } finally {
-      await client.stop();
+      try {
+        await clientOwner.stop();
+      } finally {
+        clientOwner.release();
+      }
     }
   } else {
-    const client = await connectResumeGateway(connectionOptions, false);
+    const { client, clientOwner } = await connectResumeGateway(connectionOptions, false);
     let sessions: Awaited<ReturnType<typeof loadRecentSessions>>;
     try {
       connection = client.connection;
@@ -126,7 +172,11 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
     } catch (error) {
       throw await formatResumeConnectionError(error);
     } finally {
-      await client.stop();
+      try {
+        await clientOwner.stop();
+      } finally {
+        clientOwner.release();
+      }
     }
     if (explicitGlobalSession) {
       sessionKey = `agent:${explicitGlobalSession.agentId}:global`;

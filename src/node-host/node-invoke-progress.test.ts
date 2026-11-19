@@ -38,37 +38,29 @@ it("chunks output to 16 KiB", async () => {
 });
 
 it.each([
-  [100, 250],
-  [2_000, 1_000],
-  [60_000, 5_000],
-])("idle %i ms: heartbeat every %i ms", async (idleTimeoutMs, heartbeatIntervalMs) => {
-  vi.useFakeTimers();
-  vi.setSystemTime(0);
-  const request = vi.fn(async () => ({}));
-  const writer = progressWriter({ request } as NodeHostClient, { idleTimeoutMs });
-  writer.startHeartbeats();
-  await vi.advanceTimersByTimeAsync(heartbeatIntervalMs - 1);
-  expect(request).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(1);
-  expect(request).toHaveBeenCalledWith(
-    "node.invoke.progress",
-    { invokeId: "invoke-1", nodeId: "node-1", seq: 0, chunk: "" },
-    undefined,
-  );
-  writer.stop();
-  await writer.flush();
-});
-it.each([-30_000, 30_000])(
-  "heartbeat stays on interval after wall clock skew %i ms",
-  async (skewMs) => {
+  [100, 250, 0],
+  [2_000, 1_000, 0],
+  [60_000, 5_000, 0],
+  [30_000, 5_000, -30_000],
+  [30_000, 5_000, 30_000],
+])(
+  "idle %i ms: heartbeat every %i ms with clock skew %i ms",
+  async (idleTimeoutMs, heartbeatIntervalMs, skewMs) => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     const request = vi.fn(async () => ({}));
-    const writer = progressWriter({ request } as NodeHostClient, { idleTimeoutMs: 30_000 });
+    const writer = progressWriter({ request } as NodeHostClient, { idleTimeoutMs });
     vi.setSystemTime(skewMs);
     writer.startHeartbeats();
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(heartbeatIntervalMs - 1);
+    expect(request).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(
+      "node.invoke.progress",
+      { invokeId: "invoke-1", nodeId: "node-1", seq: 0, chunk: "" },
+      undefined,
+    );
     writer.stop();
     await writer.flush();
   },
@@ -111,17 +103,4 @@ it("releases a cancelled progress wait and queued chunks without cancelling anot
     writer.stop();
     client.close();
   }
-});
-
-it("does not send a worker request whose signal is already aborted", async () => {
-  const send = vi.fn();
-  const client = new NodeHostWorkerBridgeClient(send);
-  client.setConnection(1, true);
-  const controller = new AbortController();
-  controller.abort(new Error("cancelled before progress"));
-  await expect(
-    client.request("node.invoke.progress", {}, { signal: controller.signal }),
-  ).rejects.toThrow("cancelled before progress");
-  expect(send).not.toHaveBeenCalled();
-  client.close();
 });

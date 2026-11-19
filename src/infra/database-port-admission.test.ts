@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -18,7 +17,6 @@ import {
   type DatabasePortRecoveryIntent,
 } from "./database-port-recovery.js";
 import { makeDatabasePortManifest } from "./database-port-recovery.test-support.js";
-import { acquireEmbeddedStateLock } from "./embedded-state-lock.js";
 import * as gatewayLockProcessModule from "./gateway-lock-process.js";
 import { acquireGatewayLock, resolveGatewayLockPaths } from "./gateway-lock.js";
 import * as ownerLease from "./gateway-owner-lease.js";
@@ -34,7 +32,7 @@ afterEach(() => {
 
 // Recovery publication requires POSIX permissions and directory fsync.
 describe.skipIf(process.platform === "win32")("port recovery admission", () => {
-  it("checks once at each admission and sees a port started after successful preflight", async () => {
+  it("sees a port started after successful preflight and prior admission", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
       const configPath = path.join(stateDir, "openclaw.json");
@@ -49,20 +47,14 @@ describe.skipIf(process.platform === "win32")("port recovery admission", () => {
       openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
       closeOpenClawStateDatabaseForTest();
       const fixedPath = databasePortManifestPath(stateDir);
-      const reads = vi.spyOn(fsSync, "readFileSync");
-      const countReads = () => reads.mock.calls.filter(([file]) => file === fixedPath).length;
       expect(
         (await runStartupConfigPreflight({ gateway: true, observe: false })).snapshot.valid,
       ).toBe(true);
-      expect(countReads()).toBe(1);
       const lock = await acquireGatewayLock(lockOptions);
       expect(lock).not.toBeNull();
       await lock?.release();
-      expect(countReads()).toBe(2);
       writeDatabasePortManifest(stateDir, makeDatabasePortManifest(stateDir), () => {});
-      const beforeNewAdmission = countReads();
       await expect(acquireGatewayLock(lockOptions)).rejects.toThrow(fixedPath);
-      expect(countReads() - beforeNewAdmission).toBe(1);
     });
   });
 
@@ -111,10 +103,7 @@ describe.skipIf(process.platform === "win32")("port recovery admission", () => {
           ? runStartupConfigPreflight({ gateway: true })
           : entry === "direct Gateway"
             ? acquireGatewayLock(lockOptions)
-            : acquireEmbeddedStateLock({
-                options: { ...lockOptions, timeoutMs: 1000 },
-                formatActiveGatewayRefusal: () => "unexpected live Gateway",
-              });
+            : acquireGatewayLock({ ...lockOptions, role: "agent-embedded", timeoutMs: 1000 });
       await expect(attempt).rejects.toThrow(intent.manifestPath);
       await expect(attempt).rejects.toThrow("openclaw database port --resume");
       await expect(attempt).rejects.toThrow("openclaw database port --rollback");

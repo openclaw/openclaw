@@ -147,15 +147,25 @@ export function applyModelOverrideToSessionEntry(params: {
   return { updated };
 }
 
-/** Repairs overrides where legacy provider/model fields were stored as provider/model strings. */
+/**
+ * Repairs overrides where legacy provider/model fields were stored as provider/model strings.
+ * `isKnownRoute` reports whether the stored pair is a real, selectable model on its own
+ * provider; such a pair is a deliberate direct selection (e.g. `anthropic/claude-opus-5-5`
+ * beside a `clawrouter/anthropic/claude-opus-5-5` default), not a split wrapper, and stays
+ * untouched.
+ */
 export function repairProviderWrappedModelOverride(params: {
   entry: SessionEntry;
   defaultProvider: string;
   defaultModel?: string;
+  isKnownRoute: (ref: { provider: string; model: string }) => boolean;
 }): { updated: boolean } {
   const overrideProvider = normalizeOptionalString(params.entry.providerOverride);
   const overrideModel = normalizeOptionalString(params.entry.modelOverride);
   if (!overrideProvider || !overrideModel) {
+    return { updated: false };
+  }
+  if (params.isKnownRoute({ provider: overrideProvider, model: overrideModel })) {
     return { updated: false };
   }
 

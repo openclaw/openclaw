@@ -23,11 +23,6 @@ import type { GatewayClient, RespondFn } from "./types.js";
 
 export type ArtifactQuery = ArtifactsListParams;
 
-type ResolvedArtifactSession = {
-  sessionKey: string;
-  agentId: string;
-};
-
 type ArtifactSessionProjection = Pick<
   SessionRowProjection,
   "ensureMaterialized" | "findBySessionId" | "sharingRevision"
@@ -65,7 +60,7 @@ function resolveQuerySession(
   query: ArtifactQuery,
   cfg: OpenClawConfig,
   projection?: ArtifactSessionProjection,
-): ResolvedArtifactSession | undefined {
+) {
   const selected =
     !query.sessionKey && query.runId
       ? resolveSessionForRun(query.runId, {
@@ -178,10 +173,11 @@ export async function prepareArtifactSessionResolution(
           });
           const visibilityDenied = Boolean(
             target &&
-            createSessionListEntryFilter({ client, cfg: currentConfig })?.(
-              target.storeKey,
-              target.entry,
-            ) === false,
+            createSessionListEntryFilter({
+              client,
+              cfg: currentConfig,
+              membership: current.membership,
+            })?.(target.storeKey, target.entry) === false,
           );
           if (!error && !visibilityDenied) {
             return current;

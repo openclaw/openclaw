@@ -98,13 +98,15 @@ export class SessionOrganizer {
     return operations.patchSession(this.deps, session, patch, scope, options);
   };
 
-  archiveSessionWithUndo(session: SidebarRecentSession): Promise<void> {
+  /** `exitFrom` is the sidebar row to animate out once the archive is applied. */
+  archiveSessionWithUndo(session: SidebarRecentSession, exitFrom?: HTMLElement): Promise<void> {
     return this.runOperation(
       (operations, scope) =>
         operations.archiveSessionWithUndo(
           this.deps,
           { ...session, hasArchiveDescendants: sidebarSessionHasArchiveDescendants(session) },
           scope,
+          exitFrom,
         ),
       true,
     );
@@ -413,15 +415,13 @@ export class SessionOrganizer {
     if (sectionId === "pinned") {
       return true;
     }
-    if (
-      this.deps.sessionsGrouping === "category" &&
-      (sectionId === "ungrouped" || Boolean(category))
-    ) {
+    // Match the rendered sections, including the saved Person preference fallback.
+    const grouping = this.deps.effectiveSessionsGrouping();
+    if (grouping === "category" && (sectionId === "ungrouped" || Boolean(category))) {
       return true;
     }
     return (
-      sectionId === "groups" &&
-      Boolean(session && categoryClearReturnsToGroups(session, this.deps.sessionsGrouping))
+      sectionId === "groups" && Boolean(session && categoryClearReturnsToGroups(session, grouping))
     );
   }
 

@@ -28,6 +28,9 @@ openclaw-board-view {
 .board-view {
   --board-line: color-mix(in srgb, var(--border) 84%, transparent);
   --board-surface: color-mix(in srgb, var(--panel) 94%, transparent);
+  /* Lets the narrow phone block below restyle .board-grid. Cards still query the
+     grid, their nearest container, whose content box has the same width. */
+  container-type: inline-size;
   display: grid;
   gap: 12px;
   min-width: 0;
@@ -37,7 +40,7 @@ openclaw-board-view {
 .board-view__error {
   background: color-mix(in srgb, var(--danger) 8%, var(--panel));
   border: 1px solid color-mix(in srgb, var(--danger) 42%, transparent);
-  border-radius: 9px;
+  border-radius: var(--radius-md);
   color: var(--danger);
   font-size: 12px;
   padding: 9px 12px;
@@ -112,7 +115,7 @@ openclaw-board-view {
   align-items: center;
   background: transparent;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   color: var(--muted);
   cursor: var(--cursor-action);
   display: inline-flex;
@@ -133,12 +136,7 @@ openclaw-board-view {
 
 .board-tabs__overflow-panel,
 .board-widget__menu-panel {
-  --oc-overlay-distance: 0px;
-
   min-width: 190px;
-  border: 1px solid var(--overlay-border);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
 }
 
 .board-widget__menu-panel {
@@ -172,6 +170,26 @@ openclaw-board-widget-cell[hidden] {
     grid-area: auto / 1 / span var(--board-widget-rows) / -1 !important;
     order: var(--board-widget-order);
   }
+
+  /* Phone layout only (PHONE_LAYOUT_QUERY): reports and progress cards show all
+     their content, so the board is the only thing a swipe scrolls. Desktop keeps
+     saved heights everywhere, narrow side panels included, so content may
+     scroll inside a card the user sized. Saved rows stay the minimum height. */
+  @media (max-width: 768px),
+    (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+    .board-grid {
+      grid-auto-rows: minmax(56px, auto);
+    }
+
+    /* Other cards keep their saved height: their content never grows the rows. */
+    .board-widget__body {
+      contain: size;
+    }
+
+    .board-widget--fit-content > .board-widget__body {
+      contain: content;
+    }
+  }
 }
 
 .board-grid__append-zone {
@@ -191,7 +209,7 @@ openclaw-board-widget-cell {
 .board-widget {
   background: var(--board-surface);
   border: 1px solid var(--board-line);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 1px 1px rgb(0 0 0 / 12%);
   display: grid;
   grid-template-rows: 38px minmax(0, 1fr);
@@ -218,6 +236,10 @@ openclaw-board-widget-cell {
   z-index: 8;
 }
 
+.board-widget__chrome {
+  display: contents;
+}
+
 .board-widget__bar {
   align-items: center;
   background: color-mix(in srgb, var(--text) 3%, transparent);
@@ -238,7 +260,7 @@ openclaw-board-widget-cell {
 
 .board-widget__drag-handle {
   align-items: center;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   cursor: grab;
   display: inline-flex;
   font-size: 17px;
@@ -286,32 +308,14 @@ openclaw-board-widget-cell {
   width: 27px;
 }
 
-.board-widget__menu-heading {
-  color: var(--muted);
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  padding: 7px 9px 3px;
-  text-transform: uppercase;
-}
-
 .board-widget__menu-empty {
   color: var(--muted);
   font-size: 11px;
   padding: 5px 9px;
 }
 
-.board-widget__menu .oc-menu-item {
-  font-size: 11px;
-  min-height: var(--menu-item-height);
-}
-
 .board-widget__menu .oc-menu-item__check {
   color: inherit;
-}
-
-.board-widget__menu-separator {
-  border-top: 1px solid var(--board-line);
-  margin: 5px 3px;
 }
 
 .board-widget__menu-danger,
@@ -332,7 +336,6 @@ openclaw-board-widget-cell {
 }
 
 .board-widget__body--card {
-  box-sizing: border-box;
   padding: var(--widget-frame-inset);
 }
 
@@ -340,8 +343,17 @@ openclaw-board-widget-cell {
   overflow: auto;
 }
 
+/* Fixed grid tracks reserve the card, including chrome, before it enters view. */
+.board-widget--fixed-report {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 0px;
+}
+
+.board-widget__body--fixed-report {
+  contain: strict;
+}
+
 .board-widget__body--scrollable .board-widget__grant {
-  box-sizing: border-box;
   height: auto;
   min-height: 100%;
 }
@@ -474,13 +486,20 @@ openclaw-board-widget-cell {
 }
 
 @media (hover: hover) and (pointer: fine) {
-  /* Focus keeps keyboard actions reachable; menu-open and dragging keep chrome
-     pinned when interaction leaves the card bounds. Inline-size containment
-     lets the pill drop to its minimal form on narrow cards; grid tracks set
-     the card's width, so containment changes no layout. */
+  /* Keep responsive chrome's query container separate from report content.
+     WebKit otherwise recalculates every report descendant on board resize. */
   .board-widget {
-    container-type: inline-size;
     grid-template-rows: minmax(0, 1fr);
+    isolation: isolate;
+  }
+
+  .board-widget__chrome {
+    container-type: inline-size;
+    display: block;
+    inset: 0;
+    pointer-events: none;
+    position: absolute;
+    z-index: 5;
   }
 
   /* Fine pointers center a compact overlay; coarse pointers keep the base 38px
@@ -498,6 +517,7 @@ openclaw-board-widget-cell {
     max-width: calc(100% - 176px);
     opacity: 0;
     padding: 0 5px;
+    pointer-events: auto;
     position: absolute;
     top: 7px;
     transform: translateX(-50%);
@@ -569,8 +589,19 @@ openclaw-board-widget-cell {
   .board-widget:focus-within .board-widget__resize-handle,
   .board-widget--dragging .board-widget__bar,
   .board-widget--dragging .board-widget__resize-handle,
-  .board-widget:has(.board-widget__menu-trigger[aria-expanded="true"]) .board-widget__bar,
-  .board-widget:has(.board-widget__menu-trigger[aria-expanded="true"])
+  .board-widget:has(
+      > :where(.board-widget__chrome)
+        > :where(.board-widget__bar)
+        > :where(.board-widget__menu)
+        > .board-widget__menu-trigger[aria-expanded="true"]
+    )
+    .board-widget__bar,
+  .board-widget:has(
+      > :where(.board-widget__chrome)
+        > :where(.board-widget__bar)
+        > :where(.board-widget__menu)
+        > .board-widget__menu-trigger[aria-expanded="true"]
+    )
     .board-widget__resize-handle {
     opacity: 1;
     transition-delay: 0s;
@@ -597,7 +628,13 @@ openclaw-board-widget-cell {
   .board-widget:hover .board-widget__grant-dot,
   .board-widget:focus-within .board-widget__grant-dot,
   .board-widget--dragging .board-widget__grant-dot,
-  .board-widget:has(.board-widget__menu-trigger[aria-expanded="true"]) .board-widget__grant-dot {
+  .board-widget:has(
+      > :where(.board-widget__chrome)
+        > :where(.board-widget__bar)
+        > :where(.board-widget__menu)
+        > .board-widget__menu-trigger[aria-expanded="true"]
+    )
+    .board-widget__grant-dot {
     opacity: 0;
   }
 
@@ -613,12 +650,17 @@ openclaw-board-widget-cell {
 
   .board-widget--frameless:hover,
   .board-widget--frameless:focus-within,
-  .board-widget--frameless:has(.board-widget__menu-trigger[aria-expanded="true"]) {
+  .board-widget--frameless:has(
+    > :where(.board-widget__chrome)
+      > :where(.board-widget__bar)
+      > :where(.board-widget__menu)
+      > .board-widget__menu-trigger[aria-expanded="true"]
+  ) {
     border-color: var(--board-line);
   }
 
   .board-widget__body {
-    border-radius: 11px;
+    border-radius: var(--radius-md);
   }
 }
 
@@ -653,8 +695,8 @@ openclaw-board-widget-cell {
   padding-left: 16px;
 }
 
-/* A lone full-width widget stays a page when its main region shares space with
-   Chat. Side dashboards keep their regular grid sizing and widget chrome. */
+/* A lone full-width widget loses its card shell in the main/focused region.
+   Side dashboards retain their regular spacing and widget chrome. */
 :is(
     .sidebar-region--expanded,
     .sidebar-region:not(.sidebar-region--open),
@@ -668,7 +710,7 @@ openclaw-board-widget-cell {
     padding: 0;
   }
 
-  .board-tabs {
+  > .board-view > .board-tabs {
     padding-left: 16px;
   }
 
@@ -688,28 +730,32 @@ openclaw-board-widget-cell {
       border-radius: 0;
     }
   }
+}
 
-  &:has(> .board-view--page) {
+/* A page owns its document scroll in side panels too. Keeping the stored row
+   span here adds an outer board scrollport around the already scrollable frame.
+   Ordinary multi-widget grids continue to use their saved row sizes. */
+.board-document__content > openclaw-board-view:has(> .board-view--page),
+.board-session-surface__board > openclaw-board-view:has(> .board-view--page) {
+  height: 100%;
+  overflow: hidden;
+
+  > .board-view {
+    display: flex;
+    flex-direction: column;
     height: 100%;
-    overflow: hidden;
+    min-height: 0;
+  }
 
-    > .board-view {
-      display: flex;
-      flex-direction: column;
-      height: 100%;
-      min-height: 0;
-    }
+  > .board-view > .board-grid {
+    flex: 1 1 0;
+    min-height: 0;
+    grid-auto-rows: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
 
-    .board-grid {
-      flex: 1 1 0;
-      min-height: 0;
-      grid-auto-rows: minmax(0, 1fr);
-      grid-template-rows: minmax(0, 1fr);
-    }
-
-    .board-widget:not(.board-widget--dragging) {
-      grid-area: 1 / 1 / -1 / -1 !important;
-    }
+  .board-widget:not(.board-widget--dragging) {
+    grid-area: 1 / 1 / -1 / -1 !important;
   }
 }
 
@@ -827,7 +873,7 @@ openclaw-board-widget-cell {
 .board-empty {
   align-items: center;
   border: 1px dashed color-mix(in srgb, var(--muted) 38%, transparent);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   color: var(--muted);
   display: flex;
   flex-direction: column;

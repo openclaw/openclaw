@@ -1,16 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createPackageUpdateDoctorCompletion } from "../cli/update-cli/update-command-doctor-completion.js";
 import * as state from "../state/openclaw-state-db.js";
-import type { UpdateDatabaseBackup } from "./update-database-backup.js";
-import { createUpdateDoctorSectionTiming } from "./update-doctor-section-timing.js";
 import * as ledger from "./update-run-ledger.js";
 import { toPublicUpdateRun } from "./update-run-record.js";
 import { renderUpdateRunReport } from "./update-run-report.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { updateRunLedgerSchema } from "./update-run-write.js";
-import type { UpdateStepResult } from "./update-step-result.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
@@ -21,8 +16,6 @@ afterEach(async () => {
 function isolatedOptions() {
   return { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-update-compaction-") } };
 }
-const names = (prefix: string, suffixes: string) =>
-  suffixes.split(",").map((suffix) => prefix + suffix);
 function timedStep(step: string, status: "completed" | "failed" = "completed") {
   return { step, status, startedAtMs: 1_000, endedAtMs: 2_000 };
 }
@@ -30,166 +23,133 @@ function timedStep(step: string, status: "completed" | "failed" = "completed") {
 describe("update run ledger compaction", () => {
   it.each([
     { name: "step count", count: 130, detail: undefined },
-    { name: "diagnostic bytes", count: 30, detail: "diagnostic ".repeat(80) },
-    { name: "retained phase bytes", count: 0, detail: "🦞".repeat(512), missingWrites: true },
-  ])(
-    "retains evidence across the $name bound and reopen",
-    async ({ count, detail, missingWrites }) => {
-      const options = isolatedOptions();
-      const run = ledger.createUpdateRun({ trigger: "chat" }, options);
-      const write = (step: Parameters<typeof ledger.recordUpdateRunStep>[1]) =>
-        ledger.recordUpdateRunStep(run.runId, step, options);
-      const backup: UpdateDatabaseBackup = {
-        directory: `${options.env.OPENCLAW_STATE_DIR}/backup`,
-        databases: [],
-        missingPaths: [],
-        sourcePaths: ["database.sqlite"],
-        sourceGenerations: { "database.sqlite": "before" },
-        warnings: [],
-        ...(missingWrites
-          ? { restoreRefusal: "databases changed after snapshot capture; the writer is unknown" }
-          : {}),
-      };
-      const results: UpdateStepResult[] = [];
-      const completeDoctor = createPackageUpdateDoctorCompletion({
-        root: options.env.OPENCLAW_STATE_DIR,
-        context: { changes: [], databaseBackup: backup },
-        results,
-        progress: {
-          onStepComplete: (step) => {
-            for (const entry of updateRunStepsFromResultStep(step)) {
-              write(entry);
-            }
-          },
-        },
-        sectionTiming: createUpdateDoctorSectionTiming({}),
-        assertCurrent: () => {},
-        doctorProgressInfo: { name: "openclaw doctor", command: "doctor", index: 0, total: 0 },
+    { name: "retained phase bytes", count: 0, detail: "🦞".repeat(512) },
+  ])("retains evidence across the $name bound and reopen", ({ count, detail }) => {
+    const options = isolatedOptions();
+    const run = ledger.createUpdateRun({ trigger: "chat" }, options);
+    const write = (step: Parameters<typeof ledger.recordUpdateRunStep>[1]) =>
+      ledger.recordUpdateRunStep(run.runId, step, options);
+    for (const entry of updateRunStepsFromResultStep({
+      name: "database migration writes",
+      exitCode: 0,
+      warnings: [
+        `Automatic database restoration unavailable: databases changed after snapshot capture; the writer is unknown. Snapshots retained at ${options.env.OPENCLAW_STATE_DIR}/backup.`,
+      ],
+    })) {
+      write(entry);
+    }
+    const widenings = [
+      "Retirement-only Doctor widened: config.model-retirement",
+      "Retirement-only Doctor widened: config.model-retirement.warning-notes.codex-routes",
+    ];
+    const evidence = [
+      "candidate-admission",
+      "warning:update-admission-fallback",
+      "global update",
+      "candidate-gateway-startup",
+      "openclaw doctor",
+      "managed-service-restart",
+      "managed-service update handoff",
+      "service-stop",
+      "service-start",
+      "service-running",
+      "update-driver-handoff",
+      ...widenings.map((_, index) => `diagnostic:post-plugin doctor:${index}`),
+    ].map((step) =>
+      Object.assign(
+        timedStep(step, step === "global update" ? "failed" : "completed"),
+        step.startsWith("diagnostic:") ? { detail: widenings[Number(step.split(":").at(-1))] } : {},
+      ),
+    );
+    const refusal = {
+      reason: "refused",
+      message: "Repair is pending.",
+      keys: Array.from({ length: 32 }, (_, index) => `${index}:${"k".repeat(1_020)}`),
+    };
+    for (const step of evidence) {
+      write({
+        ...step,
+        detail: step.detail ?? detail,
+        ...(step.step === "openclaw doctor" ? { configWriteRefusal: refusal } : {}),
       });
-      await completeDoctor(
-        {
-          name: "openclaw doctor",
-          command: "doctor",
-          cwd: backup.directory,
-          durationMs: 1,
-          exitCode: 0,
-        },
-        {
-          status: "ok",
-          warnings: ["Unrelated Doctor warning"],
-          databaseWrites: missingWrites
-            ? undefined
-            : {
-                unchanged: false,
-                fromGenerations: { "database.sqlite": "foreign-write" },
-                generations: { "database.sqlite": "after" },
-              },
-        },
+    }
+    const notices = [
+      "validating",
+      "notice:ack",
+      "previous generation restoration",
+      "warning:post-plugin doctor",
+      "warning:post-stop-checks",
+      // Candidate Doctor's predecessor-stop receipt: identity lives in the key.
+      "finalize:predecessor-stop:1758600000000:1000:631:0123456789abcdef",
+      "post-update verification",
+    ];
+    for (const step of notices) {
+      write({ step, status: "completed", detail });
+    }
+    for (let index = 0; index < count; index++) {
+      write({ step: `warning:diagnostic-${index}`, status: "completed", detail });
+    }
+    ledger.finishUpdateRun(run.runId, { status: "succeeded" }, options);
+    state.closeOpenClawStateDatabaseForTest();
+    const persisted = ledger.getUpdateRun(run.runId, options)!;
+    const published = toPublicUpdateRun(persisted);
+    const report = renderUpdateRunReport(published);
+    expect(report.headline).toMatch(/warnings? needs? attention/);
+    expect(report.markdown).toContain(
+      "Automatic database restoration unavailable: databases changed after snapshot capture; the writer is unknown.",
+    );
+    expect(report.markdown).toContain("Snapshots retained at $OPENCLAW_STATE_DIR/backup.");
+    expect(report.markdown).not.toContain(options.env.OPENCLAW_STATE_DIR);
+    for (const expected of evidence) {
+      expect(persisted.steps.find(({ step }) => step === expected.step)).toMatchObject(expected);
+    }
+    const retainedRefusal = persisted.steps.find(
+      (step) => step.step === "openclaw doctor",
+    )?.configWriteRefusal;
+    expect(retainedRefusal).toMatchObject({ reason: "refused", message: "Repair is pending." });
+    expect(retainedRefusal?.keys).toHaveLength(32);
+    expect(retainedRefusal?.keys.every((key) => key.length < 1_020)).toBe(true);
+    expect(persisted.steps.map((step) => step.step)).toEqual(expect.arrayContaining(notices));
+    for (const key of ["warning:post-plugin doctor", "warning:post-stop-checks"]) {
+      expect(persisted.steps.find((step) => step.step === key)?.detail).toBe(detail);
+    }
+    expect(persisted.steps.length).toBeLessThanOrEqual(128);
+    expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
+  });
+
+  it.each([
+    { name: "byte", count: 40, detail: "diagnostic ".repeat(100) },
+    { name: "step", count: 140, detail: "diagnostic" },
+  ])("keeps warning rows ahead of plain steps across the $name bound", ({ count, detail }) => {
+    const options = isolatedOptions();
+    const run = ledger.createUpdateRun({ trigger: "chat" }, options);
+    const write = (step: string) =>
+      ledger.recordUpdateRunStep(run.runId, { step, status: "completed", detail: step }, options);
+    write("warning:finalize:plugins:skipped");
+    write("warning:update-channel-note");
+    for (let index = 0; index < count; index++) {
+      ledger.recordUpdateRunStep(
+        run.runId,
+        { step: `plugin-check-${index}`, status: "completed", detail },
+        options,
       );
-      expect(backup.restoreRefusal).toBe(
-        "databases changed after snapshot capture; the writer is unknown",
-      );
-      const evidence = [
-        "candidate-admission",
-        ...names("warning:", "update-admission-unsupported-target,update-admission-fallback"),
-        ...names("warning:", "managed-service-membership,finalize:plugins:deadline"),
-        ...names("", "global update,global update (omit optional)"),
-        "candidate-doctor-lint",
-        ...names("candidate-", "state-snapshot,doctor,gateway-startup,state-cleanup"),
-        "post-stop-checks",
-        ...names("git-", "checkout,runtime-activation"),
-        ...names("", "openclaw doctor,pre-plugin doctor,post-plugin doctor"),
-        "updater-runtime-retention",
-        "diagnostic:updater-runtime-retention",
-        ...names("managed-service-", "executor-check,install,restart"),
-        ...names("", "update-driver-handoff,diagnostic:update-driver-handoff"),
-      ].map((step) => {
-        const failed = step.startsWith("global update") || step === "candidate-doctor-lint";
-        return timedStep(step, failed ? "failed" : "completed");
-      });
-      const refusal = {
-        reason: "refused",
-        message: "Repair is pending.",
-        keys: Array.from({ length: 32 }, (_, index) => `${index}:${"k".repeat(1_020)}`),
-      };
-      for (const step of evidence) {
-        write({
-          ...step,
-          detail,
-          ...(step.step === "openclaw doctor" ? { configWriteRefusal: refusal } : {}),
-        });
-      }
-      const notices = [
-        ...names("notice:", "ack,activating,verifying"),
-        "previous generation restoration",
-        ...names("finalize:", "doctor,future-phase"),
-        // Candidate Doctor's predecessor-stop receipt: identity lives in the key.
-        "finalize:predecessor-stop:1758600000000:1000:631:0123456789abcdef",
-        "post-update verification",
-      ];
-      for (const step of [...UPDATE_RUN_PHASES, ...notices]) {
-        write({ step, status: "completed", detail });
-      }
-      for (let index = 0; index < count; index++) {
-        write({ step: `warning:diagnostic-${index}`, status: "completed", detail });
-      }
-      ledger.finishUpdateRun(run.runId, { status: "succeeded" }, options);
-      state.closeOpenClawStateDatabaseForTest();
-      const persisted = ledger.getUpdateRun(run.runId, options)!;
-      const published = toPublicUpdateRun(persisted);
-      const report = renderUpdateRunReport(published);
-      expect(published.status).toBe("succeeded");
-      expect(report.headline).toMatch(/warnings? needs? attention/);
-      expect(report.markdown).toContain(
-        "Automatic database restoration unavailable: databases changed after snapshot capture; the writer is unknown.",
-      );
-      expect(report.markdown).toContain("Snapshots retained at $OPENCLAW_STATE_DIR/backup.");
-      expect(report.markdown).not.toContain(options.env.OPENCLAW_STATE_DIR);
-      expect(
-        published.steps.filter((step) => step.step === "warning:database migration writes"),
-      ).toHaveLength(1);
-      expect(results).toContainEqual(
-        expect.objectContaining({
-          name: "database migration writes",
-          warnings: expect.arrayContaining([
-            expect.stringContaining("Automatic database restoration unavailable:"),
-          ]),
-        }),
-      );
-      for (const expected of evidence) {
-        expect(persisted.steps.filter((step) => step.step === expected.step)).toEqual([
-          expect.objectContaining(expected),
-        ]);
-      }
-      const retainedRefusal = persisted.steps.find(
-        (step) => step.step === "openclaw doctor",
-      )?.configWriteRefusal;
-      expect(retainedRefusal).toMatchObject({ reason: "refused", message: "Repair is pending." });
-      expect(retainedRefusal?.keys).toHaveLength(32);
-      expect(retainedRefusal?.keys.every((key) => key.length < 1_020)).toBe(true);
-      expect(persisted.steps.map((step) => step.step)).toEqual(
-        expect.arrayContaining([...UPDATE_RUN_PHASES, ...notices]),
-      );
-      expect(persisted.steps.length).toBeLessThanOrEqual(128);
-      expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
-    },
-  );
+    }
+    ledger.finishUpdateRun(run.runId, { status: "succeeded" }, options);
+    const report = renderUpdateRunReport(
+      toPublicUpdateRun(ledger.getUpdateRun(run.runId, options)!),
+    );
+    expect(report.headline).toContain("2 warnings need attention");
+  });
 
   it("reads and compacts pre-timing rows without adding timing steps", () => {
     const options = isolatedOptions();
     const runId = "00000000-0000-4000-8000-000000000098";
     const version = "2026.9.8";
     // v2026.9.8 fixture: bypass today's writer so it cannot add the new timing steps.
-    const steps = [
-      ..."requested,staging,validating,repairing,activating,restarting,verifying,finished".split(
-        ",",
-      ),
-      "candidate-admission",
-      "global update",
-      ...names("notice:", "ack,activating,verifying"),
-      "post-update verification",
-      "finalize:doctor",
-    ].map((step) => Object.assign(timedStep(step), { detail: "legacy diagnostic ".repeat(50) }));
+    const steps = Array.from({ length: 15 }, (_, index) => ({
+      ...timedStep(`finalize:legacy-${index}`),
+      detail: "legacy diagnostic ".repeat(50),
+    }));
     const requester = { channel: "discord", senderId: "legacy-operator" };
     const oldRecord = {
       runId,

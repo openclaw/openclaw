@@ -140,30 +140,22 @@ describe("setupPluginConfig", () => {
   });
 
   it.each([
-    {
-      name: "an existing array through a dotted index",
-      field: "accounts.0.token",
-      existing: { accounts: [{}] },
-      expected: configuredAccount,
-    },
-    {
-      name: "a missing schema-declared array through a dotted index",
-      field: "accounts.0.token",
-      schema: objectSchema({ accounts: { type: "array", items: tokenSchema } }),
-      expected: configuredAccount,
-    },
-    {
-      name: "a numeric record key through a dotted path",
-      field: "accounts.0.token",
-      schema: objectSchema({ accounts: objectSchema({ "0": tokenSchema }) }),
-      expected: { accounts: { "0": { token: "configured" } } },
-    },
-    {
-      name: "an explicit bracketed array index without a schema",
-      field: "accounts[0].token",
-      expected: configuredAccount,
-    },
-  ])("writes $name", async ({ field, existing, schema, expected }) => {
+    ["existing array", { accounts: [{}] }, undefined, configuredAccount],
+    [
+      "schema array",
+      undefined,
+      objectSchema({ accounts: { type: "array", items: tokenSchema } }),
+      configuredAccount,
+    ],
+    [
+      "numeric record",
+      undefined,
+      objectSchema({ accounts: objectSchema({ "0": tokenSchema }) }),
+      { accounts: { "0": { token: "configured" } } },
+    ],
+    ["bracket index", undefined, undefined, configuredAccount],
+  ] as const)("writes a nested token in %s", async (kind, existing, schema, expected) => {
+    const field = kind === "bracket index" ? "accounts[0].token" : "accounts.0.token";
     manifest({ [field]: { label: "Token" } }, schema);
     const result = await configure(pluginConfig(existing));
     expect(result.plugins?.entries?.fixture?.config).toEqual(expected);

@@ -1,3 +1,4 @@
+import { serialize } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
@@ -224,28 +225,51 @@ it("reads current membership at staging admission and rejects a replaced session
     expect(mutate).toThrow("no longer owns the admitted session");
   }));
 
-it("stages and settles user turns without caller-thread SQL", () =>
-  withFixture(async ({ database, stage, pending, rows }) => {
+it("stages and settles user turns without caller-thread SQL or duplicate receipt replies", () =>
+  withFixture(async ({ database, pending, rows }) => {
     const recorder = makeRecorder("completed", database.path, true);
     let cancelled: SessionPendingInputReceipt | undefined;
+    const replyBytes = new Map<string, number[]>();
+    const replies = interceptPendingInputWorker((worker) => ({
+      execute: async (command, options) => {
+        const result = await worker.execute(command, options);
+        if (command.type === "session.pendingInputs.mutate" && isRecord(command.input)) {
+          const kind = String(command.input.kind);
+          replyBytes.set(kind, [...(replyBytes.get(kind) ?? []), serialize(result).byteLength]);
+        }
+        return result;
+      },
+    }));
     const sql = observeHostDataSql();
     try {
       expect(await recorder.stageApproved?.({ runId: "completed", assertCurrent() {} })).toBe(true);
       expect(sql.queries).toEqual([]);
-      cancelled = await stage("cancelled");
+      cancelled = expectDefined(
+        await stageSessionPendingInput(scope, {
+          runId: "cancelled",
+          message: { ...message("cancelled"), content: "Synthetic input. ".repeat(2048) },
+          assertCurrent() {},
+        }),
+        "Expected accepted input custody",
+      );
       const outcome = ok();
       expect(await completeUserTurnProcessing(recorder, outcome)).toEqual(outcome);
       expect(recorder.getProcessingCompletion?.()).toEqual(outcome);
-      recorder.finishPendingInput?.("interrupted");
-      cancelled.finish("cancelled");
+      recorder.finishPendingInput?.("interrupted", "failed");
+      cancelled.finish("cancelled", "failed");
       expect(() => cancelled?.run(() => {})).toThrow(SessionPendingInputCustodyError);
       await Promise.all([recorder.waitForPendingInputSettlement?.(), cancelled.settled?.()]);
       expect(sql.queries).toEqual([]);
+      expect([...replyBytes.keys()].toSorted()).toEqual(["complete", "finish", "stage"]);
+      for (const sizes of replyBytes.values()) {
+        expect(Math.max(...sizes)).toBeLessThan(32);
+      }
     } finally {
       sql.restore();
-      recorder.finishPendingInput?.("interrupted");
-      cancelled?.finish("interrupted");
+      recorder.finishPendingInput?.("interrupted", "failed");
+      cancelled?.finish("interrupted", "failed");
       await Promise.all([recorder.waitForPendingInputSettlement?.(), cancelled?.settled?.()]);
+      replies.mockRestore();
     }
     expect(pending()).toMatchObject([{ run_id: "cancelled", state: "cancelled" }]);
     expect(rows("session_input_completions", "run_id, succeeded")).toEqual([
@@ -273,7 +297,7 @@ it.each(["cancelled", "consumed", "failed"] as const)(
         }
       });
       try {
-        recorder.finishPendingInput?.("cancelled");
+        recorder.finishPendingInput?.("cancelled", "failed");
         expect(readWithdrawnUserTurnInputId(recorder)).toBeUndefined();
         if (result === "failed") {
           await expect(recorder.waitForPendingInputSettlement?.()).rejects.toThrow(
@@ -292,7 +316,7 @@ it.each(["cancelled", "consumed", "failed"] as const)(
         );
       } finally {
         spy.mockRestore();
-        recorder.finishPendingInput?.("interrupted");
+        recorder.finishPendingInput?.("interrupted", "failed");
         await Promise.allSettled([recorder.waitForPendingInputSettlement?.()]);
       }
     }),
@@ -327,7 +351,7 @@ it("retains cancellation custody while completion waits", ({ signal }) =>
         awaitGateBeforeSettlement(entered.promise, completion, "Completion skipped its worker"),
         signal,
       );
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       expect(() => receipt.run(() => {})).toThrow(SessionPendingInputCustodyError);
       expect(await withinTest(listSessionPendingInputs(scope), signal)).toMatchObject({
         items: [{ id: receipt.inputId, state: "queued" }],
@@ -341,7 +365,7 @@ it("retains cancellation custody while completion waits", ({ signal }) =>
     } finally {
       release.resolve();
       spy.mockRestore();
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       await Promise.allSettled([completion, receipt.settled?.()]);
     }
   }));
@@ -392,7 +416,7 @@ it("preserves custody errors for worker-side request-hash mismatches", () =>
       database.db
         .prepare("UPDATE session_pending_inputs SET request_hash = ? WHERE input_id = ?")
         .run(originalHash ?? null, receipt.inputId);
-      receipt.finish("interrupted");
+      receipt.finish("interrupted", "failed");
       await expect(receipt.settled?.()).rejects.toBeInstanceOf(SessionPendingInputCustodyError);
     }
   }));
@@ -413,7 +437,7 @@ it("refuses completion after a lifecycle change during the worker wait", () =>
       expect(completions()).toEqual([]);
     } finally {
       spy.mockRestore();
-      receipt.finish("interrupted");
+      receipt.finish("interrupted", "failed");
       await expect(receipt.settled?.()).rejects.toThrow();
     }
   }));
@@ -485,7 +509,7 @@ it.each(["lost reply", "unknown settlement", "independent committed write"] as c
       } finally {
         restoreSettlement?.();
         spy.mockRestore();
-        receipt?.finish("interrupted");
+        receipt?.finish("interrupted", "failed");
         await receipt?.settled?.();
       }
     }),

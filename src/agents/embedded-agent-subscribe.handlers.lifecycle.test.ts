@@ -87,7 +87,7 @@ describe("embedded lifecycle", () => {
     expectEvent(onAgentEvent, {
       phase: "error",
       error:
-        "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
+        "Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.",
       errorObservation: expect.objectContaining({ providerRuntimeFailureKind: "auth_html" }),
       livenessState: "blocked",
     });
@@ -257,30 +257,12 @@ describe("embedded lifecycle", () => {
   });
 
   it.each([
-    {
-      name: "ordinary voice",
-      silentExpected: false,
-      mediaUrl: "/tmp/reply.opus",
-      audioAsVoice: true,
-      delivered: true,
-    },
-    {
-      name: "silent image",
-      silentExpected: true,
-      mediaUrl: "/tmp/private.png",
-      audioAsVoice: false,
-      delivered: false,
-    },
-    {
-      name: "silent voice",
-      silentExpected: true,
-      mediaUrl: "/tmp/reply.opus",
-      audioAsVoice: true,
-      delivered: true,
-    },
-  ])(
-    "settles orphaned $name before the terminal event",
-    async ({ silentExpected, mediaUrl, audioAsVoice, delivered }) => {
+    ["ordinary voice", false, "/tmp/reply.opus", true, true],
+    ["silent image", true, "/tmp/private.png", false, false],
+    ["silent voice", true, "/tmp/reply.opus", true, true],
+  ] as const)(
+    "settles orphaned %s before the terminal event",
+    async (_name, silentExpected, mediaUrl, audioAsVoice, delivered) => {
       const onAgentEvent = vi.fn();
       const onBlockReply = vi.fn();
       const ctx = createContext(undefined, { onAgentEvent, onBlockReply });
@@ -343,7 +325,7 @@ describe("embedded lifecycle", () => {
       expectEvent(onAgentEvent, {
         phase: "error",
         error:
-          "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+          "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
         errorObservation: expect.objectContaining({ providerRuntimeFailureKind: "timeout" }),
         livenessState: "blocked",
       });

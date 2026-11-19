@@ -90,6 +90,7 @@ for (const engine of ["sqlite", "postgres"] as const) {
                         startedAt: 1_000,
                         endedAt: 2_000,
                         status: "ok",
+                        errorReason: undefined,
                         completionStatus: "succeeded",
                         deliveryState: {
                           status: "not-requested",

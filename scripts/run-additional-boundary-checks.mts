@@ -15,6 +15,7 @@ import {
   terminateManagedChild,
   waitForManagedProcessGroupExit,
 } from "./lib/managed-child-process.mts";
+import { decodeUtf8Tail } from "./lib/output-tail.mts";
 
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
@@ -185,15 +186,6 @@ export function selectChecksForShard(
 
 export function formatCommand({ command, args }: Pick<BoundaryCheck, "args" | "command">) {
   return [command, ...args].join(" ");
-}
-
-function decodeUtf8Tail(buffer: Buffer) {
-  let start = 0;
-  while (start < buffer.length && (buffer[start]! & 0b1100_0000) === 0b1000_0000) {
-    start += 1;
-  }
-  // Appends are complete JS strings; only a byte slice's leading boundary can be partial.
-  return buffer.subarray(start).toString("utf8");
 }
 
 export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {

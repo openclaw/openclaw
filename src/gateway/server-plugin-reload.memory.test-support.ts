@@ -467,3 +467,42 @@ export async function verifyGatewayMemoryWatcherRestart(
     await state.cleanup();
   }
 }
+
+export async function verifyUnchangedMemoryServiceSurvivesReload(
+  createRecoveryFixture: (
+    options: Parameters<typeof createPluginReloadRecoveryFixture>[1],
+  ) => ReturnType<typeof createPluginReloadRecoveryFixture>,
+) {
+  const config: OpenClawConfig = {
+    plugins: { allow: ["first", "sibling"], slots: { memory: "sibling" } },
+  };
+  const release = createDeferredCore();
+  const fixture = await createRecoveryFixture({
+    config,
+    abortOnCandidateStart: false,
+    register(api, owner, record) {
+      if (owner !== "sibling") {
+        return;
+      }
+      record.kind = "memory";
+      record.memorySlotSelected = true;
+      api.registerMemoryCapability({
+        providerRuntime: { open: async () => ({ provider: null }) },
+      });
+    },
+  });
+  const runtime = fixture.previousRegistry.memoryCapabilities[0]?.capability.providerRuntime;
+  assert(runtime);
+  // Work admitted before the reload must finish inside the same memory service lifetime.
+  const inFlight = release.promise.then(() => fixture.siblingStop.mock.calls.length);
+  await expect(fixture.reload(config, ["first"])).resolves.toMatchObject({
+    runtime: { pluginIds: ["first"] },
+  });
+  release.resolve();
+  await expect(inFlight, "Unchanged memory service was stopped").resolves.toBe(0);
+  expect(fixture.registryOwner.registry.memoryCapabilities[0]?.capability.providerRuntime).toBe(
+    runtime,
+  );
+  expect(fixture.firstStop).toHaveBeenCalledOnce();
+  expect(fixture.siblingStart).toHaveBeenCalledOnce();
+}

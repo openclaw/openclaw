@@ -9,7 +9,6 @@ import type {
   MemoryCorpusSupplementRegistration,
   MemoryFlushFilePlanDraft,
   MemoryFlushToolsPlan,
-  MemoryLearnGuidanceBuilder,
   MemoryPluginCapability,
   MemoryPluginCapabilityRegistration,
   MemoryProviderFlushPlanResolver,
@@ -39,7 +38,6 @@ export type {
   MemoryFlushPlan,
   MemoryFlushPlanResolver,
   MemoryFlushToolsPlan,
-  MemoryLearnGuidanceBuilder,
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,
   MemoryPluginPublicArtifactsProvider,
@@ -171,21 +169,6 @@ export function getMemoryCapabilityRegistration(): MemoryPluginCapabilityRegistr
     ? {
         pluginId: capability.pluginId,
         capability: { ...capability.capability },
-      }
-    : undefined;
-}
-
-/** The selected memory provider's /learn contribution, when it declares one. */
-export function getMemoryLearnContribution():
-  | { pluginId: string; toolNames: readonly string[]; buildGuidance: MemoryLearnGuidanceBuilder }
-  | undefined {
-  const registration = getMemoryCapability();
-  const capability = registration?.capability;
-  return registration && capability?.learnToolNames?.length && capability.learnGuidanceBuilder
-    ? {
-        pluginId: registration.pluginId,
-        toolNames: capability.learnToolNames,
-        buildGuidance: capability.learnGuidanceBuilder,
       }
     : undefined;
 }
@@ -322,7 +305,8 @@ function snapshotMemoryPromptContext(
   params: MemoryPromptSectionParams,
 ): PreparedMemoryPromptSection["context"] {
   return Object.freeze({
-    availableTools: Object.freeze([...params.availableTools].toSorted()),
+    // oxlint-disable-next-line unicorn/no-array-sort -- The spread already owns this array.
+    availableTools: Object.freeze([...params.availableTools].sort()),
     citationsMode: params.citationsMode,
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
@@ -356,9 +340,8 @@ export async function prepareMemoryPromptSection(
   const synchronous = buildSynchronousMemoryPromptSection(
     cloneMemoryPromptSectionParams(runParams),
   );
-  const preparationRegistrations = [...requireActivePluginRegistry().memoryPromptPreparations];
   const preparedSupplements = await Promise.all(
-    preparationRegistrations.map(async (registration) => ({
+    requireActivePluginRegistry().memoryPromptPreparations.map(async (registration) => ({
       pluginId: registration.pluginId,
       lines: filterStringEntries(
         await registration.prepare(cloneMemoryPromptSectionParams(runParams)),
@@ -368,7 +351,8 @@ export async function prepareMemoryPromptSection(
   const lines = Object.freeze([
     ...synchronous.primary,
     ...[...synchronous.supplements, ...preparedSupplements]
-      .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId))
+      // oxlint-disable-next-line unicorn/no-array-sort -- Sort the fresh merged array without copying it again.
+      .sort((left, right) => left.pluginId.localeCompare(right.pluginId))
       .flatMap((registration) => registration.lines),
   ]);
   const prepared = Object.freeze({

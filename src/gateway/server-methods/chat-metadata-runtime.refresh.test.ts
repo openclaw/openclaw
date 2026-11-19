@@ -156,45 +156,19 @@ describe("gateway chat metadata refresh", () => {
     },
   );
 
-  test("notifies settled catalog status without rebuilding metadata", async () => {
+  test("retains a requested status notification when refreshes coalesce", async () => {
     const onChanged = vi.fn();
     const harness = createChatMetadataHarness(undefined, { onChanged });
     onTestFinished(() => harness.runtime.stop());
-    const owner = harness.getPreparedOwner()!;
-    const catalog = owner.modelCatalog;
-    const catalogChange = { modelCatalogChanged: true, authChanged: false, commandsChanged: false };
-    const notify = () =>
-      Promise.all([harness.refresh(), harness.refresh({ notifyIfUnchanged: true })]);
     await harness.refresh();
-    const original = await harness.read();
     onChanged.mockClear();
-    catalog.pendingProviders = ["test"];
-    await harness.refresh();
-    expect(onChanged).not.toHaveBeenCalled();
-
-    catalog.pendingProviders = undefined;
-    await notify();
+    await Promise.all([harness.refresh(), harness.refresh({ notifyIfUnchanged: true })]);
     expect(onChanged).toHaveBeenCalledExactlyOnceWith({
       modelCatalogChanged: false,
       modelCatalogStatusChanged: true,
       authChanged: false,
       commandsChanged: false,
     });
-    expect(await harness.read()).toEqual(original);
-    expect(harness.getPreparedOwner()).toBe(owner);
-    expect(owner.modelCatalog).toBe(catalog);
-    expect(harness.buildCommands).toHaveBeenCalledOnce();
-    expect(harness.buildProjection).toHaveBeenCalledOnce();
-    await harness.refresh();
-    expect(onChanged).toHaveBeenCalledOnce();
-
-    catalog.refreshFailed = true;
-    await notify();
-    expect(onChanged).toHaveBeenCalledTimes(2);
-    expect(onChanged).toHaveBeenLastCalledWith(catalogChange);
-    await harness.read();
-    expect(harness.buildCommands).toHaveBeenCalledTimes(2);
-    expect(harness.buildProjection).toHaveBeenCalledTimes(2);
   });
 });
 

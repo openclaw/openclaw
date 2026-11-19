@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writeJsonFile } from "../../test/helpers/temp-repo.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   installOpenClawInternalCorePackageNativeResolver,
@@ -289,6 +290,7 @@ import Module from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { installOpenClawInternalCorePackageNativeResolver, installOpenClawPluginSdkNativeResolver } from ${JSON.stringify(resolverModuleUrl)};
+import { getPluginCache } from ${JSON.stringify(new URL("./plugin-cache.ts", resolverModuleUrl).href)};
 const { root, loaderModulePath, aliasFreeLoaderPath, aiToolSchemaPath, coreEntryPath, entryPath } = ${JSON.stringify({ root, loaderModulePath, aliasFreeLoaderPath, aiToolSchemaPath, coreEntryPath, entryPath })};
 const originalResolver = Module._resolveFilename;
 installOpenClawInternalCorePackageNativeResolver({ moduleUrl: pathToFileURL(aliasFreeLoaderPath).href });
@@ -299,6 +301,10 @@ installOpenClawPluginSdkNativeResolver({
   pluginModulePath: entryPath,
   pluginSdkResolution: "dist",
 });
+const contexts = getPluginCache().sdk.contexts;
+const contextValues = contexts.values.bind(contexts);
+let contextScans = 0;
+contexts.values = () => { contextScans += 1; return contextValues(); };
 const module = await import(pathToFileURL(entryPath).href);
 const lazy = await module.loadLazy();
 const core = await import(pathToFileURL(coreEntryPath).href);
@@ -306,23 +312,32 @@ for (const [key, entry] of [["poolSource", "index"], ["workerSource", "worker"],
   assert.equal(module.workerRuntime[key], pathToFileURL(fs.realpathSync(path.join(root, "packages", "worker-runtime", "src", entry + ".ts"))).href);
 }
 assert.equal(core.schemaSource, pathToFileURL(fs.realpathSync(aiToolSchemaPath)).href);
+assert.equal(contextScans, 0, "native imports must not scan prepared SDK contexts");
 console.log(JSON.stringify({ aliasFreeUnchanged, eager: module.eager, lazy: lazy.lazy }));
 `,
     );
 
-    // Under Bun, tsx's Node hooks redirect SDK aliases before the native plugin can resolve them.
-    const probeArgs = process.versions.bun ? [probePath] : ["--import", "tsx", probePath];
-    const result = spawnSync(process.execPath, probeArgs, {
-      cwd: process.cwd(),
-      encoding: "utf8",
-    });
-    fs.rmSync(root, { recursive: true, force: true });
-    expect(result).toMatchObject({ stderr: "", status: 0 });
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      aliasFreeUnchanged: true,
-      eager: "adapter",
-      lazy: "late-adapter",
-    });
+    try {
+      for (const runtime of new Set([process.execPath, resolveTestNodeExecPath()])) {
+        // Exercise Node hooks even when the test runner uses Bun's separate resolver.
+        const probeArgs =
+          process.versions.bun && runtime === process.execPath
+            ? [probePath]
+            : ["--import", pathToFileURL(path.resolve("scripts/tsx.mjs")).href, probePath];
+        const result = spawnSync(runtime, probeArgs, {
+          cwd: process.cwd(),
+          encoding: "utf8",
+        });
+        expect(result).toMatchObject({ stderr: "", status: 0 });
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          aliasFreeUnchanged: true,
+          eager: "adapter",
+          lazy: "late-adapter",
+        });
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("resolves internal core packages only for OpenClaw-owned source parents", () => {

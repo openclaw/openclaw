@@ -3,13 +3,19 @@ import { expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { i18n } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { createInspectResult, createPlugin, createResult } from "./plugins-page.test-support.ts";
+import {
+  createInspectResult,
+  createPlugin,
+  createPluginSettingsDetailProps,
+  createResult,
+} from "./plugins-page.test-support.ts";
 import {
   renderPluginSettingsDetail as PluginSettingsDetail,
   type DetailProps,
 } from "./settings-view.tsx";
 import "../../styles.css";
 import "../../styles/settings.css";
+import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
 
 it("retains focused lifecycle controls across settings reads and uses current mutation state", async () => {
@@ -17,46 +23,10 @@ it("retains focused lifecycle controls across settings reads and uses current mu
   await page.viewport(1440, 900);
   const onUninstall = vi.fn();
   const onSetEnabled = vi.fn();
-  const initial: DetailProps = {
-    connected: true,
-    loading: false,
-    result: createResult(createPlugin({ removable: true })),
-    error: null,
-    busy: {},
-    messages: {},
-    iconUrls: {},
-    canMutate: true,
-    mutationBlockedReason: null,
-    configBusy: false,
-    configRead: undefined,
-    configSchemaRead: undefined,
-    configSchemaLoading: false,
-    configError: null,
-    canEditConfig: true,
-    configValue: {},
-    configHints: {},
-    configUnsupportedPaths: [],
-    pluginId: "workboard",
-    inspection: null,
-    inspectionRead: { receipt: () => null, value: () => null },
-    configSchema: null,
-    hostControlsSchema: null,
-    backHref: "/settings/plugins",
-    backLabel: "Plugins",
-    tab: "readme",
-    onBack: vi.fn(),
-    onRetryInspection: vi.fn(),
-    onTabChange: vi.fn(),
-    onIconError: vi.fn(),
-    onSetEnabled,
-    onUninstall: vi.fn(),
-    onConfigPatch: vi.fn(),
-    onConfigRemove: vi.fn(),
-    onConfigReload: vi.fn(),
-    onConfigReadRetry: vi.fn(),
-    onConfigWriteRetry: vi.fn(),
-    onRefresh: vi.fn(),
-  };
+  const initial: DetailProps = createPluginSettingsDetailProps(
+    createResult(createPlugin({ removable: true })),
+    { onSetEnabled },
+  );
   let setProps!: Setter<DetailProps>;
   const { container } = mountSolid(() => {
     const [props, update] = createSignal(initial);

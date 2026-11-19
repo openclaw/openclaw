@@ -616,7 +616,7 @@ export function createModelSetup(
           activationTargetId(candidate.kind, candidate.modelRef),
         ),
       onStartAuth: (option: NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number]) => {
-        wizard.prepareSignIn(option.kind, option.label);
+        wizard.prepareSignIn(option.kind, option.label, option.brandId);
         pendingPrepareOption = null;
         state.wizardMode = "auth";
         void runWizardMutation(() =>

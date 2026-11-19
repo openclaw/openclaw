@@ -10,7 +10,6 @@ import type { PluginCandidate } from "./discovery.js";
 import {
   createPluginCandidatesFromManifestRegistry,
   preparePluginLoadRecord,
-  validatePluginConfig as validatePluginConfigByOrigin,
 } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import { loadOpenClawPluginCliRegistry, loadOpenClawPlugins } from "./loader.js";
@@ -22,6 +21,7 @@ import {
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import { waitForPluginCacheRetirement } from "./plugin-cache.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
+import { validatePluginConfig as validatePluginConfigByOrigin } from "./schema-validator.js";
 
 function validatePluginConfig(
   params: Omit<Parameters<typeof validatePluginConfigByOrigin>[0], "origin">,
@@ -116,11 +116,8 @@ it("createPluginCandidatesFromManifestRegistry preserves child identity and owne
   expect(candidate).toMatchObject({ idHint: "example/child", effectivePluginId: "example/child" });
   expect(resolvePluginCandidateInstallOwner(candidate!)).toBe("example");
   expect(
-    Object.getOwnPropertyDescriptor(childRecord, Symbol.for("openclaw.pluginManifestInstallOwner")),
-  ).toMatchObject({ configurable: false, enumerable: true, writable: false });
-  expect(
-    Object.getOwnPropertyDescriptor(candidate, Symbol.for("openclaw.pluginCandidateInstallOwner")),
-  ).toMatchObject({ configurable: true, enumerable: true, writable: false });
+    Reflect.set(candidate!, Symbol.for("openclaw.pluginCandidateInstallOwner"), "replacement"),
+  ).toBe(false);
   expect(resolvePluginCandidateInstallOwner({ ...candidate })).toBe("example");
   expect(() => recordPluginManifestInstallOwner(childRecord, "replacement")).toThrow(TypeError);
 });

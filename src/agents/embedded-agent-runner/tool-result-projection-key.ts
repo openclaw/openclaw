@@ -1,6 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sha256Base64Url } from "../../infra/crypto-digest.js";
-import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
+import {
+  freezeJsonSnapshot,
+  isDeeplyFrozenPlainData,
+  memoizeFrozenPlainDataProjection,
+} from "../../shared/immutable-data.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { ToolResultPromptProjectionState } from "./session-prompt-state.js";
 
@@ -56,17 +60,13 @@ export function getToolResultProjectionKeys(
     const sourceIdentity =
       typeof messageId === "string" && messageId.length > 0
         ? `id:${messageId}`
-        : `text:${hashToolResultText(getToolResultTextBlocks(message))}`;
+        : `text:${hashToolResultText(message)}`;
     const fallbackBase = `fallback:${baseKey ?? "tool"}:${sourceIdentity}`;
     const occurrence = occurrences.get(fallbackBase) ?? 0;
     occurrences.set(fallbackBase, occurrence + 1);
     const key = `${fallbackBase}:${occurrence}`;
     const previousSource = baseKey ? projectionState.sourceHashByKey.get(baseKey) : undefined;
-    if (
-      baseKey &&
-      previousSource &&
-      previousSource === hashToolResultText(getToolResultTextBlocks(message))
-    ) {
+    if (baseKey && previousSource && previousSource === hashToolResultText(message)) {
       // A later duplicate must move the original projection, not make its sent bytes disappear.
       const replacement = projectionState.replacements.get(baseKey);
       if (replacement) {
@@ -138,7 +138,9 @@ export function getToolResultTextBlocks(message: AgentMessage): string[] {
     : [];
 }
 
-export function hashToolResultText(texts: string[]): string {
-  // JSON framing preserves block boundaries and lone surrogates, including persisted fallback keys.
-  return sha256Base64Url(JSON.stringify(texts));
-}
+// Frozen transcript identities survive attempt recreation; mutable SDK messages must be rehashed.
+export const hashToolResultText = memoizeFrozenPlainDataProjection(
+  (message: AgentMessage): string =>
+    // JSON framing preserves block boundaries and lone surrogates, including persisted fallback keys.
+    sha256Base64Url(JSON.stringify(getToolResultTextBlocks(message))),
+);

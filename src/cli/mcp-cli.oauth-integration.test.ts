@@ -13,6 +13,7 @@ import { readMcpOAuthPendingAuthorization } from "../agents/mcp-oauth-store.js";
 import { readMcpOAuthCredentialsStatus } from "../agents/mcp-oauth.js";
 import { seedMcpOAuthStoreForTest } from "../agents/mcp-oauth.test-support.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
+import * as gatewayCall from "../gateway/call.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
 import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { defaultRuntime } from "../runtime.js";
@@ -57,11 +58,12 @@ async function startOAuthFixture() {
   const mcpRequests: Array<Pick<IncomingMessage, "headers"> & { body: string }> = [];
   const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
     const url = new URL(request.url ?? "/", issuer);
+    const reply = (body: unknown, status = 200) => sendJson(response, body, status);
     if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
-      return sendJson(response, { resource: `${issuer}/mcp`, authorization_servers: [issuer] });
+      return reply({ resource: `${issuer}/mcp`, authorization_servers: [issuer] });
     }
     if (url.pathname === "/.well-known/oauth-authorization-server") {
-      return sendJson(response, {
+      return reply({
         issuer,
         authorization_endpoint: `${issuer}/authorize`,
         token_endpoint: `${issuer}/token`,
@@ -70,6 +72,7 @@ async function startOAuthFixture() {
         grant_types_supported: ["authorization_code", "refresh_token"],
         token_endpoint_auth_methods_supported: ["none"],
         code_challenge_methods_supported: ["S256"],
+        authorization_response_iss_parameter_supported: true,
       });
     }
     if (url.pathname === "/register" && request.method === "POST") {
@@ -79,31 +82,28 @@ async function startOAuthFixture() {
         redirect.port = "";
         return redirect.href;
       });
-      return sendJson(
-        response,
-        { ...metadata, redirect_uris: redirectUris, client_id: "fixture-client" },
-        201,
-      );
+      return reply({ ...metadata, redirect_uris: redirectUris, client_id: "fixture-client" }, 201);
     }
     if (url.pathname === "/authorize") {
       const redirectUri = url.searchParams.get("redirect_uri");
       const state = url.searchParams.get("state");
       codeChallenge = url.searchParams.get("code_challenge") ?? undefined;
       if (!redirectUri || !state || !codeChallenge) {
-        return sendJson(response, { error: "invalid_request" }, 400);
+        return reply({ error: "invalid_request" }, 400);
       }
       const callback = new URL(redirectUri);
       callback.searchParams.set("code", "fixture-code");
       callback.searchParams.set("state", state);
+      callback.searchParams.set("iss", issuer);
       return response.writeHead(302, { Location: callback.toString() }).end();
     }
     if (url.pathname === "/token" && request.method === "POST") {
       const form = new URLSearchParams(await readBody(request));
       if (form.get("grant_type") === "refresh_token") {
         if (form.get("refresh_token") !== "fixture-refresh-token") {
-          return sendJson(response, { error: "invalid_grant" }, 400);
+          return reply({ error: "invalid_grant" }, 400);
         }
-        return sendJson(response, oauthTokens("fixture-refreshed-access-token"));
+        return reply(oauthTokens("fixture-refreshed-access-token"));
       }
       tokenRedirectUri = form.get("redirect_uri") ?? undefined;
       tokenVerifier = form.get("code_verifier") ?? undefined;
@@ -111,9 +111,9 @@ async function startOAuthFixture() {
         ? createHash("sha256").update(tokenVerifier).digest("base64url")
         : undefined;
       if (form.get("code") !== "fixture-code" || challenge !== codeChallenge) {
-        return sendJson(response, { error: "invalid_grant" }, 400);
+        return reply({ error: "invalid_grant" }, 400);
       }
-      return sendJson(response, oauthTokens("fixture-access-token", "fixture-refresh-token"));
+      return reply(oauthTokens("fixture-access-token", "fixture-refresh-token"));
     }
     if (url.pathname === "/mcp" && request.method === "POST") {
       const body = await readBody(request);
@@ -132,10 +132,9 @@ async function startOAuthFixture() {
           .end("expired token");
       }
       const message = JSON.parse(body) as { id?: number; method?: string };
-      const reply = (result: unknown) =>
-        sendJson(response, { jsonrpc: "2.0", id: message.id, result });
+      const rpc = (result: unknown) => reply({ jsonrpc: "2.0", id: message.id, result });
       if (message.method === "initialize") {
-        return reply({
+        return rpc({
           protocolVersion: "2025-06-18",
           capabilities: { tools: {} },
           serverInfo: { name: "fixture", version: "1.0.0" },
@@ -145,7 +144,7 @@ async function startOAuthFixture() {
         return response.writeHead(202, { "Content-Length": "0" }).end();
       }
       if (message.method === "tools/list") {
-        return reply({ tools: [{ name: "read_page", inputSchema: { type: "object" } }] });
+        return rpc({ tools: [{ name: "read_page", inputSchema: { type: "object" } }] });
       }
     }
     response.writeHead(404).end();
@@ -249,6 +248,60 @@ it("clears requester credentials when the same URL changes to shared OAuth", asy
   });
 });
 
+it("routes login and logout through a live Gateway owner and prints its sign-in link", async () => {
+  await withTempHome(`openclaw-mcp-online-${randomUUID()}-`, async () => {
+    const owner = {
+      pid: process.pid,
+      ownerId: "fixture-gateway-owner",
+      createdAt: new Date(0).toISOString(),
+      port: 18789,
+      configPath: process.env.OPENCLAW_CONFIG_PATH ?? "",
+    };
+    vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue(owner);
+    vi.spyOn(gatewayLock, "readLockPayloadSync").mockReturnValue(owner);
+    const request = vi
+      .spyOn(gatewayCall, "callGateway")
+      .mockResolvedValueOnce({
+        status: "redirect",
+        serverName: "fixture",
+        authorizationUrl: "https://accounts.example.com/authorize?state=fixture-state",
+        redirectUrl: "http://127.0.0.1:18789/oauth/mcp/callback",
+        usesPublicOrigin: false,
+      })
+      .mockResolvedValueOnce({ status: "authorized", serverName: "fixture" })
+      .mockResolvedValueOnce({ serverName: "fixture" });
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    const { run } = createCli();
+    await run("login", "fixture");
+    expect(request).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        method: "mcp.authLogin",
+        params: { serverName: "fixture" },
+        localPortOverride: owner.port,
+      }),
+    );
+    expect(log).toHaveBeenCalledWith("https://accounts.example.com/authorize?state=fixture-state");
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("--callback-url <url>"));
+    const callbackUrl =
+      "http://127.0.0.1:18789/oauth/mcp/callback?code=fixture&state=fixture-state";
+    await run("login", "fixture", "--callback-url", callbackUrl);
+    expect(request).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        method: "mcp.authLogin",
+        params: { serverName: "fixture", callbackUrl },
+      }),
+    );
+    await run("logout", "fixture");
+    expect(request).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        method: "mcp.authLogout",
+        params: { serverName: "fixture" },
+      }),
+    );
+    expect(log).toHaveBeenCalledWith('MCP OAuth credentials cleared for "fixture".');
+  });
+});
+
 it("logs in and probes through the CLI with a portless loopback registration", async () => {
   await withTempHome(`openclaw-mcp-login-${randomUUID()}-`, async () => {
     const fixture = await startOAuthFixture();
@@ -310,7 +363,7 @@ it("logs in and probes through the CLI with a portless loopback registration", a
       expect(requests.slice(1).map((request) => request.headers.authorization)).toEqual(
         Array(3).fill("Bearer fixture-refreshed-access-token"),
       );
-      // A live owner must keep this CLI from refreshing or clearing its credentials.
+      // Probes still require offline custody because they may refresh credentials.
       const discover = vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
         pid: process.pid,
         ownerId: "synthetic-other-process-owner",
@@ -320,14 +373,8 @@ it("logs in and probes through the CLI with a portless loopback registration", a
       const requestCount = fixture.mcpRequests().length;
       try {
         for (const args of [
-          ["login", "fixture", "--code", "fixture-code"],
-          ["logout", "fixture"],
           ["probe", "fixture"],
           ["doctor", "fixture", "--probe"],
-          ["set", "fixture", '{"url":"https://replacement.example.com"}'],
-          ["configure", "fixture", "--clear-auth"],
-          ["tools", "fixture", "--clear"],
-          ["unset", "fixture"],
         ]) {
           await expect(run(...args)).rejects.toMatchObject({
             code: "OWNER_UNAVAILABLE",

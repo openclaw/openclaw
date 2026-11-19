@@ -31,7 +31,11 @@ const { createPromptBuildToolPolicy } = await vi.importActual<
 
 beforeEach(() => Object.values(mocks).forEach((mock) => mock.mockReset()));
 
-async function promptFixture(codeMode = false, mode: "tools" | "directory" = "tools") {
+async function promptFixture(
+  codeMode = false,
+  mode: "tools" | "directory" = "tools",
+  skillsDeferred = false,
+) {
   const config = {
     agents: { defaults: { experimental: { localModelLean: false } } },
     tools: { codeMode, ...(!codeMode && { toolSearch: { enabled: true, mode } }) },
@@ -52,9 +56,10 @@ async function promptFixture(codeMode = false, mode: "tools" | "directory" = "to
     admission.close();
     runtime.cleanup();
   });
-  const sourceTools = (codeMode ? ["sessions_create"] : ["fixture_allowed", "fixture_denied"]).map(
-    createStubTool,
-  );
+  const sourceTools = [
+    ...(codeMode ? ["sessions_create"] : ["fixture_allowed", "fixture_denied"]),
+    ...(skillsDeferred ? ["skills_search", "skills_read"] : []),
+  ].map(createStubTool);
   const surface = runtime.compactTools([
     ...(!codeMode
       ? createToolSearchTools({ config: runtime.config, catalogRef: runtime.toolSearchCatalogRef })
@@ -97,6 +102,7 @@ async function promptFixture(codeMode = false, mode: "tools" | "directory" = "to
     skillsPrompt: "",
     codeModeActive: codeMode,
     toolSearchDirectoryEnabled: !codeMode,
+    deferredToolsDirectlyCallable: !codeMode && mode === "directory",
     toolSearchRuntimeConfig: runtime.config,
     toolSearchCatalogRef: runtime.toolSearchCatalogRef,
   });
@@ -120,6 +126,25 @@ it("keeps explicit task creation discoverable in Code Mode and removes revoked c
   const refreshPrompt = await prepared.prepareToolPrompt(restricted.tools);
   expect(refreshPrompt(prepared.systemPromptText)).not.toContain("`sessions_create`");
 });
+
+it.each(["tools", "directory"] as const)(
+  "guides deferred skill access through the callable %s surface",
+  async (mode) => {
+    const { surface, prepared } = await promptFixture(false, mode, true);
+    expect(surface.tools.map((tool) => tool.name)).not.toContain("skills_read");
+    if (mode === "tools") {
+      expect(prepared.systemPromptText).toContain(
+        'call `dispatch_action` with `{"id":"skills_read","args":{"name":"<name>"}}`',
+      );
+      expect(prepared.systemPromptText).toContain(
+        'by calling `dispatch_action` with `{"id":"skills_search","args":{"query":"<query>"}}`',
+      );
+      expect(prepared.systemPromptText).not.toContain("use `skills_read` with its exact name");
+    } else {
+      expect(prepared.systemPromptText).toContain("use `skills_read` with its exact name");
+    }
+  },
+);
 
 it.each([
   { mode: "tools" as const, toolsAllow: undefined },

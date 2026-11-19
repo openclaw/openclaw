@@ -6,9 +6,9 @@ import type {
 } from "../../config/sessions/transcript-entry-anchor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
-import type { ContextEngine } from "../../context-engine/types.js";
+import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../context-engine/types.js";
 
-export type PendingContextEngineTurn = Readonly<{
+type PendingContextEngineTurn = Readonly<{
   advancement_key: string;
   payload_json: string;
   session_id: string;
@@ -20,6 +20,8 @@ export type ContextEngineTurnRuntimeContext = Readonly<{
   modelId?: string;
   modelContextWindow?: number;
   tokenBudget?: number;
+  /** The turn's last-call usage and cache observation; plain counters only. */
+  promptCache?: ContextEnginePromptCacheInfo;
 }>;
 
 type AdmittedContextEngineTurnOutboxPayload = Readonly<{

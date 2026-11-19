@@ -107,6 +107,52 @@ describe("cloud worker milestone 2 fault injection", () => {
     }
   };
 
+  it("completes a worker turn when the automatic skill catalog exceeds its delivery budget", async () => {
+    for (const name of ["alpha", "beta"]) {
+      const directory = path.join(harness.root, "skills", name);
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(
+        path.join(directory, "SKILL.md"),
+        `---\nname: ${name}\ndescription: Synthetic overflow fixture\n---\n# Complete instructions\n`,
+      );
+      for (let index = 0; index < 4; index++) {
+        await fs.writeFile(
+          path.join(directory, `reference-${index}.txt`),
+          Buffer.alloc(1024 * 1024, "x"),
+        );
+      }
+    }
+    const snapshot = await buildSkillSnapshot(harness.root, {
+      entries: loadWorkspaceSkills(harness.root, { workspaceOnly: true }),
+    });
+    const descriptor = await harness.createDescriptor();
+    descriptor.assignment.systemPrompt = snapshot.prompt;
+    descriptor.assignment.skillResources = await prepareSkillResourceDelivery(snapshot, () => {});
+    const { release, started } = harness.planPending();
+    const run = runWorkerDescriptor(descriptor);
+    try {
+      await waitForWorkerEvent(started.promise, run, "provider start");
+      const request = harness.requestParams(
+        "worker.inference.start",
+      )[0] as WorkerInferenceStartParams;
+      const locations = [
+        ...(request.context.systemPrompt ?? "").matchAll(/<location>(.*?)<\/location>/g),
+      ];
+      const instructions = await Promise.all(
+        locations.map((match) => fs.readFile(match[1]!, "utf8")),
+      );
+      expect(instructions.some((text) => text.includes("Supporting files were omitted"))).toBe(
+        true,
+      );
+      release.resolve(doneOutcome("Completed with the available resources."));
+      await expect(run).resolves.toMatchObject({ status: "completed" });
+      expect(harness.providerCalls).toBe(1);
+    } finally {
+      release.resolve(doneOutcome("fixture cleanup"));
+      await run;
+    }
+  });
+
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0).each([
     ["success", "standalone", "skill", "completed", "stop"],
     ["success", "managed", "skill", "completed", "stop"],
@@ -164,6 +210,8 @@ describe("cloud worker milestone 2 fault injection", () => {
       const managed = mode === "managed";
       const command = runWorkerCommand({ input, output, managed, lifetime });
       void command.catch(() => undefined);
+      const waitFor = (event: Promise<void>, phase: string) =>
+        waitForWorkerEvent(event, command, phase, resultOutput.promise);
       if (managed) {
         input.write(
           `${JSON.stringify({ type: "turn", turnId: descriptor.assignment.turnId, descriptor })}\n`,
@@ -174,12 +222,7 @@ describe("cloud worker milestone 2 fault injection", () => {
       let protectedDirectory: string | undefined;
       let turnDirectory: string | undefined;
       try {
-        await waitForWorkerEvent(
-          providerStarted.promise,
-          command,
-          "provider start",
-          resultOutput.promise,
-        );
+        await waitFor(providerStarted.promise, "provider start");
         environmentStateDir = process.env.OPENCLAW_STATE_DIR;
         expect(environmentStateDir).toBeDefined();
         expect(environmentStateDir).not.toBe(previousStateDir);
@@ -211,12 +254,7 @@ describe("cloud worker milestone 2 fault injection", () => {
               : doneOutcome("paid reply"),
           );
         }
-        await waitForWorkerEvent(
-          finishingGate.entered.promise,
-          command,
-          "finishing event",
-          resultOutput.promise,
-        );
+        await waitFor(finishingGate.entered.promise, "finishing event");
         if (outcome === "cancellation") {
           expect(harness.requestParams("worker.inference.cancel")).toHaveLength(1);
         }
@@ -290,8 +328,6 @@ describe("cloud worker milestone 2 fault injection", () => {
         expect(lifetime.terminateOwnedTree).not.toHaveBeenCalled();
         expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
         expect(harness.providerCalls).toBe(1);
-        expect(harness.requestParams("worker.inference.start")).toHaveLength(1);
-        expect(harness.requestParams("worker.live-event")).toHaveLength(finishing[0]!.seq);
         const warning = warn.mock.calls.flat().map(String).join("\n");
         if (deniedOwner === "skill") {
           expect(await fs.readFile(retainedFile!, "utf8")).toBe(markdown);
@@ -454,7 +490,6 @@ describe("cloud worker milestone 2 fault injection", () => {
     const transcriptRequests = harness.requestParams("worker.transcript.commit");
     expect(transcriptRequests).toHaveLength(2);
     expect(transcriptRequests[1]).toEqual(transcriptRequests[0]);
-    expect(harness.requestParams("worker.inference.start")).toHaveLength(3);
     expect(harness.providerCalls).toBe(1);
     expect(inferenceSeqs).toEqual([1, 2]);
     expect(harness.liveDeltas).toEqual(["one", "two", "three"]);

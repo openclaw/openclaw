@@ -1,4 +1,4 @@
-import type { AgentSideConnection, PromptRequest, SessionUpdate } from "@agentclientprotocol/sdk";
+import type { AgentContext, PromptRequest, SessionUpdate } from "@agentclientprotocol/sdk";
 import { THINKING_LEVELS_HELP } from "../auto-reply/thinking.shared.js";
 import { enqueueKeyedTask } from "../plugin-sdk/keyed-async-queue.js";
 import { createPendingPromiseTracker } from "../shared/pending-promises.js";
@@ -54,7 +54,7 @@ type AcpTranslatorLedgerSessionRef = AcpTranslatorSessionRef & {
 };
 
 type AcpTranslatorSessionUpdatesOptions = {
-  connection: Pick<AgentSideConnection, "sessionUpdate">;
+  connection: Pick<AgentContext, "notify">;
   eventLedger: AcpEventLedger;
   log: (message: string) => void;
 };
@@ -101,6 +101,18 @@ export class AcpTranslatorSessionUpdates {
       this.options.log(
         `event ledger session start failed for ${session.sessionId}: ${String(err)}`,
       );
+    }
+  }
+
+  async readLedgerSessionKey(sessionId: string): Promise<string | undefined> {
+    if (this.stopped) {
+      return undefined;
+    }
+    try {
+      return await this.track(this.options.eventLedger.readSessionKey({ sessionId }));
+    } catch (err) {
+      this.options.log(`event ledger session-key lookup failed for ${sessionId}: ${String(err)}`);
+      return undefined;
     }
   }
 
@@ -171,21 +183,29 @@ export class AcpTranslatorSessionUpdates {
       return;
     }
     const delivery = this.track(
-      this.options.connection.sessionUpdate({
+      this.options.connection.notify("session/update", {
         sessionId: params.sessionId,
         update: params.update,
       }),
     );
-    const recording =
-      params.record && params.sessionKey
-        ? this.recordLedgerUpdate({
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            ...(params.ledgerSessionId ? { ledgerSessionId: params.ledgerSessionId } : {}),
-            ...(params.runId ? { runId: params.runId } : {}),
-            update: params.update,
-          })
-        : undefined;
+    let recording: Promise<void> | undefined;
+    if (params.record && params.sessionKey) {
+      const ledgerUpdate = {
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        ...(params.ledgerSessionId ? { ledgerSessionId: params.ledgerSessionId } : {}),
+        ...(params.runId ? { runId: params.runId } : {}),
+        update: params.update,
+      };
+      recording = this.recordLedgerMutation(ledgerUpdate, "update", () =>
+        this.options.eventLedger.recordUpdate({
+          sessionId: resolveLedgerSessionId(ledgerUpdate),
+          sessionKey: ledgerUpdate.sessionKey,
+          ...(ledgerUpdate.runId ? { runId: ledgerUpdate.runId } : {}),
+          update: ledgerUpdate.update,
+        }),
+      );
+    }
     if (params.waitForDelivery === false) {
       void delivery.catch((err: unknown) => {
         this.options.log(`session update delivery failed for ${params.sessionId}: ${String(err)}`);
@@ -210,23 +230,6 @@ export class AcpTranslatorSessionUpdates {
         availableCommands: AVAILABLE_COMMANDS,
       },
     });
-  }
-
-  private recordLedgerUpdate(params: {
-    sessionId: string;
-    sessionKey: string;
-    ledgerSessionId?: string;
-    runId?: string;
-    update: SessionUpdate;
-  }): Promise<void> {
-    return this.recordLedgerMutation(params, "update", () =>
-      this.options.eventLedger.recordUpdate({
-        sessionId: resolveLedgerSessionId(params),
-        sessionKey: params.sessionKey,
-        ...(params.runId ? { runId: params.runId } : {}),
-        update: params.update,
-      }),
-    );
   }
 
   private recordLedgerMutation(

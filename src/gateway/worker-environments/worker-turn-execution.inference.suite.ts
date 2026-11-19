@@ -15,6 +15,7 @@ import {
   createWorkerTurnTunnel,
   credential,
   placements,
+  reconcileUnchangedLocalWorkspace,
   seedActivePlacement,
   turn,
   unusedEnvironments,
@@ -56,9 +57,8 @@ export function registerWorkerTurnInferenceTests(): void {
       const tunnel = createWorkerTurnTunnel({
         launchTurn,
         runWorkspaceCommand: vi.fn(),
-        quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
-        reconcileWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(reconcileUnchangedLocalWorkspace),
         stop: vi.fn(async () => {}),
       });
       const environments = {

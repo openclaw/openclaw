@@ -1,23 +1,30 @@
 import { createMemo, createSignal, createStore, onSettled, untrack } from "solid-js";
+import { serializeSidebarEntry } from "../../app-navigation.ts";
+import { DASHBOARDS_DISPLAY_DEFAULTS } from "../../app/settings-contract.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectSessionList } from "../../lib/reactive/domain-capabilities.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { dashboardSessionListQuery } from "../../lib/sessions/session-requests.ts";
+import type { DashboardGalleryFilters, DashboardsRouteData } from "./gallery-filters.ts";
 import { dashboardsRouteData } from "./route.ts";
-import { DashboardsView, type DashboardGalleryFilters, type DashboardsRouteData } from "./view.tsx";
+import { DashboardsView } from "./view.tsx";
 
-type DashboardsPageProps = { routeData?: DashboardsRouteData };
-
-export function DashboardsPage(props: DashboardsPageProps) {
+export function DashboardsPage(props: { routeData?: DashboardsRouteData }) {
   const context = useApplication();
+  // Display (view, ordering, grouping) is remembered per browser, like other view preferences.
   const [filters, setFilters] = createStore<DashboardGalleryFilters>({
     query: "",
-    ownerId: "",
-    sort: "updated",
+    ownerIds: [],
+    ...(loadSettings().dashboardsDisplay ?? DASHBOARDS_DISPLAY_DEFAULTS),
   });
   // Loader data is an initial seed; session publications own subsequent updates.
   const initialData = untrack(() => props.routeData);
   const gateway = projectGateway(context.gateway);
+  // Personal rail pins: the same navigation preference the sidebar's session pins write.
+  const navigation = projectOwner(context.navigation, (owner) => owner.snapshot);
+  const railPin = (key: string) => serializeSidebarEntry({ type: "session", key, rail: true });
 
   let scope = dashboardSessionListQuery(context.agentSelection.state.scopeId);
   const list = projectSessionList({ sessions: context.sessions, scope });
@@ -87,11 +94,30 @@ export function DashboardsPage(props: DashboardsPageProps) {
         readReady={ready}
         filters={filters}
         handlers={{
-          onFilterChange: (filter) =>
+          onFilterChange: (filter) => {
+            const display = {
+              view: filter.view ?? filters.view,
+              sort: filter.sort ?? filters.sort,
+              group: filter.group ?? filters.group,
+            };
             setFilters((draft) => {
               Object.assign(draft, filter);
-            }),
+            });
+            if (filter.view || filter.sort || filter.group) {
+              patchSettings({ dashboardsDisplay: display });
+            }
+          },
           onNavigate: context.navigate,
+          isPinned: (key) => navigation.read().sidebarEntries.includes(railPin(key)),
+          onTogglePin: (key) => {
+            const entry = railPin(key);
+            const entries = context.navigation.snapshot.sidebarEntries;
+            context.navigation.update({
+              sidebarEntries: entries.includes(entry)
+                ? entries.filter((value) => value !== entry)
+                : [...entries, entry],
+            });
+          },
         }}
         gatewaySnapshot={gateway.read().snapshot}
       />

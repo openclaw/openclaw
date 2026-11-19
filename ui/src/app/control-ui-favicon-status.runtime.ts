@@ -14,6 +14,7 @@ import {
   invalidateControlUiFaviconPalette,
 } from "./control-ui-environment-presentation.runtime.ts";
 import { connectControlUiFaviconArtwork } from "./control-ui-favicon-artwork.runtime.ts";
+import { controlUiPaletteStyle } from "./control-ui-palette-style.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import { canUseQuestionPrompts } from "./question-prompt-client.ts";
 import {
@@ -178,26 +179,9 @@ export function connectControlUiFavicon(
     listen(shell, CHAT_PANE_LIFECYCLE_CHANGED_EVENT, synchronize),
   ];
   const root = document.documentElement;
-  // Shell geometry and its derived chrome color cannot change favicon colors.
-  // Read inline declarations without forcing style for unrelated route commits.
-  const paletteStyle = () =>
-    JSON.stringify(
-      [...root.style]
-        .filter(
-          (property) =>
-            property !== "--shell-viewport-height" &&
-            property !== "--shell-safe-area-bottom" &&
-            property !== "--control-ui-system-chrome-background",
-        )
-        .map((property) => [
-          property,
-          root.style.getPropertyValue(property),
-          root.style.getPropertyPriority(property),
-        ]),
-    );
-  let previousPaletteStyle = paletteStyle();
+  let previousPaletteStyle = controlUiPaletteStyle(root);
   const palette = new MutationObserver((records) => {
-    const nextPaletteStyle = paletteStyle();
+    const nextPaletteStyle = controlUiPaletteStyle(root);
     if (
       records.every((record) => record.attributeName === "style") &&
       nextPaletteStyle === previousPaletteStyle

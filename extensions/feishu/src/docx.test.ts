@@ -150,7 +150,8 @@ describe("feishu_doc image fetch hardening", () => {
     const result = await executeDoc({
       action: "color_text",
       block_id: "text_1",
-      content: "[Q1][RED bg:yellow bold]profit[/green][bg:unknown]plain[/bg][gray][/gray]",
+      content:
+        "[Q1][RED bg:yellow bold]profit[/green][bg:unknown]plain[/bg][bg:constructor]unstyled[/bg][gray][/gray]",
     });
 
     expect(blockPatchMock).toHaveBeenCalledExactlyOnceWith({
@@ -162,11 +163,12 @@ describe("feishu_doc image fetch hardening", () => {
             textRun("Q1]"),
             textRun("profit", { text_color: 1, background_color: 3, bold: true }),
             textRun("plain"),
+            textRun("unstyled"),
           ],
         },
       },
     });
-    expect(result.details).toStrictEqual({ success: true, segments: 4, block: undefined });
+    expect(result.details).toStrictEqual({ success: true, segments: 5, block: undefined });
   });
 
   it.each([

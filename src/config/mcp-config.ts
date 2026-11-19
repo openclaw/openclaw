@@ -5,6 +5,7 @@ import { canonicalizeConfiguredMcpServer } from "./mcp-config-normalize.js";
 import { replaceConfigFile } from "./mutate.js";
 import { redactSensitiveArgv } from "./redact-argv.js";
 import { REDACTED_SENTINEL, redactConfigObject, restoreRedactedValues } from "./redact-snapshot.js";
+import { hasManagedRuntimeConfigWriteOwner } from "./runtime-snapshot.js";
 import { buildConfigSchemaCore } from "./schema.js";
 import type { McpServerToolFilterConfig } from "./types.mcp.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -40,6 +41,12 @@ type McpConfigMutation = {
   next?: Record<string, unknown>;
 };
 type McpConfigMutationHook = (mutation: McpConfigMutation) => Promise<void>;
+type McpConfigWriteAuthority = {
+  assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
+  /** Prepare locally, but let the running Gateway own persistence and credential cleanup. */
+  commit?: (change: { previous: OpenClawConfig; next: OpenClawConfig }) => Promise<unknown>;
+};
 
 function normalizeToolSelectionList(value: readonly string[] | undefined): string[] | undefined {
   if (!value) {
@@ -144,8 +151,10 @@ export function redactMcpServersForDisplay(
   return redactedRoot.mcp.servers;
 }
 
-export async function listConfiguredMcpServers(): Promise<ConfigMcpReadResult> {
-  return resolveConfiguredMcpServers(await readSourceConfigSnapshot());
+export async function listConfiguredMcpServers(options?: {
+  observe?: boolean;
+}): Promise<ConfigMcpReadResult> {
+  return resolveConfiguredMcpServers(await readSourceConfigSnapshot(options));
 }
 
 type McpServerMutationRequest =
@@ -198,7 +207,8 @@ async function mutateConfiguredMcpServer(
     };
   }
 
-  const servers = structuredClone(loaded.mcpServers);
+  const next = loaded.config;
+  const servers: ConfigMcpServers = next.mcp?.servers ?? {};
   if (params.kind === "set") {
     const argvRestored = restoreMcpServerArgvSentinels({
       incoming: params.server,
@@ -235,9 +245,7 @@ async function mutateConfiguredMcpServer(
   }
   const errorLabel = params.kind === "update" ? params.errorLabel : params.kind;
   const success = params.kind === "set" ? undefined : { [successKey]: true };
-  const assertCurrent = params.kind === "update" ? undefined : params.assertCurrent;
-  const assertCurrentAsync = params.kind === "unset" ? params.assertCurrentAsync : undefined;
-  const next = structuredClone(loaded.config);
+  const { assertCurrent, assertCurrentAsync } = params;
   if (Object.keys(servers).length > 0) {
     next.mcp = { ...next.mcp, servers };
   } else if (next.mcp) {
@@ -247,7 +255,10 @@ async function mutateConfiguredMcpServer(
     }
   }
 
-  const validated = validateConfigObjectWithPlugins(next);
+  const validated = validateConfigObjectWithPlugins(next, {
+    semanticValidation: "strict",
+    mcpTransportBaseline: snapshot.sourceConfig,
+  });
   if (!validated.ok) {
     const issue = expectDefined(validated.issues[0], "issues entry at 0");
     return {
@@ -257,22 +268,30 @@ async function mutateConfiguredMcpServer(
     };
   }
   // Validation materializes runtime defaults; persist only the source candidate.
-  const committed = await replaceConfigFile({
-    sourceConfig: next,
-    baseHash: loaded.baseHash,
-    writeOptions: {
-      ...writeOptions,
-      assertCurrent: () => {
-        writeOptions.assertCurrent?.();
-        assertCurrent?.();
+  let committedConfig: OpenClawConfig;
+  if (params.commit) {
+    await params.commit({ previous: snapshot.sourceConfig, next });
+    committedConfig = next;
+  } else {
+    const committed = await replaceConfigFile({
+      sourceConfig: next,
+      baseHash: loaded.baseHash,
+      writeOptions: {
+        ...writeOptions,
+        assertCurrent: () => {
+          writeOptions.assertCurrent?.();
+          assertCurrent?.();
+        },
+        beforeCommit: async () => {
+          await writeOptions.beforeCommit?.();
+          await assertCurrentAsync?.();
+        },
       },
-      beforeCommit: async () => {
-        await writeOptions.beforeCommit?.();
-        await assertCurrentAsync?.();
-      },
-    },
-  });
-  if (onCommitted) {
+    });
+    committedConfig = committed.nextConfig;
+  }
+  // A running Gateway reconciles every committed writer, not only this facade.
+  if (onCommitted && !params.commit && !hasManagedRuntimeConfigWriteOwner(loaded.path)) {
     const previous = loaded.mcpServers[name];
     const nextServer = servers[name];
     await onCommitted({
@@ -284,14 +303,14 @@ async function mutateConfiguredMcpServer(
   return {
     ok: true,
     path: loaded.path,
-    config: committed.nextConfig,
+    config: committedConfig,
     mcpServers: servers,
     ...success,
   };
 }
 
 async function updateConfiguredMcpServerTools(
-  params: {
+  params: McpConfigWriteAuthority & {
     name: string;
     tools: McpServerToolFilterConfig | null;
     skipLifecycleLease?: boolean;
@@ -302,6 +321,9 @@ async function updateConfiguredMcpServerTools(
     {
       kind: "update",
       name: params.name,
+      assertCurrent: params.assertCurrent,
+      assertCurrentAsync: params.assertCurrentAsync,
+      commit: params.commit,
       errorLabel: "tool selection update",
       update: (server) => {
         if (params.tools === null) {
@@ -327,7 +349,7 @@ async function updateConfiguredMcpServerTools(
 }
 
 async function updateConfiguredMcpServer(
-  params: {
+  params: McpConfigWriteAuthority & {
     name: string;
     update: (server: Record<string, unknown>) => Record<string, unknown>;
     skipLifecycleLease?: boolean;
@@ -338,6 +360,9 @@ async function updateConfiguredMcpServer(
     {
       kind: "update",
       name: params.name,
+      assertCurrent: params.assertCurrent,
+      assertCurrentAsync: params.assertCurrentAsync,
+      commit: params.commit,
       errorLabel: "configure",
       update: (server) => canonicalizeConfiguredMcpServer(params.update(server)),
     },
@@ -346,13 +371,12 @@ async function updateConfiguredMcpServer(
 }
 
 async function setConfiguredMcpServer(
-  params: {
+  params: McpConfigWriteAuthority & {
     name: string;
     server: unknown;
     createOnly?: boolean;
     skipLifecycleLease?: boolean;
     expectedServer?: Record<string, unknown>;
-    assertCurrent?: () => void;
   },
   onCommitted?: McpConfigMutationHook,
 ): Promise<ConfigMcpWriteResult> {
@@ -367,11 +391,9 @@ async function setConfiguredMcpServer(
 }
 
 async function unsetConfiguredMcpServer(
-  params: {
+  params: McpConfigWriteAuthority & {
     name: string;
     expectedServer?: Record<string, unknown>;
-    assertCurrent?: () => void;
-    assertCurrentAsync?: () => Promise<void>;
   },
   onCommitted?: McpConfigMutationHook,
 ): Promise<ConfigMcpWriteResult> {

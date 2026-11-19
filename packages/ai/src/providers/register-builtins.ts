@@ -3,8 +3,6 @@ import type { ApiProvider, ApiRegistry } from "../api-registry.js";
 import type {
   Api,
   AssistantMessage,
-  AssistantMessageEvent,
-  Model,
   SimpleStreamOptions,
   StreamFunction,
   StreamOptions,
@@ -23,33 +21,6 @@ type RegisterBuiltIn = (registry: ApiRegistry) => void;
 /** Source id used for built-in API provider registrations. */
 export const BUILT_IN_API_PROVIDER_SOURCE_ID = "core:built-in";
 
-async function forwardStream(
-  target: AssistantMessageEventStream,
-  source: AsyncIterable<AssistantMessageEvent>,
-): Promise<void> {
-  for await (const event of source) {
-    target.push(event);
-  }
-  target.end();
-}
-
-function createLazyLoadErrorMessage<TApi extends Api>(
-  model: Model<TApi>,
-  error: unknown,
-  signal?: AbortSignal,
-): AssistantMessage & ProviderErrorProjection {
-  return {
-    role: "assistant",
-    content: [],
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: createZeroUsage(),
-    ...projectProviderError(error, signal),
-    timestamp: Date.now(),
-  };
-}
-
 // Provider modules load on first use, while callers still receive a stream synchronously.
 function createLazyStream<TApi extends Api, TOptions extends StreamOptions, TStreams>(
   load: () => Promise<TStreams>,
@@ -58,9 +29,24 @@ function createLazyStream<TApi extends Api, TOptions extends StreamOptions, TStr
   return (model, context, options) => {
     const outer = new AssistantMessageEventStream();
     load()
-      .then((streams) => forwardStream(outer, select(streams)(model, context, options)))
+      .then(async (streams) => {
+        for await (const event of select(streams)(model, context, options)) {
+          outer.push(event);
+        }
+        outer.end();
+      })
       .catch((error: unknown) => {
-        const message = createLazyLoadErrorMessage(model, error, options?.signal);
+        const lazyLoadSignal = options?.signal;
+        const message: AssistantMessage & ProviderErrorProjection = {
+          role: "assistant",
+          content: [],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: createZeroUsage(),
+          ...projectProviderError(error, lazyLoadSignal),
+          timestamp: Date.now(),
+        };
         outer.push({ type: "error", reason: message.stopReason, error: message });
         outer.end(message);
       });

@@ -22,7 +22,6 @@ import {
   ensureDeliveryState,
   getDeliveryLastError,
 } from "./subagent-delivery-state.js";
-import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import {
   resumeAncestorCleanup,
   startSubagentAnnounceCleanupFlow,
@@ -43,7 +42,6 @@ import {
   resumeSubagentAfterDrain,
 } from "./subagent-registry-lifecycle-finalize-cleanup.js";
 import {
-  hasPendingRequesterSettlement,
   retireSubagentObligationsInContext,
   scheduleRequesterSettleWake,
 } from "./subagent-registry-lifecycle-wake.js";
@@ -54,6 +52,7 @@ import {
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
+import { hasPendingRequesterSettlement } from "./subagent-registry-requester-wake-mutation.js";
 import {
   adoptSubagentRunForRequesterTurnInRuns,
   commitRequesterTransfer,
@@ -71,6 +70,7 @@ import {
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
+import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
 
 export type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle-context.js";
 
@@ -194,7 +194,7 @@ export class SubagentLifecycleController {
     return (
       (current !== undefined && !isSameSubagentRunOwner(current, entry)) ||
       this.newerGenerationOwnsSession(entry) ||
-      shouldSuppressSubagentRecoverySessionEffects(current ?? entry)
+      shouldSuppressSubagentSessionEffects(current ?? entry)
     );
   }
 

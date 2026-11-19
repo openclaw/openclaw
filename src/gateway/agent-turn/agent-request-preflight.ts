@@ -20,7 +20,7 @@ import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
-  isMainSessionRestartRecoveryInputProvenance,
+  isExecCompletionInputProvenance,
   isProgressCardRefreshInputProvenance,
   normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
@@ -175,7 +175,6 @@ export async function prepareAgentRequestPreflight(params: {
   }
   const allowModelOverride =
     hasGatewayAdminScope(params.client) || params.client?.internal?.allowModelOverride === true;
-  const canUseCronRunContinuation = params.client?.internal?.cronRunContinuation === true;
   const expectedSessionResult = resolveExpectedExistingSessionConstraint({
     canUseInternalRuntimeHandoff,
     expectedExistingSessionId: request.expectedExistingSessionId,
@@ -218,12 +217,16 @@ export async function prepareAgentRequestPreflight(params: {
     return rejectInvalidRequest("Progress refresh input is reserved for progressCard.refresh.");
   }
   // Plugin tools read the starting run named on exec completion wakes; only the host stamps it.
+  if (isExecCompletionInputProvenance(inputProvenance) && !canUseInternalRuntimeHandoff) {
+    return rejectInvalidRequest("Exec completion input is reserved for background exec owners.");
+  }
+  // Restart input may wait for a surviving turn or a reconnecting node; only recovery stamps it.
   if (
     inputProvenance?.kind === "internal_system" &&
-    inputProvenance.sourceTool === "exec" &&
+    inputProvenance.sourceTool === "restart" &&
     !canUseInternalRuntimeHandoff
   ) {
-    return rejectInvalidRequest("Exec completion input is reserved for background exec owners.");
+    return rejectInvalidRequest("Restart input is reserved for restart recovery.");
   }
   if (inputProvenance?.kind === "inter_session" && inputProvenance.sourceTool === "sessions_send") {
     const sourceSessionKey = inputProvenance.sourceSessionKey;
@@ -267,28 +270,6 @@ export async function prepareAgentRequestPreflight(params: {
       delete inputProvenance.sourceRole;
     }
   }
-  const isRestartRecoveryResumeRun =
-    canUseInternalRuntimeHandoff && isMainSessionRestartRecoveryInputProvenance(inputProvenance);
-  if (
-    (request.internalExecutionIdentityRetry !== undefined ||
-      request.internalExecutionIdentityRecoveryAttempt !== undefined) &&
-    !isRestartRecoveryResumeRun
-  ) {
-    return rejectInvalidRequest(
-      "internal execution identity recovery fields are reserved for main-session restart recovery.",
-    );
-  }
-  // Child recovery shares the restricted tool policy, but not main-session cycle ownership.
-  const canUseRestartRecoveryToolPolicy =
-    isRestartRecoveryResumeRun ||
-    (canUseInternalRuntimeHandoff &&
-      inputProvenance?.kind === "internal_system" &&
-      inputProvenance.sourceTool === "subagent_restart_recovery" &&
-      requestSessionKey !== undefined &&
-      inputProvenance.sourceSessionKey === requestSessionKey);
-  if (request.forceCodeModeTools === true && !canUseRestartRecoveryToolPolicy) {
-    return rejectInvalidRequest("forceCodeModeTools is reserved for native restart recovery.");
-  }
   const sessionEffects =
     isOneShotModelRun || requestedInternalSessionEffects ? "internal" : request.sessionEffects;
   const agentDedupeKeys = resolveAgentDedupeKeys({
@@ -305,7 +286,6 @@ export async function prepareAgentRequestPreflight(params: {
     runId,
     allowModelOverride,
     canUseInternalRuntimeHandoff,
-    canUseCronRunContinuation,
     expectedSession: expectedSessionResult.constraint,
     expectedExistingSessionId: expectedSessionResult.constraint?.sessionId,
     providerOverride: allowModelOverride ? request.provider : undefined,
@@ -317,7 +297,6 @@ export async function prepareAgentRequestPreflight(params: {
       groupSpace: request.groupSpace,
     }),
     inputProvenance,
-    isRestartRecoveryResumeRun,
     preserveUserFacingSessionModelState:
       canUseInternalRuntimeHandoff &&
       shouldPreserveUserFacingSessionStateForInputProvenance(inputProvenance),

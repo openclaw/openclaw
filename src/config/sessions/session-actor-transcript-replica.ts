@@ -10,7 +10,7 @@ import type { SessionTranscriptAuthority } from "./session-transcript-authority.
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import { transcriptEventContextEligibility } from "./session-transcript-projection-append.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
-import { cloneTranscriptView } from "./transcript-snapshot.js";
+import { freezeTranscriptSnapshot } from "./transcript-snapshot.js";
 import { isCanonicalSessionTranscriptEntry } from "./transcript-tree.js";
 
 type Bounded = Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>;
@@ -219,7 +219,7 @@ function readContextWindow(
     snapshot.opaqueParents.set(snapshot.activeLeafEntryId, null);
   }
   delete snapshot.completeActivePath;
-  return result;
+  return Object.freeze({ ...result, snapshot: freezeTranscriptSnapshot(snapshot) });
 }
 
 function boundedTail(events: SessionActorTranscriptRow[], coveredAfterSeq: number) {
@@ -347,8 +347,7 @@ export function seedSessionActorTranscriptContext(
   if (!prepared.residentRows && current.context) {
     return { ...current, anchors };
   }
-  // Own one detached window; row views share it, and worker/cohort facts stay with the read.
-  const snapshot = cloneTranscriptView(prepared.snapshot);
+  const snapshot = freezeTranscriptSnapshot(prepared.snapshot);
   const rows = prepared.residentRows?.map((row, index) => ({
     ...row,
     event: snapshot.events[index],
@@ -386,7 +385,7 @@ export function seedSessionActorTranscriptContext(
         ? { limits: { ...limits }, window }
         : {
             limits: { ...limits },
-            exact: { kind: "bounded", snapshot },
+            exact: Object.freeze({ kind: "bounded", snapshot }),
             admission: admission && { ...admission },
           },
   };
@@ -498,7 +497,7 @@ export function readSessionActorTranscriptContext(
     if (JSON.stringify(context.admission) !== JSON.stringify(admission)) {
       return undefined;
     }
-    return cloneTranscriptView(context.exact);
+    return context.exact;
   }
   const events = admission
     ? context.rows.filter((row) => row.rawSeq < admission.rawSeq)
@@ -511,5 +510,5 @@ export function readSessionActorTranscriptContext(
     result.snapshot.activeLeafEntryId = admission.effectiveParentId;
     delete result.snapshot.completeActivePath;
   }
-  return result;
+  return Object.freeze({ ...result, snapshot: freezeTranscriptSnapshot(result.snapshot) });
 }

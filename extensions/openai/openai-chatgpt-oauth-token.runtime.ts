@@ -50,11 +50,6 @@ type TokenFailure = {
   oauthRefreshOutcome?: OAuthRefreshOutcome;
 };
 type TokenResult = TokenSuccess | TokenFailure;
-type TokenResponseJson = {
-  access_token?: unknown;
-  refresh_token?: unknown;
-  expires_in?: unknown;
-};
 type TokenRequestOptions = {
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -134,7 +129,11 @@ function buildTokenResponseFailure(params: {
 }
 
 function formatMissingTokenResponseFields(
-  json: TokenResponseJson,
+  json: {
+    access_token?: unknown;
+    refresh_token?: unknown;
+    expires_in?: unknown;
+  },
   existingRefreshToken?: string,
 ): string {
   const missing: string[] = [];

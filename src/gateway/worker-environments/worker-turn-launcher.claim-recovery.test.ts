@@ -17,6 +17,7 @@ import { createReplyOperation } from "../../sessions/session-controller.js";
 import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
+import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionTurnClaim } from "./placement-store.js";
 import {
   advancePlacementFixtureToActive,
@@ -325,298 +326,337 @@ describe("worker pre-launch claim recovery", () => {
     "dispatch",
     "uncertain dispatch",
     "pending result",
-  ] as const)("recovers a warm second turn blocked in %s with exact custody", async (stage) => {
-    await seedActivePlacement();
-    const entered = createDeferred();
-    const resume = createDeferred();
-    const successorEntered = createDeferred();
-    const finishSuccessor = createDeferred();
-    const coordinator = createWorkerWorkspaceOperationCoordinator();
-    const pauseAt = async (expected: typeof stage) => {
-      if (blockSecond && stage === expected) {
-        entered.resolve();
-        await resume.promise;
-      }
-    };
-    let blockSecond = false;
-    let queuedBlocker: Promise<void> | undefined;
-    const launch = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
-      if (blockSecond && stage === "dispatch boundary") {
-        // The transport accepted dispatch before its synchronous handoff callback.
-        // Cancellation here makes beginExecution refuse, but cannot undo dispatch custody.
-        entered.resolve();
-        await resume.promise;
-      }
-      request.onDispatchReady?.();
-      if (blockSecond) {
-        if (stage === "pending result") {
-          await placements.markWorkspaceResultPending(request.turnClaim);
+  ] as const)(
+    "recovers a warm second turn blocked in %s with exact custody",
+    async (stage) => {
+      await seedActivePlacement();
+      const entered = createDeferred();
+      const resume = createDeferred();
+      const successorEntered = createDeferred();
+      const finishSuccessor = createDeferred();
+      const coordinator = createWorkerWorkspaceOperationCoordinator();
+      const pauseAt = async (expected: typeof stage) => {
+        if (blockSecond && stage === expected) {
+          entered.resolve();
+          await resume.promise;
         }
-        entered.resolve();
-        await resume.promise;
-        if (stage === "dispatch") {
-          return createCommandResult({ code: 1, killed: true });
-        }
-        throw new AggregateError(
-          [new Error("cancel receipt unavailable")],
-          "node cancellation unconfirmed",
-        );
-      }
-      const result = await completeTurn(request, "First turn complete", 41);
-      await placements.markWorkspaceResultPending(request.turnClaim);
-      return result;
-    });
-    let environment: ReturnType<typeof attachedEnvironment> = {
-      ...attachedEnvironment(),
-      nodeDeviceId: "worker-node",
-      sshEndpoint: null,
-    };
-    const destroy = vi.fn(async () => {
-      if (environment.leaseId === null) {
-        throw new Error("expected leased worker environment");
-      }
-      environment = {
-        ...environment,
-        state: "destroyed" as const,
-        attachedSessionIds: [],
-        tunnelStatus: "stopped",
       };
-      writePlacementEnvironmentFixture(database, environment);
-      return environment;
-    });
-    const environments = {
-      ...unusedEnvironments(),
-      get: () => environment,
-      acquireTurnCredential: vi.fn(async () => ({
-        ...credential(),
-        environmentId: environment.environmentId,
-        ownerEpoch: environment.ownerEpoch,
-      })),
-      acknowledgeCredentialDelivery: async () => true,
-      startTunnel: async () =>
-        createWorkerTurnTunnel({
-          environmentId: environment.environmentId,
-          ownerEpoch: environment.ownerEpoch,
-          syncWorkspace: vi.fn(),
-          launchTurn: launch,
-          reconcileWorkspace: reconcileUnchangedLocalWorkspace,
-        }),
-      destroy,
-    };
-    const redispatchPlacement = createWorkerPlacementRedispatch({
-      placements,
-      resolveDevicePlacementRequirement: async () => ({
-        requiredNodeCommands: [],
-        consumesWorkerSlot: true,
-      }),
-      dispatch: async (request, _onTransition, assertCurrent) => {
-        assertCurrent?.();
-        const recoveredEnvironmentId = `${ENVIRONMENT_ID}-recovered`;
-        const recoveredOwnerEpoch = OWNER_EPOCH + 1;
-        const recovered = await advancePlacementFixtureToActive(placements, database, request, {
-          environmentId: recoveredEnvironmentId,
-          ownerEpoch: recoveredOwnerEpoch,
-          remoteWorkspaceDir: "/workspace/recovered",
-          workspaceBaseManifestRef: MANIFEST_REF,
-        });
-        const recoveredEnvironment = attachedEnvironment();
-        if (recoveredEnvironment.leaseId === null) {
+      let blockSecond = false;
+      let queuedBlocker: Promise<void> | undefined;
+      const launch = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
+        if (blockSecond && stage === "dispatch boundary") {
+          // The transport accepted dispatch before its synchronous handoff callback.
+          // Cancellation here makes beginExecution refuse, but cannot undo dispatch custody.
+          entered.resolve();
+          await resume.promise;
+        }
+        request.onDispatchReady?.();
+        if (blockSecond) {
+          if (stage === "pending result") {
+            await placements.markWorkspaceResultPending(request.turnClaim);
+          }
+          entered.resolve();
+          await resume.promise;
+          if (stage === "dispatch") {
+            return createCommandResult({ code: 1, killed: true });
+          }
+          throw new AggregateError(
+            [new Error("cancel receipt unavailable")],
+            "node cancellation unconfirmed",
+          );
+        }
+        const result = await completeTurn(request, "First turn complete", 41);
+        await placements.markWorkspaceResultPending(request.turnClaim);
+        return result;
+      });
+      let environment: ReturnType<typeof attachedEnvironment> = {
+        ...attachedEnvironment(),
+        nodeDeviceId: "worker-node",
+        sshEndpoint: null,
+      };
+      const destroy = vi.fn(async () => {
+        if (environment.leaseId === null) {
           throw new Error("expected leased worker environment");
         }
         environment = {
-          ...recoveredEnvironment,
-          environmentId: recoveredEnvironmentId,
-          ownerEpoch: recoveredOwnerEpoch,
-          nodeDeviceId: "worker-node",
-          leaseId: "lease-worker-turn-recovered",
-          sshEndpoint: null,
+          ...environment,
+          state: "destroyed" as const,
+          attachedSessionIds: [],
+          tunnelStatus: "stopped",
         };
         writePlacementEnvironmentFixture(database, environment);
-        return recovered;
-      },
-    });
-    let workspaceCalls = 0;
-    const provider = createProvider({
-      environments,
-      reconcileActivePlacement: async () => {},
-      redispatchPlacement,
-      resolveWorkspace: async () => {
-        workspaceCalls++;
-        if (workspaceCalls === 3 && blockSecond) {
-          successorEntered.resolve();
-          await finishSuccessor.promise;
-          throw new Error("successor finished");
-        }
-        await pauseAt("workspace resolution");
-        return { kind: "local", path: root };
-      },
-      workspaceOperations: {
-        run(environmentId, task, ...options) {
-          const result = coordinator.run(
-            environmentId,
-            async () => {
-              if (blockSecond && stage === "workspace mutation") {
-                await pauseAt("workspace mutation");
-                // The entered writer still owns the exact claim after cancellation.
-                expect(currentClaim()?.runId).toBe("blocked-second");
-              }
-              return await task();
-            },
-            ...options,
-          );
-          if (blockSecond && stage === "workspace queue") {
-            entered.resolve();
+        return environment;
+      });
+      const environments = {
+        ...unusedEnvironments(),
+        get: () => environment,
+        acquireTurnCredential: vi.fn(async () => ({
+          ...credential(),
+          environmentId: environment.environmentId,
+          ownerEpoch: environment.ownerEpoch,
+        })),
+        acknowledgeCredentialDelivery: async () => true,
+        startTunnel: async () =>
+          createWorkerTurnTunnel({
+            environmentId: environment.environmentId,
+            ownerEpoch: environment.ownerEpoch,
+            syncWorkspace: vi.fn(),
+            launchTurn: launch,
+            reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+          }),
+        destroy,
+      };
+      const redispatchPlacement = createWorkerPlacementRedispatch({
+        placements,
+        resolveDevicePlacementRequirement: async () => ({
+          requiredNodeCommands: [],
+          consumesWorkerSlot: true,
+        }),
+        dispatch: async (request, _onTransition, assertCurrent) => {
+          assertCurrent?.();
+          const recoveredEnvironmentId = `${ENVIRONMENT_ID}-recovered`;
+          const recoveredOwnerEpoch = OWNER_EPOCH + 1;
+          const recovered = await advancePlacementFixtureToActive(placements, database, request, {
+            environmentId: recoveredEnvironmentId,
+            ownerEpoch: recoveredOwnerEpoch,
+            remoteWorkspaceDir: "/workspace/recovered",
+            workspaceBaseManifestRef: MANIFEST_REF,
+          });
+          const recoveredEnvironment = attachedEnvironment();
+          if (recoveredEnvironment.leaseId === null) {
+            throw new Error("expected leased worker environment");
           }
-          return result;
+          environment = {
+            ...recoveredEnvironment,
+            environmentId: recoveredEnvironmentId,
+            ownerEpoch: recoveredOwnerEpoch,
+            nodeDeviceId: "worker-node",
+            leaseId: "lease-worker-turn-recovered",
+            sshEndpoint: null,
+          };
+          writePlacementEnvironmentFixture(database, environment);
+          return recovered;
         },
-      },
-    });
-    const first = turn("warm-first");
-    const second: ReturnType<typeof turn> & SessionPlacementTurnParams = {
-      ...turn("blocked-second"),
-      onExecutionStarted: () => pauseAt("execution-start publication"),
-    };
-    let blockedOperation: ReplyOperation | undefined;
-    const execute = (input: ReturnType<typeof turn>) =>
-      withSessionTurn(
-        { sessionId: SESSION_ID, sessionKey: SESSION_KEY, storePath: sessionTarget.storePath },
-        async (operation, signal) => {
-          if (input === second) {
-            blockedOperation = operation;
+      });
+      let workspaceCalls = 0;
+      const provider = createProvider({
+        environments,
+        reconcileActivePlacement: async () => {},
+        redispatchPlacement,
+        resolveWorkspace: async () => {
+          workspaceCalls++;
+          if (workspaceCalls === 3 && blockSecond) {
+            successorEntered.resolve();
+            await finishSuccessor.promise;
+            throw new Error("successor finished");
           }
-          return provider.executeTurn(
-            runIdentity(input.runId),
-            { ...input, replyOperation: operation, abortSignal: signal },
-            unexpectedLocalExecution,
-          );
+          await pauseAt("workspace resolution");
+          return { kind: "local", path: root };
         },
-      );
-    let blocked: Promise<unknown> | undefined;
-    let successor: Promise<unknown> | undefined;
-    let recovery: ReturnType<ReplyOperation["watchdog"]["tick"]> | undefined;
-    const clock = vi.spyOn(Date, "now");
-    try {
-      await expect(execute(first)).resolves.toMatchObject({
-        payloads: [{ text: "First turn complete" }],
+        workspaceOperations: {
+          run(environmentId, task, ...options) {
+            const result = coordinator.run(
+              environmentId,
+              async () => {
+                if (blockSecond && stage === "workspace mutation") {
+                  await pauseAt("workspace mutation");
+                  // The entered writer still owns the exact claim after cancellation.
+                  expect(currentClaim()?.runId).toBe("blocked-second");
+                }
+                return await task();
+              },
+              ...options,
+            );
+            if (blockSecond && stage === "workspace queue") {
+              entered.resolve();
+            }
+            return result;
+          },
+        },
       });
-      await placements.waitForTurnClaimRelease(SESSION_ID, {});
-      expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-      expect(await pendingResults()).toEqual([]);
-      blockSecond = true;
-      if (stage === "workspace queue") {
-        queuedBlocker = coordinator.run(ENVIRONMENT_ID, () => resume.promise);
-      }
-      blocked = execute(second);
-      const outcome = blocked.catch((error: unknown) => error);
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        outcome,
-        "worker settled before reaching cancellation gate",
-      );
-      const oldClaim = currentClaim();
-      expect(oldClaim?.runId).toBe("blocked-second");
-      expect(await pendingResults()).toHaveLength(stage === "pending result" ? 1 : 0);
-      const dispatched =
-        stage === "dispatch boundary" ||
-        stage === "dispatch" ||
-        stage === "uncertain dispatch" ||
-        stage === "pending result";
-      expect(launch).toHaveBeenCalledTimes(dispatched ? 2 : 1);
-      let settled = false;
-      void outcome.then(() => {
-        settled = true;
-      });
-      if (!blockedOperation) {
-        throw new Error("Expected the actual admitted warm turn operation");
-      }
-      const operation = blockedOperation;
-      let ownerSettled = false;
-      void operation.ownerSettlement.then(() => {
-        ownerSettled = true;
-      });
-      // Exercise stalled recovery on the exact operation while retaining raw producer custody.
-      const deadlineAtMs = operation.watchdog.snapshot().semanticDeadlineAtMs;
-      const cancelled = createDeferred();
-      operation.abortSignal.addEventListener("abort", () => cancelled.resolve(), { once: true });
-      clock.mockReturnValue(deadlineAtMs);
-      recovery = operation.watchdog.tick(deadlineAtMs);
-      await awaitGateBeforeSettlement(
-        cancelled.promise,
-        recovery,
-        "stalled recovery finished before accepting cancellation",
-      );
-      expect(operation.abortSignal.aborted).toBe(true);
-      expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
-      expect(operation.watchdog.snapshot().recovery?.startedAtMs).toBe(deadlineAtMs);
-      if (stage === "workspace mutation" || stage === "execution-start publication" || dispatched) {
-        expect(ownerSettled).toBe(false);
-        expect(settled).toBe(false);
-        expect(currentClaim()).toEqual(oldClaim);
-        resume.resolve();
-      }
-      expect(await outcome).toBeInstanceOf(Error);
-      if (!dispatched) {
-        expect(await outcome).toMatchObject({ name: "AbortError" });
-      }
-      if (stage === "dispatch boundary" || stage === "uncertain dispatch") {
-        const failed = placements.get(SESSION_ID);
-        expect(failed).toMatchObject({
-          state: "failed",
-          turnClaim: null,
-          environmentId: ENVIRONMENT_ID,
-          activeOwnerEpoch: OWNER_EPOCH,
-        });
-        if (failed?.state !== "failed") {
-          throw new Error("expected failed custody fence");
-        }
-        expect(canRedispatchFailedWorkerPlacement(failed, environment)).toBe(true);
-        expect(environments.stopTunnel).toHaveBeenCalledOnce();
-        expect(destroy).toHaveBeenCalledOnce();
-        blockSecond = false;
-        await expect(execute(turn("successor-third"))).resolves.toMatchObject({
+      const first = turn("warm-first");
+      const second: ReturnType<typeof turn> & SessionPlacementTurnParams = {
+        ...turn("blocked-second"),
+        onExecutionStarted: () => pauseAt("execution-start publication"),
+      };
+      let blockedOperation: ReplyOperation | undefined;
+      const execute = (input: ReturnType<typeof turn>) =>
+        withSessionTurn(
+          { sessionId: SESSION_ID, sessionKey: SESSION_KEY, storePath: sessionTarget.storePath },
+          async (operation, signal) => {
+            if (input === second) {
+              blockedOperation = operation;
+            }
+            return provider.executeTurn(
+              runIdentity(input.runId),
+              { ...input, replyOperation: operation, abortSignal: signal },
+              unexpectedLocalExecution,
+            );
+          },
+        );
+      let blocked: Promise<unknown> | undefined;
+      let successor: Promise<unknown> | undefined;
+      let recovery: ReturnType<ReplyOperation["watchdog"]["tick"]> | undefined;
+      const clock = vi.spyOn(Date, "now");
+      try {
+        await expect(execute(first)).resolves.toMatchObject({
           payloads: [{ text: "First turn complete" }],
         });
         await placements.waitForTurnClaimRelease(SESSION_ID, {});
-        expect(placements.get(SESSION_ID)).toMatchObject({
-          state: "active",
-          environmentId: ENVIRONMENT_ID + "-recovered",
-          activeOwnerEpoch: OWNER_EPOCH + 1,
-          turnClaim: null,
+        expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+        expect(await pendingResults()).toEqual([]);
+        blockSecond = true;
+        if (stage === "workspace queue") {
+          queuedBlocker = coordinator.run(ENVIRONMENT_ID, () => resume.promise);
+        }
+        blocked = execute(second);
+        const outcome = blocked.catch((error: unknown) => error);
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          outcome,
+          "worker settled before reaching cancellation gate",
+        );
+        const oldClaim = currentClaim();
+        const currentPlacement = placements.get(SESSION_ID);
+        const oldWorkerClaim = currentPlacement && projectWorkerSessionTurnClaim(currentPlacement);
+        expect(oldClaim?.runId).toBe("blocked-second");
+        if (!oldClaim || !oldWorkerClaim) {
+          throw new Error("Expected the blocked turn claim");
+        }
+        const fenced =
+          stage === "workspace queue" ||
+          stage === "workspace mutation" ||
+          stage === "pending result";
+        const pendingBeforeCancellation = await pendingResults();
+        if (fenced) {
+          expect(pendingBeforeCancellation).toMatchObject([
+            {
+              sessionId: SESSION_ID,
+              environmentId: ENVIRONMENT_ID,
+              ownerEpoch: OWNER_EPOCH,
+              placementGeneration: oldWorkerClaim.placementGeneration,
+              claimId: oldWorkerClaim.claimId,
+              runId: oldWorkerClaim.runId,
+              workspaceAcceptedAtMs: null,
+              recoveryRequestedAtMs: null,
+              stagedResultRef: null,
+            },
+          ]);
+        } else {
+          expect(pendingBeforeCancellation).toEqual([]);
+        }
+        const dispatched =
+          stage === "dispatch boundary" ||
+          stage === "dispatch" ||
+          stage === "uncertain dispatch" ||
+          stage === "pending result";
+        expect(launch).toHaveBeenCalledTimes(dispatched ? 2 : 1);
+        let settled = false;
+        void outcome.then(() => {
+          settled = true;
         });
-        expect(launch).toHaveBeenCalledTimes(3);
-        return;
-      }
-      if (stage === "pending result") {
-        expect(currentClaim()).toEqual(oldClaim);
-        const pending = (await pendingResults())[0]!;
-        expect(pending.claimId).toBe(oldClaim?.claimId);
-        expect(pending.recoveryRequestedAtMs).not.toBeNull();
+        if (!blockedOperation) {
+          throw new Error("Expected the actual admitted warm turn operation");
+        }
+        const operation = blockedOperation;
+        let ownerSettled = false;
+        void operation.ownerSettlement.then(() => {
+          ownerSettled = true;
+        });
+        // Exercise stalled recovery on the exact operation while retaining raw producer custody.
+        const deadlineAtMs = operation.watchdog.snapshot().semanticDeadlineAtMs;
+        const cancelled = createDeferred();
+        operation.abortSignal.addEventListener("abort", () => cancelled.resolve(), { once: true });
+        clock.mockReturnValue(deadlineAtMs);
+        recovery = operation.watchdog.tick(deadlineAtMs);
+        await awaitGateBeforeSettlement(
+          cancelled.promise,
+          recovery,
+          "stalled recovery finished before accepting cancellation",
+        );
+        expect(operation.abortSignal.aborted).toBe(true);
+        expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
+        expect(operation.watchdog.snapshot().recovery?.startedAtMs).toBe(deadlineAtMs);
+        if (
+          stage === "workspace mutation" ||
+          stage === "execution-start publication" ||
+          dispatched
+        ) {
+          expect(ownerSettled).toBe(false);
+          expect(settled).toBe(false);
+          expect(currentClaim()).toEqual(oldClaim);
+          resume.resolve();
+        }
+        expect(await outcome).toBeInstanceOf(Error);
+        if (!dispatched) {
+          expect(await outcome).toMatchObject({ name: "AbortError" });
+        }
+        if (stage === "dispatch boundary" || stage === "uncertain dispatch") {
+          const failed = placements.get(SESSION_ID);
+          expect(failed).toMatchObject({
+            state: "failed",
+            turnClaim: null,
+            environmentId: ENVIRONMENT_ID,
+            activeOwnerEpoch: OWNER_EPOCH,
+          });
+          if (failed?.state !== "failed") {
+            throw new Error("expected failed custody fence");
+          }
+          expect(canRedispatchFailedWorkerPlacement(failed, environment)).toBe(true);
+          expect(environments.stopTunnel).toHaveBeenCalledOnce();
+          expect(destroy).toHaveBeenCalledOnce();
+          blockSecond = false;
+          await expect(execute(turn("successor-third"))).resolves.toMatchObject({
+            payloads: [{ text: "First turn complete" }],
+          });
+          await placements.waitForTurnClaimRelease(SESSION_ID, {});
+          expect(placements.get(SESSION_ID)).toMatchObject({
+            state: "active",
+            environmentId: ENVIRONMENT_ID + "-recovered",
+            activeOwnerEpoch: OWNER_EPOCH + 1,
+            turnClaim: null,
+          });
+          expect(launch).toHaveBeenCalledTimes(3);
+          return;
+        }
+        if (fenced) {
+          expect(currentClaim()).toEqual(oldClaim);
+          const pending = (await pendingResults())[0]!;
+          expect(pending).toMatchObject({
+            claimId: oldWorkerClaim.claimId,
+            runId: oldWorkerClaim.runId,
+            placementGeneration: oldWorkerClaim.placementGeneration,
+            recoveryRequestedAtMs: expect.any(Number),
+            workspaceAcceptedAtMs: null,
+          });
+          expect(environments.destroy).not.toHaveBeenCalled();
+          return;
+        }
+        expect(currentClaim()).toBeNull();
+        successor = execute(turn("successor-third"));
+        void successor.catch(() => undefined);
+        await awaitGateBeforeSettlement(
+          successorEntered.promise,
+          successor,
+          "successor settled before reaching workspace gate",
+        );
+        const replacement = currentClaim();
+        expect(replacement?.runId).toBe("successor-third");
+        resume.resolve();
+        expect(currentClaim()).toEqual(replacement);
+        expect(launch).toHaveBeenCalledTimes(dispatched ? 2 : 1);
         expect(environments.destroy).not.toHaveBeenCalled();
-        return;
+      } finally {
+        resume.resolve();
+        finishSuccessor.resolve();
+        await Promise.allSettled([blocked, successor, queuedBlocker, recovery]);
+        clock.mockRestore();
+        first.preparedRunAdmission.close();
+        second.preparedRunAdmission.close();
       }
-      expect(currentClaim()).toBeNull();
-      successor = execute(turn("successor-third"));
-      void successor.catch(() => undefined);
-      await awaitGateBeforeSettlement(
-        successorEntered.promise,
-        successor,
-        "successor settled before reaching workspace gate",
-      );
-      const replacement = currentClaim();
-      expect(replacement?.runId).toBe("successor-third");
-      resume.resolve();
-      expect(currentClaim()).toEqual(replacement);
-      expect(launch).toHaveBeenCalledTimes(dispatched ? 2 : 1);
-      expect(environments.destroy).not.toHaveBeenCalled();
-    } finally {
-      resume.resolve();
-      finishSuccessor.resolve();
-      await Promise.allSettled([blocked, successor, queuedBlocker, recovery]);
-      clock.mockRestore();
-      first.preparedRunAdmission.close();
-      second.preparedRunAdmission.close();
-    }
-  });
+    },
+    180_000,
+  );
 });
 
 describe("worker turn launcher node-loss continuation", () => {

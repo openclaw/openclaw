@@ -33,6 +33,16 @@ function quotedMessageUpsert(id: string, text: string, contextInfo: Record<strin
 describe("web monitor inbox reply context", () => {
   installStreamsInboundMessageHooks();
 
+  async function receive(
+    upsert: ReturnType<typeof quotedMessageUpsert> | ReturnType<typeof buildNotifyMessageUpsert>,
+  ) {
+    const onMessage = vi.fn(async () => {});
+    const monitor = await startInboxMonitor(onMessage as InboxOnMessage);
+    monitor.sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+    return { ...monitor, inbound: inboundMessage(onMessage) };
+  }
+
   async function expectQuotedReplyContext(quotedMessage: unknown) {
     const onMessage = vi.fn(async (msg) => {
       await msg.platform.reply("pong");
@@ -49,30 +59,23 @@ describe("web monitor inbox reply context", () => {
     await waitForMessageCalls(onMessage, 1);
 
     const inbound = inboundMessage(onMessage);
-    expect(inbound.quote?.id).toBe("q1");
-    expect(inbound.quote?.body).toBe("original");
-    expect(inbound.quote?.sender?.displayName).toBe("+111");
-    const sender = inbound.platform.sender as { e164?: string; name?: string };
-    expect(sender.e164).toBe("+999");
-    expect(sender.name).toBe("Tester");
-    const replyTo = inbound.quote?.context as {
-      body?: string;
-      id?: string;
-      sender?: { e164?: string; jid?: string; label?: string };
-    };
-    expect(replyTo.id).toBe("q1");
-    expect(replyTo.body).toBe("original");
-    expect(replyTo.sender?.jid).toBe("111@s.whatsapp.net");
-    expect(replyTo.sender?.e164).toBe("+111");
-    expect(replyTo.sender?.label).toBe("+111");
-    const self = inbound.platform.self as { e164?: string; jid?: string };
-    expect(self.jid).toBe("123@s.whatsapp.net");
-    expect(self.e164).toBe("+123");
+    expect(inbound.quote).toMatchObject({
+      id: "q1",
+      body: "original",
+      sender: { displayName: "+111" },
+      context: {
+        id: "q1",
+        body: "original",
+        sender: { jid: "111@s.whatsapp.net", e164: "+111", label: "+111" },
+      },
+    });
+    expect(inbound.platform).toMatchObject({
+      sender: { e164: "+999", name: "Tester" },
+      self: { jid: "123@s.whatsapp.net", e164: "+123" },
+    });
     expect(sock.sendMessage).toHaveBeenCalledWith(
       "999@s.whatsapp.net",
-      {
-        text: "pong",
-      },
+      { text: "pong" },
       expect.objectContaining({ messageId: expect.any(String) }),
     );
 
@@ -80,10 +83,7 @@ describe("web monitor inbox reply context", () => {
   }
 
   it("prepopulates image previews for inbound sendMedia replies", async () => {
-    const onMessage = vi.fn(async () => undefined);
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-    sock.ev.emit(
-      "messages.upsert",
+    const { listener, sock, inbound } = await receive(
       buildNotifyMessageUpsert({
         id: nextMessageId("image-preview"),
         remoteJid: "999@s.whatsapp.net",
@@ -92,9 +92,6 @@ describe("web monitor inbox reply context", () => {
         pushName: "Tester",
       }),
     );
-    await waitForMessageCalls(onMessage, 1);
-
-    const inbound = inboundMessage(onMessage);
     const image = Buffer.from("img");
     const thumbnail = Buffer.from("thumb");
     imageOps.getImageMetadata.mockResolvedValueOnce({ width: 640, height: 480 });
@@ -124,86 +121,52 @@ describe("web monitor inbox reply context", () => {
     await listener.close();
   });
 
-  it("resolves LID JIDs using Baileys LID mapping store", async () => {
+  it.each([
+    { source: "Baileys", remoteJid: "999@lid", phone: "999", mapped: "999@lid" },
+    { source: "auth directory", remoteJid: "555@lid", phone: "1555" },
+    { source: "group Baileys", remoteJid: "123@g.us", phone: "444", mapped: "444@lid" },
+  ])("resolves LID JIDs via $source", async ({ remoteJid, phone, mapped }) => {
+    if (!mapped) {
+      fsSync.writeFileSync(
+        path.join(getAuthDir(), "lid-mapping-555_reverse.json"),
+        JSON.stringify(phone),
+      );
+    }
     const onMessage = vi.fn(async () => {});
-
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-    const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
-    sock.signalRepository.lidMapping.getPNForLID.mockResolvedValueOnce("999:0@s.whatsapp.net");
-    const upsert = buildNotifyMessageUpsert({
-      id: nextMessageId("lid-store"),
-      remoteJid: "999@lid",
-      text: "ping",
-      timestamp: 1_700_000_000,
-      pushName: "Tester",
-    });
-
-    sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
-
-    expect(getPNForLID).toHaveBeenCalledWith("999@lid");
-    expect(getPNForLID).toHaveBeenCalledTimes(1);
-    const inbound = inboundMessage(onMessage);
-    expect(inbound.payload.body).toBe("ping");
-    expect(inbound.admission?.conversation.id).toBe("+999");
-    expect(inbound.platform.recipientJid).toBe("+123");
-
-    await listener.close();
-  });
-
-  it("resolves LID JIDs via authDir mapping files", async () => {
-    const onMessage = vi.fn(async () => {});
-    fsSync.writeFileSync(
-      path.join(getAuthDir(), "lid-mapping-555_reverse.json"),
-      JSON.stringify("1555"),
+    const mapping = sock.signalRepository.lidMapping.getPNForLID;
+    if (mapped) {
+      mapping.mockResolvedValueOnce(phone + ":0@s.whatsapp.net");
+    }
+    const group = remoteJid.endsWith("@g.us");
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("lid"),
+        remoteJid,
+        text: "ping",
+        timestamp: 1_700_000_000,
+        ...(group ? { participant: mapped } : { pushName: "Tester" }),
+      }),
     );
-
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-    const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
-    const upsert = buildNotifyMessageUpsert({
-      id: nextMessageId("lid-authdir"),
-      remoteJid: "555@lid",
-      text: "ping",
-      timestamp: 1_700_000_000,
-      pushName: "Tester",
-    });
-
-    sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
-
+    if (mapped) {
+      expect(mapping).toHaveBeenCalledWith(mapped);
+      if (!group) {
+        expect(mapping).toHaveBeenCalledTimes(1);
+      }
+    } else {
+      expect(mapping).not.toHaveBeenCalled();
+    }
     const inbound = inboundMessage(onMessage);
     expect(inbound.payload.body).toBe("ping");
-    expect(inbound.admission?.conversation.id).toBe("+1555");
-    expect(inbound.platform.recipientJid).toBe("+123");
-    expect(getPNForLID).not.toHaveBeenCalled();
-
-    await listener.close();
-  });
-
-  it("resolves group participant LID JIDs via Baileys mapping", async () => {
-    const onMessage = vi.fn(async () => {});
-
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-    const getPNForLID = vi.spyOn(sock.signalRepository.lidMapping, "getPNForLID");
-    sock.signalRepository.lidMapping.getPNForLID.mockResolvedValueOnce("444:0@s.whatsapp.net");
-    const upsert = buildNotifyMessageUpsert({
-      id: nextMessageId("group-lid"),
-      remoteJid: "123@g.us",
-      participant: "444@lid",
-      text: "ping",
-      timestamp: 1_700_000_000,
-    });
-
-    sock.ev.emit("messages.upsert", upsert);
-    await waitForMessageCalls(onMessage, 1);
-
-    expect(getPNForLID).toHaveBeenCalledWith("444@lid");
-    const inbound = inboundMessage(onMessage);
-    expect(inbound.payload.body).toBe("ping");
-    expect(inbound.admission?.conversation.id).toBe("123@g.us");
-    expect(inbound.platform.senderE164).toBe("+444");
-    expect(inbound.admission?.conversation.kind).toBe("group");
-
+    expect(inbound.admission?.conversation.id).toBe(group ? remoteJid : "+" + phone);
+    if (group) {
+      expect(inbound.platform.senderE164).toBe("+" + phone);
+      expect(inbound.admission?.conversation.kind).toBe("group");
+    } else {
+      expect(inbound.platform.recipientJid).toBe("+123");
+    }
     await listener.close();
   });
 
@@ -212,20 +175,13 @@ describe("web monitor inbox reply context", () => {
   });
 
   it("preserves native reply context when WhatsApp omits the quoted message", async () => {
-    const onMessage = vi.fn(async () => {});
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
-
-    sock.ev.emit(
-      "messages.upsert",
+    const { listener, inbound } = await receive(
       quotedMessageUpsert(nextMessageId("quoted-unavailable"), "yes", {
         stanzaId: "original-message",
         participant: "111@s.whatsapp.net",
       }),
     );
 
-    await waitForMessageCalls(onMessage, 1);
-
-    const inbound = inboundMessage(onMessage);
     expect(inbound.payload.body).toBe("yes");
     expect(inbound.quote).toMatchObject({
       id: "original-message",

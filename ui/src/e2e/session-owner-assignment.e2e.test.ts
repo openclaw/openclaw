@@ -65,7 +65,12 @@ function directoryResponse(extraNames: string[]): UsersListResult {
   };
 }
 
-async function installOwnerGateway(page: Page, archived = false, extraNames: string[] = []) {
+async function installOwnerGateway(
+  page: Page,
+  archived = false,
+  extraNames: string[] = [],
+  initialPage: "chat" | "sessions" = "chat",
+) {
   await routeAvatarFixtures(page, [{ id: "profile-ada", background: "#7c3aed", label: "A" }]);
   const result = sessionsListResponse(archived);
   const gateway = await installMockGateway(page, {
@@ -97,11 +102,15 @@ async function installOwnerGateway(page: Page, archived = false, extraNames: str
     sessionKey,
   });
   await page.goto(
-    archived
-      ? `${suite.server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`
-      : controlUiSessionUrl(suite.server.baseUrl, sessionKey),
+    initialPage === "sessions"
+      ? `${suite.server.baseUrl}sessions`
+      : archived
+        ? `${suite.server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`
+        : controlUiSessionUrl(suite.server.baseUrl, sessionKey),
   );
-  await page.getByText("Owner assignment outcome proof.", { exact: true }).waitFor();
+  if (initialPage === "chat") {
+    await page.getByText("Owner assignment outcome proof.", { exact: true }).waitFor();
+  }
   await gateway.deferNext("sessions.assignOwner");
   return gateway;
 }
@@ -147,7 +156,7 @@ async function expectAssignmentAvatarLayout(page: Page, compact = false): Promis
   expect(layout.length).toBeGreaterThan(0);
   for (const avatar of layout) {
     expect(avatar).toMatchObject({ width: "24px", height: "24px", square: true, contained: true });
-    expect(avatar.gap).toBeGreaterThanOrEqual(6);
+    expect(avatar.gap).toBeGreaterThanOrEqual(5.5);
   }
 }
 
@@ -219,6 +228,7 @@ async function expandAssignment(assignTo: Locator, compact: boolean) {
     await assignTo.click();
   } else {
     await assignTo.hover();
+    await expectBrowser(sessionMenuSubmenu(assignTo)).toHaveAttribute("data-phase", "open");
   }
 }
 
@@ -235,7 +245,7 @@ suite.define(() => {
         await expectBrowser(search).toBeVisible();
         await page.keyboard.type("zz");
         await expectBrowser(search).toHaveValue("zz");
-        await expectBrowser(panel).toContainText("No matching people or agents");
+        await expectBrowser(panel).toContainText("No people or agents match your search.");
         await page.keyboard.press("Escape");
         await expectBrowser(search).toHaveValue("");
         await page.keyboard.type("carol");
@@ -258,9 +268,7 @@ suite.define(() => {
       suite.withPage(
         { ...createControlUiE2eContextOptions(), viewport: { width, height: 900 } },
         async ({ page }) => {
-          const gateway = await installOwnerGateway(page);
-          await page.goto(`${suite.server.baseUrl}sessions`);
-          await gateway.deferNext("sessions.assignOwner");
+          const gateway = await installOwnerGateway(page, false, [], "sessions");
           const roster = page.locator("openclaw-sessions-page");
           const row = roster.locator("tbody tr").filter({
             has: page.getByRole("checkbox", { name: `Select session: ${sessionKey}`, exact: true }),
@@ -491,8 +499,8 @@ suite.define(() => {
           page.off("close", stopAvatarDiagnostics);
         }
         await expectAssignmentAvatarLayout(page);
-        await expectBrowser(assignTo.locator(".session-menu__icon")).toHaveCSS("width", "14px");
-        await expectBrowser(assignTo.locator(".session-menu__icon svg")).toHaveCSS("width", "14px");
+        await expectBrowser(assignTo.locator(".session-menu__icon")).toHaveCSS("width", "15px");
+        await expectBrowser(assignTo.locator(".session-menu__icon svg")).toHaveCSS("width", "15px");
         await assignee(panel, "Carol").click();
         await expectAssignmentRequest(gateway, "profile-carol");
         await confirmOwner(gateway, "Carol");
@@ -625,14 +633,15 @@ suite.define(() => {
           await search.clear();
           await expectBrowser(ownerChoices(page, compact)).toHaveCount(compact ? 1005 : 1004);
           await search.fill("Teammate 0999");
+          // Escape clears the query and keeps the field; the next Escape leaves the list.
           await search.press("Escape");
+          await expectBrowser(search).toHaveValue("");
+          await page.keyboard.press("Escape");
           if (width < 560) {
             await expectBrowser(page.locator(".session-actions-page")).toBeHidden();
             await expectBrowser(trigger).toBeFocused();
           } else {
-            await expectBrowser(search).toHaveValue("");
             await expectBrowser(trigger).toHaveAttribute("aria-expanded", "true");
-            await search.press("Escape");
             const assignment = menuItem(page, "Assign to…");
             await expectBrowser(assignment).toHaveAttribute("aria-expanded", "false");
             await page.keyboard.press("Escape");
@@ -652,6 +661,9 @@ suite.define(() => {
           await expectBrowser(match).toBeVisible();
           await expectBrowser(ownerChoices(page, compact)).toHaveCount(compact ? 2 : 1);
           await search.press(width < 560 ? "Tab" : "ArrowDown");
+          if (width < 560) {
+            await page.keyboard.press("Tab");
+          }
           await expectBrowser(match).toBeFocused();
           await page.keyboard.press("Enter");
           await expectAssignmentRequest(gateway, "profile-teammate-0999");

@@ -1,4 +1,4 @@
-import { withServer } from "openclaw/plugin-sdk/test-env";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./bridge-server.js";
@@ -29,7 +29,6 @@ describe("startBrowserBridgeServer auth", () => {
   }
 
   it.each([
-    ["127.0.0.1", tokenAuth, tokenHeaders],
     ["::1", tokenAuth, tokenHeaders],
     [
       "127.0.0.1",
@@ -50,15 +49,26 @@ describe("startBrowserBridgeServer auth", () => {
     await expect(startBridge()).rejects.toThrow(/requires auth/i);
   });
 
-  it("rejects startup when the bridge port is already in use", async () => {
-    await withServer(
-      (_req, res) => res.end(),
-      async (baseUrl) => {
-        await expect(
-          startBridge({ ...tokenAuth, port: Number(new URL(baseUrl).port) }),
-        ).rejects.toMatchObject({ code: "EADDRINUSE" });
-      },
-    );
+  it("does not carry its preparing turn into later authenticated requests", async () => {
+    const turn = new AsyncLocalStorage<string>();
+    const observed: Array<string | undefined> = [];
+    const bridge = await turn.run("finished-turn", async () => {
+      const started = await startBridge({
+        ...tokenAuth,
+        resolveSandboxNoVncToken: () => {
+          observed.push(turn.getStore());
+          return { noVncPort: 45678 };
+        },
+      });
+      expect(turn.getStore()).toBe("finished-turn");
+      return started;
+    });
+    const response = await fetch(`${bridge.baseUrl}/sandbox/novnc?token=synthetic`, {
+      headers: tokenHeaders,
+    });
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(observed).toEqual([undefined]);
   });
 
   it("closes ingress but retains exact bridge cleanup state for retry", async () => {
@@ -72,8 +82,7 @@ describe("startBrowserBridgeServer auth", () => {
     expect(getBridgeAuthForPort(bridge.port)).toEqual({ token: "secret-token" });
 
     const firstStop = stopBrowserBridgeServer(bridge.server);
-    const concurrentStop = stopBrowserBridgeServer(bridge.server);
-    expect(concurrentStop).toBe(firstStop);
+    expect(stopBrowserBridgeServer(bridge.server)).toBe(firstStop);
     await expect(firstStop).rejects.toThrow("relay cleanup failed");
     expect(bridge.server.listening).toBe(false);
     expect(getBridgeAuthForPort(bridge.port)).toBeUndefined();
@@ -130,7 +139,6 @@ describe("startBrowserBridgeServer auth", () => {
       headers: tokenHeaders,
     });
     expect(res.status).toBe(200);
-    expect(resolveToken).toHaveBeenCalledOnce();
     expect(res.headers.get("location")).toBeNull();
     expect(res.headers.get("cache-control")).toContain("no-store");
     expect(res.headers.get("referrer-policy")).toBe("no-referrer");

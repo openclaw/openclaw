@@ -49,6 +49,8 @@ describe("pruneStaleEntries", () => {
   it.each([
     ["agent:main:dashboard:child", { spawnedBy: "agent:main:main" }, "age-retention"],
     ["agent:main:subagent:child", {}, undefined],
+    [" SubAgent:child ", { sidebarRoot: true }, undefined],
+    [" Agent:Main: SubAgent:child ", { sidebarRoot: true }, undefined],
   ] as const)("drops a stale child pin on %s %j", (key, lineage, archiveReason) => {
     const stale = { ...makeEntry(Date.now() - 31 * DAY_MS), pinnedAt: 1, ...lineage };
     const store = makeStore([[key, stale]]);

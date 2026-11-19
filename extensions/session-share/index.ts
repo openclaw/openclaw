@@ -1,4 +1,6 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { createSessionShareGatewayCatalog } from "./src/gateway-catalog.js";
+import { registerSessionShareGatewayMethods } from "./src/gateway-methods.js";
 import { createSessionShareNodeCommands, SESSION_SHARE_COMMANDS } from "./src/node-commands.js";
 import { createSessionShareCatalog } from "./src/session-catalog.js";
 
@@ -7,7 +9,21 @@ export default definePluginEntry({
   name: "Session Share",
   description: "Read-only OpenClaw sessions on paired gateways",
   register(api) {
-    api.registerSessionCatalog(createSessionShareCatalog(api));
+    registerSessionShareGatewayMethods(api);
+    const nodes = createSessionShareCatalog(api);
+    const gateways = createSessionShareGatewayCatalog(api);
+    api.registerSessionCatalog({
+      ...nodes,
+      async list(query) {
+        const [nodeHosts, gatewayHosts] = await Promise.all([
+          nodes.list(query),
+          gateways.list(query),
+        ]);
+        return [...nodeHosts, ...gatewayHosts];
+      },
+      read: (request) =>
+        request.hostId.startsWith("gateway:") ? gateways.read(request) : nodes.read(request),
+    });
     for (const command of createSessionShareNodeCommands(api)) {
       api.registerNodeHostCommand(command);
     }

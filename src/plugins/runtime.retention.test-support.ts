@@ -23,13 +23,12 @@ import {
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
+import { PluginInvocationScope } from "./plugin-invocation-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import { PluginRuntimeCloseRetainedError } from "./runtime-close-error.js";
 import { disposePluginRegistryInstances, waitForPluginRegistryRetirement } from "./runtime.js";
 import { createPluginRecord } from "./status.test-helpers.js";
-
-const emptyResult = { cleanupCount: 0, failures: [] };
 
 function assertCollected(reference: WeakRef<object>, message: string) {
   assert.equal(reference.deref(), undefined, message);
@@ -143,11 +142,8 @@ async function retireSuccessors(withInstance: boolean) {
   for (let generation = 0; generation < 3; generation += 1) {
     const next = createRetirementRegistry(withInstance);
     successors.push(new WeakRef(next));
-    assert.deepEqual(
-      await disposePluginRegistryInstances(previous, next, { cfg: {} }),
-      emptyResult,
-    );
-    assert.deepEqual(await waitForPluginRegistryRetirement(previous), emptyResult);
+    await disposePluginRegistryInstances(previous, next, { cfg: {} });
+    await waitForPluginRegistryRetirement(previous);
     previous = next;
   }
   return { oldest, successors };
@@ -177,7 +173,7 @@ async function retireCapturedCallback() {
   };
   // Match a lifecycle caller whose stack frame closes over the retirement callback.
   const retire = () => retirePluginCache(cache, beforeRetire);
-  assert.deepEqual(await retire(), emptyResult);
+  await retire();
   assert.equal(calls, 1);
   return { cache, signal, reference };
 }
@@ -247,11 +243,8 @@ async function loadReplacement(root: string) {
     path.join(root, "index.cjs"),
     previous,
   );
-  assert.deepEqual(
-    await disposePluginRegistryInstances(previous, registry, { cfg: {} }),
-    emptyResult,
-  );
-  assert.deepEqual(await waitForPluginRegistryRetirement(previous), emptyResult);
+  await disposePluginRegistryInstances(previous, registry, { cfg: {} });
+  await waitForPluginRegistryRetirement(previous);
   return { registry, cache, reference };
 }
 
@@ -315,7 +308,9 @@ async function recoverOwner(root: string, kind: "source" | "bundled-cjs" | "bund
     rootDir: root,
   });
   assert.equal((instance.loadModule(source) as { read(): string }).read(), "recovered source");
-  const recovery = instance.captureModuleLoaderRecovery();
+  const scope = new PluginInvocationScope(previous, [instance]);
+  const recovery = await scope.run(() => instance.captureModuleLoaderRecovery());
+  scope.release();
   await instance.dispose();
   const current = new PluginInstance(record.id);
   recovery.bind(current);
@@ -516,7 +511,7 @@ switch (process.argv[2]) {
       Error.prepareStackTrace = () => {
         throw failure;
       };
-      assert.deepEqual(await retirePluginCache(cache, () => calls++), emptyResult);
+      await retirePluginCache(cache, () => calls++);
     } finally {
       if (formatter) {
         Object.defineProperty(Error, "prepareStackTrace", formatter);
@@ -549,8 +544,8 @@ switch (process.argv[2]) {
           successors.every((reference) => reference.deref() === undefined),
           "Completed retirement retained a successor registry",
         );
-        assert.deepEqual(await waitForPluginRegistryRetirement(oldest), emptyResult);
-        assert.deepEqual(await disposePluginRegistryInstances(oldest), emptyResult);
+        await waitForPluginRegistryRetirement(oldest);
+        await disposePluginRegistryInstances(oldest);
       },
     );
     break;
@@ -573,7 +568,7 @@ switch (process.argv[2]) {
         () => signal.throwIfAborted(),
         (error) => error === reason,
       );
-      assert.deepEqual(await retirePluginCache(cache), emptyResult);
+      await retirePluginCache(cache);
       const other = createPluginCache();
       await retirePluginCache(other);
       assert.notEqual(getPluginCacheRetirementSignal(other).reason, reason);

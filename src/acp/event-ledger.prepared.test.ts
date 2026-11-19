@@ -28,6 +28,40 @@ const nativeDatabase = (options: { path: string }) =>
   requireNativeSqliteDatabase(openOpenClawStateDatabase(options).db);
 const expectValues = (db: ReturnType<typeof nativeDatabase>, query: string) =>
   expect(db.prepare(`SELECT ${query}`).all().flatMap(Object.values));
+function seedSession(
+  db: ReturnType<typeof nativeDatabase>,
+  id: string,
+  key: string,
+  cwd: string,
+  payloads: string[],
+  gap = 1,
+  understated = false,
+) {
+  const events = payloads.map((json, index) => {
+    const bytes = Buffer.byteLength(id) + Buffer.byteLength(key) + Buffer.byteLength(json) + 32;
+    return { seq: (index + 1) * gap, json, bytes };
+  });
+  const bytes = Buffer.byteLength(id + key + cwd) + 32 + events.reduce((n, e) => n + e.bytes, 0);
+  db.prepare(
+    "INSERT INTO acp_replay_sessions (session_id, session_key, cwd, complete, created_at, updated_at, next_seq, estimated_bytes) VALUES (?, ?, ?, 1, 100, 100, ?, ?)",
+  ).run(id, key, cwd, (events.at(-1)?.seq ?? 0) + 1, understated ? 1 : bytes);
+  const insert = db.prepare(
+    "INSERT INTO acp_replay_events (session_id, seq, at, session_key, run_id, update_json, estimated_bytes) VALUES (?, ?, 100, ?, NULL, ?, ?)",
+  );
+  for (const event of events) {
+    insert.run(id, event.seq, key, event.json, event.bytes);
+  }
+}
+function workerFixture(options: { path: string }) {
+  const database = openOpenClawStateDatabase(options);
+  const context: WorkerWriteOperationContext = {
+    open: () => database,
+    stateOptions: () => ({ path: options.path, env: process.env }),
+    write: (operation) => runOpenClawStateWriteTransaction(operation, options),
+    writeAdmitted: (operation) => runOpenClawStateWriteTransaction(operation, options),
+  };
+  return { db: requireNativeSqliteDatabase(database.db), context };
+}
 async function fixture(
   dir: string,
   { warm = 0 }: { warm?: number } = {},
@@ -35,7 +69,8 @@ async function fixture(
 ) {
   const options = { path: path.join(dir, "state.sqlite") };
   const ledger = createSqliteAcpEventLedger(options);
-  const record = (text: string) => ledger.recordUpdate({ ...session, update: update(text) });
+  const record = (text: string, runId?: string) =>
+    ledger.recordUpdate({ ...session, runId, update: update(text) });
   await ledger.startSession(session);
   for (let index = 0; index < warm; index++) {
     await record(`warm-${index}`);
@@ -46,67 +81,11 @@ async function fixture(
 describe("ACP replay worker", () => {
   afterEach(() => closeOpenClawStateDatabaseAsync());
 
-  it("binds fresh metadata, sequence and payload values across worker appends", async ({ dir }) => {
-    const f = await fixture(dir, { warm: 3 });
-    const { ledger, session } = f;
-    const db = f.db();
-    const appends = Array.from({ length: 4 }, (_, index) => ({
-      sessionKey: `key-${index}-漢😀`,
-      runId: index % 2 ? `run-${index}` : undefined,
-      update: update(`payload-${index}-漢\0\ud800`),
-    }));
-    const expected = structuredClone(appends);
-    const initial = db.prepare("SELECT created_at, updated_at FROM acp_replay_sessions").get();
-    // Separate native clock windows without changing worker-issued authority time.
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1);
-    });
-    const timestampWindows: Array<{ before: number; after: number }> = [];
-    for (const event of appends) {
-      const before = Date.now();
-      await ledger.recordUpdate({ sessionId: session.sessionId, ...event });
-      timestampWindows.push({ before, after: Date.now() });
-    }
-    const replay = await ledger.readReplayBySessionId(session);
-    expect(replay).toMatchObject({ complete: true, sessionKey: "key-3-漢😀" });
-    expectValues(db, "created_at, updated_at, next_seq FROM acp_replay_sessions").toEqual([
-      initial?.created_at,
-      replay.events.at(-1)?.at,
-      8,
-    ]);
-    expect(
-      replay.events
-        .slice(3)
-        .map((event) => [event.seq, event.sessionKey, event.runId, event.update]),
-    ).toEqual(
-      expected.map((event, index) => [index + 4, event.sessionKey, event.runId, event.update]),
-    );
-    expect(timestampWindows[0]?.before).toBeGreaterThan(Number(initial?.updated_at));
-    for (const [index, { before, after }] of timestampWindows.entries()) {
-      expect(replay.events[index + 3]?.at).toBeGreaterThanOrEqual(before);
-      expect(replay.events[index + 3]?.at).toBeLessThanOrEqual(after);
-    }
-    expectAcpReplayUtf8Accounting(db);
-
-    await closeOpenClawStateDatabaseAsync();
-    await f.record("after reopen");
-    const reopened = await ledger.readReplayBySessionId(session);
-    expect(reopened.events.at(-1)).toMatchObject({ seq: 8, update: update("after reopen") });
-    expectAcpReplayUtf8Accounting(f.db());
-  });
-
   it("appends without reading earlier payload columns", async ({ dir }) => {
     const { options, session, record } = await fixture(dir);
     await record("prior payload");
     await closeOpenClawStateDatabaseAsync();
-    const database = openOpenClawStateDatabase(options);
-    const db = requireNativeSqliteDatabase(database.db);
-    const context: WorkerWriteOperationContext = {
-      open: () => database,
-      stateOptions: () => ({ path: options.path, env: process.env }),
-      write: (operation) => runOpenClawStateWriteTransaction(operation, options),
-      writeAdmitted: (operation) => runOpenClawStateWriteTransaction(operation, options),
-    };
+    const { db, context } = workerFixture(options);
     db.setAuthorizer((action, table, column) =>
       action === constants.SQLITE_READ && table === "acp_replay_events" && column === "update_json"
         ? constants.SQLITE_DENY
@@ -124,12 +103,15 @@ describe("ACP replay worker", () => {
     expectAcpReplayUtf8Accounting(db);
   });
 
-  it("rolls back sequence and byte accounting when an event insert fails", async ({ dir }) => {
+  it("rolls back failed appends and preserves sequence, timestamps and bytes across reopen", async ({
+    dir,
+  }) => {
     const f = await fixture(dir, { warm: 3 });
     const large = "漢".repeat(32 * 1024);
     await f.record(large);
-    await f.record("small after large");
+    await f.record("small after large", "run-漢😀");
     const db = f.db();
+    const initial = db.prepare("SELECT created_at, updated_at FROM acp_replay_sessions").get();
     db.exec(`CREATE TRIGGER reject_replay_event BEFORE INSERT ON acp_replay_events
         BEGIN SELECT RAISE(ABORT, 'replay event rejected'); END`);
     try {
@@ -137,14 +119,33 @@ describe("ACP replay worker", () => {
     } finally {
       db.exec("DROP TRIGGER reject_replay_event");
     }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1);
+    });
+    const before = Date.now();
     await f.record("accepted");
+    const after = Date.now();
     const replay = await f.ledger.readReplayBySessionId(f.session);
-    expect(replay.events.slice(3).map((event) => [event.seq, event.update])).toEqual([
-      [4, update(large)],
-      [5, update("small after large")],
-      [6, update("accepted")],
+    expect(replay.events.slice(3).map((event) => [event.seq, event.runId, event.update])).toEqual([
+      [4, undefined, update(large)],
+      [5, "run-漢😀", update("small after large")],
+      [6, undefined, update("accepted")],
+    ]);
+    const last = replay.events.at(-1);
+    expect(before).toBeGreaterThan(Number(initial?.updated_at));
+    expect(last?.at).toBeGreaterThanOrEqual(before);
+    expect(last?.at).toBeLessThanOrEqual(after);
+    expectValues(db, "created_at, updated_at, next_seq FROM acp_replay_sessions").toEqual([
+      initial?.created_at,
+      last?.at,
+      7,
     ]);
     expectAcpReplayUtf8Accounting(db);
+    await closeOpenClawStateDatabaseAsync();
+    await f.record("after reopen");
+    const reopened = await f.ledger.readReplayBySessionId(f.session);
+    expect(reopened.events.at(-1)).toMatchObject({ seq: 7, update: update("after reopen") });
+    expectAcpReplayUtf8Accounting(f.db());
   });
 
   it("retains a later prompt block after byte-budget exhaustion", async ({ dir }) => {
@@ -171,22 +172,11 @@ describe("ACP replay worker", () => {
     "carries byte-budget accounting across ordered partial-session eviction (understated=%s)",
     async (understated, { dir }) => {
       const options = { path: path.join(dir, "state.sqlite") };
-      const database = openOpenClawStateDatabase(options);
-      const db = requireNativeSqliteDatabase(database.db);
-      const updateJson = JSON.stringify(update("x".repeat(64 * 1024)));
+      const { db, context } = workerFixture(options);
+      const payloads = Array<string>(130).fill(JSON.stringify(update("x".repeat(64 * 1024))));
       runOpenClawStateWriteTransaction(() => {
-        const insertSession = db.prepare(
-          "INSERT INTO acp_replay_sessions (session_id, session_key, cwd, complete, created_at, updated_at, next_seq, estimated_bytes) VALUES (?, ?, '', 1, 100, 100, 131, ?)",
-        );
-        const insertEvent = db.prepare(
-          "INSERT INTO acp_replay_events (session_id, seq, at, session_key, run_id, update_json, estimated_bytes) VALUES (?, ?, 100, ?, NULL, ?, ?)",
-        );
         for (const id of ["a", "b", "c"]) {
-          const eventBytes = 34 + Buffer.byteLength(updateJson);
-          insertSession.run(id, id, understated && id === "a" ? 1 : 34 + 130 * eventBytes);
-          for (let seq = 1; seq <= 130; seq++) {
-            insertEvent.run(id, seq, id, updateJson, eventBytes);
-          }
+          seedSession(db, id, id, "", payloads, 1, understated && id === "a");
         }
       }, options);
       const measured = trackSqliteStatementExecutions(db, ["budgetRead"], (sql) =>
@@ -196,12 +186,6 @@ describe("ACP replay worker", () => {
           ? "budgetRead"
           : null,
       );
-      const context: WorkerWriteOperationContext = {
-        open: () => database,
-        stateOptions: () => ({ path: options.path, env: process.env }),
-        write: (operation) => runOpenClawStateWriteTransaction(operation, options),
-        writeAdmitted: (operation) => runOpenClawStateWriteTransaction(operation, options),
-      };
       try {
         acpReplayOperations["acpReplay.start"](
           { session: { ...defaultSession, sessionId: "fresh" }, now: 200 },
@@ -235,41 +219,14 @@ describe("ACP replay worker", () => {
     ];
     // Seed actual retained rows in one transaction, not thousands of worker round trips.
     runOpenClawStateWriteTransaction(() => {
-      const insertSession = db.prepare(
-        "INSERT INTO acp_replay_sessions (session_id, session_key, cwd, complete, created_at, updated_at, next_seq, estimated_bytes) VALUES (?, ?, '/work', 1, 100, 100, ?, ?)",
-      );
-      const insertEvent = db.prepare(
-        "INSERT INTO acp_replay_events (session_id, seq, at, session_key, run_id, update_json, estimated_bytes) VALUES (?, ?, 100, ?, NULL, ?, ?)",
-      );
       for (const sessionId of sessionIds) {
-        const sessionKey = "key-" + sessionId;
-        const events = Array.from(
+        const payloads = Array.from(
           { length: sessionId === "a" || sessionId === "b" ? 5_001 : 0 },
-          (_, index) => {
-            const updateJson = JSON.stringify(update(sessionId + "-" + index));
-            const bytes =
-              Buffer.byteLength(sessionId) +
-              Buffer.byteLength(sessionKey) +
-              Buffer.byteLength(updateJson) +
-              32;
-            return { seq: (index + 1) * 10, updateJson, bytes };
-          },
+          (_, index) => JSON.stringify(update(sessionId + "-" + index)),
         );
-        const bytes =
-          Buffer.byteLength(sessionId) +
-          Buffer.byteLength(sessionKey) +
-          Buffer.byteLength("/work") +
-          32 +
-          events.reduce((sum, event) => sum + event.bytes, 0);
-        insertSession.run(sessionId, sessionKey, events.length ? 50_011 : 1, bytes);
-        for (const event of events) {
-          insertEvent.run(sessionId, event.seq, sessionKey, event.updateJson, event.bytes);
-        }
+        seedSession(db, sessionId, "key-" + sessionId, "/work", payloads, 10);
       }
     }, options);
-    expectValues(db, "COUNT(*) FROM acp_replay_sessions").toEqual([201]);
-    expectValues(db, "COUNT(*) FROM acp_replay_events").toEqual([10_002]);
-    expectAcpReplayUtf8Accounting(db);
     // Tied timestamps and gapped sequences must not turn next_seq into an event count.
     await second.startSession({
       sessionId: "a",

@@ -7,6 +7,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { create as createSessionRow, type Lookup } from "./session-row-projection-record.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import * as sessionStoreKeys from "./session-store-key.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
@@ -16,6 +17,7 @@ function placementReadView() {
     isCurrent(): boolean;
     getPolicyConfig(): SessionRowReadView["state"]["policyConfig"];
   } = {
+    ...createSessionRowProjectionFixture({ cfg: {}, store: {} }),
     physicalPaths: (locator) => [locator],
     state: {
       cfg: {},
@@ -70,7 +72,7 @@ function placementSnapshot(reconciling: readonly string[]): WorkerSessionPlaceme
 }
 
 it.each(["gateway:rpc:sessions.list", "scheduler:maintenance:session-refresh"])(
-  "attributes prepared-row work after readiness waits to %s",
+  "attributes prepared-row work after readiness waits without relabeling roster consumers: %s",
   async (task) => {
     const { read, query } = placementReadView();
     let now = 0;
@@ -107,9 +109,27 @@ it.each(["gateway:rpc:sessions.list", "scheduler:maintenance:session-refresh"])(
         );
       });
       expect(monitor.drain().stalls).toEqual([
-        { elapsedMs: 300, task: `${task}:session-rows:select`, taskMs: 300 },
-        { elapsedMs: 350, task: `${task}:session-rows:prepare`, taskMs: 350 },
-        { elapsedMs: 900, task: `${task}:agent-roster`, taskMs: 500 },
+        {
+          elapsedMs: 300,
+          task: `${task}:session-rows:select`,
+          taskMs: 300,
+          startedAt: 5_000,
+          endedAt: 5_300,
+        },
+        {
+          elapsedMs: 350,
+          task: `${task}:session-rows:prepare`,
+          taskMs: 350,
+          startedAt: 5_300,
+          endedAt: 5_650,
+        },
+        {
+          elapsedMs: 900,
+          task: `${task}:session-rows:consume`,
+          taskMs: 900,
+          startedAt: 5_650,
+          endedAt: 6_550,
+        },
       ]);
     } finally {
       owner.dispose();

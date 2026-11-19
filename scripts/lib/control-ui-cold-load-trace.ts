@@ -4,26 +4,29 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import {
+  scriptExecutionMask,
+  type ScriptCoverageFunctions,
+} from "./control-ui-script-coverage.mts";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 
-/** V8 offsets are UTF-16; nested block counts override their containing function. */
+export function controlUiScriptAssetUrl(value: string, assets: URL): URL | null {
+  const url = URL.parse(value);
+  return url &&
+    url.origin === assets.origin &&
+    url.pathname.includes(assets.pathname) &&
+    /\.m?js$/u.test(url.pathname)
+    ? url
+    : null;
+}
+
 export function summarizeScriptCoverage(entry: {
   source?: string;
-  functions: readonly {
-    ranges: readonly { startOffset: number; endOffset: number; count: number }[];
-  }[];
+  functions: ScriptCoverageFunctions;
 }) {
   const source = entry.source ?? "";
-  const executed = new Uint8Array(source.length);
-  const ranges = entry.functions
-    .flatMap((fn) => fn.ranges)
-    .toSorted(
-      (left, right) => right.endOffset - right.startOffset - (left.endOffset - left.startOffset),
-    );
-  for (const range of ranges) {
-    executed.fill(range.count > 0 ? 1 : 0, range.startOffset, range.endOffset);
-  }
+  const executed = scriptExecutionMask(source.length, entry.functions);
   let executedBytes = 0;
   let start = 0;
   for (let index = 0; index <= source.length; index++) {
@@ -157,20 +160,12 @@ export async function mapColdLoadCpuProfile(
   const nodes = await Promise.all(
     profile.nodes.map(async (node) => {
       const frame = node.callFrame;
-      const url = URL.parse(frame.url);
-      if (
-        !url ||
-        url.origin !== base.origin ||
-        frame.lineNumber < 0 ||
-        !/\.m?js$/u.test(url.pathname)
-      ) {
+      const url = controlUiScriptAssetUrl(frame.url, base);
+      if (!url || frame.lineNumber < 0) {
         return node;
       }
       // Preview also serves relative entry assets beneath the deep-link path.
       const assetStart = url.pathname.lastIndexOf(base.pathname);
-      if (assetStart < 0) {
-        return node;
-      }
       const relative = decodeURIComponent(url.pathname.slice(assetStart + base.pathname.length));
       const file = path.resolve(directory, relative);
       if (!file.startsWith(`${directory}${path.sep}`)) {

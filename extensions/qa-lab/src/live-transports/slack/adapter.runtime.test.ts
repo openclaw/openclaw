@@ -8,9 +8,7 @@ import type { QaChannelE2eDriver } from "../shared/channel-e2e.types.js";
 import { slackRequest } from "./slack-capture.test-helpers.js";
 
 const mocks = vi.hoisted(() => ({
-  acquireCaptureStore: vi.fn(),
   acquireCredentialLease: vi.fn(),
-  captureRelease: vi.fn(),
   createCaptureReader: vi.fn(),
   credentialRelease: vi.fn(),
   getSlackIdentity: vi.fn(),
@@ -21,7 +19,6 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
-  acquireDebugProxyCaptureStoreAsync: mocks.acquireCaptureStore,
   createDebugProxyCaptureReaderAsync: mocks.createCaptureReader,
 }));
 
@@ -36,12 +33,6 @@ vi.mock("../shared/credential-lease.runtime.js", () => ({
 
 vi.mock("./scenario-environment.js", () => ({
   createSlackQaScenarioEnvironment: () => ({ prepareFlow: mocks.prepareFlow }),
-}));
-
-vi.mock("./slack-live.config.js", () => ({
-  buildSlackQaConfig: () => ({}),
-  parseSlackQaCredentialPayload: vi.fn(),
-  resolveSlackQaRuntimeEnv: vi.fn(),
 }));
 
 vi.mock("./slack-live.message-observations.js", () => ({
@@ -73,11 +64,6 @@ const emptyCaptureReader = () => ({
   getSessionEvents: vi.fn(async () => []),
   readBlob: vi.fn(async () => null),
 });
-const messageRecorder = () => ({
-  addInboundMessage: vi.fn(),
-  addOutboundMessage: vi.fn(),
-  editMessage: vi.fn(),
-});
 const privateEvidence = "preserve private evidence";
 const uncertainReceipt = "without a definitive Slack receipt";
 function expectEvidence(artifact: { evidence: unknown[] }, evidence: Record<string, unknown>) {
@@ -100,10 +86,6 @@ beforeEach(() => {
     "fetch",
     vi.fn(() => Promise.reject(new Error("Unexpected Slack request"))),
   );
-  mocks.acquireCaptureStore.mockResolvedValue({
-    store: emptyCaptureReader(),
-    release: mocks.captureRelease,
-  });
   mocks.createCaptureReader.mockReturnValue(emptyCaptureReader());
   mocks.acquireCredentialLease.mockResolvedValue({
     payload: {
@@ -145,6 +127,41 @@ function holdSlackResponse() {
       body.close();
     },
   };
+}
+
+async function prepareAdapter(outputDir: string, agentE2e = false, signal?: AbortSignal) {
+  const adapter = await createSlackQaTransportAdapter({
+    channelId: "slack",
+    driver: "live",
+    outputDir,
+    credentials: {
+      acquire: mocks.acquireCredentialLease,
+      startHeartbeat: () => ({
+        getFailure: () => null,
+        stop: mocks.heartbeatStop,
+        throwIfFailed: mocks.heartbeatThrowIfFailed,
+      }),
+    },
+    adapterOptions: { agentE2e },
+    messages: createQaBusState(),
+  });
+  const input = {
+    config: {},
+    gateway: {
+      baseUrl: "http://127.0.0.1:1",
+      tempRoot: outputDir,
+      workspaceDir: outputDir,
+      runtimeEnv: {},
+      call: async () => ({}),
+    },
+    outputDir,
+    scenarioId: "settlement",
+    scenarioTitle: "Bounded Slack settlement",
+    signal,
+    timeoutMs: 30_000,
+    waitForConfigRestartSettle: vi.fn(),
+  };
+  return { adapter, input, prepared: await adapter.prepareFlow?.(input) };
 }
 
 async function nativeAdapterFixture(
@@ -199,38 +216,9 @@ async function nativeAdapterFixture(
   });
   const outputDir = tempDirs.make("slack-adapter-settlement-");
   const controller = new AbortController();
-  const adapter = await createSlackQaTransportAdapter({
-    channelId: "slack",
-    driver: "live",
-    outputDir,
-    credentials: {
-      acquire: mocks.acquireCredentialLease,
-      startHeartbeat: () => ({
-        getFailure: () => null,
-        stop: mocks.heartbeatStop,
-        throwIfFailed: mocks.heartbeatThrowIfFailed,
-      }),
-    },
-    adapterOptions: { agentE2e: true },
-    messages: messageRecorder(),
-  });
-  const prepared = await adapter.prepareFlow?.({
-    config: {},
-    gateway: {
-      baseUrl: "http://127.0.0.1:1",
-      tempRoot: outputDir,
-      workspaceDir: outputDir,
-      runtimeEnv: {},
-      call: async () => ({}),
-    },
-    outputDir,
-    scenarioId: "settlement",
-    scenarioTitle: "Bounded Slack settlement",
-    signal: controller.signal,
-    timeoutMs: 30_000,
-    waitForConfigRestartSettle: vi.fn(),
-  });
+  const { adapter, prepared } = await prepareAdapter(outputDir, true, controller.signal);
   const requestMethods = (since = 0) => requests.slice(since).map(({ method }) => method);
+  const artifactPath = path.join(outputDir, "settlement-slack-e2e.json");
   return {
     adapter,
     controller,
@@ -248,11 +236,7 @@ async function nativeAdapterFixture(
       expect(deadline, "The dispatched HTTP request must have an owned deadline").toBeDefined();
       deadline!.abort(new DOMException("Slack request deadline", "TimeoutError"));
     },
-    async artifact() {
-      return JSON.parse(
-        await fs.readFile(path.join(outputDir, "settlement-slack-e2e.json"), "utf8"),
-      );
-    },
+    artifact: async () => JSON.parse(await fs.readFile(artifactPath, "utf8")),
     async cleanup() {
       await adapter.cleanup?.();
       await adapter.cleanupAfterGatewayStop?.();
@@ -263,19 +247,17 @@ async function nativeAdapterFixture(
 function busObservationFixture() {
   const state = createQaBusState();
   const busMessageIds = new Map<string, string>();
-  const base = {
-    accountId: "sut",
-    busMessageIds,
-    logicalConversationId: "C123",
-    observedText: new Map<string, string>(),
-    sutUserId: "U123",
-    messages: state,
-  };
+  const observedText = new Map<string, string>();
   return {
     state,
     observe: (text: string, ts = "123.000001", thread_ts?: string) =>
       testing.recordSlackObservedMessage({
-        ...base,
+        accountId: "sut",
+        busMessageIds,
+        logicalConversationId: "C123",
+        observedText,
+        sutUserId: "U123",
+        messages: state,
         message: { text, ts, thread_ts, user: "U123" },
       }),
     busMessageIds,
@@ -284,28 +266,12 @@ function busObservationFixture() {
 
 describe("Slack live adapter reconciliation", () => {
   it("does not acquire a capture reader before a capture is requested", async () => {
-    const adapter = await createSlackQaTransportAdapter({
-      messages: messageRecorder(),
-    } as never);
-    const runtimeEnv = { OPENCLAW_STATE_DIR: "/candidate/state" };
-    const input = {
-      config: {},
-      gateway: { runtimeEnv },
-      outputDir: "/output",
-      scenarioId: "slack-progress",
-      scenarioTitle: "Slack progress",
-      timeoutMs: 30_000,
-      waitForConfigRestartSettle: vi.fn(),
-    } as never;
-
-    await adapter.prepareFlow?.(input);
+    const { adapter, input } = await prepareAdapter(tempDirs.make("slack-lazy-capture-"));
     await adapter.prepareFlow?.(input);
     await adapter.cleanup?.();
     await adapter.cleanupAfterGatewayStop?.();
 
     expect(mocks.createCaptureReader).not.toHaveBeenCalled();
-    expect(mocks.acquireCaptureStore).not.toHaveBeenCalled();
-    expect(mocks.captureRelease).not.toHaveBeenCalled();
     expectLeaseReleased();
   });
 

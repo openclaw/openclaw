@@ -130,7 +130,7 @@ const publicLabels = new Set([
   "prototype",
 ]);
 
-function readGraph(file, safeLabels = null, stringLimit = 1024, scriptAllowlist = null) {
+export function readGraph(file, safeLabels = null, stringLimit = 1024, scriptAllowlist = null) {
   const reader = new Reader(file);
   try {
     const header = reader.find('"nodes"', true).replace(/,\s*$/u, "");
@@ -1093,6 +1093,48 @@ function summarizeCode(snapshot, top) {
   const ranked = rows
     .slice(2)
     .toSorted((a, b) => b.retainedBytes - a.retainedBytes || b.shallowBytes - a.shallowBytes);
+  const sourceGroups = new Map();
+  const sourceNodes = new Set();
+  let sourceBytes = 0;
+  for (const script of scripts) {
+    const owner = owners[script];
+    let group = sourceGroups.get(owner);
+    if (!group) {
+      const { name, identityHash, instanceCount } = rows[owner];
+      group = { name, identityHash, instanceCount, nodes: new Set(), shallowBytes: 0 };
+      sourceGroups.set(owner, group);
+    }
+    const pending = [];
+    for (let edge = starts[script]; edge < starts[script + 1]; edge++) {
+      if (internalTag(edge) === "source") {
+        pending.push(targets[edge]);
+      }
+    }
+    // Source ropes can share backing strings within and across script identities.
+    while (pending.length) {
+      const source = pending.pop();
+      if (!reachable(source) || group.nodes.has(source)) {
+        continue;
+      }
+      const kind = nodeKinds[types[source]];
+      if (!["string", "concatenated string", "sliced string"].includes(kind)) {
+        continue;
+      }
+      group.nodes.add(source);
+      group.shallowBytes += sizes[source];
+      if (!sourceNodes.has(source)) {
+        sourceNodes.add(source);
+        sourceBytes += sizes[source];
+      }
+      if (kind !== "string") {
+        for (let edge = starts[source]; edge < starts[source + 1]; edge++) {
+          if (kinds[edgeKinds[edge]] === "internal") {
+            pending.push(targets[edge]);
+          }
+        }
+      }
+    }
+  }
   return {
     total,
     scriptCount: scripts.size,
@@ -1101,12 +1143,95 @@ function summarizeCode(snapshot, top) {
     sharedOrRuntime: rows[1],
     topScripts: ranked.slice(0, top),
     duplicateScripts: ranked.filter((row) => row.instanceCount > 1),
+    sourceStrings: {
+      stringNodes: sourceNodes.size,
+      shallowBytes: sourceBytes,
+      topScripts: [...sourceGroups.values()]
+        .filter((group) => group.nodes.size)
+        .map((group) => ({
+          name: group.name,
+          identityHash: group.identityHash,
+          instanceCount: group.instanceCount,
+          shallowBytes: group.shallowBytes,
+          stringNodes: group.nodes.size,
+        }))
+        .toSorted((a, b) => b.shallowBytes - a.shallowBytes)
+        .slice(0, top),
+    },
     notes: [
       "Only exact reviewed script names after stripping query/hash are emitted; other names are redacted. SHA-256 identities compare normalized names, not source contents. Anonymous/truncated names have null hashes and remain separate.",
       "Instances count reachable V8 Script objects, not functions, module evaluations or reclaimable duplicates. Attribution seeds Script/SFI and closure code/feedback edges, then follows only strong internal/hidden code-to-code edges. Script/SFI seeds stay fixed; conflicting associations and tagged builtins are shared/runtime. Unassociated code stays unattributed.",
       "Shallow bytes partition reachable code nodes once. Retained bytes union each group's dominated subtrees, including source strings and other non-code data; different rows may overlap and must not be summed. Top scripts are bounded by --top; duplicateScripts includes every repeated complete identity. Attribution is inferred from V8 snapshot structure, not a loader or security-boundary verdict.",
+      "Source strings follow Script.source and strong internal string edges through concatenated/sliced backing strings. Counts and shallow bytes union nodes within each script identity and across the total. Per-script source rows may overlap: this is source association, not exclusive dominator retention or RSS. Source contents are never emitted.",
     ],
   };
+}
+
+function summarizeNodeGroups(snapshot, file) {
+  const groups = JSON.parse(readFileSync(file, "utf8"));
+  if (!groups || typeof groups !== "object" || Array.isArray(groups)) {
+    throw new Error("--node-groups requires a JSON object of reviewed names to node-ID arrays");
+  }
+  const wanted = new Map();
+  for (const [name, ids] of Object.entries(groups)) {
+    if (
+      !/^[A-Za-z][A-Za-z0-9_.-]{0,79}$/u.test(name) ||
+      !Array.isArray(ids) ||
+      ids.some((id) => !Number.isSafeInteger(id) || id <= 0)
+    ) {
+      throw new Error("Invalid --node-groups name or node-ID array");
+    }
+    for (const id of ids) {
+      wanted.set(id, undefined);
+    }
+  }
+  const { ids, count, immediateDominators, sizes, retained } = snapshot;
+  for (let node = 0; node < count; node++) {
+    if (wanted.has(ids[node])) {
+      wanted.set(ids[node], node);
+    }
+  }
+  return Object.fromEntries(
+    Object.entries(groups).map(([name, requested]) => {
+      const unique = new Set(requested);
+      const found = [...unique].map((id) => wanted.get(id)).filter((node) => node !== undefined);
+      const selected = new Set(found.filter((node) => immediateDominators[node] < count));
+      let retainedUnionBytes = 0;
+      let subtreeRoots = 0;
+      let shallowBytes = 0;
+      for (const node of selected) {
+        shallowBytes += sizes[node];
+        let ancestor = node;
+        let covered = false;
+        while (ancestor !== 0) {
+          ancestor = immediateDominators[ancestor];
+          if (selected.has(ancestor)) {
+            covered = true;
+            break;
+          }
+        }
+        // Existing dominator subtrees are nested or disjoint; count only uncovered roots.
+        if (!covered) {
+          retainedUnionBytes += retained[node];
+          subtreeRoots++;
+        }
+      }
+      return [
+        name,
+        {
+          requestedCount: requested.length,
+          uniqueRequestedCount: unique.size,
+          matchedCount: found.length,
+          missingCount: unique.size - found.length,
+          reachableCount: selected.size,
+          unreachableCount: found.length - selected.size,
+          subtreeRoots,
+          shallowBytes,
+          retainedUnionBytes,
+        },
+      ];
+    }),
+  );
 }
 
 function summarizeRetention(file, options) {
@@ -1276,10 +1401,14 @@ function summarizeRetention(file, options) {
     duplicateStrings: snapshot.duplicateStrings,
     duplicateStringRetainers: stringRetainers,
     inspectedNodes,
+    ...(options.nodeGroups
+      ? { nodeGroups: summarizeNodeGroups(snapshot, options.nodeGroups) }
+      : {}),
     retainers,
     notes: [
       "Only fixed built-in labels and the explicit reviewed-source label allowlist are emitted; other names are redacted. No string values or session keys are emitted.",
       "Retained sizes exclude weak and shortcut edges; ephemerons follow V8 internal edges. Class totals overlap across classes; nested same-class subtrees count once.",
+      "Node-group retainedUnionBytes is the exact union of individually dominated subtrees in this graph. Different groups overlap. Shared descendants dominated by none of the selected nodes are excluded: this is not the hypothetical memory freed by deleting all selected nodes together. Group names come from the caller's reviewed manifest; node IDs are snapshot-local.",
       "Duplicate estimates cover flat string nodes sharing a V8 string-table entry, including unreachable nodes; names at or above stringLimit are excluded because V8 truncates them. Match --string-limit to the capturing runtime flag (Node default 1024). Sliced/concatenated strings and external backing are excluded. Savings retain the largest copy and are not a measured reclamation result.",
       "Duplicate retainer attribution keeps the first largest copy per string group and charges each other node once to one reachable strong incoming edge, preferring property/context edges. Multiple incoming edges are counted, not charged again. Attribution is representative, not exclusive ownership or a promise of producer-local savings; ownerId is the nearest context/named-constructor dominator, or the root. Unattributed bytes have no reachable strong incoming edge. Displayed groups are top-N; attributedBytes includes all groups. Requested --node children contain only allowlisted labels and element-reference counts, not array length or Map.size.",
       "Session scaling counts references to agent:<agent>:<session> keys, not unique sessions or Map.size; shared keys and backing tables can appear in multiple rows. Other key formats are not detected.",
@@ -1290,7 +1419,7 @@ function summarizeRetention(file, options) {
 }
 
 const usage =
-  "Single snapshot: node scripts/heap-snapshot-diff.mjs --summary <snapshot> [--labels reviewed-source-labels.txt] [--code-by-script] [--script-allowlist reviewed-build-files.txt] [--string-limit N] [--top N] [--max-depth N]\nUsage: node scripts/heap-snapshot-diff.mjs <before.heapsnapshot> <after.heapsnapshot> [--independent-ids] [--json] [--top N] [--node ID] [--max-depth N]";
+  "Single snapshot: node scripts/heap-snapshot-diff.mjs --summary <snapshot> [--labels reviewed-source-labels.txt] [--node-groups reviewed-node-groups.json] [--code-by-script] [--script-allowlist reviewed-build-files.txt] [--string-limit N] [--top N] [--max-depth N]\nUsage: node scripts/heap-snapshot-diff.mjs <before.heapsnapshot> <after.heapsnapshot> [--independent-ids] [--json] [--top N] [--node ID] [--max-depth N]";
 
 function parseArgs(args) {
   const options = {
@@ -1300,6 +1429,7 @@ function parseArgs(args) {
     codeByScript: false,
     scriptAllowlist: null,
     labels: null,
+    nodeGroups: null,
     stringLimit: 1024,
     files: [],
     top: 30,
@@ -1315,8 +1445,9 @@ function parseArgs(args) {
     } else if (arg === "--code-by-script") {
       options.codeByScript = true;
       options.summary = true;
-    } else if (arg === "--labels" || arg === "--script-allowlist") {
-      const key = arg === "--labels" ? "labels" : "scriptAllowlist";
+    } else if (["--labels", "--script-allowlist", "--node-groups"].includes(arg)) {
+      const key =
+        arg === "--labels" ? "labels" : arg === "--node-groups" ? "nodeGroups" : "scriptAllowlist";
       options[key] = args[++index];
       if (!options[key] || options[key].startsWith("--")) {
         throw new Error(usage);
@@ -1344,6 +1475,7 @@ function parseArgs(args) {
     options.files.length !== (options.summary ? 1 : 2) ||
     (options.summary && options.independentIds) ||
     (options.labels && !options.summary) ||
+    (options.nodeGroups && (!options.summary || options.codeByScript)) ||
     (options.scriptAllowlist && !options.codeByScript)
   ) {
     throw new Error(usage);
@@ -1444,9 +1576,11 @@ function main() {
   }
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(error.message);
-  process.exitCode = 1;
+if (import.meta.main) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error.message);
+    process.exitCode = 1;
+  }
 }

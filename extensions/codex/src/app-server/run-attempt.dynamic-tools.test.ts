@@ -552,4 +552,79 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       toolCallId: "call-echo-1",
     });
   });
+
+  it.each([
+    { verboseLevel: "on" as const, forced: false, outcome: "success" },
+    { verboseLevel: "full" as const, forced: false, outcome: "success" },
+    { verboseLevel: "off" as const, forced: true, outcome: "success" },
+    { verboseLevel: "full" as const, forced: false, outcome: "error" },
+    { verboseLevel: "full" as const, forced: false, outcome: "timeout" },
+  ])(
+    "keeps hidden $outcome progress private at $verboseLevel (forced=$forced)",
+    async ({ verboseLevel, forced, outcome }) => {
+      const pending = pendingTool("hidden_plugin_tool", "hidden output");
+      const hiddenTool = { ...pending.tool, hideFromChannelProgress: true };
+      if (outcome !== "timeout") {
+        hiddenTool.execute = vi.fn(async () => {
+          if (outcome === "error") {
+            throw new Error("hidden failure");
+          }
+          return { content: [{ type: "text" as const, text: "hidden output" }], details: {} };
+        });
+      }
+      const visibleTool = {
+        ...createRuntimeDynamicTool("visible_plugin_tool"),
+        hideFromChannelProgress: false,
+      };
+      const onEvent = vi.fn<NonNullable<ReturnType<typeof createTestParams>["onAgentEvent"]>>();
+      const onToolResult = vi.fn();
+      const onAgentToolResult = vi.fn();
+      const { harness, run } = await startTool([hiddenTool, visibleTool], {
+        onAgentEvent: onEvent,
+        onToolResult,
+        onAgentToolResult,
+        verboseLevel,
+        ...(forced ? { shouldEmitToolResult: () => true, shouldEmitToolOutput: () => true } : {}),
+        timeoutMs: MAX_TIMER_TIMEOUT_MS,
+        clock: outcome === "timeout",
+      });
+      try {
+        await run.waitForTurnAccepted();
+        const response = callTool(harness, hiddenTool.name, "hidden");
+        if (outcome === "timeout") {
+          await pending.started;
+          await vi.advanceTimersByTimeAsync(90_000);
+        }
+        await expect(response).resolves.toMatchObject({ success: outcome === "success" });
+        expect(onToolResult).not.toHaveBeenCalled();
+        expect(
+          onEvent.mock.calls
+            .map(([event]) => event)
+            .filter((event) => event.stream === "tool" && event.data?.toolCallId === "hidden"),
+        ).toEqual([]);
+        expect(onAgentToolResult).toHaveBeenCalledWith(
+          expect.objectContaining({
+            toolName: hiddenTool.name,
+            isError: outcome !== "success",
+          }),
+        );
+        await expect(callTool(harness, visibleTool.name, "visible")).resolves.toMatchObject({
+          success: true,
+        });
+        expect(onToolResult).toHaveBeenCalled();
+        expect(onToolResult.mock.calls.every(([payload]) => !/hidden/i.test(payload.text))).toBe(
+          true,
+        );
+        expect(
+          onEvent.mock.calls.some(
+            ([event]) => event.stream === "tool" && event.data?.toolCallId === "visible",
+          ),
+        ).toBe(true);
+        await completeRun(harness, run);
+      } finally {
+        pending.finish();
+        vi.useRealTimers();
+      }
+    },
+  );
 });

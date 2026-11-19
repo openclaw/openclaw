@@ -28,13 +28,22 @@ function controlClock() {
 
 function makeParams(overrides: Record<string, unknown> = {}) {
   return makeIsolatedAgentParamsFixture({
-    job: makeIsolatedAgentJobFixture({
-      activeHours,
-      idleOnly: true,
-      delivery: { mode: "none" },
-    }),
+    job: makeIsolatedAgentJobFixture({ activeHours, idleOnly: true, delivery: { mode: "none" } }),
     ...overrides,
   });
+}
+
+const deferredByWindow = {
+  status: "skipped",
+  executionStarted: false,
+  admissionDeferred: true,
+  admissionDeferredReason: "active-hours",
+};
+
+function expectNoEffect(...effects: ReturnType<typeof vi.fn>[]) {
+  for (const effect of effects) {
+    expect(effect).not.toHaveBeenCalled();
+  }
 }
 
 describe("isolated automation actual-start policy", () => {
@@ -62,15 +71,8 @@ describe("isolated automation actual-start policy", () => {
       const result = await runAgent(makeParams({ onExecutionStarted }));
 
       expect(runner).toHaveBeenCalledOnce();
-      expect(result).toMatchObject({
-        status: "skipped",
-        executionStarted: false,
-        admissionDeferred: true,
-        admissionDeferredReason: "active-hours",
-      });
-      expect(providerEffect).not.toHaveBeenCalled();
-      expect(onExecutionStarted).not.toHaveBeenCalled();
-      expect(h.dispatchCronDeliveryMock).not.toHaveBeenCalled();
+      expect(result).toMatchObject(deferredByWindow);
+      expectNoEffect(providerEffect, onExecutionStarted, h.dispatchCronDeliveryMock);
     },
   );
 
@@ -147,8 +149,7 @@ describe("isolated automation actual-start policy", () => {
           ),
           signal,
         );
-        expect(providerEffect).not.toHaveBeenCalled();
-        expect(onExecutionStarted).not.toHaveBeenCalled();
+        expectNoEffect(providerEffect, onExecutionStarted);
         if (afterWait === "window-closed") {
           clock.mockReturnValue(afterWindow);
         } else if (afterWait === "authority-revoked") {
@@ -163,21 +164,14 @@ describe("isolated automation actual-start policy", () => {
         } else {
           expect(result).toMatchObject(
             afterWait === "window-closed"
-              ? {
-                  status: "skipped",
-                  executionStarted: false,
-                  admissionDeferred: true,
-                  admissionDeferredReason: "active-hours",
-                }
+              ? deferredByWindow
               : {
                   status: "error",
                   executionStarted: false,
                   error: "Scheduled source authority revoked",
                 },
           );
-          expect(providerEffect).not.toHaveBeenCalled();
-          expect(onExecutionStarted).not.toHaveBeenCalled();
-          expect(h.dispatchCronDeliveryMock).not.toHaveBeenCalled();
+          expectNoEffect(providerEffect, onExecutionStarted, h.dispatchCronDeliveryMock);
         }
       } finally {
         cancellation.abort();

@@ -46,7 +46,7 @@ suite.define(() => {
       await composer.getByRole("button", { name: "Add attachment" }).click();
       const menu = composer.locator(".agent-chat__capability-menu");
       const search = menu.getByRole("menuitemcheckbox", { name: "Web search" });
-      const github = menu.getByRole("menuitemcheckbox", { name: /^github/ });
+      const github = menu.getByRole("switch", { name: "github", exact: true });
       await expect.poll(() => search.isVisible()).toBe(true);
       expect(await gateway.getRequests("config.get")).toHaveLength(1);
       expect(await tooltipTitleText(search)).toContain(loadError);

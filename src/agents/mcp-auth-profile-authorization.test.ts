@@ -1,10 +1,14 @@
+import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import * as directoryObservation from "../infra/owned-directory-observation.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { readAuthProfileAuthorizationLifetime } from "./auth-profiles/authorization-lifetime.js";
 import { retainAuthProfileAuthorizationObservation } from "./auth-profiles/authorization-observation.js";
@@ -29,6 +33,7 @@ import {
 import type { OAuthCredential } from "./auth-profiles/types.js";
 import { persistAuthProfileBatch } from "./auth-profiles/upsert-with-lock.js";
 import { captureMcpAuthProfileAuthorization as captureMcp } from "./mcp-auth-profile-authorization.js";
+import { mcpImportRuntimeEntrypoints } from "./mcp-import-runtime.test-support.js";
 
 const { seedRoot, apiKey } = createAuthOwnerTestFixtures();
 afterEach(() => vi.restoreAllMocks());
@@ -84,15 +89,15 @@ function source() {
 
 async function foreign(root: AuthRoot, script: string) {
   const result = await runNodeScript(
-    ["--import", "tsx", "--input-type=module", "-e", script],
+    (workerArgv) => [...workerArgv(captureUrl).slice(0, -1), "--input-type=module", "-e", script],
     root.env,
     30_000,
   );
-  expect(result.error, result.stderr).toBeUndefined();
+  expect(result.error, `${result.stderr}\n${result.stdout}`).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
   return result.stdout;
 }
-const captureUrl = new URL("./mcp-auth-profile-authorization.ts", import.meta.url).href;
+const captureUrl = resolveRuntimeWorkerUrl(mcpImportRuntimeEntrypoints.authorization);
 const writeProfile = (profileId: string, key: string, agentDir?: string) =>
   upsertAuthProfileWithLockOrThrow({ profileId, agentDir, credential: apiKey(key) });
 
@@ -139,7 +144,7 @@ it("enrolls inherited owners through the generic API and preserves MCP capture a
     const output = await foreign(
       root,
       "import { captureMcpAuthProfileAuthorization as capture } from " +
-        JSON.stringify(captureUrl) +
+        JSON.stringify(captureUrl.href) +
         ";" +
         "let active = true; const authority = await capture({ profileId: 'shared', agentDir: " +
         JSON.stringify(root.agentDir) +
@@ -151,6 +156,22 @@ it("enrolls inherited owners through the generic API and preserves MCP capture a
     expect(authority.assertCurrent).toThrow(retired);
     authority.dispose();
     await expect(authority.revalidate()).rejects.toMatchObject(retiredCode);
+  });
+});
+
+it("enrolls concurrent inherited captures without borrowing their authority", async () => {
+  await withRoot(async (root) => {
+    const captures = await Promise.allSettled([root.capture(), root.capture()]);
+    expect(captures.map((capture) => capture.status)).toEqual(["fulfilled", "fulfilled"]);
+    const authorities = captures.flatMap((capture) =>
+      capture.status === "fulfilled" ? [capture.value] : [],
+    );
+    expect(authorities[0]!.authorizationId).toBe(authorities[1]!.authorizationId);
+    authorities[0]!.dispose();
+    expect(authorities[0]!.assertCurrent).toThrow(retired);
+    expect(authorities[1]!.assertCurrent).not.toThrow();
+    await writeProfile("shared", "replacement");
+    expect(authorities[1]!.assertCurrent).toThrow(retired);
   });
 });
 
@@ -243,20 +264,24 @@ it.each(["local", "shared"])(
       const createAdmission = admission.createSqliteWorkerOperationAdmission;
       let refused = false;
       using spy = vi.spyOn(admission, "createSqliteWorkerOperationAdmission");
-      spy.mockImplementation((admit, attachment) => {
+      spy.mockImplementation((admit, attachment, prepare) => {
         let updating = false;
-        return createAdmission((request, grant) => {
-          updating ||= isRecord(request.facts) && request.facts.kind === "auth-store-update";
-          if (updating && request.stage === "commit") {
-            admit(request, () => {
-              expect(authority.assertCurrent).toThrow(expect.objectContaining(unavailableCode));
-              refused = true;
-              throw new Error("fixture auth commit refused");
-            });
-          } else {
-            admit(request, grant);
-          }
-        }, attachment);
+        return createAdmission(
+          (request, grant) => {
+            updating ||= isRecord(request.facts) && request.facts.kind === "auth-store-update";
+            if (updating && request.stage === "commit") {
+              admit(request, () => {
+                expect(authority.assertCurrent).toThrow(expect.objectContaining(unavailableCode));
+                refused = true;
+                throw new Error("fixture auth commit refused");
+              });
+            } else {
+              admit(request, grant);
+            }
+          },
+          attachment,
+          prepare,
+        );
       });
       await expect(
         writeProfile(profileId, "replacement", profileId === "local" ? root.agentDir : undefined),
@@ -275,7 +300,9 @@ it("enrolls an absent agent's inheritance tombstone through its native first-use
     using watcher = vi.spyOn(directoryObservation, "observeOwnedDirectory");
     watcher.mockImplementation((directory, onChange) =>
       // Native commit publication must not depend on a later filesystem notification.
-      directory === agentDir ? { close() {} } : observe(directory, onChange),
+      directory === agentDir
+        ? { close() {}, isWatching: () => false }
+        : observe(directory, onChange),
     );
     const authority = await root.capture("shared", agentDir);
     expect(
@@ -319,3 +346,32 @@ it.each([undefined, ""])(
     });
   },
 );
+
+it("records an upgrade copy's authorization as the live databases it is published as", async () => {
+  await withRoot(async (root) => {
+    const agentDir = (stateDir: string) => path.join(stateDir, "agents", "main", "agent");
+    const live = await root.capture("shared", agentDir(root.stateDir), true);
+    live.dispose();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawAgentDatabasesForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
+    // The state upgrade runs Doctor on a private copy inside the live state directory.
+    const shadow = path.join(root.stateDir, ".upgrade-test", "state");
+    for (const dir of ["agents", "state"]) {
+      fs.cpSync(path.join(root.stateDir, dir), path.join(shadow, dir), { recursive: true });
+    }
+    await withEnvAsync({ OPENCLAW_STATE_DIR: shadow }, async () => {
+      const copy = await captureAuth({
+        profileId: "shared",
+        agentDir: agentDir(shadow),
+        publishedStateDir: root.stateDir,
+        assertCurrent: root.caller.assertCurrent,
+      });
+      try {
+        expect(copy.authorizationId).toBe(live.authorizationId);
+      } finally {
+        copy.dispose();
+      }
+    });
+  });
+});

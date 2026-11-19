@@ -17,6 +17,10 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasAgentRunContextExecutionOwner } from "../../infra/agent-run-registry.js";
 import * as mutationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../../plugins/legacy-sdk-resource-host.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
@@ -40,6 +44,7 @@ import {
 } from "../device-revocation.js";
 import {
   GatewayOperatorAccessDeniedError,
+  GatewayOperatorAccessUnavailableError,
   resolveGatewayOperatorAccessAuthority,
   resumeGatewayOperatorAccessGrant,
 } from "../operator-access-policy.js";
@@ -118,6 +123,8 @@ describe("visitor access admitted caller", () => {
         const context = makeContext();
         const resolveGatewayContext = () => context;
         context.resolveGatewayContext = resolveGatewayContext;
+        const sdkResources = new LegacyPluginSdkResourceHost();
+        bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkResources);
         const connection = new AbortController();
         const client: GatewayClient = {
           ...operatorWriteCliClient([scenario === "writer" ? WRITE_SCOPE : ADMIN_SCOPE]),
@@ -305,7 +312,10 @@ describe("visitor access admitted caller", () => {
           try {
             await expectDefined(proof, "admitted visitor proof missing");
           } finally {
-            await waitForAssertion(() => expect(rpcSourceTesting.size).toBe(0));
+            await waitForAssertion(() => {
+              expect(rpcSourceTesting.size).toBe(0);
+              expect(hasAgentRunContextExecutionOwner(runId)).toBe(false);
+            });
           }
           expect(mocks.agentCommand).toHaveBeenCalledOnce();
           const saved = await grants.lookup(EMAIL);
@@ -324,23 +334,27 @@ describe("visitor access admitted caller", () => {
           expect(revocationState).toEqual({
             ownerBefore: true,
             callerCurrent: false,
-            ownerAfter: false,
+            ownerAfter: true,
           });
           expect(stages).toEqual(["transaction", "commit"]);
-          const outcome = expectDefined(renewal, "renewal result missing");
-          expect(outcome.status).toBe("rejected");
-          if (scenario === "revoked before commit") {
-            expect(saved).toEqual(original);
-          } else {
-            const renewed = expectDefined(saved, "committed renewal was lost");
-            expect(renewed.createdAt).toBe(original.createdAt);
-            expect(renewed.expiresAt).toBeGreaterThan(original.expiresAt);
-          }
-          expect(commitGranted).toBe(scenario === "revoked after commit");
+          expect(expectDefined(renewal, "renewal result missing")).toMatchObject({
+            status: "fulfilled",
+            value: {
+              ok: true,
+              source: "plugin",
+              toolName: "visitor_invite",
+              output: { details: { outcome: "renewed" } },
+            },
+          });
+          const renewed = expectDefined(saved, "committed renewal was lost");
+          expect(renewed.createdAt).toBe(original.createdAt);
+          expect(renewed.expiresAt).toBeGreaterThan(original.expiresAt);
+          expect(commitGranted).toBe(true);
         } finally {
           caller.release();
           closeGatewayDeviceRevocation(context);
           await gateway?.stop();
+          await sdkResources.close();
         }
       });
     },
@@ -413,6 +427,8 @@ describe("visitor access admitted caller", () => {
       const previousContext = makeContext();
       const resolvePreviousContext = () => previousContext;
       previousContext.resolveGatewayContext = resolvePreviousContext;
+      const previousSdkResources = new LegacyPluginSdkResourceHost();
+      bindLegacyPluginSdkResourceHost(resolvePreviousContext, previousSdkResources);
       const previousGateway = await startVisitorGateway({
         config,
         state,
@@ -432,6 +448,7 @@ describe("visitor access admitted caller", () => {
       } finally {
         closeGatewayDeviceRevocation(previousContext);
         await previousGateway.stop();
+        await previousSdkResources.close();
       }
       await closeOpenClawStateDatabaseAsync();
 
@@ -446,6 +463,8 @@ describe("visitor access admitted caller", () => {
       const context = makeContext();
       const resolveGatewayContext = () => context;
       context.resolveGatewayContext = resolveGatewayContext;
+      const sdkResources = new LegacyPluginSdkResourceHost();
+      bindLegacyPluginSdkResourceHost(resolveGatewayContext, sdkResources);
       const gateway = await startVisitorGateway({
         config: restrictedConfig,
         state,
@@ -454,9 +473,10 @@ describe("visitor access admitted caller", () => {
       });
       try {
         const grants = createVisitorGrantStore(state.env);
+        // Invalid policy configuration is unavailable, not a decision to revoke this visitor.
         expect(() =>
           resolveGatewayOperatorAccessAuthority(unassigned.id, restrictedConfig),
-        ).toThrow(GatewayOperatorAccessDeniedError);
+        ).toThrow(GatewayOperatorAccessUnavailableError);
         for (const profile of [staff, owner]) {
           expect(resolveGatewayOperatorAccessAuthority(profile.id, restrictedConfig)).toBeNull();
         }
@@ -685,6 +705,7 @@ describe("visitor access admitted caller", () => {
         }
       } finally {
         await gateway.stop();
+        await sdkResources.close();
       }
     });
   });

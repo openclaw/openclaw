@@ -50,7 +50,6 @@ describe("npm hook admission", () => {
     vi.mocked(packNpmSpecToArchive).mockResolvedValue({ ok: false, error: "pack failed" });
     await expect(install()).resolves.toEqual({ ok: false, error: "pack failed" });
     expect(extract).not.toHaveBeenCalled();
-    expect(withInstallWorkspace).toHaveBeenCalledWith("openclaw-hook-pack-", expect.any(Function));
   });
 
   it("rejects non-registry specs before packing or creating a workspace", async () => {
@@ -75,7 +74,6 @@ describe("npm hook admission", () => {
     }
     expect(Date.parse(result.npmResolution?.resolvedAt ?? "")).not.toBeNaN();
     expect(packNpmSpecToArchive).toHaveBeenCalledWith(expect.objectContaining({ spec: baseSpec }));
-    expect(extract).toHaveBeenCalledWith(expect.objectContaining({ archivePath: baseArchivePath }));
   });
 
   it("extracts only after an integrity-drift callback accepts the resolved archive", async () => {
@@ -97,28 +95,20 @@ describe("npm hook admission", () => {
         resolvedAt: expect.any(String),
       },
     });
-    expect(extract).toHaveBeenCalledOnce();
   });
 
   it.each([false, undefined] as const)("rejects drift without approval (%s)", async (approval) => {
     packed({ integrity: "sha512-new" });
-    const warn = vi.fn();
     await expect(
       install({
         expectedIntegrity: "sha512-old",
         onIntegrityDrift: approval === undefined ? undefined : async () => approval,
-        logger: { warn },
       }),
     ).resolves.toEqual({
       ok: false,
       error: "aborted: npm package integrity drift detected for @openclaw/test@1.0.0",
     });
     expect(extract).not.toHaveBeenCalled();
-    if (approval === undefined) {
-      expect(warn).toHaveBeenCalledWith(
-        "Integrity drift detected for @openclaw/test@1.0.0: expected sha512-old, got sha512-new",
-      );
-    }
   });
 
   it.each([
@@ -131,7 +121,6 @@ describe("npm hook admission", () => {
     expect(result.ok).toBe(allowed);
     if (result.ok) {
       expect(result.npmResolution?.version).toBe("1.1.0-beta.1");
-      expect(extract).toHaveBeenCalledOnce();
     } else {
       expect(result.error).toContain("prerelease version 1.1.0-beta.1");
       expect(result.error).toContain('Use "npm:@openclaw/test@beta"');

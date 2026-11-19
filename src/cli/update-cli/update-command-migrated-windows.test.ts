@@ -19,9 +19,11 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { createUpdateCliBaseSnapshot } from "./update-cli-config.test-support.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { finishParams, updateResult } from "./update-command-maintenance-fixtures.test-support.js";
+import { withMigratedTerminalResult } from "./update-command-migrated-package.test-support.js";
 import type { MigratedUpdateFinalizationInput } from "./update-command-migrated-types.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
 import { readMigratedUpdateRunRow } from "./update-command-migrated.test-support.js";
@@ -30,7 +32,6 @@ import {
   UpdateCommandPendingRecoveryFailure,
 } from "./update-command-result.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
-import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 
 const mocks = vi.hoisted(() => ({
   service: vi.fn<() => GatewayService>(),
@@ -201,19 +202,16 @@ it.each([
         expect(input.params.preManagedServiceStop).not.toHaveProperty(
           "windowsTaskAutoStartRecovery",
         );
-        await fs.writeFile(
-          input.resultPath,
-          JSON.stringify({
-            result: {
-              ...input.params.result,
-              ...(succeeded
-                ? { postUpdate: { plugins: { status: "warning" } } }
-                : { status: "error", reason: "plugin-convergence-failed" }),
-            },
-            terminalRunId: runId,
-            exitCode: succeeded ? 0 : 1,
-          }),
-        );
+        await writeFixtureJson(input.resultPath, {
+          result: {
+            ...input.params.result,
+            ...(succeeded
+              ? { postUpdate: { plugins: { status: "warning" } } }
+              : { status: "error", reason: "plugin-convergence-failed" }),
+          },
+          terminalRunId: runId,
+          exitCode: succeeded ? 0 : 1,
+        });
         if (succeeded) {
           mocks.enabled = true;
           running = true;
@@ -269,17 +267,7 @@ it.each([
       const refusesBeforeReceipt = outcome === "launch failure" || replaced;
       const operation = refusesBeforeReceipt
         ? continueUpdate()
-        : withUpdateCommandTerminalResult(
-            async (registerRun) => {
-              registerRun(run);
-              const continued = await continueUpdate();
-              if (continued.preparedFailure) {
-                throw continued.preparedFailure;
-              }
-              return continued;
-            },
-            { json: true, onResult },
-          );
+        : withMigratedTerminalResult(run, continueUpdate, onResult);
       try {
         if (compensationRefusal) {
           const failure = await operation.catch((error: unknown) => error);

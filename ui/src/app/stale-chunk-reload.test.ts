@@ -3,8 +3,12 @@ import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { i18n } from "../i18n/index.ts";
-import * as storageAccess from "../local-storage.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
+import {
+  dispatchPreloadError,
+  memoryStorage,
+  stubDocumentNavigation,
+} from "./stale-chunk-reload.test-support.ts";
 import {
   cancelStaleChunkRecovery,
   installMissingStylesheetRecovery,
@@ -51,42 +55,6 @@ function stubHangingDocumentFetch() {
   return fetchMock;
 }
 
-function memoryStorage(initial: Record<string, string> = {}): Storage {
-  const store = new Map(Object.entries(initial));
-  return {
-    get length() {
-      return store.size;
-    },
-    clear: () => store.clear(),
-    key: (index: number) => [...store.keys()][index] ?? null,
-    removeItem: (key: string) => {
-      store.delete(key);
-    },
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-  };
-}
-
-function stubDocumentNavigation() {
-  vi.useFakeTimers();
-  const target = window;
-  const replace = vi.fn();
-  vi.stubGlobal("window", {
-    location: { href: target.location.href, replace },
-    addEventListener: target.addEventListener.bind(target),
-    removeEventListener: target.removeEventListener.bind(target),
-    dispatchEvent: target.dispatchEvent.bind(target),
-  });
-  vi.spyOn(storageAccess, "getSafeSessionStorage").mockReturnValue(memoryStorage());
-  return replace;
-}
-
-function dispatchPreloadError(payload: unknown) {
-  const event = new Event("vite:preloadError", { cancelable: true });
-  Object.defineProperty(event, "payload", { value: payload });
-  window.dispatchEvent(event);
-}
-
 beforeEach(() => {
   vi.useFakeTimers({ now: 1_000 });
   vi.spyOn(Math, "random").mockReturnValue(0);
@@ -105,6 +73,15 @@ afterEach(async () => {
 });
 
 describe("isStaleChunkImportError", () => {
+  it.each([
+    ["Importing a module script failed.", true],
+    ["Failed to fetch dynamically imported module: /assets/lazy.js", true],
+    ["error loading dynamically imported module: /assets/lazy.js", true],
+    ["Load failed", false],
+  ])("classifies the browser TypeError %s", (message, expected) => {
+    expect(isStaleChunkImportError(new TypeError(message))).toBe(expected);
+  });
+
   it.each([false, true])(
     "leaves route recovery to its retry owner (persistent failure: %s)",
     async (persistent) => {
@@ -131,7 +108,14 @@ describe("isStaleChunkImportError", () => {
         expect(reload).not.toHaveBeenCalled();
         expect(replace).not.toHaveBeenCalled();
         expect(load).toHaveBeenCalledOnce();
-        probe.mockResolvedValue(new Response(null, { status: 200 }));
+        probe.mockImplementation(
+          async (_input, init) =>
+            new Response(
+              init?.method === "HEAD"
+                ? null
+                : `<script>globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO=${JSON.stringify(CONTROL_UI_BUILD_INFO)};</script>`,
+            ),
+        );
         window.dispatchEvent(new Event("online"));
         await vi.advanceTimersByTimeAsync(1);
         await expect(completion).resolves.toBe(persistent ? true : "loaded");
@@ -763,7 +747,10 @@ describe("retryStaleChunkReloadWhenReachable single-shot", () => {
 
       expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
         `${location.origin}${resourceBase}/index.html`,
-        expect.objectContaining({ method: "HEAD", cache: "no-store" }),
+        expect.objectContaining({
+          cache: "no-store",
+          headers: { "X-OpenClaw-Reachability-Probe": "1" },
+        }),
       );
       expect(replace).toHaveBeenCalledOnce();
       const destination = new URL(replace.mock.calls[0]![0]);
@@ -807,24 +794,6 @@ describe("retryStaleChunkReloadWhenReachable", () => {
     expect(probe).toHaveBeenCalledOnce();
     expect(reload).toHaveBeenCalledTimes(1);
     expect(storage.getItem(GUARD_KEY)).toBe(guard(CONTROL_UI_BUILD_INFO.buildId));
-  });
-});
-
-describe("installStaleChunkReloadListener", () => {
-  it("recovers caught lazy-surface failures when the document is reachable, not evaluation errors", async () => {
-    const replace = stubDocumentNavigation();
-    const fetchMock = stubDocumentFetch(new Response(null, { status: 200 }));
-    const uninstall = installStaleChunkReloadListener();
-    try {
-      dispatchPreloadError(new Error("boom in module evaluation"));
-      expect(fetchMock).not.toHaveBeenCalled();
-      dispatchPreloadError(new Error("Importing a module script failed."));
-      await vi.advanceTimersByTimeAsync(0);
-      expect(replace).toHaveBeenCalledOnce();
-      expect(fetchMock).toHaveBeenCalledOnce();
-    } finally {
-      uninstall();
-    }
   });
 });
 
@@ -988,15 +957,18 @@ describe("retryStaleChunkReloadWhenReachable deadline enforcement", () => {
   });
 });
 
-it("never starts another probe once the wait carried past the deadline", async () => {
+it("keeps probing past a wall-clock step before the wait deadline", async () => {
   const reload = vi.fn();
   const probe = stubDocumentFetch(new Response(null, { status: 503 }));
   const pending = retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 5_000 });
   await vi.advanceTimersByTimeAsync(0);
+  expect(probe).toHaveBeenCalledOnce();
   // Wall time can move ahead while the tab is suspended, before its scheduled retry runs.
+  // The process-local wait window must survive the step; only its own deadline ends it.
   vi.setSystemTime(Date.now() + 10_000);
   await vi.advanceTimersByTimeAsync(1_000);
+  expect(probe.mock.calls.length).toBeGreaterThan(1);
+  await vi.advanceTimersByTimeAsync(5_000);
   await expect(pending).resolves.toBe(false);
-  expect(probe).toHaveBeenCalledOnce();
   expect(reload).not.toHaveBeenCalled();
 });

@@ -33,17 +33,15 @@ export type MeetingChromeTransportConfig = MeetingRealtimeEngineConfig & {
   };
 };
 
-type MeetingBrowserNodeAdapter = Pick<
-  MeetingPlatformAdapter<unknown, string, MeetingBrowserHealth, MeetingTranscriptSnapshot>,
-  "displayName" | "nodeCommandName" | "nodeConfigPath"
->;
-
 export type MeetingChromeTransportOptions<
   Mode extends string,
   Health extends MeetingBrowserHealth,
   Transcript extends MeetingTranscriptSnapshot,
 > = {
-  browserNodeAdapter: MeetingBrowserNodeAdapter;
+  browserNodeAdapter: Pick<
+    MeetingPlatformAdapter<unknown, string, MeetingBrowserHealth, MeetingTranscriptSnapshot>,
+    "displayName" | "nodeCommandName" | "nodeConfigPath"
+  >;
   isRealtimeRouteReady(mode: Mode, health: Health | undefined): boolean;
   isTalkBackMode(mode: Mode): boolean;
   meetingLabel: string;

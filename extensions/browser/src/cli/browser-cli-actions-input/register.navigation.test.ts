@@ -77,8 +77,8 @@ describe("browser navigation commands", () => {
     ["1e3", "must be a positive integer"],
     ["8193", "maximum is 8192"],
   ])("rejects invalid resize width %s before dispatch", async (width, error) => {
-    await expect(run("resize", width, "768")).rejects.toThrow("__exit__:1");
-    expect(capture.runtimeErrors.join("\n")).toContain(`Invalid width: ${error}`);
+    await expect(run("resize", width, "768")).rejects.toThrow(`Invalid width: ${error}`);
+    expect(capture.runtimeErrors).toEqual([]);
     expect(gatewayMock).not.toHaveBeenCalled();
   });
 });

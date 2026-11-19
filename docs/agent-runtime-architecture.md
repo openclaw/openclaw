@@ -24,6 +24,18 @@ Core calls the built-in runtime through OpenClaw modules and SDK barrels. No ext
 
 `@earendil-works/pi-tui` remains a third-party dependency: a terminal component toolkit used by the local TUI and session tool renderers. Internalizing it would be a separate vendoring effort.
 
+## Streaming update ownership
+
+Assistant `message_update` envelopes reconstructed from partial-free text deltas
+are shallow-frozen and shared with the loop's current message. Later deltas create
+new envelopes, preserving retained earlier text snapshots. Nested metadata is not
+deep-frozen. Listeners should read updates and keep their own derived state;
+terminal-message hooks retain their existing mutation behavior.
+
+Provider-owned partial snapshots remain mutable while streaming. Agent-core
+copies their top-level envelope before publication so retained updates preserve
+references when a provider replaces fields such as `content` or `usage`.
+
 ## Manifests
 
 Resource packages declare OpenClaw resources in `package.json` metadata. Entries are file paths or globs relative to the package root:
@@ -57,6 +69,10 @@ Standalone embedded runtimes publish the same snapshot shape at their activation
 
 Runtime selections resolve in the requesting agent's scope before becoming owner keys. Lease admission carries that prepared choice forward and reads the exact owner's snapshot. Retries must observe a changed owner or publication gate; unchanged publication state fails with a retryable error instead of blocking the Gateway event loop.
 
+If publication supersedes unfinished run preparation, admission prepares again on the current generation once before reporting a retryable error. A reply whose captured dispatch generation was replaced can also discard that initial selection before execution and enter current admission. These retries do not replay model requests or tools. Once execution begins, nested work stays pinned to its admitted generation; changing plugin owners at that point could mix callbacks and resources from different generations.
+
+Auth-triggered publication allows up to two fresh-generation retries for supersession. Exhaustion remains a typed, retryable error, and a later request can recover the configured owner through normal catalog recovery. Other lifecycle failures retain their existing single fresh-generation retry.
+
 ## Compute workers
 
 Code-mode execution, compaction planning, and file-tool planning use the reusable `WorkerTaskPool`.
@@ -85,10 +101,12 @@ Physical session disk accounting uses the reader limit so independent stores can
 scan concurrently without creating a worker for each store.
 Shared-state readers retain at least two slots so a held settlement read cannot
 block a fresh catalog read. Foreground transcript history and search also use the
-two-worker reader cap. The SQLite broker multiplexes independent database owners
-over two writer isolates, preserving per-database ordering without multiplying
-loaded backends on high-core hosts. These pools keep their existing admission and
-native-resource cleanup owners.
+two-worker reader cap, except that history on PostgreSQL agent stores uses two
+workers per CPU above one, up to four: those workers spend most of a request
+blocked on database bridge replies. The SQLite broker multiplexes independent
+database owners over two writer isolates, preserving per-database ordering without
+multiplying loaded backends on high-core hosts. These pools keep their existing
+admission and native-resource cleanup owners.
 
 File-tool workers perform pure edit matching, Unicode normalization, and diff
 computation. One prepared patch supplies both display and unified-patch receipts,

@@ -37,7 +37,11 @@ import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js"
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createGatewaySchedulerClock } from "../../test-utils/gateway-scheduler-clock.js";
 import { admitScheduledOccurrence } from "../execution-context-admission.js";
-import { readScheduledMemoryParent } from "../execution-context-registry.js";
+import {
+  readScheduledMemoryParent,
+  readScheduledToolTargets,
+  type ScheduledToolTargets,
+} from "../execution-context-registry.js";
 import type { CronEvent } from "../service.js";
 import { onTimer } from "../service/timer.test-support.js";
 import { prepareAuthorityConfig, resetAuthorityRunHarness } from "./run.authority.test-support.js";
@@ -216,10 +220,11 @@ it.each([
   if (scenario === "no operator source") {
     expect(job.operatorSource).toBeUndefined();
   } else {
+    // The source links its conversation by key; it records no transcript id.
+    expect(job.operatorSource?.source).not.toHaveProperty("sessionId");
     expect(job.operatorSource?.source).toMatchObject({
       agentId: "main",
       sessionKey: SESSION,
-      sessionId: SESSION_ID,
       snapshot: { profileId: profile.id, device: { deviceId: DEVICE.deviceId } },
     });
   }
@@ -239,10 +244,12 @@ it.each([
 
   let entered = 0;
   let operatorAdmitted = false;
-  let revokedDuringRun: boolean | undefined;
+  let ownerTargets: ScheduledToolTargets | undefined;
+  let runSenderIsOwner: boolean | undefined;
   let memoryParent: ReturnType<typeof readScheduledMemoryParent>;
   runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) => {
     entered++;
+    runSenderIsOwner = params.senderIsOwner;
     const admitted = await expectDefined(params.preparedRunAdmission, "scheduled admission").admit(
       "gateway",
       params.runId,
@@ -250,16 +257,17 @@ it.each([
     const operator = readAdmittedRunOperatorAuthority(admitted);
     operatorAdmitted = operator !== undefined;
     if (scenario === "device revoked during the run") {
-      // The Gateway's device-token revocation owner fences every capture of that device.
+      // This child has already crossed runtime admission, not merely joined a queue.
+      persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, stateDir, "both");
       invalidateGatewayDeviceRevocation(context, DEVICE.deviceId, "operator");
-      revokedDuringRun = (() => {
-        try {
-          operator?.assertCurrent();
-          return false;
-        } catch {
-          return true;
-        }
-      })();
+      const targets = expectDefined(readScheduledToolTargets(admitted), "admitted child targets");
+      ownerTargets = targets;
+      const assertOwnerCurrent = expectDefined(targets.assertOwnerCurrent, "admitted owner guard");
+      expect(() => {
+        expectDefined(operator, "admitted child operator").assertCurrent();
+        targets.assertCurrent();
+        assertOwnerCurrent();
+      }).not.toThrow();
     }
     memoryParent = readScheduledMemoryParent(admitted.operationalRunInstance);
     return { payloads: [{ text: "Deploy checked" }], meta: { agentMeta: {} } };
@@ -287,12 +295,22 @@ it.each([
     clock.setTime(expectDefined(execution.getJob(job.id)?.state.nextRunAtMs, "next occurrence"));
     await onTimer(state);
     await execution.waitForIdle();
-    const after = expectDefined(execution.getJob(job.id), "settled job");
+    let after = expectDefined(execution.getJob(job.id), "settled job");
     if (scenario === "device revoked during the run") {
+      expect(after.state.lastRunStatus, after.state.lastError).toBe("ok");
+      expect(after.enabled).toBe(true);
       expect(entered).toBe(1);
       expect(operatorAdmitted).toBe(true);
-      expect(revokedDuringRun).toBe(true);
-      return;
+      expect(finished).toHaveBeenLastCalledWith(expect.objectContaining({ status: "ok" }));
+      const targets = expectDefined(ownerTargets, "finished child targets");
+      expect(targets.assertCurrent).toThrow(/settled/);
+      expect(expectDefined(targets.assertOwnerCurrent, "finished owner guard")).toThrow(/settled/);
+
+      // The next occurrence is a new start and cannot reuse the admitted child's grant.
+      clock.setTime(expectDefined(after.state.nextRunAtMs, "next child occurrence"));
+      await onTimer(state);
+      await execution.waitForIdle();
+      after = expectDefined(execution.getJob(job.id), "refused fresh child occurrence");
     }
     if (scenario === "valid" || scenario === "no operator source" || scenario === "parent reset") {
       expect(after.state.lastRunStatus, after.state.lastError).toBe("ok");
@@ -300,19 +318,27 @@ it.each([
       expect(entered).toBe(1);
       expect(operatorAdmitted).toBe(scenario !== "no operator source");
       if (scenario === "parent reset") {
-        // A reset parent runs unbound: nothing carries into the new incarnation.
-        expect(memoryParent).toBeUndefined();
+        // The key-only link keeps the child bound to the parent's current incarnation.
+        expect(memoryParent).toMatchObject({
+          sessionKey: SESSION,
+          sessionId: "reset-session",
+          lifecycleRevision: "reset",
+          senderIsOwner: true,
+        });
       } else if (scenario === "valid") {
         expect(memoryParent).toMatchObject({ sessionKey: SESSION, senderIsOwner: true });
+        // An owner run is an internal turn: it carries no sender bit.
+        expect(runSenderIsOwner).toBeUndefined();
       } else {
         // Without a snapshot the existing profile check decides owner status; the
         // fixture's attributed profile is not resident, so it is not the owner.
         expect(job.createdActor).toMatchObject({ source: "profile", id: "fixture-operator" });
         expect(memoryParent).toMatchObject({ sessionKey: SESSION, senderIsOwner: false });
+        expect(runSenderIsOwner).toBe(false);
       }
       return;
     }
-    expect(entered).toBe(0);
+    expect(entered).toBe(scenario === "device revoked during the run" ? 1 : 0);
     expect(after.state.lastRunStatus).toBe("error");
     expect(after.state.lastError).toMatch(
       /operator authority that created this automation was refused/,
@@ -323,6 +349,7 @@ it.each([
     // The refused source cannot recover through retries, so the job stops.
     expect(after.enabled).toBe(false);
     expect(after.state.nextRunAtMs).toBeUndefined();
+    expect(finished).toHaveBeenLastCalledWith(expect.objectContaining({ status: "error" }));
   } finally {
     execution.stop();
     await execution.waitForIdle();

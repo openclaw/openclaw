@@ -54,11 +54,6 @@ type ChatDetailsMobileRootDestination =
   | { kind: "outputs" }
   | { kind: "versions" };
 
-type ChatDetailsMobileRootOrigin = {
-  kind: "details-root";
-  trigger: HTMLButtonElement;
-};
-
 export type ChatDetailsMobileRootProps = {
   /** The mobile host owns hidden/inert, mounting, scroll, focus and navigation retention. */
   presented: boolean;
@@ -96,7 +91,10 @@ export type ChatDetailsMobileRootProps = {
   versions?: ChatDetailsMobileEntry;
   onNavigate: (
     destination: ChatDetailsMobileRootDestination,
-    origin: ChatDetailsMobileRootOrigin,
+    origin: {
+      kind: "details-root";
+      trigger: HTMLButtonElement;
+    },
   ) => void;
 };
 
@@ -213,7 +211,13 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
           {props.taskProgressNotice}
         </RootGroup>
       </Show>
-      <Show when={props.subagents && props.subagents.rows.length > 0 && props.subagents}>
+      <Show
+        when={
+          props.subagents &&
+          props.subagents.rows.some((row) => row.listed !== false) &&
+          props.subagents
+        }
+      >
         {(subagents) => (
           <section
             class="chat-details-mobile-root__section"
@@ -276,7 +280,11 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
       </Show>
       <ChatLazyBoundary>
         <Show when={automationsTotal() > 0 || automationNotice.toArray().length > 0}>
-          <RootGroup name="automations" label={props.labels.automations}>
+          <RootGroup
+            name="automations"
+            label={props.labels.automations}
+            heading={automationsTotal() === 1}
+          >
             <Show when={props.automations}>
               {(collection) => (
                 <>
@@ -313,7 +321,7 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
       </ChatLazyBoundary>
       <Show when={props.outputs}>
         {(entry) => (
-          <RootGroup name="outputs" label={props.labels.generatedFiles}>
+          <RootGroup name="outputs" label={props.labels.generatedFiles} heading={false}>
             <RootEntry
               entry={entry()}
               icon="fileText"

@@ -82,4 +82,5 @@ if (isMainThread && output) {
       );
     }
   });
+  process.channel?.unref();
 }

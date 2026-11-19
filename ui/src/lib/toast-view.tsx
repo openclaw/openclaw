@@ -1,106 +1,96 @@
-import { createMemo, onSettled } from "solid-js";
-import { Icon } from "../components/solid/icon.tsx";
-import { AgentIdentityAvatar } from "../components/solid/identity-avatar.tsx";
-import { formatUiExternalText } from "./format-error.ts";
-import { t } from "./reactive/i18n.ts";
-import { resolveToastAnchorRect, type ToastOptions, type ToastDismissReason } from "./toast.ts";
+import { createMemo, For } from "solid-js";
+import { ToastNotice } from "./toast-notice.tsx";
+import { TOAST_LANES, type toastOwnerFor, type ToastEntry, type ToastPlacement } from "./toast.ts";
+
+type ToastController = ReturnType<typeof toastOwnerFor>;
 
 export function ToastView(props: {
-  toast: ToastOptions | null;
-  active: boolean;
-  host: HTMLElement;
-  bodyRef(element: HTMLElement): void;
-  ready(): void;
-  hover(value: boolean): void;
-  focus(value: boolean): void;
-  dismiss(reason: ToastDismissReason): void;
-  transitionEnd(): void;
+  toasts: readonly ToastEntry[];
+  open: readonly ToastPlacement[];
+  owner: ToastController;
 }) {
-  onSettled(() => props.ready());
-  const anchor = createMemo(() => resolveToastAnchorRect(props.toast?.anchor));
-  const content = createMemo(() => props.toast?.message);
-  const message = createMemo(() => {
-    const value = content();
-    if (typeof value === "string") {
-      return formatUiExternalText(value);
-    }
-    // Snapshot only on message changes: inserting a fragment consumes its children.
-    return value instanceof DocumentFragment ? Array.from(value.childNodes) : value;
-  });
+  const anchored = createMemo(() => props.toasts.filter((entry) => entry.lane === "anchored"));
   return (
     <>
-      {props.toast ? (
-        <div
-          ref={(element) => props.bodyRef(element)}
-          class={[
-            "app-toast",
-            {
-              "app-toast--anchored": Boolean(anchor()),
-              "app-toast--error": props.toast.severity === "error",
-              "app-toast--bottom": !anchor() && props.toast.placement === "bottom",
-              "app-toast--top-center": !anchor() && props.toast.placement === "top-center",
-            },
-          ]}
-          data-active={props.active ? "true" : "false"}
-          style={
-            anchor()
-              ? {
-                  "--app-toast-anchor-center": `${anchor()!.left + anchor()!.width / 2}px`,
-                  "--app-toast-anchor-top": `${anchor()!.top}px`,
-                  "--app-toast-anchor-width": `${anchor()!.width}px`,
-                }
-              : {}
-          }
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          onPointerEnter={() => props.hover(true)}
-          onPointerLeave={() => props.hover(false)}
-          onFocusIn={() => props.focus(true)}
-          onFocusOut={(event) =>
-            props.focus(
-              event.relatedTarget instanceof Node && props.host.contains(event.relatedTarget),
-            )
-          }
-          onTransitionEnd={(event) => {
-            if (event.target === event.currentTarget && event.propertyName === "opacity") {
-              props.transitionEnd();
-            }
-          }}
-        >
-          {props.toast.avatar ? (
-            <span class="app-toast__avatar" aria-hidden="true">
-              <AgentIdentityAvatar agent={props.toast.avatar} />
-            </span>
-          ) : props.toast.icon ? (
-            <span class="app-toast__icon" aria-hidden="true">
-              <Icon name={props.toast.icon} />
-            </span>
-          ) : undefined}
-          <span class="app-toast__message">{message()}</span>
-          {props.toast.actionLabel && props.toast.onAction ? (
-            <button
-              type="button"
-              class="app-toast__action"
-              onClick={() => {
-                const action = props.toast?.onAction;
-                props.dismiss("action");
-                action?.();
-              }}
-            >
-              {props.toast.actionLabel}
-            </button>
-          ) : undefined}
-          <button
-            type="button"
-            class="app-toast__dismiss"
-            aria-label={t("common.dismiss")}
-            onClick={() => props.dismiss("dismiss")}
-          >
-            <Icon name="x" />
-          </button>
-        </div>
-      ) : undefined}
+      <div class="app-toast-lanes">
+        <For each={TOAST_LANES}>
+          {(lane) => (
+            <ToastStack
+              lane={lane}
+              entries={props.toasts.filter((entry) => entry.lane === lane)}
+              open={props.open.includes(lane)}
+              owner={props.owner}
+            />
+          )}
+        </For>
+      </div>
+      <div
+        ref={(element) => props.owner.laneElement("anchored", element)}
+        class="app-toast-anchored"
+      >
+        <For each={anchored()} keyed={(entry) => entry.id}>
+          {(entry) => <ToastCard entry={entry()} open={false} owner={props.owner} />}
+        </For>
+      </div>
     </>
+  );
+}
+
+/** Newest in front; the next two peek behind it. Hover, focus or a tap opens the
+ * stack into a list, and leaving closes it. */
+function ToastStack(props: {
+  lane: ToastPlacement;
+  entries: readonly ToastEntry[];
+  open: boolean;
+  owner: ToastController;
+}) {
+  return (
+    <div
+      ref={(element) => props.owner.laneElement(props.lane, element)}
+      class={["app-toast-lane", `app-toast-lane--${props.lane}`]}
+      data-open={props.open ? "" : undefined}
+      onPointerEnter={(event) => {
+        if (event.pointerType !== "touch") {
+          props.owner.hover(props.lane, true);
+        }
+      }}
+      onPointerLeave={(event) => {
+        if (event.pointerType !== "touch") {
+          props.owner.hover(props.lane, false);
+        }
+      }}
+      onPointerDown={(event) => {
+        if (event.pointerType === "touch") {
+          props.owner.touch(props.lane);
+        }
+      }}
+      onFocusIn={() => props.owner.focus(props.lane, true)}
+      onFocusOut={(event) =>
+        props.owner.focus(
+          props.lane,
+          event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget),
+        )
+      }
+    >
+      <For each={props.entries} keyed={(entry) => entry.id}>
+        {(entry) => <ToastCard entry={entry()} open={props.open} owner={props.owner} />}
+      </For>
+    </div>
+  );
+}
+
+function ToastCard(props: { entry: ToastEntry; open: boolean; owner: ToastController }) {
+  return (
+    <ToastNotice
+      toast={props.entry.options}
+      lane={props.entry.lane}
+      active={props.entry.active}
+      depth={props.entry.depth}
+      open={props.open}
+      onDismiss={(reason) => props.owner.dismiss(props.entry.id, reason)}
+      onHover={(hovered) => props.owner.hover("anchored", hovered)}
+      onFocus={(focused) => props.owner.focus("anchored", focused)}
+      onExit={() => props.owner.transitionEnd(props.entry.id)}
+    />
   );
 }

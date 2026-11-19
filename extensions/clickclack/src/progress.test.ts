@@ -1,3 +1,4 @@
+import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createClickClackAgentProgressPublisher,
@@ -49,6 +50,41 @@ function blockedTransport() {
 describe("ClickClack native agent progress", () => {
   afterEach(() => vi.useRealTimers());
 
+  it("publishes prepared tool context from the activity producer", async () => {
+    const { publisher, frames } = createPublisher();
+    publisher.onItemEvent(
+      projectAgentToolActivity({
+        toolCallId: "read-report",
+        name: "read",
+        phase: "start",
+        args: { path: "/tmp/report.txt" },
+      }),
+    );
+    await publisher.finalize();
+    expect(frames()[1]).toMatchObject({ line: { text: "Read: from /tmp/report.txt" } });
+  });
+
+  it("uses the formatter's prepared text without trimming it again", async () => {
+    const { publisher, frames } = createPublisher();
+    const renderedText = "Read: prepared-progress-sentinel";
+    let renderedTrims = 0;
+    const spy = vi.spyOn(String.prototype, "trim");
+    try {
+      publisher.onItemEvent({
+        itemId: "tool_1",
+        kind: "tool",
+        name: "read",
+        progressText: "  prepared-progress-sentinel  ",
+      });
+      renderedTrims = spy.mock.contexts.filter((value) => value === renderedText).length;
+    } finally {
+      spy.mockRestore();
+      await publisher.finalize();
+    }
+    expect(frames()[1]).toMatchObject({ line: { text: renderedText } });
+    expect(renderedTrims).toBe(0);
+  });
+
   it("serializes turn, private-command completion, and clear frames", async () => {
     const { publisher, publishEphemeral, frames } = createPublisher({ agentLabel: "Blackbird" });
     const tool = {
@@ -56,6 +92,7 @@ describe("ClickClack native agent progress", () => {
       kind: "tool",
       name: "server.exec",
       meta: "echo private-sentinel",
+      title: "echo private-sentinel",
       commandBearing: true,
     };
     publisher.onItemEvent({ ...tool, progressText: "Searching", status: "running" });

@@ -8,7 +8,7 @@ import {
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SessionBindingRecord } from "../../../infra/outbound/session-binding-service.js";
 import { resolveSpawnChannelAccountId } from "../../spawn-plan.js";
-import type { AcpSpawnRequesterState } from "./acp-spawn-requester.js";
+import type { resolveAcpSpawnRequesterState } from "./acp-spawn-requester.js";
 
 type GatewayImageAttachmentInput = {
   type: "image";
@@ -47,7 +47,7 @@ export function resolveAcpSpawnBootstrapDeliveryPlan(params: {
   cfg: OpenClawConfig;
   spawnMode: "run" | "session";
   effectiveStreamToParent: boolean;
-  requester: AcpSpawnRequesterState;
+  requester: Awaited<ReturnType<typeof resolveAcpSpawnRequesterState>>;
   binding: SessionBindingRecord | null;
 }): AcpSpawnBootstrapDeliveryPlan {
   // Child-thread ACP spawns deliver bootstrap output to the new thread; current-conversation

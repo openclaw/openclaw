@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { sanitizeAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import { runAgentStep } from "./agent-step.js";
@@ -9,13 +10,11 @@ import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
 const agentWaitMock = vi.hoisted(() => vi.fn());
-const requesterDeliveryGeneration = {
+const requesterDeliveryGeneration = chatRef({
   agentId: "main",
   storePath: "/test/agents/main/sessions/sessions.json",
   sessionKey: "agent:main:discord:channel:target-room",
-  sessionId: "session-source",
-  lifecycleRevision: null,
-};
+});
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
@@ -68,7 +67,7 @@ function deliveryTarget(sessionKey: string, agentId = "main") {
     callGateway: callGatewayMock,
     targetSessionKey: sessionKey,
     targetAgentId: agentId,
-    requesterDeliveryGeneration: { ...requesterDeliveryGeneration, agentId, sessionKey },
+    requesterDeliveryGeneration: chatRef({ ...requesterDeliveryGeneration, agentId, sessionKey }),
   };
 }
 function visibleReply(text: string) {
@@ -126,6 +125,10 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
     expect(runAgentStep).not.toHaveBeenCalled();
     expectNoSend();
   }
+  function deliveredStep() {
+    expect(runAgentStep).toHaveBeenCalledOnce();
+    return vi.mocked(runAgentStep).mock.calls[0]![0];
+  }
 
   it.each([true, false])(
     "recovers a long delayed peer answer or reports missing history (%s)",
@@ -154,16 +157,11 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
         targetSessionKey: "agent:worker:main",
         requesterSessionKey: "agent:main:main",
       });
-      expect(runAgentStep).toHaveBeenCalledOnce();
-      const delivered = vi.mocked(runAgentStep).mock.calls[0]![0];
+      const delivered = deliveredStep();
       expect(delivered.message).toBe(
         available ? fullReply : terminalReply.disposition === "visible" ? terminalReply.text : "",
       );
-      if (available) {
-        expect(delivered.extraSystemPrompt).not.toContain("The reply may be truncated");
-      } else {
-        expect(delivered.extraSystemPrompt).toContain("The reply may be truncated");
-      }
+      expect(delivered.extraSystemPrompt?.includes("The reply may be truncated")).toBe(!available);
     },
   );
 
@@ -291,8 +289,7 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
           : {}),
       });
       if (cross) {
-        expect(runAgentStep).toHaveBeenCalledOnce();
-        expect(vi.mocked(runAgentStep).mock.calls[0]?.[0]).toMatchObject({
+        expect(deliveredStep()).toMatchObject({
           sessionKey: "agent:main:webchat:direct:requester",
           message: "Already delivered source reply",
           sourceSessionKey: "agent:main:webchat:direct:target",
@@ -329,7 +326,7 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
       await runFlow({
         callGateway: callGatewayMock,
         requesterDeliveryGeneration: generation
-          ? { ...requesterDeliveryGeneration, sessionKey }
+          ? chatRef({ ...requesterDeliveryGeneration, sessionKey })
           : undefined,
         targetSessionKey: sessionKey,
         requesterChannel: "qa-channel",
@@ -391,8 +388,7 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
     });
     await runNotification("run-lock-timeout");
 
-    expect(runAgentStep).toHaveBeenCalledOnce();
-    const stepInput = vi.mocked(runAgentStep).mock.calls[0]![0];
+    const stepInput = deliveredStep();
     expect(stepInput).toMatchObject({
       sessionKey: "agent:main:discord:group:req",
       sourceSessionKey: "agent:worker:discord:group:dev",
@@ -416,8 +412,7 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
       runId: "run-failed-after-source-reply",
     });
 
-    expect(runAgentStep).toHaveBeenCalledOnce();
-    const stepInput = vi.mocked(runAgentStep).mock.calls[0]![0];
+    const stepInput = deliveredStep();
     expect(stepInput.message).toContain(wait.error);
     expect(stepInput.message).toContain("final reply was already delivered");
     expect(stepInput.message).toContain("Do not resend");

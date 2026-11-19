@@ -89,7 +89,14 @@ describe("scheduled-run access review", () => {
       {
         job: { id: "job-1", name: "Morning digest", enabled: true },
         ownerCheck: "checked",
-        fields: [expect.objectContaining({ field: "ownerEmbedded", legacy: true, context: false })],
+        fields: [
+          expect.objectContaining({
+            field: "ownerEmbedded",
+            legacy: "owner",
+            context: "non-owner",
+            label: "loss",
+          }),
+        ],
       },
     ]);
     expect(formatScheduledContextReport(report)).toContain(
@@ -109,6 +116,38 @@ describe("scheduled-run access review", () => {
       observe(storedJob(linked), { ...liveParent, sandboxRequired: true }, true),
     );
     expect(report.losses[0]?.fields.map((field) => field.field)).toEqual(["sandbox"]);
+  });
+
+  it("reports a session-target job's yield and CLI automations narrowing", () => {
+    // The collector runs a session-target job in its target session.
+    const job = storedJob({ sessionTarget: `session:${PARENT}` });
+    const facts = assembleScheduledAdmissionFacts(
+      {
+        cfg: {},
+        job,
+        trigger: "cron",
+        runId: "doctor",
+        agentId: "main",
+        runSessionKey: PARENT,
+        toolsAllow: resolveCronRunToolsAllow(job),
+      },
+      undefined,
+      undefined,
+    );
+    const report = classify({
+      job,
+      facts,
+      result: buildScheduledExecutionContext(job, facts),
+      ownerCheck: "not-needed",
+    });
+    expect(report.losses[0]?.fields.map((field) => field.field)).toEqual([
+      "automationsCli",
+      "requesterYield",
+    ]);
+    const text = formatScheduledContextReport(report);
+    expect(text).toContain("1 automation will lose access at the next run:");
+    expect(text).toContain("unscoped automations tool on CLI backends");
+    expect(text).toContain("sessions_yield (scheduled runs cannot wait for child sessions");
   });
 
   it("does not report a linked job whose creator is still an owner", () => {
@@ -139,7 +178,7 @@ describe("scheduled-run access review", () => {
     expect(formatScheduledContextReport(report)).toContain("has a missing worktree (`/work/tree`)");
   });
 
-  it("reports key-only and reset parent links as unbound", () => {
+  it("reports key-only parent links as unbound and keeps an edited parent bound", () => {
     const keyOnly = storedJob({
       id: "job-key",
       owner: { agentId: "main", sessionKey: PARENT },
@@ -150,20 +189,13 @@ describe("scheduled-run access review", () => {
         ownerAccountId: "default",
       },
     });
-    const reset = storedJob({ ...linked, id: "job-reset" });
+    const edited = storedJob({ ...linked, id: "job-edited" });
     const report = classify(
       observe(keyOnly),
-      observe(reset, { ...liveParent, sessionId: "next-session" }, true),
+      observe(edited, { ...liveParent, sessionId: "next-session" }, true),
     );
     expect(report.unbound).toEqual([
-      expect.objectContaining({
-        job: expect.objectContaining({ id: "job-key" }),
-        cause: "key-only",
-      }),
-      expect.objectContaining({
-        job: expect.objectContaining({ id: "job-reset" }),
-        cause: "reset",
-      }),
+      expect.objectContaining({ job: expect.objectContaining({ id: "job-key" }) }),
     ]);
     expect(report.losses).toEqual([]);
   });
@@ -179,7 +211,7 @@ describe("scheduled-run access review", () => {
         cliBackend: "claude-cli",
       }),
     );
-    // Only the owner context differs from today's CLI owner bit.
+    // Only the owner context gains owner-only tools on the CLI backend.
     expect(report.runtimeOwner).toEqual([
       { job: expect.objectContaining({ id: "job-1" }), cliBackend: "claude-cli" },
     ]);

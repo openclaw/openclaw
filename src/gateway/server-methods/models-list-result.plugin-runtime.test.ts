@@ -7,8 +7,8 @@ import {
 import { harnessRegistry } from "../../agents/model-catalog-fixtures.test-support.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeManifestModelCatalog } from "../../plugins/manifest-decision-catalog.js";
 import type { DecisionProviderCapabilities } from "../../plugins/manifest-types.js";
+import { loadPluginManifest } from "../../plugins/manifest.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import {
@@ -105,6 +105,8 @@ type DecisionCase = {
   chat?: boolean;
   expectedChat?: boolean;
   error?: boolean;
+  replace?: boolean;
+  prepared?: "remote" | "remote-cleared" | "cleared" | "alias";
 };
 function decisionCase(name: string, overrides: Partial<Omit<DecisionCase, "name">>): DecisionCase {
   return { name, plugins: {}, expected: false, ...overrides };
@@ -121,77 +123,130 @@ describe("models.list plugin metadata handoff", () => {
     decisionCase("decision filter + chat", { provider: "fixture", chat: true, expected: true }),
     decisionCase("chat filter + decisions", { provider: "custom", chat: true, expectedChat: true }),
     decisionCase("unfiltered", { chat: true, expectedChat: true, expected: true }),
+    decisionCase("prepared-only Decision model", { prepared: "remote", expected: true }),
+    decisionCase("route-cleared manifest advertisement", { prepared: "cleared", expected: true }),
+    decisionCase("route-cleared remote-only model", { prepared: "remote-cleared", expected: true }),
+    decisionCase("owned provider alias", { prepared: "alias", expected: true }),
+    decisionCase("replace-mode manifest discovery", { replace: true, expected: true }),
   ])(
     "keeps decision discovery separate from chat routing: $name",
-    async ({ plugins, expected, provider, chat = false, expectedChat = false, error }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          entries: { main: {} },
-          ...(chat ? { defaults: { model: "custom/chat", models: { "custom/chat": {} } } } : {}),
-        },
-        plugins,
-      };
-      const snapshot: ModelCatalogSnapshot = {
-        entries: chat ? [catalogEntry("chat")] : [],
-        routeVariants: [],
-      };
-      const capabilities: DecisionProviderCapabilities = {
-        questionTypes: ["boolean", "choice", "score"],
-        maxQuestions: 32,
-        maxInputTokens: 512,
-        inputTokenScope: "state-plus-each-criterion",
-        confidence: "provider-specific",
-      };
-      const decision = { provider: "fixture", id: "fast", name: "Fast decisions", capabilities };
-      const metadataSnapshot = createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "decisions",
-            contracts: { decisionProviders: ["fixture"] },
-            modelCatalog: normalizeManifestModelCatalog({
-              modelCatalog: undefined,
-              decisionModels: [decision],
-              providers: [],
-              cliBackends: [],
-              decisionProviders: ["fixture"],
-            }),
+    async ({
+      plugins,
+      expected,
+      provider,
+      chat = false,
+      expectedChat = false,
+      error,
+      replace,
+      prepared,
+    }) => {
+      await withState(async (state) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            entries: { main: {} },
+            ...(chat ? { defaults: { model: "custom/chat", models: { "custom/chat": {} } } } : {}),
           },
-          ...(chat ? [{ id: "custom", providers: ["custom"] }] : []),
-        ],
-      });
-      const preparedSnapshot = preparedCatalog(cfg, snapshot, { metadataSnapshot });
-      const loadGatewayModelCatalogSnapshot = vi.fn(() => {
-        throw new Error("Unexpected runtime discovery");
-      });
-      registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
-        readPrepared: async () => preparedSnapshot,
-        loadDeferred: loadGatewayModelCatalogSnapshot,
-      });
-      const context = createGatewayRequestContext(
-        makeContextParams({ loadGatewayModelCatalogSnapshot }),
-      );
-      context.getRuntimeConfig = () => cfg;
-      context.getCommittedRuntimeConfig = () => cfg;
-      context.logGateway.debug = vi.fn();
-      const params = { view: "configured", ...(provider ? { provider } : {}) };
-      const respond = await requestModelsList(context, params);
-      if (error) {
-        expectReply(respond, false, {
-          code: "INVALID_REQUEST",
-          message: expect.stringContaining('Unknown model catalog provider "missing"'),
+          plugins,
+          ...(replace ? { models: { mode: "replace" } } : {}),
+        };
+        const snapshot: ModelCatalogSnapshot = {
+          entries: chat ? [catalogEntry("chat")] : [],
+          routeVariants: [],
+        };
+        const capabilities: DecisionProviderCapabilities = {
+          questionTypes: ["boolean", "choice", "score"],
+          maxQuestions: 32,
+          maxInputTokens: 512,
+          inputTokenScope: "state-plus-each-criterion",
+          confidence: "provider-specific",
+        };
+        const decision = { provider: "fixture", id: "fast", name: "Fast decisions", capabilities };
+        await state.writeJson("openclaw.plugin.json", {
+          id: "decisions",
+          configSchema: {},
+          providers: ["fixture"],
+          contracts: { decisionProviders: ["fixture"] },
+          modelCatalog: { aliases: { "fixture-alias": { provider: "fixture" } } },
+          decisionModels: [decision],
         });
-        expect(respond.mock.calls[0]?.[2]?.message).toContain("openclaw models list --all");
+        const loaded = loadPluginManifest(state.stateDir);
+        if (!loaded.ok) {
+          throw new Error(loaded.error);
+        }
+        const declared = loaded.manifest.modelCatalog?.providers?.fixture?.models[0];
+        if (!declared?.inference) {
+          throw new Error("legacy Decision manifest omitted canonical inference facts");
+        }
+        const native = { ...declared, provider: "fixture", name: "Fast decisions" };
+        if (!replace) {
+          snapshot.entries.push({
+            ...native,
+            provider: prepared === "alias" ? "fixture-alias" : "fixture",
+            inference: prepared === "cleared" ? { chat: false } : native.inference,
+          });
+        }
+        if (prepared === "remote" || prepared === "remote-cleared" || prepared === "alias") {
+          snapshot.entries.push({
+            ...native,
+            id: "remote",
+            name: "Remote decisions",
+            provider: prepared === "alias" ? "fixture-alias" : "fixture",
+            inference: prepared === "remote-cleared" ? { chat: false } : native.inference,
+          });
+        }
+        snapshot.entries.push({ ...native, id: "unowned", provider: "unowned" });
+        const metadataSnapshot = createPluginMetadataSnapshotFixture({
+          plugins: [
+            {
+              id: "decisions",
+              providers: ["fixture"],
+              contracts: { decisionProviders: ["fixture"] },
+              modelCatalog: loaded.manifest.modelCatalog,
+            },
+            ...(chat ? [{ id: "custom", providers: ["custom"] }] : []),
+          ],
+        });
+        const preparedSnapshot = preparedCatalog(cfg, snapshot, { metadataSnapshot });
+        const loadGatewayModelCatalogSnapshot = vi.fn(() => {
+          throw new Error("Unexpected runtime discovery");
+        });
+        registerGatewayModelCatalogPrivateAccess(loadGatewayModelCatalogSnapshot, {
+          readPrepared: async () => preparedSnapshot,
+          loadDeferred: loadGatewayModelCatalogSnapshot,
+        });
+        const context = createGatewayRequestContext(
+          makeContextParams({ loadGatewayModelCatalogSnapshot }),
+        );
+        context.getRuntimeConfig = () => cfg;
+        context.getCommittedRuntimeConfig = () => cfg;
+        context.logGateway.debug = vi.fn();
+        const params = { view: "configured", ...(provider ? { provider } : {}) };
+        const respond = await requestModelsList(context, params);
+        if (error) {
+          expectReply(respond, false, {
+            code: "INVALID_REQUEST",
+            message: expect.stringContaining('Unknown model catalog provider "missing"'),
+          });
+          expect(respond.mock.calls[0]?.[2]?.message).toContain("openclaw models list --all");
+          expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
+          return;
+        }
+        expectReply(respond, true, expect.anything());
+        const result = respond.mock.calls[0]?.[1] as ModelsListResult;
+        expect(result.models.map((entry) => entry.id)).toEqual(expectedChat ? ["chat"] : []);
+        expect(result.decisionModels ?? []).toEqual(
+          expected
+            ? [
+                { ...decision, pluginId: "decisions" },
+                ...(prepared === "remote" || prepared === "alias"
+                  ? [{ ...decision, id: "remote", name: "Remote decisions", pluginId: "decisions" }]
+                  : []),
+              ]
+            : [],
+        );
+        expect(Check(ModelsListResultSchema, result)).toBe(true);
         expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
-        return;
-      }
-      expectReply(respond, true, expect.anything());
-      const result = respond.mock.calls[0]?.[1] as ModelsListResult;
-      expect(result.models.map((entry) => entry.id)).toEqual(expectedChat ? ["chat"] : []);
-      expect(result.decisionModels ?? []).toEqual(
-        expected ? [{ ...decision, pluginId: "decisions" }] : [],
-      );
-      expect(Check(ModelsListResultSchema, result)).toBe(true);
-      expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
+      });
     },
   );
 

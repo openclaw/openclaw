@@ -238,8 +238,11 @@ export async function createUpdateUtf8CommandTransportFixture(
       path.basename(argv.at(-2) ?? "") ===
         path.basename(runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath)
     ) {
-      // These CLI fixture packages do not implement the delegated post-core worker.
-      return commandResult({ code: 1 });
+      // These CLI fixture packages expose the legacy schema check without delegated Doctor.
+      return commandResult({
+        stdout: JSON.stringify({ state: 16, agent: 1 }),
+        cleanup: "normal",
+      });
     }
     if (argv.at(-1) === "--doctor" && typeof options !== "number" && options.beforeInput) {
       const result = await runDoctorFixture(argv, options);

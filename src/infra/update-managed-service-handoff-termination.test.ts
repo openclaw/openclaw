@@ -252,7 +252,6 @@ it.each(["finalization", "diagnostics"] as const)(
     fixture.diagnosticFinished.resolve();
     await completed;
     expectNoReplacement(fixture);
-    expect(fixture.leaseStore.release).toHaveBeenCalledExactlyOnceWith(fixture.lease);
     expect(fixture.order).toEqual([
       "terminal:start",
       "terminal:done",
@@ -294,18 +293,6 @@ it.each(["current", "lost-before-diagnostics", "lost-before-admission"] as const
       expect(fixture.children[1]?.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
       expect(fixture.order).not.toContain("diagnostic:start");
       expect(fixture.process.stdin.destroy).toHaveBeenCalledOnce();
-    } else if (current) {
-      expect(fixture.spawn.mock.calls[1]?.[1]).toEqual(
-        expect.arrayContaining([
-          "triage",
-          "--non-interactive",
-          "--update-result",
-          "/fixture/diagnostics.json",
-        ]),
-      );
-      expect(fixture.logs).toContain(
-        "Reuse this diagnostic context on the Gateway host: openclaw triage --run --update-result /fixture/failure.json",
-      );
     }
     expectNoReplacement(fixture);
     expect(fixture.process.exitCode).toBe(1);

@@ -11,6 +11,7 @@ import {
 } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
 import { UpdatePreMutationError } from "./shared.js";
 import {
   resolveMutableUpdateFailure,
@@ -90,10 +91,7 @@ it.each(["forced", "uncertain"] as const)(
           throw new Error("compensation escaped cleanup ownership");
         }),
       ]);
-      expect(boundary.admission).not.toHaveBeenCalled();
-      expect(restore).not.toHaveBeenCalled();
-      expect(complete).not.toHaveBeenCalled();
-      expect(boundary.prepareFailure).not.toHaveBeenCalled();
+      expectNoCalls(boundary.admission, restore, complete, boundary.prepareFailure);
     } finally {
       cleanup.resolve(cleanupResult);
       await work;
@@ -102,10 +100,8 @@ it.each(["forced", "uncertain"] as const)(
     expect(hasCommandProcessCleanupError(error)).toBe(cleanupResult === "uncertain");
     expect(collectNestedErrorCandidates(error)).toContain(original);
     if (cleanupResult === "uncertain") {
-      expect(boundary.admission).not.toHaveBeenCalled();
-      expect(restore).not.toHaveBeenCalled();
+      expectNoCalls(boundary.admission, restore, boundary.prepareFailure);
       expect(complete).toHaveBeenCalledExactlyOnceWith(false, { preserveState: true });
-      expect(boundary.prepareFailure).not.toHaveBeenCalled();
     } else {
       expect(error).toBe(prepared);
       expect(restore).toHaveBeenCalledOnce();
@@ -149,8 +145,7 @@ it.each([
     const work = resolveFailure(error, originalRecovery);
     if (uncertain) {
       await expect(work).rejects.toBe(error);
-      expect(originalRecovery).not.toHaveBeenCalled();
-      expect(report).not.toHaveBeenCalled();
+      expectNoCalls(originalRecovery, report);
     } else {
       const { result, failure } = await work;
       expect(failure.cause).toBe(error);

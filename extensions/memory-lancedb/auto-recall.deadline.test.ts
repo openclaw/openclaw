@@ -8,16 +8,20 @@ import type { EmbeddingProvider } from "openclaw/plugin-sdk/embedding-providers"
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, expect, test, vi } from "vitest";
-import memoryPlugin from "./index.js";
+import { createEmbeddings } from "./embeddings.js";
 
 afterEach(() => {
   vi.useRealTimers();
   resetPluginRuntimeStateForTest();
 });
 
-test.each([10_000, 16_000])(
-  "includes %ims of cold provider initialization in the auto-recall deadline",
-  async (initializationMs) => {
+test.each([
+  { initializationMs: 10_000, clockStepMs: 0 },
+  { initializationMs: 16_000, clockStepMs: 0 },
+  { initializationMs: 0, clockStepMs: 30_000 },
+])(
+  "bounds cold startup ($initializationMs ms) across a $clockStepMs ms clock step",
+  async ({ initializationMs, clockStepMs }) => {
     const ready = createDeferred<void>();
     const creating = createDeferred<void>();
     const requests: AbortSignal[] = [];
@@ -32,9 +36,13 @@ test.each([10_000, 16_000])(
         }
         requests.push(signal);
         return await new Promise<number[]>((_resolve, reject) => {
-          signal.addEventListener("abort", () => reject(new Error("Synthetic embedding aborted")), {
-            once: true,
-          });
+          signal.addEventListener(
+            "abort",
+            () => reject(new Error("memory-lancedb embedding timed out")),
+            {
+              once: true,
+            },
+          );
         });
       },
       embedBatch: async () => [],
@@ -55,57 +63,35 @@ test.each([10_000, 16_000])(
       },
     });
     setActivePluginRegistry(registry);
-    const pluginConfig = {
-      embedding: { provider: provider.id, model: provider.model, dimensions: 3 },
-      dbPath: "/unused/synthetic-memory-deadline",
-      autoRecall: true,
-      autoCapture: false,
-    };
-    const config = { plugins: { entries: { "memory-lancedb": { config: pluginConfig } } } };
     const runtime = createPluginRuntimeMock();
-    runtime.config.current = () => config;
     runtime.agent.resolveAgentDir = () => "/unused/synthetic-agent";
-    const on = vi.fn();
-    const registerService = vi.fn();
-    memoryPlugin.register(
-      createTestPluginApi({ pluginConfig, config, runtime, on, registerService }),
-    );
-    const hook = on.mock.calls.find(([name]) => name === "before_prompt_build")?.[1];
-    expect(hook).toBeTypeOf("function");
-    const service = registerService.mock.calls[0]?.[0];
-    service.start();
+    const embeddings = createEmbeddings(createTestPluginApi({ runtime }));
+    const config = { provider: provider.id, model: provider.model };
     vi.useFakeTimers();
     try {
-      const recall = hook(
-        { prompt: "Which synthetic editor do I prefer?", messages: [] },
-        {
-          agentId: "main",
-          sessionKey: "agent:main:dashboard:synthetic-deadline",
-          toolAuthority: {
-            fingerprint: "synthetic-authority",
-            allows: (name: string) => name === "memory_recall",
-            assertActive() {},
-          },
-        },
-      );
+      const pending = embeddings.embed("main", "Which editor?", config, 15_000);
+      const rejected = expect(pending).rejects.toThrow("memory-lancedb embedding timed out");
       await creating.promise;
       await vi.advanceTimersByTimeAsync(initializationMs);
+      // The clock step lands between the monotonic deadline and remaining-budget reads.
+      // A healthy query must still receive its full remaining budget.
+      if (clockStepMs) {
+        vi.setSystemTime(Date.now() + clockStepMs);
+      }
       ready.resolve();
       await vi.advanceTimersByTimeAsync(0);
       if (initializationMs < 15_000) {
-        expect(requests).toHaveLength(1);
         expect(requests[0]?.aborted).toBe(false);
         await vi.advanceTimersByTimeAsync(15_000 - initializationMs);
-        await expect(recall).resolves.toBeUndefined();
-        expect(requests[0]?.aborted).toBe(true);
-      } else {
-        await expect(recall).resolves.toBeUndefined();
-        expect(requests).toHaveLength(0);
       }
+      await rejected;
+      expect(requests.map((signal) => signal.aborted)).toEqual(
+        initializationMs < 15_000 ? [true] : [],
+      );
     } finally {
       ready.resolve();
       await vi.runAllTimersAsync();
-      await service.stop();
+      await embeddings.close?.();
     }
     expect(close).toHaveBeenCalledOnce();
   },

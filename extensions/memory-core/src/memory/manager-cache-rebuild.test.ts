@@ -24,6 +24,82 @@ describe("memory rebuild cache reuse", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it.each([
+    { cacheEnabled: true, vectorEnabled: true },
+    { cacheEnabled: false, vectorEnabled: false },
+  ])(
+    "reuses shifted chunks during ordinary edits (cache=$cacheEnabled, vector=$vectorEnabled)",
+    async ({ cacheEnabled, vectorEnabled }) => {
+      const file = path.join(fixture.paths.memory, "2026-01-12.md");
+      const original = Array.from({ length: 18 }, (_, i) =>
+        `Alpha archive record ${i}: stable reference details.`.padEnd(900, "."),
+      ).join("\n");
+      await fs.writeFile(file, original);
+      const manager = await fixture.getFreshManager(
+        fixture.createConfig({ sources: ["memory"], cacheEnabled, vectorEnabled }),
+        "cli",
+      );
+      await manager.sync({ reason: "cli", force: true });
+      const writer = memoryIndexFixtureWriter(manager);
+      const read = () =>
+        writer
+          .prepare(
+            "SELECT id, hash, text, start_line, embedding FROM memory_index_chunks ORDER BY start_line",
+          )
+          .all();
+      const before = read();
+      expect(before.length).toBeGreaterThan(5);
+      // Model a cache miss without deleting the canonical published vectors.
+      writer.exec("DELETE FROM memory_embedding_cache");
+      fixture.provider.embeddedBatchTexts.length = 0;
+      await fs.writeFile(file, "Beta newly inserted header.\n" + original);
+      Reflect.set(manager, "dirty", true);
+      if (cacheEnabled) {
+        writer.exec(`CREATE TRIGGER fail_edit_publication BEFORE INSERT ON memory_index_chunks
+          BEGIN SELECT RAISE(ABORT, 'injected edit publication failure'); END;`);
+        try {
+          await expect(manager.sync({ reason: "watch" })).rejects.toThrow(
+            "injected edit publication failure",
+          );
+          expect(read()).toEqual(before);
+          expect(writer.prepare("SELECT count(*) AS n FROM memory_embedding_cache").get()).toEqual({
+            n: 1,
+          });
+        } finally {
+          writer.exec("DROP TRIGGER fail_edit_publication");
+        }
+      }
+      // Retry keeps the failed run's new vector; only the initial cache miss embeds it.
+      await manager.sync({ reason: "watch" });
+      const after = read();
+      const unchanged = after.filter((row) => before.some((old) => old.hash === row.hash));
+      expect(unchanged.length).toBeGreaterThan(5);
+      expect(
+        unchanged.every((row) =>
+          before.some(
+            (old) =>
+              old.hash === row.hash && old.id !== row.id && old.start_line !== row.start_line,
+          ),
+        ),
+      ).toBe(true);
+      expect(fixture.provider.embeddedBatchTexts).toEqual([
+        `Beta newly inserted header.\n${original.split("\n")[0]}`,
+      ]);
+      for (const row of unchanged) {
+        expect(row.embedding).toEqual(before.find((old) => old.hash === row.hash)?.embedding);
+      }
+      const results = await manager.search("Beta newly inserted header", { minScore: 0 });
+      expect(
+        results.some((row) => row.path === "memory/2026-01-12.md" && row.snippet.includes("Beta")),
+      ).toBe(true);
+      if (!cacheEnabled) {
+        expect(writer.prepare("SELECT count(*) AS n FROM memory_embedding_cache").get()).toEqual({
+          n: 0,
+        });
+      }
+    },
+  );
+
+  it.each([
     { emptyIndex: false, failPublication: false },
     { emptyIndex: true, failPublication: false },
     { emptyIndex: false, failPublication: true },
@@ -47,9 +123,14 @@ describe("memory rebuild cache reuse", () => {
       }
       await manager.sync({ reason: "cli", force: true });
       const writer = memoryIndexFixtureWriter(manager);
-      writer.exec(`DELETE FROM memory_embedding_cache WHERE hash IN (
-        SELECT hash FROM memory_index_chunks WHERE path < 'memory/04.md'
-      ); UPDATE memory_embedding_cache SET updated_at = 1;`);
+      // The rebuild retired its own published duplicates; restore rows an older build kept.
+      writer.exec(`INSERT INTO memory_embedding_cache
+          (provider, model, provider_key, hash, embedding, dims, updated_at)
+        SELECT json_extract(meta.value, '$.provider'), chunk.model,
+          json_extract(meta.value, '$.providerKey'), chunk.hash, chunk.embedding,
+          length(chunk.embedding) / 8, 1
+        FROM memory_index_chunks AS chunk, memory_index_meta AS meta
+        WHERE meta.key = 'memory_index_meta_v1' AND chunk.path >= 'memory/04.md'`);
       const insert = writer.prepare(`INSERT INTO memory_embedding_cache
         (provider, model, provider_key, hash, embedding, dims, updated_at)
         SELECT provider, model, provider_key, ?, ?, 4, ? FROM memory_embedding_cache LIMIT 1`);
@@ -82,8 +163,9 @@ describe("memory rebuild cache reuse", () => {
       expect(writer.prepare("SELECT count(*) AS n FROM memory_index_chunks").get()).toEqual({
         n: 12,
       });
+      // A published rebuild retires the rows it now serves; only superseded rows remain.
       expect(writer.prepare("SELECT count(*) AS n FROM memory_embedding_cache").get()).toEqual({
-        n: 12,
+        n: failPublication ? 12 : 4,
       });
       if (!emptyIndex && !failPublication) {
         await manager.close();
@@ -151,6 +233,10 @@ describe("memory rebuild cache reuse", () => {
     // Full rebuilds may use twice the cap; every commit must stay within its
     // budget, and completion restores the normal cap.
     harness.dirty = true;
+    if (mode === "full") {
+      // Keep this rebuild's rows so the cap, not duplicate retirement, settles them.
+      vi.spyOn(MemoryIndexDatabase.prototype, "retireEmbeddingCache").mockResolvedValue(null);
+    }
     await memoryManager.sync({ reason: "cli", force: mode === "full" });
 
     expect(interceptedPaths.length).toBeGreaterThan(0);

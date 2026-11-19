@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import * as runtimeSnapshotModule from "../../config/runtime-snapshot.js";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import type {
   ConfigFileSnapshot,
   ConfigValidationIssue,
@@ -39,7 +39,6 @@ export function gatewayRunReadFailures(): ReadFailureFixture[] {
   const unavailable = Object.assign(new Error("configuration storage unavailable"), {
     code: "ENOSPC",
   });
-  const ownership = new OpenClawStateOwnershipMetadataError("/synthetic/state.sqlite", "invalid");
   return [
     {
       label: "rejected final read",
@@ -58,7 +57,7 @@ export function gatewayRunReadFailures(): ReadFailureFixture[] {
     },
     {
       label: "restart ownership refusal",
-      failure: ownership,
+      failure: new OpenClawStateOwnershipMetadataError("/synthetic/state.sqlite", "invalid"),
       stage: "runtime",
       expected: { message: "__exit__:78" },
     },
@@ -69,18 +68,9 @@ export function completeGatewayRunSnapshot(
   overrides: Partial<ConfigFileSnapshot> = {},
 ) {
   return {
-    path: "/tmp/openclaw.json",
-    exists: true,
-    valid: true,
+    ...createTestConfigSnapshot(config),
     parsed: config,
     raw: JSON.stringify(config),
-    runtimeConfig: config,
-    resolved: config,
-    sourceConfig: config,
-    config,
-    issues: [],
-    legacyIssues: [],
-    warnings: [],
     ...overrides,
   } satisfies ConfigFileSnapshot;
 }
@@ -88,56 +78,40 @@ export function completeGatewayRunSnapshot(
 export function registerInvalidConfigResetTests(configState: {
   snapshot: Record<string, unknown>;
 }) {
-  it.each<[string, { sourceConfig?: null | string }, "raw" | "path" | null]>([
-    ["absent", {}, null],
-    ["null", { sourceConfig: null }, null],
-    ["non-object", { sourceConfig: "invalid" }, null],
-    ["raw contents", {}, "raw"],
-    ["file target", {}, "path"],
-  ])("guards invalid-config dev reset: %s", async (_name, source, change) => {
+  it.each([null, "raw", "path"] as const)("guards invalid-config dev reset: %s", async (change) => {
     const { clearGatewayRunConfigEnvironment, prepareGatewayRunBootstrap, recheckGatewayRunReset } =
       await import("./pre-bootstrap.js");
-    await withEnvAsync(
-      { OPENCLAW_SERVICE_MARKER: undefined, OPENCLAW_PROFILE: "dev" },
-      async () => {
-        clearGatewayRunConfigEnvironment();
-        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-        const params = { opts: { dev: true, reset: true, allowUnconfigured: true }, runtime };
-        const snapshot: Record<string, unknown> = {
-          ...completeGatewayRunSnapshot({}),
-          raw: "{ invalid config",
-          parsed: null,
-          valid: false,
-          issues: [{ path: "<root>", message: "JSON parse failed" }],
+    const env = { OPENCLAW_SERVICE_MARKER: undefined, OPENCLAW_PROFILE: "dev" };
+    await withEnvAsync(env, async () => {
+      clearGatewayRunConfigEnvironment();
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const params = { opts: { dev: true, reset: true, allowUnconfigured: true }, runtime };
+      const snapshot: Record<string, unknown> = {
+        ...failedGatewayRunConfigSnapshot(),
+        raw: "{ invalid config",
+      };
+      delete snapshot.sourceConfig;
+      configState.snapshot = snapshot;
+      try {
+        await expect(prepareGatewayRunBootstrap(params)).resolves.toBe(false);
+        configState.snapshot = {
+          ...snapshot,
+          ...(change === "raw" ? { raw: "{ a different invalid config" } : {}),
+          ...(change === "path" ? { path: "/tmp/other.json" } : {}),
         };
-        delete snapshot.sourceConfig;
-        Object.assign(snapshot, source);
-        configState.snapshot = snapshot;
-        const hash = vi.spyOn(runtimeSnapshotModule, "hashRuntimeConfigValue");
-        try {
-          await expect(prepareGatewayRunBootstrap(params)).resolves.toBe(false);
-          hash.mockClear();
-          configState.snapshot = {
-            ...snapshot,
-            ...(change === "raw" ? { raw: "{ a different invalid config" } : {}),
-            ...(change === "path" ? { path: "/tmp/other.json" } : {}),
-          };
-          await expect(recheckGatewayRunReset(params)).resolves.toBe(change === null);
-          if (change) {
-            expect(runtime.exit).toHaveBeenCalledWith(1);
-            expect(runtime.error).toHaveBeenCalledWith(
-              expect.stringContaining("selected config or state target changed during startup"),
-            );
-          } else {
-            expect(hash).not.toHaveBeenCalled();
-            expect(runtime.error).not.toHaveBeenCalled();
-            expect(runtime.exit).not.toHaveBeenCalled();
-          }
-        } finally {
-          hash.mockRestore();
-          clearGatewayRunConfigEnvironment();
+        await expect(recheckGatewayRunReset(params)).resolves.toBe(change === null);
+        if (change) {
+          expect(runtime.exit).toHaveBeenCalledWith(1);
+          expect(runtime.error).toHaveBeenCalledWith(
+            expect.stringContaining("selected config or state target changed during startup"),
+          );
+        } else {
+          expect(runtime.error).not.toHaveBeenCalled();
+          expect(runtime.exit).not.toHaveBeenCalled();
         }
-      },
-    );
+      } finally {
+        clearGatewayRunConfigEnvironment();
+      }
+    });
   });
 }

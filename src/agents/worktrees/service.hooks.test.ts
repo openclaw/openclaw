@@ -199,7 +199,6 @@ describe("ManagedWorktreeService repository code isolation", () => {
       type SourceScope = { active: boolean; checks: number };
       const callerContext = new AsyncLocalStorage<string>();
       const sourceContext = new AsyncLocalStorage<SourceScope>();
-      const dispatched = createDeferredCore();
       const released = createDeferredCore();
       const aborted = createDeferredCore();
       const completion = createDeferredCore<SpawnResult>();
@@ -249,7 +248,6 @@ describe("ManagedWorktreeService repository code isolation", () => {
           }
           setupSource = currentSource;
           events.push("dispatch");
-          dispatched.resolve();
           expect(setupSource?.active).toBe(true);
           expect(setupSource?.checks).toBeGreaterThan(0);
           expect(sourceContext.getStore()).toBeUndefined();
@@ -290,7 +288,6 @@ describe("ManagedWorktreeService repository code isolation", () => {
       const waitForSetupSignal = (ready: Promise<void>, label: string) =>
         withTimeout(Promise.race([ready, premature]), SESSION_CONTROLLER_DRAIN_TIMEOUT_MS, label);
       try {
-        await waitForSetupSignal(dispatched.promise, "setup dispatch");
         await waitForSetupSignal(released.promise, "setup source release");
         expect(creationSettled).not.toHaveBeenCalled();
         if (mode === "unwind") {

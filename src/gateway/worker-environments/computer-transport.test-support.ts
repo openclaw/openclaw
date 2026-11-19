@@ -27,6 +27,7 @@ import { createWorkerComputerTransportOwner } from "./computer-transport.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
+import { createDispatchEnvironmentFixtures } from "./placement-dispatch-test-fixtures.js";
 import {
   isCurrentPlacementTurnClaim,
   type WorkerSessionPlacementRecord,
@@ -68,28 +69,20 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     workerBundleHash: "a".repeat(64),
   });
   const environment: WorkerEnvironmentRecord = {
-    preparation: null,
-    lastActivatedAtMs: null,
+    ...createDispatchEnvironmentFixtures().attached,
     environmentId: "environment-1",
     providerId: sharedHost ? "device" : "fixture-cloud",
     profileId: "desktop",
     profileSnapshot: { settings: {} },
     provisionOperationId: "provision-1",
-    nodeSetupId: null,
     nodeDeviceId: "desktop-node",
     sharedHost,
     desktop: sharedHost ? null : { protocol: "rfb", port: 5900, passwordFilePath: "/vnc.password" },
     bootstrapReceipt: null,
     ownerEpoch: 7,
-    teardownTerminalState: null,
     attachedSessionIds: [claim.sessionId],
-    lastError: null,
-    createdAtMs: 1,
     updatedAtMs: 2,
     stateChangedAtMs: 2,
-    idleSinceAtMs: null,
-    destroyRequestedAtMs: null,
-    state: "attached",
     leaseId: "lease-1",
     sshEndpoint: null,
   };

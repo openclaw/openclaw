@@ -19,7 +19,6 @@ import {
 } from "./subagent-registry-state.fixture.test-support.js";
 import {
   clearSubagentRunsReadCacheForTest as clearReadCache,
-  prepareSubagentMaintenanceRunsSnapshotForRead as prepareMaintenance,
   prepareSubagentRunsSnapshotForRunIds,
   prepareSubagentRunsSnapshotForSessions as prepareSessions,
 } from "./subagent-registry-state.js";
@@ -59,17 +58,6 @@ aroundEach((runTest) =>
     },
   ),
 );
-
-it("captures current committed maintenance protection", async () => {
-  persist(memory);
-  const prepared = await prepareMaintenance(rows());
-  const completed = { ...entry, cleanupCompletedAt: 100 };
-  const active = { ...entry, runId: "new-child", childSessionKey: "agent:main:subagent:new" };
-  persist(rows(completed, active), [completed.runId, active.runId]);
-  expect([...prepared.capture()]).toEqual([
-    expect.objectContaining({ runId: active.runId, childSessionKey: active.childSessionKey }),
-  ]);
-});
 
 it.each(["live-only delete", "update", "delete"] as const)(
   "consumes committed resident %s",
@@ -173,11 +161,7 @@ it("hydrates live-parent descendants and rejects changed topology", async () => 
       grandchild: runs.get(grandchild.runId)?.childSessionKey,
     })),
   ).toEqual({ ready: true, value: { rawParent: true, grandchild: grandchild.childSessionKey } });
-  memory.set("new-child", {
-    ...parent,
-    runId: "new-child",
-    childSessionKey: "agent:main:subagent:new",
-  });
+  memory.set("new-child", child("new-child", root));
   const consume = vi.fn();
   expect(prepared.consume(consume)).toEqual({ ready: false });
   expect(consume).not.toHaveBeenCalled();

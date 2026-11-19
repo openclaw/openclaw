@@ -28,11 +28,9 @@ import {
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { SessionControllerWatchdogAttempt } from "../sessions/session-controller.watchdog.js";
-import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import type { Skill } from "../skills/loading/skill-contract.js";
 import {
   resolveSkillTelemetrySource,
@@ -47,23 +45,16 @@ import {
 } from "../skills/workspace-skill-read-path.js";
 import { isPlainObject, truncateUtf16Safe } from "../utils.js";
 import { buildAdjustedParamsKey } from "./agent-tools.before-tool-call.state.js";
-import type {
-  HookBlockedReason,
-  HookContext,
-  ToolOutcomeObservation,
-  ToolOutcomeObserver,
-} from "./agent-tools.before-tool-call.types.js";
+import type { HookBlockedReason, HookContext } from "./agent-tools.before-tool-call.types.js";
 import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { getBeforeToolCallSourceTool } from "./before-tool-call-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
 import { getSkillInstructionFingerprint } from "./skill-instruction-result.js";
-import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
+import { resolveToolExecutionErrorKind } from "./tool-execution-error.js";
+import type { ToolOutcomeObserver } from "./tool-outcome-observation.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
-import {
-  resolveToolExecutionErrorKind,
-  resolveToolResultFailureKind,
-} from "./tool-result-error.js";
+import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import { getToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { canonicalizePath } from "./utils/paths.js";
@@ -99,8 +90,6 @@ export function startToolExecutionLiveness(
 
 const log = beforeToolCallLog;
 const MAX_PENDING_TERMINAL_PRESENTATIONS = 1024;
-const LOOP_WARNING_BUCKET_SIZE = 10;
-const MAX_LOOP_WARNING_KEYS = 256;
 const MAX_TERMINAL_PRESENTATION_CHARS = 2_000;
 type ToolTerminalPresentationProjector = (
   result: Awaited<ReturnType<AnyAgentTool["execute"]>>,
@@ -189,18 +178,11 @@ export function finalizeToolTerminalPresentation(params: {
   const toolCallOrdinal = pending?.toolCallOrdinal ?? params.toolCallOrdinal;
   observer({
     toolName: pending?.toolName || params.toolName || "tool",
-    argsHash: "",
-    resultHash: "",
     ...(toolCallOrdinal !== undefined ? { toolCallOrdinal } : {}),
     terminalPresentation: params.isError ? undefined : pending?.project?.(params.result),
     presentationOnly: true,
   });
 }
-
-export const loadBeforeToolCallRuntime = createLazyRuntimeSurface(
-  () => import("./agent-tools.before-tool-call.runtime.js"),
-  ({ beforeToolCallRuntime }) => beforeToolCallRuntime,
-);
 
 export function unwrapErrorCause(err: unknown): unknown {
   try {
@@ -244,44 +226,24 @@ export function resolveToolErrorDiagnostic(
   };
 }
 
-type ResolvedToolTerminalDiagnostic =
-  | {
-      type: "tool.execution.blocked";
-      deniedReason: "tool_result_blocked";
-      reason: "tool_result_blocked";
-    }
-  | {
-      type: "tool.execution.completed";
-      durationMs: number;
-    }
-  | {
-      type: "tool.execution.error";
-      durationMs: number;
-      errorCategory: "tool_result_error";
-      terminalReason: DiagnosticToolTerminalReason;
-    };
-
-export function resolveToolResultTerminalDiagnostic(
-  result: unknown,
-  durationMs: number,
-): ResolvedToolTerminalDiagnostic {
+export function resolveToolResultTerminalDiagnostic(result: unknown, durationMs: number) {
   // Tool execution may resolve with a structured failure. Classify that here
   // so every diagnostic consumer sees one canonical terminal outcome.
   const failureKind = resolveToolResultFailureKind(result);
   if (!failureKind) {
-    return { type: "tool.execution.completed", durationMs };
+    return { type: "tool.execution.completed" as const, durationMs };
   }
   if (failureKind === "blocked") {
     return {
-      type: "tool.execution.blocked",
-      deniedReason: "tool_result_blocked",
-      reason: "tool_result_blocked",
+      type: "tool.execution.blocked" as const,
+      deniedReason: "tool_result_blocked" as const,
+      reason: "tool_result_blocked" as const,
     };
   }
   return {
-    type: "tool.execution.error",
+    type: "tool.execution.error" as const,
     durationMs,
-    errorCategory: "tool_result_error",
+    errorCategory: "tool_result_error" as const,
     terminalReason: failureKind,
   };
 }
@@ -319,7 +281,8 @@ function canonicalSkillFile(value: string | undefined): string | undefined {
     : undefined;
 }
 
-function resolvedSkillUsageMatch(params: {
+/** Builds the usage match for one resolved skill, keyed by its canonical SKILL.md file. */
+export function resolvedSkillUsageMatch(params: {
   activation: SkillUsageMatch["activation"];
   skill: Pick<Skill, "name" | "filePath"> & Partial<Pick<Skill, "source" | "sourceInfo">>;
 }): SkillUsageMatch {
@@ -431,9 +394,10 @@ export function findSkillUsageMatch(params: {
     if (typeof name !== "string") {
       return undefined;
     }
+    const normalizedName = name.trim();
     const snapshot = params.ctx?.skillsSnapshot;
     const skill = (snapshot?.discoverySkills ?? snapshot?.resolvedSkills)?.find(
-      (entry) => entry.name === name.trim() && !entry.disableModelInvocation,
+      (entry) => entry.name === normalizedName && !entry.disableModelInvocation,
     );
     if (!skill) {
       return undefined;
@@ -525,11 +489,7 @@ export function emitToolBlockedSecurityEvent(params: {
   paramsSummary?: DiagnosticToolParamsSummary;
 }): void {
   const policyId =
-    params.deniedReason === "tool-loop"
-      ? "tool-loop-detection"
-      : params.deniedReason === "plugin-approval"
-        ? "plugin-tool-approval"
-        : "plugin-before-tool-call";
+    params.deniedReason === "plugin-approval" ? "plugin-tool-approval" : "plugin-before-tool-call";
   emitTrustedSecurityEvent({
     category: "tool",
     action: "tool.execution.blocked",
@@ -552,7 +512,7 @@ export function emitToolBlockedSecurityEvent(params: {
     },
     control: {
       id: policyId === "plugin-before-tool-call" ? "before-tool-call" : policyId,
-      family: policyId === "tool-loop-detection" ? "authorization" : "approval",
+      family: "approval",
     },
     attributes: {
       tool_source: params.toolIdentity.toolSource,
@@ -603,128 +563,18 @@ export function summarizeToolParams(params: unknown): DiagnosticToolParamsSummar
   return { kind: "other" };
 }
 
-export function shouldEmitLoopWarning(
-  state: SessionState,
-  warningKey: string,
-  count: number,
-): boolean {
-  if (!state.toolLoopWarningBuckets) {
-    state.toolLoopWarningBuckets = new Map();
-  }
-  const bucket = Math.floor(count / LOOP_WARNING_BUCKET_SIZE);
-  const lastBucket = state.toolLoopWarningBuckets.get(warningKey) ?? 0;
-  if (bucket <= lastBucket) {
-    return false;
-  }
-  state.toolLoopWarningBuckets.set(warningKey, bucket);
-  pruneMapToMaxSize(state.toolLoopWarningBuckets, MAX_LOOP_WARNING_KEYS);
-  return true;
-}
-
-/** Reconcile loop liveness with the final post-policy arguments before execution. */
-export async function reconcileLoopCallExecutionParams(args: {
+/** Publish one settled outcome to the run's presentation and taint observers. */
+export function observeToolOutcome(args: {
   ctx?: HookContext;
   toolName: string;
-  toolParams: unknown;
-  toolCallId?: string;
-}): Promise<void> {
-  if ((!args.ctx?.sessionKey && !args.ctx?.sessionId) || args.ctx.loopDetection?.enabled !== true) {
-    return;
-  }
-  try {
-    const {
-      getDiagnosticSessionState,
-      markDiagnosticArgumentChurnObservation,
-      reconcileToolCallExecutionParams,
-    } = await loadBeforeToolCallRuntime();
-    const sessionState = getDiagnosticSessionState({
-      sessionKey: args.ctx.sessionKey,
-      sessionId: args.ctx.sessionId,
-    });
-    const active = reconcileToolCallExecutionParams(sessionState, {
-      toolName: args.toolName,
-      toolParams: args.toolParams,
-      toolCallId: args.toolCallId,
-      runId: args.ctx.runId,
-      warningThreshold: TOOL_LOOP_WARNING_THRESHOLD,
-    });
-    markDiagnosticArgumentChurnObservation({
-      watchdogAttempt: args.ctx.watchdogAttempt,
-      sessionKey: args.ctx.sessionKey,
-      sessionId: args.ctx.sessionId,
-      runId: args.ctx.runId,
-      active,
-    });
-  } catch (err) {
-    log.warn(
-      `tool loop execution-param reconciliation failed: tool=${args.toolName} error=${String(err)}`,
-    );
-  }
-}
-
-export async function recordLoopOutcome(args: {
-  ctx?: HookContext;
-  toolName: string;
-  toolParams: unknown;
-  toolCallId?: string;
-  result?: unknown;
-  error?: unknown;
   resultContentSource?: AnyAgentTool["resultContentSource"];
   toolCallOrdinal?: number;
   terminalPresentation?: string;
-}): Promise<void> {
-  if (!args.ctx?.sessionKey && !args.ctx?.sessionId) {
-    return;
-  }
-  let recordedOutcome: ToolOutcomeObservation | undefined;
-  try {
-    const {
-      getArgumentChurnNoProgressStreak,
-      getDiagnosticSessionState,
-      markDiagnosticArgumentChurnObservation,
-      recordToolCallOutcome,
-    } = await loadBeforeToolCallRuntime();
-    const sessionState = getDiagnosticSessionState({
-      sessionKey: args.ctx.sessionKey,
-      sessionId: args.ctx.sessionId,
-    });
-    const record = recordToolCallOutcome(sessionState, {
-      toolName: args.toolName,
-      toolParams: args.toolParams,
-      toolCallId: args.toolCallId,
-      result: args.result,
-      error: args.error,
-      ...(args.ctx.runId && { runId: args.ctx.runId }),
-    });
-    const churnContinues =
-      record !== undefined &&
-      getArgumentChurnNoProgressStreak(
-        (sessionState.toolCallHistory ?? []).filter((call) => call.runId === record.runId),
-        record.toolName,
-        record.argsHash,
-      ).count > 0;
-    markDiagnosticArgumentChurnObservation({
-      watchdogAttempt: args.ctx.watchdogAttempt,
-      sessionKey: args.ctx.sessionKey,
-      sessionId: args.ctx.sessionId,
-      runId: args.ctx.runId,
-      active: churnContinues,
-      existingOnly: true,
-    });
-    if (record?.resultHash && args.ctx.onToolOutcome) {
-      recordedOutcome = {
-        toolName: record.toolName,
-        argsHash: record.argsHash,
-        resultHash: record.resultHash,
-        ...(args.resultContentSource ? { resultContentSource: args.resultContentSource } : {}),
-        ...(args.toolCallOrdinal !== undefined ? { toolCallOrdinal: args.toolCallOrdinal } : {}),
-        ...(args.terminalPresentation ? { terminalPresentation: args.terminalPresentation } : {}),
-      };
-    }
-  } catch (err) {
-    log.warn(`tool loop outcome tracking failed: tool=${args.toolName} error=${String(err)}`);
-  }
-  if (recordedOutcome) {
-    args.ctx.onToolOutcome?.(recordedOutcome);
-  }
+}): void {
+  args.ctx?.onToolOutcome?.({
+    toolName: args.toolName,
+    ...(args.resultContentSource ? { resultContentSource: args.resultContentSource } : {}),
+    ...(args.toolCallOrdinal !== undefined ? { toolCallOrdinal: args.toolCallOrdinal } : {}),
+    ...(args.terminalPresentation ? { terminalPresentation: args.terminalPresentation } : {}),
+  });
 }

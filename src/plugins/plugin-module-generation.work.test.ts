@@ -2,49 +2,39 @@ import fs from "node:fs";
 import Module from "node:module";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { useNodeModuleHooks } from "./native-module-require.js";
 import { createPluginModuleGenerationTestHarness } from "./plugin-module-generation.test-support.js";
 
 const { fixture, host } = createPluginModuleGenerationTestHarness();
 
 describe.skipIf(!useNodeModuleHooks())("plugin generation demanded work", () => {
-  it("allocates stable resolve-only outputs only for demanded source modules", async () => {
+  it("keeps resolve-only paths stable without materializing compiler outputs", async () => {
     const root = fixture({
       "entry.ts":
         "export const resolve = () => require.resolve('./deferred.ts'); export const read = () => import('./deferred.ts');",
       "deferred.ts": "export const value = 42;",
-      ...Object.fromEntries(
-        Array.from({ length: 24 }, (_, index) => [
-          "unused-" + index + ".ts",
-          "export const unused = 1;",
-        ]),
-      ),
+      "unused.ts": "export const unused = 1;",
     });
-    const write = vi.spyOn(fs, "writeFileSync");
+    using guard = observeMainThreadFs();
     const plugin = host(root).load("entry.ts") as {
       resolve(): string;
       read(): Promise<{ value: number }>;
     };
-    const placeholders = () =>
-      write.mock.calls.filter(
-        ([filename, content]) =>
-          typeof filename === "string" &&
-          path.basename(path.dirname(filename)).startsWith(".source-") &&
-          content === "",
-      );
-    try {
-      expect(placeholders()).toHaveLength(1);
-      const resolved = plugin.resolve();
-      expect(fs.existsSync(resolved)).toBe(true);
-      expect(fs.readFileSync(resolved, "utf8")).toBe("");
-      expect(plugin.resolve()).toBe(resolved);
-      expect(placeholders()).toHaveLength(2);
-      await expect(plugin.read()).resolves.toMatchObject({ value: 42 });
-      expect(plugin.resolve()).toBe(resolved);
-      expect(placeholders()).toHaveLength(2);
-    } finally {
-      write.mockRestore();
-    }
+    const resolved = plugin.resolve();
+    expect(fs.readFileSync(resolved, "utf8")).toBe("");
+    expect(plugin.resolve()).toBe(resolved);
+    await expect(plugin.read()).resolves.toMatchObject({ value: 42 });
+    expect(plugin.resolve()).toBe(resolved);
+    expect(
+      guard
+        .stacks()
+        .filter(
+          ({ api, stack }) =>
+            /^(?:mkdtemp|mkdir|writeFile|rename|unlink|rm|copyFile|symlink|link)Sync$/.test(api) &&
+            stack.includes("plugin-source-build"),
+        ),
+    ).toEqual([]);
   });
 
   it("compiles sync and async TypeScript with only the selected Jiti transformer", async () => {
@@ -81,10 +71,7 @@ describe.skipIf(!useNodeModuleHooks())("plugin generation demanded work", () => 
 
   it("reuses captured package metadata while new local demands still resolve dependencies", () => {
     const root = fixture({
-      "package.json": JSON.stringify({
-        dependencies: { dependency: "1" },
-        optionalDependencies: { absent: "1" },
-      }),
+      "package.json": '{"dependencies":{"dependency":"1"},"optionalDependencies":{"absent":"1"}}',
       "entry.cjs": "exports.directory = __dirname; exports.read = name => require(name).value;",
       "first.cjs": "exports.value = require('dependency').value;",
       "second.cjs": "exports.value = require('dependency').value + 1;",

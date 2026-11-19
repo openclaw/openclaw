@@ -18,7 +18,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
-import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { readAgentDatabaseReadAdmissionRefusal } from "../state/agent-database-admission.js";
 import { getOrLoadAgentDeletionJournalStatus } from "../state/agent-deletion-journal-status.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveAgentEntry, toAgentEntriesRecord } from "./agent-scope-config.js";
@@ -318,7 +318,7 @@ export function listConfiguredOwnerInputs(
       return (
         deletion !== "pending" &&
         deletion !== "complete" &&
-        !readAgentDatabaseAdmissionRefusal(agentId)
+        !readAgentDatabaseReadAdmissionRefusal(agentId)
       );
     })
     .map((agentId) => {

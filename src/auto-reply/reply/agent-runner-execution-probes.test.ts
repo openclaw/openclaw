@@ -561,16 +561,11 @@ describe("executeAgentTurn: primary probe routing", () => {
     const followupRun = createProbeRun({ sessionKey, autoFallbackPrimaryProbe: probe });
     const fixture = storedProbe(sessionEntry, followupRun, sessionKey);
     const attemptedProviders: Array<string | undefined> = [];
-    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+    state.runWithModelFallbackMock.mockImplementation((params: FallbackRunnerParams) => {
       attemptedProviders.push(params.provider);
       const provider = params.provider ?? "anthropic";
       const model = params.model ?? "claude-sonnet-4-6";
-      return {
-        result: await params.run(provider, model, initialFallbackAttemptOptions(params)),
-        provider,
-        model,
-        attempts: [],
-      };
+      return runFallbackCandidate(params, provider, model);
     });
     state.runEmbeddedAgentMock
       .mockImplementationOnce(async () => {

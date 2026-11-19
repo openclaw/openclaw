@@ -62,8 +62,9 @@ const { createLifecycleEventBroadcastHandler: createLifecycleHandler } =
   await import("./server-session-lifecycle-events.js");
 const { createTranscriptUpdateBroadcastHandler: createTranscriptHandler } =
   await import("./server-session-events.js");
-const { createGatewayBroadcaster } = await import("./server-broadcast.js");
-const { subscribePluginSessionsChanged } = await import("../plugins/services.test-support.js");
+export const { createGatewayBroadcaster } = await import("./server-broadcast.js");
+export const { subscribePluginSessionsChanged } =
+  await import("../plugins/services.test-support.js");
 
 const projection = {
   get state() {
@@ -144,18 +145,18 @@ const projection = {
   },
 } as unknown as SessionRowProjection;
 
-function createLifecycleEventBroadcastHandler(
+export function createLifecycleEventBroadcastHandler(
   params: Parameters<typeof createLifecycleHandler>[0],
 ) {
   return createLifecycleHandler({ getSessionRowProjection: () => projection, ...params });
 }
-function createTranscriptUpdateBroadcastHandler(
+export function createTranscriptUpdateBroadcastHandler(
   params: Parameters<typeof createTranscriptHandler>[0],
 ) {
   return createTranscriptHandler({ getSessionRowProjection: () => projection, ...params });
 }
 
-function createActiveRun(
+export function createActiveRun(
   projectSessionActive: boolean,
   executionStarted = true,
   identity: {
@@ -193,7 +194,7 @@ function createActiveRun(
   return ref;
 }
 
-function storedMessage(messageId: string, seq = 1) {
+export function storedMessage(messageId: string, seq = 1) {
   return {
     found: true,
     oversized: false,
@@ -202,11 +203,11 @@ function storedMessage(messageId: string, seq = 1) {
   };
 }
 
-function transcriptTarget(storePath: string) {
+export function transcriptTarget(storePath: string) {
   return { agentId: "main", sessionId: "sess-main", sessionKey: "agent:main:main", storePath };
 }
 
-function expectBroadcast(
+export function expectBroadcast(
   broadcast: ReturnType<typeof vi.fn>,
   payload: object,
   event = "session.message",
@@ -220,13 +221,13 @@ function expectBroadcast(
   );
 }
 
-function expectAbsentFields(payload: unknown, fields: string) {
+export function expectAbsentFields(payload: unknown, fields: string) {
   for (const field of fields.split(" ")) {
     expect(payload, field).not.toHaveProperty(field);
   }
 }
 
-function resetSessionEventMocks() {
+export function resetSessionEventMocks() {
   vi.clearAllMocks();
   listAccessorSessionEntriesReadOnlyMock.mockReturnValue([]);
   loadAccessorSessionEntryReadOnlyMock.mockReturnValue(undefined);
@@ -238,7 +239,7 @@ function resetSessionEventMocks() {
   sessionRow.key = "agent:main:main";
 }
 
-function fixedStoreRuntimeConfig(ownerAgentId: string, configuredAgentIds: string[]) {
+export function fixedStoreRuntimeConfig(ownerAgentId: string, configuredAgentIds: string[]) {
   return {
     session: { store: "/tmp/shared.sqlite" },
     agents: {
@@ -249,7 +250,7 @@ function fixedStoreRuntimeConfig(ownerAgentId: string, configuredAgentIds: strin
   };
 }
 
-function createHandler(
+export function createHandler(
   projectSessionActive: boolean,
   executionStarted = true,
   getSessionMessageSubscribers: SessionMessageSubscriberRegistry["get"] = () => new Set<string>(),
@@ -266,16 +267,19 @@ function createHandler(
   return { broadcastToConnIds, handler };
 }
 
-const ownerGoal = createSessionGoalFixture("goal-ops", "Ops only", { updatedAt: 2, tokensUsed: 3 });
+export const ownerGoal = createSessionGoalFixture("goal-ops", "Ops only", {
+  updatedAt: 2,
+  tokensUsed: 3,
+});
 
-function expectPrivateSessionInvalidation(payload: unknown) {
+export function expectPrivateSessionInvalidation(payload: unknown) {
   expectAbsentFields(
     payload,
     "agentId session message owner goal status hasActiveRun activeRunIds model responseUsage",
   );
 }
 
-async function emitAssistantTranscriptUpdate(
+export async function emitAssistantTranscriptUpdate(
   projectSessionActive: boolean,
   message: unknown = { role: "assistant", content: [{ type: "text", text: "Final answer" }] },
   executionStarted = true,
@@ -293,28 +297,13 @@ async function emitAssistantTranscriptUpdate(
 }
 
 export {
-  createActiveRun,
-  createGatewayBroadcaster,
-  createHandler,
-  createLifecycleEventBroadcastHandler,
-  createTranscriptUpdateBroadcastHandler,
-  emitAssistantTranscriptUpdate,
-  expectPrivateSessionInvalidation,
-  expectAbsentFields,
-  expectBroadcast,
-  fixedStoreRuntimeConfig,
+  sessionRow,
+  loadGatewaySessionRowMock,
+  projectChatDisplayMessageMock,
   listAccessorSessionEntriesReadOnlyMock,
   loadAccessorSessionEntryReadOnlyMock,
   loadGatewaySessionEntryReadOnlyMock,
-  loadGatewaySessionRowMock,
-  ownerGoal,
-  projectChatDisplayMessageMock,
-  readSessionMessageByIdAsyncMock,
   readSessionMessageCountAsyncMock,
-  resetSessionEventMocks,
+  readSessionMessageByIdAsyncMock,
   runtimeConfigState,
-  sessionRow,
-  storedMessage,
-  subscribePluginSessionsChanged,
-  transcriptTarget,
 };

@@ -26,41 +26,6 @@ describe.each(["manifest", "snapshot"] as const)("provider ownership through %s"
     };
   }
 
-  it("requires an alias receiver while preserving CLI and model ownership", () => {
-    const owner = {
-      id: "empty-owner",
-      providers: [],
-      cliBackends: ["shared-ref"],
-      providerAuthAliases: { "shared-ref": "target" },
-      modelCatalog: { aliases: { "catalog-ref": { provider: "target" } } },
-      modelSupport: { modelPrefixes: ["synthetic-prefix-"] },
-      setup: { providers: [{ id: "target" }] },
-    };
-    const empty = lookup([owner]);
-    expect([empty.provider("shared-ref"), empty.provider("catalog-ref")]).toEqual([
-      undefined,
-      undefined,
-    ]);
-    expect(empty.ref(" SHARED-REF ")).toEqual(["empty-owner"]);
-    expect(empty.model("synthetic-prefix-model")).toEqual(["empty-owner"]);
-
-    const populated = lookup([
-      owner,
-      {
-        id: "runtime-owner",
-        providers: ["TARGET"],
-        providerAuthAliases: owner.providerAuthAliases,
-        modelCatalog: owner.modelCatalog,
-      },
-    ]);
-    for (const ref of [" SHARED-REF ", "catalog-ref"]) {
-      expect([populated.provider(ref), populated.ref(ref)]).toEqual([
-        ["runtime-owner"],
-        ["runtime-owner"],
-      ]);
-    }
-  });
-
   it("shares sorted immutable owners with provider precedence and replaces the generation", () => {
     const generation = (id: string) =>
       lookup([
@@ -69,6 +34,7 @@ describe.each(["manifest", "snapshot"] as const)("provider ownership through %s"
           id,
           providers: ["TARGET", "target"],
           providerAuthAliases: { " AUTH-REF ": " target ", orphan: "absent" },
+          setup: { providers: [{ id: "absent" }] },
           modelCatalog: {
             aliases: {
               "catalog-ref": { provider: "target" },
@@ -97,6 +63,7 @@ describe.each(["manifest", "snapshot"] as const)("provider ownership through %s"
       expect(first.model(`${ref}/synthetic-model`)).toBe(owners);
     }
     expect(first.ref("target")).toBe(first.provider("target"));
+    expect(first.provider("cli-ref")).toBeUndefined();
     for (const ref of ["orphan", "orphan-catalog", "missing"]) {
       expect(first.ref(ref)).toBeUndefined();
     }

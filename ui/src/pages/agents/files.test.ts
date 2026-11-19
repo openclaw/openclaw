@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsFilesGetResult,
   AgentsFilesListResult,
@@ -12,7 +13,7 @@ import { createAgentFilePanel } from "./files.ts";
 
 type FilesState = Parameters<typeof createAgentFilePanel>[0];
 
-function createFixture(client: GatewayBrowserClient) {
+function createFixture(request: Parameters<typeof createTestGatewayClient>[0]) {
   const inventory: AgentsFilesListResult = {
     agentId: "main",
     workspace: "workspace",
@@ -23,7 +24,7 @@ function createFixture(client: GatewayBrowserClient) {
     agentFileActive: null,
     agentFilesList: null,
     agentsPanel: "files",
-    client,
+    client: createTestGatewayClient(request),
     connected: true,
     requestGeneration: 0,
     agents: {
@@ -56,7 +57,8 @@ function createFixture(client: GatewayBrowserClient) {
       completion: Promise.all([refreshing, read]).then(([, outcome]) => outcome.result === true),
     };
   }
-  return { state, actions, startRefresh };
+  const editor = () => state.agentFileEditors["AGENTS.md"];
+  return { state, actions, startRefresh, editor };
 }
 
 function fileResult(content: string, hash?: string, missing = false): AgentsFilesGetResult {
@@ -73,6 +75,25 @@ function fileResult(content: string, hash?: string, missing = false): AgentsFile
   };
 }
 
+const loadedHash = "a".repeat(64);
+const currentHash = "b".repeat(64);
+const writtenHash = "c".repeat(64);
+const operatorDraft = "original\noperator note";
+const appended = "original\nagent appended";
+const conflict = () =>
+  new GatewayRequestError({
+    code: "INVALID_REQUEST",
+    message: 'agent file "AGENTS.md" changed since it was read',
+    details: { type: "agent_file_conflict", name: "AGENTS.md", currentHash },
+  });
+const setCall = (
+  content: string,
+  version: { expectedHash: string } | { expectedMissing: true } = { expectedHash: loadedHash },
+) => [
+  "agents.files.set",
+  { agentId: "main", name: "AGENTS.md", content, expectedWorkspace: "workspace", ...version },
+];
+
 describe("agent file requests", () => {
   it.each(["pending", "failed"] as const)(
     "does not replace an unread file while its initial read is %s, then accepts a loaded empty file",
@@ -81,8 +102,8 @@ describe("agent file requests", () => {
       const request = vi
         .fn()
         .mockReturnValueOnce(read.promise)
-        .mockResolvedValue(fileResult("", "a".repeat(64)));
-      const { state, actions } = createFixture(createTestGatewayClient(request));
+        .mockResolvedValue(fileResult("", loadedHash));
+      const { state, actions, editor } = createFixture(request);
       const load = actions.onSelectFile("AGENTS.md");
       if (phase === "failed") {
         read.reject(new Error("workspace read failed"));
@@ -93,7 +114,7 @@ describe("agent file requests", () => {
       expect(request).toHaveBeenCalledTimes(1);
       expect(agentFileValues(state, "content")).toEqual({});
       if (phase === "pending") {
-        read.resolve(fileResult("", "a".repeat(64)));
+        read.resolve(fileResult("", loadedHash));
         expect(await load).toBe(true);
       } else {
         expect(await state.agentFileOutcome).toEqual({ error: "workspace read failed" });
@@ -101,18 +122,11 @@ describe("agent file requests", () => {
       }
       request.mockResolvedValueOnce({
         ok: true,
-        ...fileResult("new instructions", "b".repeat(64)),
+        ...fileResult("new instructions", currentHash),
       });
       actions.onFileDraftChange("AGENTS.md", "new instructions");
       expect(await actions.onFileSave("AGENTS.md")).toBe(true);
-      expect(request).toHaveBeenLastCalledWith("agents.files.set", {
-        agentId: "main",
-        name: "AGENTS.md",
-        content: "new instructions",
-        expectedWorkspace: "workspace",
-        expectedHash: "a".repeat(64),
-      });
-      expect(state.agentFileEditors["AGENTS.md"]?.content).toBe("new instructions");
+      expect(editor()?.content).toBe("new instructions");
     },
   );
 
@@ -125,56 +139,51 @@ describe("agent file requests", () => {
         .mockReturnValueOnce(read.promise)
         .mockResolvedValue({
           ok: true,
-          ...fileResult(draft, "b".repeat(64)),
+          ...fileResult(draft, currentHash),
         });
-      const { state, actions } = createFixture(createTestGatewayClient(request));
+      const { state, actions, editor } = createFixture(request);
       setAgentFileValues(state, "draft", { "AGENTS.md": draft });
-      setAgentFileValues(state, "version", { "AGENTS.md": { hash: "a".repeat(64) } });
+      setAgentFileValues(state, "version", { "AGENTS.md": { hash: loadedHash } });
       const load = actions.onSelectFile("AGENTS.md");
       actions.onFileReset("AGENTS.md");
-      expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe(draft);
-      expect(state.agentFileEditors["AGENTS.md"]?.version).toEqual({ hash: "a".repeat(64) });
+      expect(editor()?.draft).toBe(draft);
+      expect(editor()?.version).toEqual({ hash: loadedHash });
 
       expect(await actions.onFileSave("AGENTS.md")).toBe(true);
       expect(request).toHaveBeenLastCalledWith("agents.files.set", {
         agentId: "main",
         name: "AGENTS.md",
         content: draft,
-        expectedHash: "a".repeat(64),
+        expectedHash: loadedHash,
       });
-      read.resolve(fileResult("older content", "a".repeat(64)));
+      read.resolve(fileResult("older content", loadedHash));
       expect(await load).toBe(false);
-      expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe(draft);
-      expect(state.agentFileEditors["AGENTS.md"]?.content).toBe(draft);
+      expect(editor()).toMatchObject({ draft, content: draft });
     },
   );
 
   it.each([false, true])(
     "adopts the refreshed base when Reset replaces a dirty draft (initially missing: %s)",
     async (missing) => {
-      const loadedHash = "a".repeat(64);
-      const refreshedHash = "b".repeat(64);
       const request = vi
         .fn()
         .mockResolvedValueOnce(
           fileResult(missing ? "" : "original", missing ? undefined : loadedHash, missing),
         )
-        .mockResolvedValueOnce(fileResult("external update", refreshedHash))
-        .mockResolvedValueOnce({ ok: true, ...fileResult("edited after reset", "c".repeat(64)) });
-      const { state, actions, startRefresh } = createFixture(createTestGatewayClient(request));
+        .mockResolvedValueOnce(fileResult("external update", currentHash))
+        .mockResolvedValueOnce({ ok: true, ...fileResult("edited after reset", writtenHash) });
+      const { state, actions, startRefresh, editor } = createFixture(request);
 
       await actions.onSelectFile("AGENTS.md");
       setAgentFileValues(state, "draft", { "AGENTS.md": "dirty draft" });
       await (
         await startRefresh()
       ).completion;
-      expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("dirty draft");
-      expect(state.agentFileEditors["AGENTS.md"]?.version).toEqual(
-        missing ? { missing: true } : { hash: loadedHash },
-      );
+      expect(editor()?.draft).toBe("dirty draft");
+      expect(editor()?.version).toEqual(missing ? { missing: true } : { hash: loadedHash });
 
       actions.onFileReset("AGENTS.md");
-      expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("external update");
+      expect(editor()?.draft).toBe("external update");
       setAgentFileValues(state, "draft", { "AGENTS.md": "edited after reset" });
       await actions.onFileSave("AGENTS.md");
 
@@ -183,7 +192,7 @@ describe("agent file requests", () => {
         name: "AGENTS.md",
         content: "edited after reset",
         expectedWorkspace: "workspace",
-        expectedHash: refreshedHash,
+        expectedHash: currentHash,
       });
     },
   );
@@ -193,14 +202,14 @@ describe("agent file requests", () => {
     async (scope) => {
       const request = vi.fn(async (method: string) =>
         method === "agents.files.get"
-          ? fileResult("workspace version", "b".repeat(64))
-          : { ok: true, ...fileResult("old draft", "c".repeat(64)) },
+          ? fileResult("workspace version", currentHash)
+          : { ok: true, ...fileResult("old draft", writtenHash) },
       );
       const replacementRequest = vi.fn(async () => ({
         ok: true,
-        ...fileResult("old draft", "c".repeat(64)),
+        ...fileResult("old draft", writtenHash),
       }));
-      const { state, actions } = createFixture(createTestGatewayClient(request));
+      const { state, actions } = createFixture(request);
       setAgentFileValues(state, "draft", { "AGENTS.md": "old draft" });
       state.agents.recordFile = vi.fn(() => {
         if (scope === "client") {
@@ -219,70 +228,43 @@ describe("agent file requests", () => {
     },
   );
 
-  it.each(["read result", "read error"])(
-    "retires an older %s after saving the same file",
-    async (completion) => {
-      const read = createDeferred<AgentsFilesGetResult>();
-      const client = {
-        request: vi.fn((method: string) =>
-          method === "agents.files.get"
-            ? read.promise
-            : Promise.resolve({ ok: true, ...fileResult("saved") }),
-        ),
-      } as unknown as GatewayBrowserClient;
-      const { state, actions, startRefresh } = createFixture(client);
-      setAgentFileValues(state, "content", { "AGENTS.md": "original" });
-      setAgentFileValues(state, "draft", { "AGENTS.md": "original" });
-
-      const load = (await startRefresh()).completion;
-      setAgentFileValues(state, "draft", { "AGENTS.md": "saved" });
-      expect(await actions.onFileSave("AGENTS.md")).toBe(true);
-      if (completion === "read error") {
+  it.each([
+    ["before", "result"],
+    ["before", "error"],
+    ["during", "result"],
+    ["during", "error"],
+  ] as const)("retires a read started %s a write, even on read %s", async (timing, outcome) => {
+    const read = createDeferred<AgentsFilesGetResult>();
+    const write = createDeferred<AgentsFilesSetResult>();
+    const request = vi.fn((method: string) =>
+      method === "agents.files.get" ? read.promise : write.promise,
+    );
+    const { state, actions, startRefresh } = createFixture(request);
+    setAgentFileValues(state, "content", { "AGENTS.md": "original" });
+    setAgentFileValues(state, "draft", { "AGENTS.md": timing === "before" ? "original" : "saved" });
+    const firstRead = timing === "before" ? (await startRefresh()).completion : null;
+    setAgentFileValues(state, "draft", { "AGENTS.md": "saved" });
+    const save = actions.onFileSave("AGENTS.md");
+    const load = firstRead ?? (await startRefresh()).completion;
+    if (timing === "during" && outcome === "error") {
+      read.reject(new Error("refresh failed"));
+      expect(await load).toBe(false);
+    }
+    write.resolve({ ok: true, ...fileResult("saved") });
+    expect(await save).toBe(true);
+    if (timing === "before" || outcome === "result") {
+      if (outcome === "error") {
         read.reject(new Error("obsolete read failed"));
       } else {
         read.resolve(fileResult("original"));
       }
       expect(await load).toBe(false);
-      expect(agentFileValues(state, "content")).toEqual({ "AGENTS.md": "saved" });
-      expect(agentFileValues(state, "draft")).toEqual({ "AGENTS.md": "saved" });
-      expect(await state.agentFileOutcome).toEqual({ result: true });
-      expect(state.agentFilesLoading).toBe(false);
-    },
-  );
-
-  it.each([false, true])(
-    "retires a read started during a write (read fails first: %s)",
-    async (readFailsFirst) => {
-      const read = createDeferred<AgentsFilesGetResult>();
-      const write = createDeferred<AgentsFilesSetResult>();
-      const client = {
-        request: vi.fn((method: string) =>
-          method === "agents.files.get" ? read.promise : write.promise,
-        ),
-      } as unknown as GatewayBrowserClient;
-      const { state, actions, startRefresh } = createFixture(client);
-      setAgentFileValues(state, "content", { "AGENTS.md": "original" });
-      setAgentFileValues(state, "draft", { "AGENTS.md": "saved" });
-
-      const save = actions.onFileSave("AGENTS.md");
-      const load = (await startRefresh()).completion;
-      if (readFailsFirst) {
-        read.reject(new Error("refresh failed"));
-        expect(await load).toBe(false);
-      }
-      write.resolve({ ok: true, ...fileResult("saved") });
-      expect(await save).toBe(true);
-      if (!readFailsFirst) {
-        read.resolve(fileResult("original"));
-        expect(await load).toBe(false);
-      }
-      expect(agentFileValues(state, "content")).toEqual({ "AGENTS.md": "saved" });
-      expect(agentFileValues(state, "draft")).toEqual({ "AGENTS.md": "saved" });
-      expect(state.agentFilesLoading).toBe(false);
-      expect(state.agentFileSaving).toBe(false);
-      expect(await state.agentFileOutcome).toEqual({ result: true });
-    },
-  );
+    }
+    expect(agentFileValues(state, "content")).toEqual({ "AGENTS.md": "saved" });
+    expect(agentFileValues(state, "draft")).toEqual({ "AGENTS.md": "saved" });
+    expect(state).toMatchObject({ agentFilesLoading: false, agentFileSaving: false });
+    expect(await state.agentFileOutcome).toEqual({ result: true });
+  });
 
   it("allows another file's read and a fresh post-save refresh", async () => {
     const read = createDeferred<AgentsFilesGetResult>();
@@ -291,9 +273,7 @@ describe("agent file requests", () => {
       .mockReturnValueOnce(read.promise)
       .mockResolvedValueOnce({ ok: true, ...fileResult("saved") })
       .mockResolvedValueOnce(fileResult("external update"));
-    const { state, actions, startRefresh } = createFixture({
-      request,
-    } as unknown as GatewayBrowserClient);
+    const { state, actions, startRefresh, editor } = createFixture(request);
     setAgentFileValues(state, "content", { "AGENTS.md": "original" });
     const load = actions.onSelectFile("SOUL.md");
     actions.onFileDraftChange("AGENTS.md", "saved");
@@ -303,7 +283,7 @@ describe("agent file requests", () => {
     expect(agentFileValues(state, "draft")).toEqual({ "AGENTS.md": "saved", "SOUL.md": "soul" });
 
     expect(await (await startRefresh()).completion).toBe(true);
-    expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("external update");
+    expect(editor()?.draft).toBe("external update");
   });
 
   it.each(["before", "during"])(
@@ -314,9 +294,7 @@ describe("agent file requests", () => {
       const request = vi.fn((method: string) =>
         method === "agents.files.get" ? read.promise : write.promise,
       );
-      const { state, actions, startRefresh } = createFixture({
-        request,
-      } as unknown as GatewayBrowserClient);
+      const { state, actions, startRefresh, editor } = createFixture(request);
       setAgentFileValues(state, "content", { "AGENTS.md": "original" });
       setAgentFileValues(state, "draft", { "AGENTS.md": "unsaved" });
       const load = timing === "before" ? (await startRefresh()).completion : null;
@@ -326,8 +304,7 @@ describe("agent file requests", () => {
       expect(await save).toBe(false);
       read.resolve(fileResult("old"));
       expect(await refresh).toBe(false);
-      expect(state.agentFileEditors["AGENTS.md"]?.content).toBe("original");
-      expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("unsaved");
+      expect(editor()).toMatchObject({ content: "original", draft: "unsaved" });
       expect(await state.agentFileOutcome).toEqual({ error: "workspace write failed" });
     },
   );
@@ -335,11 +312,11 @@ describe("agent file requests", () => {
   it("does not let an old-client read overwrite or finish a replacement read", async () => {
     const oldRead = createDeferred<AgentsFilesGetResult>();
     const nextRead = createDeferred<AgentsFilesGetResult>();
-    const oldClient = { request: vi.fn(() => oldRead.promise) } as unknown as GatewayBrowserClient;
+    const oldRequest = vi.fn(() => oldRead.promise);
     const nextClient = {
       request: vi.fn(() => nextRead.promise),
     } as unknown as GatewayBrowserClient;
-    const { state, actions } = createFixture(oldClient);
+    const { state, actions } = createFixture(oldRequest);
 
     const oldLoad = actions.onSelectFile("AGENTS.md");
     state.client = nextClient;
@@ -360,8 +337,8 @@ describe("agent file requests", () => {
 
   it.each(["client", "capability"] as const)("ignores an old-%s save completion", async (owner) => {
     const saved = createDeferred<AgentsFilesSetResult>();
-    const oldClient = { request: vi.fn(() => saved.promise) } as unknown as GatewayBrowserClient;
-    const { state, actions } = createFixture(oldClient);
+    const oldRequest = vi.fn(() => saved.promise);
+    const { state, actions } = createFixture(oldRequest);
     setAgentFileValues(state, "draft", { "AGENTS.md": "old" });
     const save = actions.onFileSave("AGENTS.md");
 
@@ -382,8 +359,8 @@ describe("agent file requests", () => {
 
   it("preserves edits made while a save is pending", async () => {
     const saved = createDeferred<AgentsFilesSetResult>();
-    const client = { request: vi.fn(() => saved.promise) } as unknown as GatewayBrowserClient;
-    const { state, actions } = createFixture(client);
+    const request = vi.fn(() => saved.promise);
+    const { state, actions } = createFixture(request);
     setAgentFileValues(state, "content", { "AGENTS.md": "original" });
     setAgentFileValues(state, "draft", { "AGENTS.md": "submitted" });
 
@@ -397,230 +374,98 @@ describe("agent file requests", () => {
     expect(state.agentFileSaving).toBe(false);
   });
 
-  it("sends the loaded hash on save and keeps that hash after a refused write", async () => {
-    const loadedHash = "a".repeat(64);
-    const currentHash = "b".repeat(64);
-    const conflict = () =>
-      new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: 'agent file "AGENTS.md" changed since it was read',
-        details: { type: "agent_file_conflict", name: "AGENTS.md", currentHash },
-      });
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(fileResult("original", loadedHash))
-      .mockRejectedValueOnce(conflict())
-      .mockRejectedValueOnce(conflict());
-    const { state, actions } = createFixture({ request } as unknown as GatewayBrowserClient);
-
-    expect(await actions.onSelectFile("AGENTS.md")).toBe(true);
-    setAgentFileValues(state, "draft", { "AGENTS.md": "original\noperator note" });
-    expect(await actions.onFileSave("AGENTS.md")).toBe(false);
-    expect(await actions.onFileSave("AGENTS.md")).toBe(false);
-
-    const setCall = [
-      "agents.files.set",
-      {
-        agentId: "main",
-        name: "AGENTS.md",
-        content: "original\noperator note",
-        expectedWorkspace: "workspace",
-        expectedHash: loadedHash,
-      },
-    ];
-    expect(request.mock.calls[1]).toEqual(setCall);
-    expect(request.mock.calls[2]).toEqual(setCall);
-    expect(state.agentFileEditors["AGENTS.md"]?.content).toBe("original");
-    expect(state.agentFileEditors["AGENTS.md"]?.version).toEqual({ hash: loadedHash });
-    expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("original\noperator note");
-    expect(state.agentFileConflict).toBe("AGENTS.md");
-    expect((await state.agentFileOutcome)?.error).toContain("changed since it was read");
-    expect(state.agentFileSaving).toBe(false);
-    expect(state.agentFilesLoading).toBe(false);
-  });
-
-  it("keeps a dirty draft's precondition when an ordinary refresh rebases the base", async () => {
-    const loadedHash = "a".repeat(64);
-    const currentHash = "b".repeat(64);
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(fileResult("original", loadedHash))
-      .mockResolvedValueOnce(fileResult("original\nagent appended", currentHash))
-      .mockRejectedValueOnce(
-        new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: 'agent file "AGENTS.md" changed since it was read',
-          details: { type: "agent_file_conflict", name: "AGENTS.md", currentHash },
-        }),
+  it.each([
+    ["retry", false],
+    ["refresh before save", false],
+    ["refresh after conflict", false],
+    ["reload", false],
+    ["reload", true],
+    ["overwrite", false],
+    ["overwrite", true],
+  ] as const)(
+    "preserves conflict ancestry through %s (missing: %s)",
+    async (operation, missing) => {
+      const request = vi.fn().mockResolvedValueOnce(fileResult("original", loadedHash));
+      const refreshed = fileResult(
+        missing ? "" : appended,
+        missing ? undefined : currentHash,
+        missing,
       );
-    const { state, actions, startRefresh } = createFixture({
-      request,
-    } as unknown as GatewayBrowserClient);
+      if (operation === "refresh before save") {
+        request.mockResolvedValueOnce(refreshed).mockRejectedValueOnce(conflict());
+      } else {
+        request.mockRejectedValueOnce(conflict());
+        if (operation === "retry") {
+          request.mockRejectedValueOnce(conflict());
+        } else {
+          request.mockResolvedValueOnce(refreshed);
+          if (operation === "overwrite") {
+            request.mockResolvedValueOnce({ ok: true, ...fileResult(operatorDraft, writtenHash) });
+          }
+        }
+      }
+      const { state, actions, startRefresh, editor } = createFixture(request);
+      expect(await actions.onSelectFile("AGENTS.md")).toBe(true);
+      setAgentFileValues(state, "draft", { "AGENTS.md": operatorDraft });
+      if (operation === "refresh before save") {
+        expect(await (await startRefresh()).completion).toBe(true);
+        expect(editor()).toMatchObject({ content: appended, draft: operatorDraft });
+        expect(editor()?.version).toEqual({ hash: loadedHash });
+      }
+      expect(await actions.onFileSave("AGENTS.md")).toBe(false);
+      expect(state.agentFileConflict).toBe("AGENTS.md");
 
-    expect(await actions.onSelectFile("AGENTS.md")).toBe(true);
-    setAgentFileValues(state, "draft", { "AGENTS.md": "original\noperator note" });
-    expect(await (await startRefresh()).completion).toBe(true);
-
-    expect(state.agentFileEditors["AGENTS.md"]?.content).toBe("original\nagent appended");
-    expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("original\noperator note");
-    expect(state.agentFileEditors["AGENTS.md"]?.version).toEqual({ hash: loadedHash });
-
-    expect(await actions.onFileSave("AGENTS.md")).toBe(false);
-
-    expect(request.mock.calls[2]).toEqual([
-      "agents.files.set",
-      {
-        agentId: "main",
-        name: "AGENTS.md",
-        content: "original\noperator note",
-        expectedWorkspace: "workspace",
-        expectedHash: loadedHash,
-      },
-    ]);
-    expect(state.agentFileConflict).toBe("AGENTS.md");
-  });
-
-  it("adopts the refreshed hash when an ordinary refresh rebases a clean draft", async () => {
-    const loadedHash = "a".repeat(64);
-    const currentHash = "b".repeat(64);
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(fileResult("original", loadedHash))
-      .mockResolvedValueOnce(fileResult("original\nagent appended", currentHash));
-    const { state, actions, startRefresh } = createFixture({
-      request,
-    } as unknown as GatewayBrowserClient);
-
-    expect(await actions.onSelectFile("AGENTS.md")).toBe(true);
-    expect(await (await startRefresh()).completion).toBe(true);
-
-    expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("original\nagent appended");
-    expect(state.agentFileEditors["AGENTS.md"]?.version).toEqual({ hash: currentHash });
-  });
-
-  it("keeps an outstanding conflict through an ordinary refresh that spares the draft", async () => {
-    const loadedHash = "a".repeat(64);
-    const currentHash = "b".repeat(64);
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(fileResult("original", loadedHash))
-      .mockRejectedValueOnce(
-        new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: 'agent file "AGENTS.md" changed since it was read',
-          details: { type: "agent_file_conflict", name: "AGENTS.md", currentHash },
-        }),
-      )
-      .mockResolvedValueOnce(fileResult("original\nagent appended", currentHash));
-    const { state, actions, startRefresh } = createFixture({
-      request,
-    } as unknown as GatewayBrowserClient);
-
-    expect(await actions.onSelectFile("AGENTS.md")).toBe(true);
-    setAgentFileValues(state, "draft", { "AGENTS.md": "original\noperator note" });
-    expect(await actions.onFileSave("AGENTS.md")).toBe(false);
-    expect(state.agentFileConflict).toBe("AGENTS.md");
-
-    expect(await (await startRefresh()).completion).toBe(true);
-
-    expect(state.agentFileConflict).toBe("AGENTS.md");
-    expect(state.agentFileEditors["AGENTS.md"]?.version).toEqual({ hash: loadedHash });
-  });
-
-  it.each([false, true])(
-    "takes the workspace version when reloading a conflict (now missing: %s)",
-    async (missing) => {
-      const loadedHash = "a".repeat(64);
-      const currentHash = "b".repeat(64);
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce(fileResult("original", loadedHash))
-        .mockRejectedValueOnce(
-          new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message: 'agent file "AGENTS.md" changed since it was read',
-            details: { type: "agent_file_conflict", name: "AGENTS.md", currentHash },
-          }),
-        )
-        .mockResolvedValueOnce(
-          fileResult(
-            missing ? "" : "original\nagent appended",
-            missing ? undefined : currentHash,
-            missing,
+      if (operation === "retry") {
+        expect(await actions.onFileSave("AGENTS.md")).toBe(false);
+        expect(request.mock.calls.slice(1)).toEqual([
+          setCall(operatorDraft),
+          setCall(operatorDraft),
+        ]);
+        expect(editor()).toMatchObject({ content: "original", draft: operatorDraft });
+        expect(editor()?.version).toEqual({ hash: loadedHash });
+        expect((await state.agentFileOutcome)?.error).toContain("changed since it was read");
+        expect(state).toMatchObject({ agentFileSaving: false, agentFilesLoading: false });
+      } else if (operation === "refresh after conflict") {
+        expect(await (await startRefresh()).completion).toBe(true);
+        expect(state.agentFileConflict).toBe("AGENTS.md");
+        expect(editor()?.version).toEqual({ hash: loadedHash });
+      } else if (operation === "reload") {
+        expect(await actions.onFileReload("AGENTS.md")).toBe(true);
+        expect(request.mock.calls[2]).toEqual([
+          "agents.files.get",
+          { agentId: "main", name: "AGENTS.md" },
+        ]);
+        expect(editor()).toMatchObject({
+          content: missing ? "" : appended,
+          draft: missing ? "" : appended,
+        });
+        expect(editor()?.version).toEqual(missing ? { missing: true } : { hash: currentHash });
+        expect(state.agentFileConflict).toBeNull();
+      } else if (operation === "overwrite") {
+        expect(await actions.onFileOverwrite("AGENTS.md")).toBe(true);
+        expect(request.mock.calls[3]).toEqual(
+          setCall(
+            operatorDraft,
+            missing ? { expectedMissing: true } : { expectedHash: currentHash },
           ),
         );
-      const { state, actions } = createFixture({ request } as unknown as GatewayBrowserClient);
-
-      expect(await actions.onSelectFile("AGENTS.md")).toBe(true);
-      setAgentFileValues(state, "draft", { "AGENTS.md": "original\noperator note" });
-      expect(await actions.onFileSave("AGENTS.md")).toBe(false);
-      expect(await actions.onFileReload("AGENTS.md")).toBe(true);
-
-      expect(request.mock.calls[2]).toEqual([
-        "agents.files.get",
-        { agentId: "main", name: "AGENTS.md" },
-      ]);
-      expect(state.agentFileEditors["AGENTS.md"]?.content).toBe(
-        missing ? "" : "original\nagent appended",
-      );
-      expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe(
-        missing ? "" : "original\nagent appended",
-      );
-      expect(state.agentFileEditors["AGENTS.md"]?.version).toEqual(
-        missing ? { missing: true } : { hash: currentHash },
-      );
-      expect(state.agentFileConflict).toBeNull();
+        expect(editor()?.content).toBe(operatorDraft);
+        expect(editor()?.version).toEqual({ hash: writtenHash });
+        expect(state.agentFileConflict).toBeNull();
+        expect(await state.agentFileOutcome).toEqual({ result: true });
+      }
     },
   );
 
-  it.each([false, true])(
-    "rebases onto the current version when overwriting a conflict (now missing: %s)",
-    async (missing) => {
-      const loadedHash = "a".repeat(64);
-      const currentHash = "b".repeat(64);
-      const writtenHash = "c".repeat(64);
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce(fileResult("original", loadedHash))
-        .mockRejectedValueOnce(
-          new GatewayRequestError({
-            code: "INVALID_REQUEST",
-            message: 'agent file "AGENTS.md" changed since it was read',
-            details: { type: "agent_file_conflict", name: "AGENTS.md", currentHash },
-          }),
-        )
-        .mockResolvedValueOnce(
-          fileResult(
-            missing ? "" : "original\nagent appended",
-            missing ? undefined : currentHash,
-            missing,
-          ),
-        )
-        .mockResolvedValueOnce({
-          ok: true,
-          ...fileResult("original\noperator note", writtenHash),
-        });
-      const { state, actions } = createFixture({ request } as unknown as GatewayBrowserClient);
-
-      expect(await actions.onSelectFile("AGENTS.md")).toBe(true);
-      setAgentFileValues(state, "draft", { "AGENTS.md": "original\noperator note" });
-      expect(await actions.onFileSave("AGENTS.md")).toBe(false);
-      expect(await actions.onFileOverwrite("AGENTS.md")).toBe(true);
-
-      expect(request.mock.calls[3]).toEqual([
-        "agents.files.set",
-        {
-          agentId: "main",
-          name: "AGENTS.md",
-          content: "original\noperator note",
-          expectedWorkspace: "workspace",
-          ...(missing ? { expectedMissing: true } : { expectedHash: currentHash }),
-        },
-      ]);
-      expect(state.agentFileEditors["AGENTS.md"]?.content).toBe("original\noperator note");
-      expect(state.agentFileEditors["AGENTS.md"]?.version).toEqual({ hash: writtenHash });
-      expect(state.agentFileConflict).toBeNull();
-      expect(await state.agentFileOutcome).toEqual({ result: true });
-    },
-  );
+  it("adopts the refreshed hash when an ordinary refresh rebases a clean draft", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(fileResult("original", loadedHash))
+      .mockResolvedValueOnce(fileResult(appended, currentHash));
+    const { actions, startRefresh, editor } = createFixture(request);
+    expect(await actions.onSelectFile("AGENTS.md")).toBe(true);
+    expect(await (await startRefresh()).completion).toBe(true);
+    expect(editor()?.draft).toBe(appended);
+    expect(editor()?.version).toEqual({ hash: currentHash });
+  });
 });

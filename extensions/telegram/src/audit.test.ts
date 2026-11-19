@@ -76,6 +76,50 @@ it("reports bot not in group when status is left", async () => {
   });
 });
 
+it.each([-60_000, 60_000] as const)(
+  "keeps the audit deadline on the monotonic clock across a %s ms wall-clock jump",
+  async (jumpMs) => {
+    // Hold group 1's fetch across the wall-clock jump so the shared deadline is
+    // re-read after the clock moved (the bug's discriminating boundary). Group 2's
+    // response body is held idle, so the audit is bounded only by the recomputed
+    // remaining budget (chunk-idle = half of it). Post-fix the remaining budget is
+    // ~10s so the idle bound settles at ~45s total; pre-fix a forward jump clamps
+    // it to ~1ms (settles almost immediately) and a backward jump inflates it
+    // (does not settle within a reasonable window).
+    respond = () =>
+      requests.length === 1
+        ? new Promise<Response>((resolve) => {
+            setTimeout(() => resolve(membership("member")), 40_000);
+          })
+        : new Response(
+            new ReadableStream<Uint8Array>({
+              // Never emit; the body read stays pending until the budget bounds it.
+              start() {},
+            }),
+          );
+    vi.useFakeTimers();
+    let settled = false;
+    let result: Awaited<ReturnType<typeof auditGroups>> | undefined;
+    const audit = auditGroups(["-1001", "-1002"], 50_000).then((value) => {
+      settled = true;
+      result = value;
+      return value;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    vi.setSystemTime(Date.now() + jumpMs);
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(requests).toHaveLength(2);
+    // Just after group 2 starts (40s), the audit must still be pending; by ~46s
+    // it must have settled (bounded) within its recomputed budget.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(settled).toBe(true);
+    expect(result).toMatchObject({ ok: false, checkedGroups: 2 });
+    await audit;
+  },
+);
+
 it.each([
   { name: "stalled body", delay: 0, remaining: 50, groupIds: ["-1001"] },
   { name: "shared timeout budget", delay: 40, remaining: 10, groupIds: ["-1001", "-1002"] },

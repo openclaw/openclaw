@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
 import { expect } from "vitest";
 import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setTestEnvValue } from "../test-utils/env.js";
@@ -32,6 +33,7 @@ export function createChatFixture(
       response: ServerResponse,
     ) => Promise<string | undefined>;
     reset?: () => void;
+    onEvent?: Parameters<typeof startGatewayWithClient>[0]["onEvent"];
   } = {},
 ) {
   const requests: string[] = [];
@@ -69,12 +71,14 @@ export function createChatFixture(
     const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
     gateway = await startGatewayWithClient({
       ...startup,
+      onEvent: options.onEvent,
       portClaim,
       clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
       mode: GATEWAY_CLIENT_MODES.WEBCHAT,
       origin: `http://127.0.0.1:${portClaim.port}`,
     });
     await gateway.server.startupSettled;
+    await waitForGatewayStartup(gateway.port);
   };
   return {
     requests,

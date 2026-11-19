@@ -1,10 +1,11 @@
 import type { Selectable } from "kysely";
+import { engineGreatest } from "../infra/database-engine/scalar.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
@@ -27,10 +28,11 @@ export function settleNodeWorkerActiveTurns(
   const update = getNodeSqliteKysely<Pick<OpenClawStateDatabase, "node_worker_turns">>(database)
     .updateTable("node_worker_turns")
     .set((expression) => {
-      const completedAt = expression.fn<number>(
-        isPostgresSqlConnection(database) ? "greatest" : "max",
-        ["created_at_ms", "updated_at_ms", expression.val(owner.updatedAtMs)],
-      );
+      const completedAt = engineGreatest(database, [
+        expression.ref("created_at_ms"),
+        expression.ref("updated_at_ms"),
+        expression.val(owner.updatedAtMs),
+      ]);
       return {
         state: owner.state === "completed" ? "interrupted" : owner.state,
         result_json: null,

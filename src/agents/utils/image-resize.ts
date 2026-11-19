@@ -6,10 +6,6 @@ interface ImageBytes {
   mimeType: string;
 }
 
-type ProcessImageResult =
-  | { ok: true; image: ImageContent; hints: string[] }
-  | { ok: false; message: string };
-
 const INLINE_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 
 async function normalizeImageForProvider(
@@ -35,7 +31,7 @@ async function normalizeImageForProvider(
 export async function processImage(
   image: ImageBytes,
   options: { autoResizeImages: boolean },
-): Promise<ProcessImageResult> {
+): Promise<{ ok: true; image: ImageContent; hints: string[] } | { ok: false; message: string }> {
   const normalized = await normalizeImageForProvider(image);
   if (!normalized) {
     return {

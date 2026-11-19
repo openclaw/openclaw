@@ -1,7 +1,10 @@
+import assert from "node:assert/strict";
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { NativeHookRelayBridgeRecord } from "../agents/harness/native-hook-relay-bridge-record.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   openOpenClawStateDatabase,
@@ -30,6 +33,12 @@ import {
 } from "./sqlite-worker-store.js";
 
 async function preparedStore(captured: OpenClawStateWorkerContext) {
+  captured.gatewayServiceInstallation = {
+    root: "/fixture/old",
+    version: "2026.10.3",
+    cliVersion: "2026.10.8",
+    databasePath: captured.admission.databasePath,
+  };
   await executeOpenClawStateWorker(captured, {
     type: "nativeHookRelay.listRecords",
     input: undefined,
@@ -48,10 +57,11 @@ async function preparedStore(captured: OpenClawStateWorkerContext) {
     command: SqliteWorkerCommand<OpenClawStateWorkerOperations>,
     admit: Parameters<typeof createSqliteWorkerOperationAdmission>[0],
   ) =>
+    // Doctor's environment-only callbacks retain the actor's service-install facts.
     runSqliteWorkerStoreOperation(
       store,
       (scope) => scope.execute(command),
-      captured,
+      { ...captured, gatewayServiceInstallation: undefined },
       captured.admission.assertCurrent,
       () => ({
         nativeLocations: [captured.admission.databasePath],
@@ -280,7 +290,16 @@ export function registerSharedStateWorkerAdmissionTests(
       const canceled = new AbortController();
       const stopped = new Error("synthetic caller stopped");
       let current = true;
-      const posts = vi.spyOn(worker, "postMessage");
+      const posted = createDeferredCore();
+      const postMessage = worker.postMessage.bind(worker);
+      const posts = vi
+        .spyOn(worker, "postMessage")
+        .mockImplementation((request: SqliteWorkerRequest, transfers) => {
+          postMessage(request, transfers);
+          if (request.type === "execute") {
+            posted.resolve();
+          }
+        });
       try {
         await runOpenClawStateWorkerOperation(
           captured,
@@ -290,6 +309,7 @@ export function registerSharedStateWorkerAdmissionTests(
             const pending = scope.execute(relayWrite(1), { signal: canceled.signal });
             const outcome = rejection(pending);
             try {
+              await awaitGateBeforeSettlement(posted.promise, head, "Head write was not posted");
               if (stop === "abort") {
                 canceled.abort(stopped);
               } else if (stop === "revoke") {
@@ -455,20 +475,14 @@ export function registerSharedStateWorkerAdmissionTests(
 }
 
 async function prepareSharedStateWorker(captured: OpenClawStateWorkerContext): Promise<Worker> {
-  const posts = vi.spyOn(Worker.prototype, "postMessage");
-  try {
-    await executeOpenClawStateWorker(captured, {
-      type: "nativeHookRelay.listRecords",
-      input: undefined,
-    });
-    const worker = posts.mock.contexts[0];
-    if (!(worker instanceof Worker)) {
-      throw new Error("Expected the prepared shared-state worker");
-    }
-    return worker;
-  } finally {
-    posts.mockRestore();
-  }
+  using posts = vi.spyOn(Worker.prototype, "postMessage");
+  await executeOpenClawStateWorker(captured, {
+    type: "nativeHookRelay.listRecords",
+    input: undefined,
+  });
+  const worker = posts.mock.contexts[0];
+  assert(worker instanceof Worker, "Expected the prepared shared-state worker");
+  return worker;
 }
 
 function relayRecord(pid: number): NativeHookRelayBridgeRecord {

@@ -9,11 +9,16 @@ import {
 import { loadExecApprovals } from "../../infra/exec-approvals.js";
 import { DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS } from "../../infra/plugin-approvals.js";
 import { APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE } from "../../infra/system-run-approval-binding.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
   requestCliNativeToolApproval,
   resolveCliNativeToolApprovalPlan,
 } from "./cli-native-tool-approval.js";
+import { cliBackendLog } from "./log.js";
 
 vi.mock("../tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
@@ -242,17 +247,46 @@ describe("requestCliNativeToolApproval", () => {
     });
   });
 
-  it.each(["wait", "request"])("fails closed when the gateway %s errors", async (phase) => {
-    if (phase === "wait") {
-      mockCallGatewayTool.mockResolvedValueOnce({ id: "approval-3" });
-    }
-    mockCallGatewayTool.mockRejectedValueOnce(new Error("gateway unavailable"));
-    await expectApproval().resolves.toEqual({ kind: "deny", reason: "unavailable" });
+  it("requests approval as the signed backend owner for agent-runtime callers", async () => {
+    // The Gateway rejects agent-runtime approval requests that lack a signed owner.
+    const owners = new Map<string, string | undefined>();
+    mockCallGatewayTool.mockImplementation(async (method) => {
+      owners.set(method, getGatewayToolCallerIdentity()?.approvalOwnerPluginId);
+      return method === "plugin.approval.request"
+        ? { id: "approval-owner" }
+        : { id: "approval-owner", decision: "allow-once" };
+    });
+
+    await expect(
+      withGatewayToolCallerIdentity({ agentId: "main", sessionKey: "agent:main:main" }, () =>
+        requestApproval({ toolName: "Agent", toolInput: { prompt: "Summarize the notes" } }),
+      ),
+    ).resolves.toEqual({ kind: "allow", grantAlways: false });
+    expect(Object.fromEntries(owners)).toEqual({
+      "plugin.approval.request": "claude-cli",
+      "plugin.approval.waitDecision": undefined,
+    });
   });
+
+  it.each(["wait", "request"])(
+    "fails closed and logs when the gateway %s errors",
+    async (phase) => {
+      const warn = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => {});
+      if (phase === "wait") {
+        mockCallGatewayTool.mockResolvedValueOnce({ id: "approval-3" });
+      }
+      mockCallGatewayTool.mockRejectedValueOnce(new Error("gateway unavailable"));
+      await expectApproval().resolves.toEqual({ kind: "deny", reason: "unavailable" });
+      expect(warn).toHaveBeenCalledWith(
+        "native tool approval unavailable for Bash: gateway unavailable",
+      );
+    },
+  );
 
   it.each(["waiting", "registering"])(
     "fails closed when the run aborts while %s",
     async (phase) => {
+      const warn = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => {});
       const abortController = new AbortController();
       if (phase === "waiting") {
         mockCallGatewayTool.mockResolvedValueOnce({ id: "approval-4" });
@@ -264,6 +298,7 @@ describe("requestCliNativeToolApproval", () => {
       if (phase === "registering") {
         expect(mockCallGatewayTool).toHaveBeenCalledOnce();
       }
+      expect(warn).not.toHaveBeenCalled();
     },
   );
 

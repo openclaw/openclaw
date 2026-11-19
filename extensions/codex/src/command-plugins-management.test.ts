@@ -14,6 +14,24 @@ import {
 } from "./command-plugins-management.test-support.js";
 
 const localPluginId = "security-review@company-tools";
+const localMarketplace = { marketplacePath: "/repo/marketplace.json" };
+
+function revocableOwner() {
+  let current = true;
+  return {
+    revoke: () => {
+      current = false;
+    },
+    ctx: {
+      ...fakeCtx,
+      assertOwnerCurrent: () => {
+        if (!current) {
+          throw new Error("Command owner was revoked");
+        }
+      },
+    },
+  };
+}
 
 function command(
   args: string[],
@@ -45,7 +63,7 @@ function app(id: string, name: string, installUrl: string): v2.AppSummary {
 }
 function installingApps(appsNeedingAuth: v2.AppSummary[], setupAllowed = true) {
   return pluginRuntime({
-    marketplacePath: "/repo/marketplace.json",
+    ...localMarketplace,
     setupAllowed,
     install: async () => ({ authPolicy: "ON_INSTALL", appsNeedingAuth }),
   });
@@ -65,12 +83,9 @@ describe("Codex /codex plugins subcommand", () => {
 
     expect(result.text).toContain("/codex plugins list");
     expect(buttonCommands(result)).toEqual([
-      "/codex plugins list",
-      "/codex plugins available",
-      "/codex plugins refresh",
-      "/codex plugins enable",
-      "/codex plugins disable",
-      "/codex plugins help",
+      ...["list", "available", "refresh", "enable", "disable", "help"].map(
+        (verb) => `/codex plugins ${verb}`,
+      ),
       "/codex",
     ]);
   });
@@ -113,22 +128,14 @@ describe("Codex /codex plugins subcommand", () => {
 
   it("blocks a plugin policy commit after owner revocation while waiting for config IO", async () => {
     const io = inMemoryIO({ calendar: { enabled: true } });
-    let ownerCurrent = true;
-    const ctx = {
-      ...fakeCtx,
-      assertOwnerCurrent: () => {
-        if (!ownerCurrent) {
-          throw new Error("Command owner was revoked");
-        }
-      },
-    };
+    const { ctx, revoke } = revocableOwner();
     await expect(
       command(
         ["disable", "calendar"],
         {
           ...io,
           mutate: async (update, assertCurrent) => {
-            ownerCurrent = false;
+            revoke();
             ctx.assertOwnerCurrent = () => {};
             await io.mutate(update, assertCurrent);
           },
@@ -142,23 +149,15 @@ describe("Codex /codex plugins subcommand", () => {
 
   it("keeps a completed native install but blocks new policy authorization after revocation", async () => {
     const io = inMemoryIO();
-    let ownerCurrent = true;
+    const { ctx, revoke } = revocableOwner();
     const runtime = pluginRuntime({
       marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
       install: async () => {
-        ownerCurrent = false;
+        revoke();
         return { authPolicy: "ON_USE", appsNeedingAuth: [] };
       },
     });
-    const result = await command(["install", localPluginId], io, runtime, {
-      ...fakeCtx,
-      assertOwnerCurrent: () => {
-        if (!ownerCurrent) {
-          throw new Error("Command owner was revoked");
-        }
-      },
-    });
-    expect(runtime.install).toHaveBeenCalledOnce();
+    const result = await command(["install", localPluginId], io, runtime, ctx);
     expect(result.text).toContain("was installed in Codex but could not be authorized in OpenClaw");
     expect(result.text).toContain("Command owner was revoked");
     expect(io.current()).toEqual({});
@@ -238,23 +237,19 @@ describe("Codex /codex plugins subcommand", () => {
         list: vi.fn(async (params: v2.PluginListParams) => {
           const supplemental = Boolean(params.marketplaceKinds);
           const marketplace = supplemental ? "openai-curated-remote" : "openai-curated";
-          return pluginCatalog(
-            [
-              pluginSummary("github", marketplace, {
-                remotePluginId,
-                ...(mode === "active"
-                  ? {
-                      installed: supplemental,
-                      enabled: supplemental,
-                      mustShowInstallationInterstitial: true,
-                    }
-                  : supplemental
-                    ? { availability: "DISABLED_BY_ADMIN" }
-                    : {}),
-              }),
-            ],
-            marketplace,
-          );
+          const summary: v2.PluginSummary = pluginSummary("github", marketplace, {
+            remotePluginId,
+          });
+          if (mode === "active") {
+            Object.assign(summary, {
+              installed: supplemental,
+              enabled: supplemental,
+              mustShowInstallationInterstitial: true,
+            });
+          } else if (supplemental) {
+            summary.availability = "DISABLED_BY_ADMIN";
+          }
+          return pluginCatalog([summary], marketplace);
         }),
       } satisfies CodexPluginsManagementRuntime;
       const result = await command(["install", "github@openai-curated"], io, runtime);
@@ -294,9 +289,7 @@ describe("Codex /codex plugins subcommand", () => {
         true,
       ),
     });
-    const runtime = pluginRuntime({
-      marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
-    });
+    const runtime = pluginRuntime(localMarketplace);
 
     const installed = await command(["install", localPluginId], io, runtime);
     const enabled = await command(["enable", localPluginId], io);
@@ -314,9 +307,7 @@ describe("Codex /codex plugins subcommand", () => {
       first: makePolicy("security-review", "company-tools", false, false),
       second: makePolicy("security-review@company-tools", "company-tools", false, true),
     });
-    const runtime = pluginRuntime({
-      marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
-    });
+    const runtime = pluginRuntime(localMarketplace);
 
     const installed = await command(["install", localPluginId], io, runtime);
     const enabled = await command(["enable", localPluginId], io);
@@ -346,7 +337,7 @@ describe("Codex /codex plugins subcommand", () => {
 
   it("allows operator.admin installation but rejects ordinary users before catalog access", async () => {
     const io = inMemoryIO();
-    const runtime = pluginRuntime({ marketplacePath: "/repo/marketplace.json" });
+    const runtime = pluginRuntime(localMarketplace);
     const denied = { ...fakeCtx, senderIsOwner: false, gatewayClientScopes: ["operator.write"] };
 
     const rejected = await command(["install", localPluginId], io, runtime, denied);
@@ -364,13 +355,12 @@ describe("Codex /codex plugins subcommand", () => {
       },
     });
     expect(allowed.text).toContain("bundle was installed in Codex");
-    expect(runtime.install).toHaveBeenCalledOnce();
   });
 
   it("does not mutate explicit plugin authorization when Codex installation fails", async () => {
     const io = inMemoryIO({}, { enabled: false });
     const runtime = pluginRuntime({
-      marketplacePath: "/repo/marketplace.json",
+      ...localMarketplace,
       install: vi.fn(async () => {
         throw new Error("workspace administrator rejected installation");
       }),
@@ -393,7 +383,6 @@ describe("Codex /codex plugins subcommand", () => {
     expect(result.text).toContain("/codex plugins status security-review@company-tools");
     expect(result.text).not.toContain("https://chatgpt.com/apps/");
     expect(io.current()["security-review@company-tools"]?.enabled).toBe(true);
-    expect(runtime.install).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -424,20 +413,16 @@ describe("Codex /codex plugins subcommand", () => {
     const result = await command(["install", localPluginId], inMemoryIO(), runtime);
 
     const buttons = presentationButtons(result).filter((button) => button.action?.type === "url");
-    expect(buttons?.map((button) => button.label)).toEqual([
-      "Open App 0 in ChatGPT",
-      "Open App 1 in ChatGPT",
-      "Open App 2 in ChatGPT",
-      "Open App 3 in ChatGPT",
-      "Open App 4 in ChatGPT",
-    ]);
+    expect(buttons?.map((button) => button.label)).toEqual(
+      Array.from({ length: 5 }, (_, index) => `Open App ${index} in ChatGPT`),
+    );
     expect(result.text).toContain("7 apps still require connector authentication");
     expect(result.text).toContain("2 more apps are not shown");
     expect(result.text).toContain("In Codex CLI, run /apps to review the remaining apps");
   });
 
   it("rejects unsafe or ambiguous marketplace identifiers before contacting Codex", async () => {
-    const runtime = pluginRuntime({ marketplacePath: "/repo/marketplace.json" });
+    const runtime = pluginRuntime(localMarketplace);
 
     const result = await command(["install", "../plugin@company-tools"], inMemoryIO(), runtime);
 

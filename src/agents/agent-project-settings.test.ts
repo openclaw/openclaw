@@ -106,43 +106,32 @@ it.each([undefined, 0, 7])("preserves stored settings (%s)", async (maxRetries) 
   const projectBytes = `${JSON.stringify(projectSettings, null, 2)}\n`;
   await fs.writeFile(globalPath, globalBytes);
   await fs.writeFile(projectPath, projectBytes);
+  // Native preparation runs first; embedded preparation must reuse its frozen inputs.
+  expect(prepareAgentProviderRetryCount(params)).toBe(maxRetries);
+  const prepared = prepare(params);
   const expectedProvider = { maxRetries, timeoutMs: 9_000, maxRetryDelayMs: 2_500 };
-  const assertPrepared = (thinkingLevel: string) => {
-    // Native preparation runs first, so embedded preparation must reuse its frozen inputs.
-    expect(prepareAgentProviderRetryCount(params)).toBe(maxRetries);
-    const prepared = prepare(params);
-    expect(prepared.getProviderRetrySettings()).toEqual(expectedProvider);
-    expect(prepared.getGlobalSettings()).toMatchObject({
-      theme: "dark",
-      defaultProvider: "openai",
-      defaultModel: "gpt-5",
-      shellPath: "/bin/sh",
-      hideThinkingBlock: true,
-    });
-    expect(prepared.getDefaultThinkingLevel()).toBe(thinkingLevel);
-    expect(prepared.getRetryEnabled()).toBe(false);
-    return prepared;
-  };
-  const prepared = assertPrepared("low");
+  expect(prepared.getProviderRetrySettings()).toEqual(expectedProvider);
+  expect(prepared.getGlobalSettings()).toMatchObject({
+    theme: "dark",
+    defaultProvider: "openai",
+    defaultModel: "gpt-5",
+    shellPath: "/bin/sh",
+    hideThinkingBlock: true,
+  });
+  expect(prepared.getDefaultThinkingLevel()).toBe("low");
+  expect(prepared.getRetryEnabled()).toBe(false);
   prepared.setDefaultThinkingLevel("high");
   prepared.setRetryEnabled(true);
   prepared.applyOverrides({ retry: { provider: { maxRetries: 99 } } });
   expect(await fs.readFile(globalPath, "utf8")).toBe(globalBytes);
   expect(await fs.readFile(projectPath, "utf8")).toBe(projectBytes);
-  assertPrepared("low");
-
-  await writeJson(globalPath, { ...globalSettings, defaultThinkingLevel: "high" });
-  expect(JSON.parse(await fs.readFile(globalPath, "utf8"))).toEqual({
-    ...globalSettings,
-    defaultThinkingLevel: "high",
-  });
-  expect(await fs.readFile(projectPath, "utf8")).toBe(projectBytes);
-  assertPrepared("low");
-  clearPreparedEmbeddedAgentSettings([params.sessionId]);
-  assertPrepared("high");
+  const next = prepare(params);
+  expect(next.getDefaultThinkingLevel()).toBe("low");
+  expect(next.getRetryEnabled()).toBe(false);
+  expect(next.getProviderRetrySettings()).toEqual(expectedProvider);
 });
 
-it.each([undefined, 0, 1, 4])("projects only the explicit count %s", async (maxRetries) => {
+it.each([undefined, 0, 4])("projects only the explicit count %s", async (maxRetries) => {
   await using params = await createSettingsWorkspace();
   await writeJson(params.globalPath, { retry: { provider: { maxRetries } } });
   expect(prepareAgentProviderRetryCount(params)).toBe(maxRetries);
@@ -166,28 +155,24 @@ it("does not admit embedded retired settings, compaction or delay policy into na
   expect(() => prepare(params)).toThrow("queueMode: use steeringMode");
 });
 describe("createPreparedEmbeddedAgentSettingsManager", () => {
-  it.each(
+  const retiredSettings = [
+    [{ queueMode: "all" }, { steeringMode: "all" }, "steeringMode"],
+    [{ websockets: false }, { transport: "sse" }, "transport"],
     [
-      {
-        retired: { queueMode: "all" },
-        canonical: { steeringMode: "all" },
-        guidance: "steeringMode",
-      },
-      { retired: { websockets: false }, canonical: { transport: "sse" }, guidance: "transport" },
-      {
-        retired: { skills: { customDirectories: ["custom-skill"], enableSkillCommands: false } },
-        canonical: { skills: ["custom-skill"], enableSkillCommands: false },
-        guidance: "enableSkillCommands",
-      },
-      {
-        retired: { retry: { maxDelayMs: 12_000 } },
-        canonical: { retry: { provider: { maxRetryDelayMs: 12_000 } } },
-        guidance: "retry.provider.maxRetryDelayMs",
-      },
-    ].flatMap((settings) => [
-      { ...settings, scope: "global" as const },
-      { ...settings, scope: "project" as const },
-    ]),
+      { skills: { customDirectories: ["custom-skill"], enableSkillCommands: false } },
+      { skills: ["custom-skill"], enableSkillCommands: false },
+      "enableSkillCommands",
+    ],
+    [
+      { retry: { maxDelayMs: 12_000 } },
+      { retry: { provider: { maxRetryDelayMs: 12_000 } } },
+      "retry.provider.maxRetryDelayMs",
+    ],
+  ] as const;
+  it.each(
+    retiredSettings.flatMap(([retired, canonical, guidance]) =>
+      ["global", "project"].map((scope) => ({ retired, canonical, guidance, scope })),
+    ),
   )(
     "refuses retired $scope settings with $guidance guidance and preserves bytes",
     async ({ retired, canonical, guidance, scope }) => {

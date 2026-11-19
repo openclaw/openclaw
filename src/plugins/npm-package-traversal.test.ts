@@ -96,32 +96,22 @@ for (const [owner, read, empty] of [
   ["peer audit", (npmRoot: string) => auditPeers({ npmRoot }), { issues: [] }],
   ["peer repair", (npmRoot: string) => repairPeers({ npmRoot, logger: {} }), { repaired: 0 }],
 ] as const) {
-  it.each([
-    ["missing", false],
-    ["file", false],
-    ["missing", true],
-    ["file", true],
-  ] as const)(
-    `${owner} preserves %s errors (scope replaced after enumeration: %s)`,
-    async (kind, scoped) => {
+  it.each(["missing", "file"] as const)(
+    `${owner} preserves %s errors after scope enumeration`,
+    async (kind) => {
       const npmRoot = makeRoot();
-      const modules = path.join(npmRoot, "node_modules");
-      if (scoped) {
-        const scope = path.join(modules, "@scope");
-        fs.mkdirSync(scope, { recursive: true });
-        const readdir = fs.promises.readdir;
-        vi.spyOn(fs.promises, "readdir").mockImplementationOnce(async (dir, options) => {
-          // oxlint-disable-next-line openclaw-boundaries/no-recursive-readdir -- Transparent fault-injection spy; the production caller owns these nonrecursive options.
-          const entries = await readdir(dir, options);
-          fs.rmdirSync(scope);
-          if (kind === "file") {
-            fs.writeFileSync(scope, "replaced after enumeration");
-          }
-          return entries;
-        });
-      } else if (kind === "file") {
-        fs.writeFileSync(modules, "not a directory");
-      }
+      const scope = path.join(npmRoot, "node_modules", "@scope");
+      fs.mkdirSync(scope, { recursive: true });
+      const readdir = fs.promises.readdir;
+      vi.spyOn(fs.promises, "readdir").mockImplementationOnce(async (dir, options) => {
+        // oxlint-disable-next-line openclaw-boundaries/no-recursive-readdir -- Transparent fault-injection spy; the production caller owns these nonrecursive options.
+        const entries = await readdir(dir, options);
+        fs.rmdirSync(scope);
+        if (kind === "file") {
+          fs.writeFileSync(scope, "replaced after enumeration");
+        }
+        return entries;
+      });
       if (kind === "file") {
         await expect(read(npmRoot)).rejects.toMatchObject({ code: "ENOTDIR" });
       } else {

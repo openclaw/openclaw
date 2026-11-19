@@ -1,6 +1,5 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import * as logger from "../logger.js";
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import {
@@ -37,7 +36,6 @@ type Probe = {
   gateway: string[];
   ownerCurrent: string[];
   tools?: string[];
-  retainedWork?: number;
 };
 
 afterEach(async () => {
@@ -59,8 +57,7 @@ it("assembles full Gateway plugin tools without widening the selected model gene
     async (state) => {
       const providerFile = await state.writeText(
         "plugins/provider/index.cjs",
-        `globalThis[${JSON.stringify(probeKey)}]("provider-load");
-module.exports = {
+        `module.exports = {
   id: ${JSON.stringify(providerPluginId)},
   register(api) {
     api.registerProvider({
@@ -89,8 +86,7 @@ module.exports = {
       });
       const toolFile = await state.writeText(
         "plugins/workboard/index.cjs",
-        `globalThis[${JSON.stringify(probeKey)}]("tool-load");
-module.exports = {
+        `module.exports = {
   id: ${JSON.stringify(toolPluginId)},
   register(api) {
     api.registerTool(() => {
@@ -114,24 +110,18 @@ module.exports = {
       let closeOnToolFactory = false;
       let closing: Promise<unknown> | undefined;
       const lifecycle: { close?: () => Promise<unknown> } = {};
+      const pluginIds = (registry: ReturnType<typeof getPluginRuntimeGenerationRegistry>) =>
+        registry?.plugins.map((plugin) => plugin.id).toSorted() ?? [];
       (globalThis as Record<string, unknown>)[probeKey] = (event: string, tools?: string[]) => {
         const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
         const ownerCurrent =
           requestRegistry && getPluginRegistryGatewayOwner(requestRegistry)?.current();
-        const toolRecord = ownerCurrent?.plugins.find((plugin) => plugin.id === toolPluginId);
         probes.push({
           event,
-          generation:
-            getPluginRuntimeGenerationRegistry()
-              ?.plugins.map((plugin) => plugin.id)
-              .toSorted() ?? [],
-          gateway:
-            getPluginRuntimeGatewayRequestScope()
-              ?.pluginRegistry?.plugins.map((plugin) => plugin.id)
-              .toSorted() ?? [],
-          ownerCurrent: ownerCurrent?.plugins.map((plugin) => plugin.id).toSorted() ?? [],
+          generation: pluginIds(getPluginRuntimeGenerationRegistry()),
+          gateway: pluginIds(requestRegistry),
+          ownerCurrent: pluginIds(ownerCurrent),
           ...(tools ? { tools } : {}),
-          ...(toolRecord ? { retainedWork: getPluginInstance(toolRecord)?.retainedWorkCount } : {}),
         });
         if (event === "tool-factory" && closeOnToolFactory && lifecycle.close) {
           closeOnToolFactory = false;
@@ -156,68 +146,51 @@ module.exports = {
           },
         },
       };
-      const metadata = resolvePluginMetadataSnapshot({
-        config,
-        env: process.env,
-        workspaceDir: state.workspaceDir,
-      });
-      setGatewayPluginMetadataSnapshot(metadata, {
-        config,
-        env: process.env,
-        workspaceDir: state.workspaceDir,
-      });
+      const metadataContext = { config, env: process.env, workspaceDir: state.workspaceDir };
+      setGatewayPluginMetadataSnapshot(
+        resolvePluginMetadataSnapshot(metadataContext),
+        metadataContext,
+      );
       const root = await loadAndActivateRootPluginRegistry({
         config,
         workspaceDir: state.workspaceDir,
         cache: false,
       });
-      expect(root.plugins.map((plugin) => plugin.id).toSorted()).toEqual([
-        providerPluginId,
-        toolPluginId,
-      ]);
+      expect(pluginIds(root)).toEqual([providerPluginId, toolPluginId]);
+      const toolInstance = getPluginInstance(root.plugins.find(({ id }) => id === toolPluginId)!)!;
       const owner = createPluginRegistryOwner(root, state.workspaceDir);
       lifecycle.close = owner.close;
-      const warnings: string[] = [];
-      const warn = vi.spyOn(logger, "logWarn").mockImplementation((message) => {
-        warnings.push(message);
-      });
+      const inventoryParams = {
+        agentId: "main",
+        agentDir: state.agentDir(),
+        workspaceDir: state.workspaceDir,
+        modelProvider: providerId,
+        modelId,
+      };
       const resolveInventory = async (inventoryConfig: OpenClawConfig, normalizeProvider = true) =>
         await withPluginRuntimeRegistryScope(owner.registry, async () => {
-          const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
+          await using acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
             cfg: inventoryConfig,
-            agentId: "main",
-            agentDir: state.agentDir(),
-            workspaceDir: state.workspaceDir,
-            modelProvider: providerId,
-            modelId,
+            ...inventoryParams,
           });
-          try {
-            return await acquired.run((runtime) => {
-              (globalThis as unknown as Record<string, (...args: unknown[]) => void>)[probeKey]?.(
-                "before-resolve",
-              );
-              return resolveEffectiveToolInventory({
-                cfg: inventoryConfig,
-                agentId: "main",
-                agentDir: state.agentDir(),
-                workspaceDir: state.workspaceDir,
-                modelProvider: normalizeProvider ? providerId : undefined,
-                modelId: normalizeProvider ? modelId : undefined,
-                modelApi: normalizeProvider ? runtime.modelApi : undefined,
-                runtimeModel: normalizeProvider ? runtime.runtimeModel : undefined,
-              });
-            });
-          } finally {
-            await acquired[Symbol.asyncDispose]();
-          }
+          const toolInventory = await acquired.run((runtime) =>
+            resolveEffectiveToolInventory({
+              cfg: inventoryConfig,
+              ...inventoryParams,
+              modelProvider: normalizeProvider ? providerId : undefined,
+              modelId: normalizeProvider ? modelId : undefined,
+              modelApi: normalizeProvider ? runtime.modelApi : undefined,
+              runtimeModel: normalizeProvider ? runtime.runtimeModel : undefined,
+            }).then((inventory) => inventory.groups.flatMap((group) => group.tools)),
+          );
+          return toolInventory;
         });
       try {
         const inventory = await resolveInventory(config);
-        expect(inventory.groups.flatMap((group) => group.tools)).toContainEqual(
+        expect(toolInstance.retainedWorkCount).toBe(0);
+        expect(inventory).toContainEqual(
           expect.objectContaining({ id: toolName, source: "plugin", pluginId: toolPluginId }),
         );
-        expect(warnings.filter((message) => message.includes("unknown entries"))).toEqual([]);
-
         const disabledConfig: OpenClawConfig = {
           ...config,
           plugins: {
@@ -230,29 +203,24 @@ module.exports = {
         };
         const factoryCount = probes.filter((probe) => probe.event === "tool-factory").length;
         const disabledInventory = await resolveInventory(disabledConfig);
-        expect(disabledInventory.groups.flatMap((group) => group.tools)).not.toContainEqual(
-          expect.objectContaining({ id: toolName }),
-        );
+        expect(disabledInventory).not.toContainEqual(expect.objectContaining({ id: toolName }));
         expect(probes.filter((probe) => probe.event === "tool-factory")).toHaveLength(factoryCount);
 
         closeOnToolFactory = true;
         const closingInventory = await resolveInventory(config, false);
-        expect(closingInventory.groups.flatMap((group) => group.tools)).toContainEqual(
+        expect(closingInventory).toContainEqual(
           expect.objectContaining({ id: toolName, source: "plugin", pluginId: toolPluginId }),
         );
         expect(closing).toBeDefined();
         await closing;
       } finally {
-        warn.mockRestore();
         await owner.close();
       }
 
-      expect(probes.filter((probe) => probe.event === "tool-load")).toHaveLength(1);
       expect(probes.find((probe) => probe.event === "tool-factory")).toMatchObject({
         generation: [providerPluginId],
         gateway: [providerPluginId, toolPluginId],
         ownerCurrent: [providerPluginId, toolPluginId],
-        retainedWork: 1,
       });
       expect(probes.find((probe) => probe.event === "normalize")).toMatchObject({
         generation: [providerPluginId],

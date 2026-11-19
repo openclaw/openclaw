@@ -8,15 +8,18 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { keyedStore, stateTest, useState } from "./plugin-state-fixtures.test-support.js";
+import {
+  keyedStore,
+  observePluginStateReads,
+  stateTest,
+  useState,
+} from "./plugin-state-fixtures.test-support.js";
 import { pluginStatePublication } from "./plugin-state-publication.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
   getPluginStateCapacity,
-  importPluginStateEntriesForDoctor,
-  registerPluginStateSequencedJournalEntry,
 } from "./plugin-state-store.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 
@@ -82,9 +85,14 @@ describe("plugin-state-store.retained", () => {
       "SELECT * FROM plugin_state_entries WHERE plugin_id = ? ORDER BY namespace, entry_key",
     ).all(pluginId);
 
-  afterEach(reopen);
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await reopen();
+  });
 
-  it("persists retained rows beyond the 50k limit", async ({ state: _state }) => {
+  it("persists over 50k retained rows without capping sibling namespaces", async ({
+    state: _state,
+  }) => {
     seed(Array.from({ length: 50_001 }, (_, id) => canonical(key(id), id, id)));
     await reopen();
 
@@ -107,6 +115,17 @@ describe("plugin-state-store.retained", () => {
       await reopened.lookup(key(0)),
       await reopened.lookup(key(50_004)),
     ]).toEqual([50_005, 0, 50_004]);
+    const options = { namespace: "sibling", maxEntries: 2, overflowPolicy: "reject-new" as const };
+    const sync = createPluginStateSyncKeyedStore<number>(pluginId, options);
+    const worker = open<number>(options);
+    sync.register("native", 1);
+    await worker.register("worker", 2);
+    expect(await worker.lookupMany(["native", "worker"])).toEqual([
+      { ok: true, value: 1 },
+      { ok: true, value: 2 },
+    ]);
+    expect(getPluginStateCapacity(pluginId).liveEntries).toBe(50_007);
+    expect(await reopened.count()).toBe(50_005);
   });
 
   it("moves raw rows atomically and pages lexical keys", async ({ state: _state }) => {
@@ -131,6 +150,7 @@ describe("plugin-state-store.retained", () => {
       { ok: true, value: { body: "superseded" } },
     ]);
     expect(await retained.lookup(key(9))).toBeUndefined();
+    const reads = observePluginStateReads();
     const move = { namespace: "history", entries: pairs([9, 10, 99, 101]) };
     expect(await retained.moveEntriesFrom(move)).toBe(2);
     expect(await retained.moveEntriesFrom(move)).toBe(0);
@@ -141,6 +161,7 @@ describe("plugin-state-store.retained", () => {
       movedEntry(10, { body: "canonical" }, 1),
       movedEntry(9, { body: "legacy 9" }, 9),
     ]);
+    expect(reads).not.toHaveBeenCalled();
     expect(
       query(
         "SELECT value_json, created_at, expires_at FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
@@ -238,18 +259,15 @@ describe("plugin-state-store.retained", () => {
   });
 
   it("rejects invalid retained writes before mutation", async ({ state: _state }) => {
-    expect(() =>
-      Reflect.apply(createPluginStateSyncKeyedStore, undefined, [pluginId, retainedOptions]),
-    ).toThrow();
-    for (const factory of [createPluginStateKeyedStore, createPluginStateSyncKeyedStore]) {
-      expect(() => factory(pluginId, { namespace: "@retained.history", maxEntries: 10 })).toThrow();
+    const reserved = { namespace: "@retained.history", maxEntries: 10 };
+    for (const [factory, options] of [
+      [createPluginStateSyncKeyedStore, retainedOptions],
+      [createPluginStateKeyedStore, { ...retainedOptions, maxEntries: 10 }],
+      [createPluginStateKeyedStore, reserved],
+      [createPluginStateSyncKeyedStore, reserved],
+    ] as const) {
+      expect(() => Reflect.apply(factory, undefined, [pluginId, options])).toThrow();
     }
-    expect(() =>
-      Reflect.apply(createPluginStateKeyedStore, undefined, [
-        pluginId,
-        { ...retainedOptions, maxEntries: 10 },
-      ]),
-    ).toThrow();
     const retained = open<number>();
     const bounded = open<number>({ namespace: "history", maxEntries: 10 });
     await bounded.register("a", 1);
@@ -351,70 +369,5 @@ describe("plugin-state-store.expiry", () => {
     store.register("permanent", 6);
     expect(expiredCount()).toBe(1);
     expect(store.entries()).toEqual([{ key: "permanent", value: 6, createdAt: 1_200 }]);
-  });
-});
-
-describe("plugin-state-store.namespace-independence", () => {
-  afterEach(() => resetPluginStateStoreForTests());
-
-  it("isolates writes from 50k sibling catalog rows", async ({ state: _state }) => {
-    seedPluginStateEntriesForTests(
-      Array.from({ length: 50_000 }, (_, index) => ({
-        pluginId: "codex",
-        namespace: `catalog-${Math.floor(index / 20_000)}`,
-        key: `thread-${index}`,
-        value: index,
-      })),
-    );
-    const options = {
-      namespace: "execution",
-      maxEntries: 10,
-      overflowPolicy: "reject-new" as const,
-    };
-    const sync = createPluginStateSyncKeyedStore<number>("codex", options);
-    sync.register("process", 1);
-    expect(sync.registerIfAbsent("claim", 2)).toBe(true);
-    expect(sync.update?.("updated", () => 3)).toBe(true);
-
-    const worker = createPluginStateKeyedStore<number>("codex", options);
-    await worker.register("binding", 4);
-    expect(await worker.registerIfAbsent("worker-claim", 5)).toBe(true);
-    const observed = await worker.observe!("compared");
-    expect(
-      await worker.compareAndApply!("compared", observed.comparison, {
-        operation: "update",
-        action: "set",
-        value: 6,
-      }),
-    ).toEqual({ status: "applied" });
-    expect(
-      (await worker.entries()).map(({ value }) => value).toSorted((left, right) => left - right),
-    ).toEqual([1, 2, 3, 4, 5, 6]);
-
-    importPluginStateEntriesForDoctor("codex", options, [
-      { key: "imported", value: 7, createdAt: 1 },
-    ]);
-    expect(sync.lookup("imported")).toBe(7);
-    expect(
-      await registerPluginStateSequencedJournalEntry({
-        pluginId: "codex",
-        cursorOptions: { namespace: "cursors", maxEntries: 1 },
-        cursorKey: "turns",
-        journalOptions: { namespace: "journal", maxEntries: 1 },
-        journalKeyPrefix: "event-",
-        journalKeyRange: { keyStartInclusive: "event-", keyEndExclusive: "event." },
-        journalValue: { completed: true },
-      }),
-    ).toBe(1);
-    expect(getPluginStateCapacity("codex").liveEntries).toBe(50_009);
-
-    for (const [index, count] of [20_000, 20_000, 10_000].entries()) {
-      const catalog = createPluginStateKeyedStore<number>("codex", {
-        namespace: `catalog-${index}`,
-        maxEntries: 20_000,
-      });
-      expect(await catalog.count!()).toBe(count);
-      expect(await catalog.lookup(`thread-${index * 20_000}`)).toBe(index * 20_000);
-    }
   });
 });

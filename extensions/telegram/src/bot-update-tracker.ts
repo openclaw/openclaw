@@ -109,29 +109,6 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     }
   };
 
-  const requestPersistAcceptedUpdateId = (updateId: number) => {
-    if (typeof options.onAcceptedUpdateId !== "function") {
-      return;
-    }
-    if (
-      highestPersistenceRequestedUpdateId !== null &&
-      updateId <= highestPersistenceRequestedUpdateId
-    ) {
-      return;
-    }
-    highestPersistenceRequestedUpdateId = updateId;
-    persistTargetUpdateId = updateId;
-    void drainPersistQueue().catch(reportPersistError);
-  };
-
-  const acceptUpdateId = (updateId: number) => {
-    acceptedUpdateIds.add(updateId);
-    if (highestAcceptedUpdateId === null || updateId > highestAcceptedUpdateId) {
-      highestAcceptedUpdateId = updateId;
-    }
-    pruneAcceptedUpdateIds();
-  };
-
   function resolveSafeCompletedUpdateId() {
     if (highestCompletedUpdateId === null) {
       return null;
@@ -180,7 +157,11 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     }
     if (typeof updateId === "number") {
       pendingUpdateIds.add(updateId);
-      acceptUpdateId(updateId);
+      acceptedUpdateIds.add(updateId);
+      if (highestAcceptedUpdateId === null || updateId > highestAcceptedUpdateId) {
+        highestAcceptedUpdateId = updateId;
+      }
+      pruneAcceptedUpdateIds();
     }
     return {
       accepted: true,
@@ -207,7 +188,17 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
         }
         const persistUpdateId = resolveSafeCompletedUpdateId();
         if (persistUpdateId !== null) {
-          requestPersistAcceptedUpdateId(persistUpdateId);
+          if (
+            typeof options.onAcceptedUpdateId === "function" &&
+            !(
+              highestPersistenceRequestedUpdateId !== null &&
+              persistUpdateId <= highestPersistenceRequestedUpdateId
+            )
+          ) {
+            highestPersistenceRequestedUpdateId = persistUpdateId;
+            persistTargetUpdateId = persistUpdateId;
+            void drainPersistQueue().catch(reportPersistError);
+          }
         }
       } else {
         failedUpdateIds.add(update.updateId);

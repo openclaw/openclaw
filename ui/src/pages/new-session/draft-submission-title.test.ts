@@ -5,7 +5,8 @@ import type { ModelCatalogResult } from "../../api/types.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { backgroundCreateOptions } from "./draft-submission-flow.test-support.ts";
 import { createDraftTitleFixture } from "./draft-title.test-support.ts";
-import { renderControl, waitForModelControl } from "./model-control.test-support.ts";
+import { controlQueries } from "./model-control-view-queries.test-support.ts";
+import { waitForModelControl } from "./model-control.test-support.ts";
 
 let releaseAccount: (() => void) | undefined;
 beforeEach(() => {
@@ -80,15 +81,27 @@ function accountTitleFixture(preview?: ReturnType<typeof createDeferred<ModelCat
   const { context, place } = fixture;
   Object.assign(context.gateway.snapshot, { selfUser: { id: "person-a", name: "Person A" } });
   place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
-  const draw = () => renderControl(place.modelControl, context, "main", place.selectedAgent());
-  const select = (value: string) => {
-    const container = draw();
-    const selector = `[data-chat-account-option="${value}"]`;
-    if (!container.querySelector(selector)) {
-      container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
+  const { draw, find } = controlQueries(place.modelControl, context, "main", place.selectedAgent());
+  const accountToggle = () =>
+    draw().querySelector<HTMLButtonElement>(".chat-controls__account-trigger");
+  const select = async (value: string, label?: string) => {
+    await waitForModelControl(place.modelControl, context, "main", place.selectedAgent());
+    const picker = draw().querySelector<HTMLDetailsElement>(".chat-controls__model-picker")!;
+    if (!picker.open) {
+      picker.querySelector<HTMLElement>("summary")!.click();
       flush();
     }
-    container.querySelector<HTMLButtonElement>(selector)!.click();
+    await vi.waitFor(() => expect(accountToggle()).not.toBeNull());
+    if (accountToggle()!.getAttribute("aria-expanded") !== "true") {
+      accountToggle()!.click();
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    await vi.waitFor(() => expect(find("account-option", value)).not.toBeNull());
+    if (label) {
+      expect(draw().textContent).toContain(label);
+    }
+    find("account-option", value)!.click();
+    await vi.advanceTimersByTimeAsync(0);
   };
   releaseAccount = () => {
     preview?.resolve(confirmed);
@@ -99,20 +112,17 @@ function accountTitleFixture(preview?: ReturnType<typeof createDeferred<ModelCat
     accounts,
     confirmed,
     titleRequest,
-    select,
-    chooseAccount: async (account: UserModelAccount) => {
-      const container = await waitForModelControl(
-        place.modelControl,
-        context,
-        "main",
-        place.selectedAgent(),
-      );
-      container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(draw().textContent).toContain(account.label);
-      select(`account:${account.authProfileId}`);
+    useAutomatic: async () => {
+      // A pending account catalog has no provider rows; exercise the live account action.
+      const section = place.modelControl
+        .renderProps({ context, agentId: "main", agent: place.selectedAgent(), sending: false })
+        .renderAccountSection?.("test/primary");
+      expect(section).toBeDefined();
+      section!.viewProps(0).onSelect("automatic", new MouseEvent("click"));
       await vi.advanceTimersByTimeAsync(0);
     },
+    chooseAccount: (account: UserModelAccount) =>
+      select(`account:${account.authProfileId}`, account.label),
   };
 }
 
@@ -146,7 +156,7 @@ it.each(["pending", "unconfirmed", "different provider"])(
   async (outcome) => {
     const preview = createDeferred<ModelCatalogResult>();
     const fixture = accountTitleFixture(preview);
-    const { accounts, confirmed, titles, titleRequest, chooseAccount, select } = fixture;
+    const { accounts, confirmed, titles, titleRequest, chooseAccount, useAutomatic } = fixture;
     await prepareTitle(fixture, "repair the sidebar naming");
     expect(titleRequest).toHaveBeenCalledOnce();
     await chooseAccount(accounts[0]);
@@ -167,7 +177,7 @@ it.each(["pending", "unconfirmed", "different provider"])(
     expect(titles.takePreparedTitle()).toBeUndefined();
     expect(titleRequest).toHaveBeenCalledOnce();
 
-    select("automatic");
+    await useAutomatic();
     await prepareTitle(fixture);
     expect(titleRequest).toHaveBeenCalledTimes(2);
     expect(titles.takePreparedTitle()).toBe("Prepared title");

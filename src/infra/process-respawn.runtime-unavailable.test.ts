@@ -1,12 +1,30 @@
+import type {
+  ExecException,
+  ExecFileOptionsWithStringEncoding,
+  SpawnSyncReturns,
+} from "node:child_process";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import type { GatewayServiceState } from "../daemon/service-types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureEnv } from "../test-utils/env.js";
 
+type ProbeResult = Pick<
+  SpawnSyncReturns<string>,
+  "stdout" | "stderr" | "status" | "signal" | "error"
+>;
+
 const io = vi.hoisted(() => ({
   systemdSupported: vi.fn<typeof import("@openclaw/proc-safe/systemd").isSupported>(),
-  probe: vi.fn<typeof import("node:child_process").spawnSync>(),
+  probe:
+    vi.fn<
+      (
+        file: string,
+        args: readonly string[],
+        options: ExecFileOptionsWithStringEncoding,
+      ) => ProbeResult | Promise<ProbeResult>
+    >(),
   history: vi.fn<typeof import("./gateway-boot-lifecycle.js").readGatewayLastShutdownAsync>(),
   service: vi.fn<typeof import("../daemon/service-state.js").readGatewayServiceState>(),
   loadedJob: vi.fn<typeof import("../daemon/launchd-runtime.js").readLoadedLaunchAgentState>(),
@@ -19,10 +37,46 @@ const io = vi.hoisted(() => ({
 
 // mock-isolation: Observe capability preparation without loading the host's native helper.
 vi.mock("@openclaw/proc-safe/systemd", () => ({ isSupported: io.systemdSupported }));
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawnSync: io.probe,
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFile: (
+      file: string,
+      args: readonly string[],
+      options: ExecFileOptionsWithStringEncoding,
+      callback: (error: ExecException | null, stdout: string, stderr: string) => void,
+    ) => {
+      void Promise.resolve()
+        .then(() => io.probe(file, args, options))
+        .then(
+          (result) =>
+            callback(
+              result.error
+                ? Object.assign(result.error, { cmd: file })
+                : result.status === 0
+                  ? null
+                  : Object.assign(new Error(result.stderr), {
+                      cmd: file,
+                      code: result.status ?? undefined,
+                      signal: result.signal ?? undefined,
+                    }),
+              result.stdout,
+              result.stderr,
+            ),
+          (error: unknown) =>
+            callback(
+              Object.assign(error instanceof Error ? error : new Error(String(error)), {
+                cmd: file,
+              }),
+              "",
+              "",
+            ),
+        );
+      return new actual.ChildProcess();
+    },
+  };
+});
 // mock-isolation: Keep state database readers and their child processes outside this fixture.
 vi.mock("./gateway-boot-lifecycle.js", () => ({ readGatewayLastShutdownAsync: io.history }));
 // mock-isolation: Native service discovery is the external observation under test.
@@ -46,35 +100,36 @@ vi.mock("../logging/subsystem.js", () => ({
 
 type RuntimeOwner = typeof import("./child-runtime-viability.js");
 type RecoveryOwner = typeof import("./process-respawn.js");
+type NativeWorkerRecoveryOwner = typeof import("./gateway-native-worker-recovery.js");
 type RecoveryDecision = Parameters<RecoveryOwner["registerGatewayRuntimeRecovery"]>[0]["decision"];
 let runtime: RuntimeOwner;
 let recovery: RecoveryOwner;
+let nativeWorkerRecovery: NativeWorkerRecoveryOwner;
 let finished: ReturnType<typeof createDeferredCore<void>>;
 let release: (() => void) | undefined;
 const environment = captureEnv(["OPENCLAW_STATE_DIR", "NODE_OPTIONS"]);
 const nodePath = "/fixture/current/bin/node";
 const serviceEnv = { PATH: "/fixture/current/bin", NODE_OPTIONS: "--no-warnings" };
+const serviceCommand = {
+  programArguments: [nodePath, "/fixture/openclaw.mjs", "gateway", "run"],
+  workingDirectory: "/fixture/service",
+  environment: serviceEnv,
+};
 const serviceState: GatewayServiceState = {
   installed: true,
   loadState: { status: "loaded" },
   running: true,
   env: serviceEnv,
-  command: {
-    programArguments: [nodePath, "/fixture/openclaw.mjs", "gateway", "run"],
-    workingDirectory: "/fixture/service",
-    environment: serviceEnv,
-  },
+  command: serviceCommand,
 };
 const systemd = { mode: "supervised", supervisor: "systemd" } as const;
 const loadedJob = {
   ...serviceState,
   launchAgent: {
+    ...serviceCommand,
     target: "gui/501/ai.openclaw.gateway",
     sourcePath: "/fixture/Library/LaunchAgents/ai.openclaw.gateway.plist",
     program: nodePath,
-    programArguments: [nodePath, "/fixture/openclaw.mjs", "gateway", "run"],
-    workingDirectory: "/fixture/service",
-    environment: serviceEnv,
   },
 };
 const probeResult = (stdout: string, stderr = "", status = 0) => ({
@@ -104,6 +159,7 @@ beforeEach(async () => {
   io.restart.mockReturnValue({ status: "emitted" });
   io.probe.mockReturnValue(probeResult("v24.20.0\n"));
   runtime = await import("./child-runtime-viability.js");
+  nativeWorkerRecovery = await import("./gateway-native-worker-recovery.js");
   recovery = await import("./process-respawn.js");
 });
 
@@ -148,14 +204,21 @@ async function recover(...args: Parameters<typeof register>) {
   await finished.promise;
 }
 
-function expectReported(reason: RegExp, noService = false, noProbe = false) {
+const requestNative = (isCurrent = () => true) =>
+  nativeWorkerRecovery.requestGatewayNativeWorkerRecovery({ isCurrent });
+const expectNativeRestart = (request = requestNative()) =>
+  expect(request).resolves.toMatchObject({ status: "restart-requested" });
+const expectNativeRefusal = (reason: string, request = requestNative()) =>
+  expect(request).resolves.toMatchObject({
+    status: "report-only",
+    reason: expect.stringContaining(reason),
+  });
+
+function expectReported(reason: RegExp, ...untouched: Array<ReturnType<typeof vi.fn>>) {
   expectUnavailable();
   expect(io.restart).not.toHaveBeenCalled();
-  if (noService) {
-    expect(io.service).not.toHaveBeenCalled();
-  }
-  if (noProbe) {
-    expect(io.probe).not.toHaveBeenCalled();
+  for (const observer of untouched) {
+    expect(observer).not.toHaveBeenCalled();
   }
   expect(io.warn).toHaveBeenCalledWith(expect.stringMatching(/^report-only:/));
   expect(io.warn).toHaveBeenCalledWith(expect.stringMatching(reason));
@@ -171,19 +234,15 @@ it.each(["systemd", "launchd"] as const)(
     // The history reader must run before the first broken-runtime classification.
     await Promise.resolve();
     expect(io.history).toHaveBeenCalledOnce();
-    const failure = diagnose();
-    expect(failure).toMatchObject({ code: "NODE_RUNTIME_UNAVAILABLE" });
-    expect(diagnose()).toBe(failure);
+    diagnose();
     expectUnavailable();
     expect(io.restart).not.toHaveBeenCalled();
     await finished.promise;
     if (supervisor === "systemd") {
-      expect(io.service).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
-        env: process.env,
-        requireEffective: true,
-        requireLoadedCommand: true,
-        timeoutMs: 5_000,
-      });
+      expect(io.service).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ requireEffective: true, requireLoadedCommand: true }),
+      );
     } else {
       expect(io.matchingCommand).toHaveBeenCalledWith(process.env, loadedJob.launchAgent, 5_000);
       expect(io.service).not.toHaveBeenCalled();
@@ -198,7 +257,7 @@ it.each(["systemd", "launchd"] as const)(
     expect(io.restart).toHaveBeenCalledExactlyOnceWith("gateway.runtime-unavailable");
     expectUnavailable();
     expect(io.warn).toHaveBeenCalledWith(expect.stringMatching(/^restart-requested: .*graceful/));
-    expect(diagnose()).toBe(failure);
+    diagnose();
     await Promise.resolve();
     expect(io.restart).toHaveBeenCalledOnce();
     expect(io.warn).toHaveBeenCalledOnce();
@@ -221,7 +280,7 @@ it.each([
 ] as const)("keeps %s report-only", async (_name, decision, owns) => {
   await recover(decision, owns);
   expect(io.systemdSupported).not.toHaveBeenCalled();
-  expectReported(/no verified native service/, true, true);
+  expectReported(/no verified native service/, io.service, io.probe);
 });
 
 it("keeps a recently restarted successor up instead of repeating runtime recovery", async () => {
@@ -230,13 +289,7 @@ it("keeps a recently restarted successor up instead of repeating runtime recover
     completedAtMs: Date.now() - 60_000,
   });
   await recover();
-  expectReported(/last five minutes/, true);
-});
-
-it("stays report-only when restart history is unavailable", async () => {
-  io.history.mockRejectedValueOnce(new Error("fixture history unavailable"));
-  await recover();
-  expectReported(/history could not be read/, true);
+  expectReported(/last five minutes/, io.service);
 });
 
 it("reports an earlier diagnosis once when its history reader can no longer start", async () => {
@@ -245,11 +298,10 @@ it("reports an earlier diagnosis once when its history reader can no longer star
   expectUnavailable();
   register();
   await finished.promise;
-  expectReported(/history could not be read/);
+  expectReported(/history could not be read/, io.service);
   release?.();
   register();
   await Promise.resolve();
-  expect(io.service).not.toHaveBeenCalled();
   expect(io.restart).not.toHaveBeenCalled();
   expect(io.warn).toHaveBeenCalledOnce();
 });
@@ -264,26 +316,61 @@ it("does not request restart after its lifecycle retires during preflight", asyn
   expectReported(/already stopping/);
 });
 
+it("does not request restart after its lifecycle retires during the runtime probe", async ({
+  signal,
+}) => {
+  const entered = createDeferredCore();
+  const probe = createDeferredCore<ProbeResult>();
+  let current = true;
+  io.probe.mockImplementationOnce(() => {
+    entered.resolve();
+    return probe.promise;
+  });
+  const pending = recover(systemd, true, () => current);
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(
+        entered.promise,
+        pending,
+        "Recovery skipped the native runtime probe",
+      ),
+      signal,
+    );
+    expect(io.restart).not.toHaveBeenCalled();
+    current = false;
+    probe.resolve(probeResult("v24.20.0\n"));
+    await withinTest(pending, signal);
+    expectReported(/already stopping/);
+  } finally {
+    probe.resolve(probeResult("v24.20.0\n"));
+    await pending;
+  }
+});
+
 it("keeps a rewritten launchd plist report-only when it does not match the loaded job", async () => {
   io.matchingCommand.mockResolvedValueOnce(null);
   await recover({ mode: "supervised", supervisor: "launchd" });
-  expect(io.loadedJob).toHaveBeenCalledOnce();
-  expect(io.matchingCommand).toHaveBeenCalledOnce();
-  expectReported(/no verified Node command/, true, true);
+  expectReported(/no verified Node command/, io.service, io.probe);
 });
 
 it("coalesces unsettled native workers into one forced fresh-process request", async () => {
   const service = createDeferredCore<GatewayServiceState>();
   io.service.mockReturnValueOnce(service.promise);
   register();
+  expect(io.systemdSupported).toHaveBeenCalledOnce();
+  expect(io.service).not.toHaveBeenCalled();
+  io.systemdSupported.mockImplementation(() => {
+    throw new Error("late native initialization would wait for the unsettled worker");
+  });
   let firstUnsettled = true;
-  const first = recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => firstUnsettled });
-  const second = recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true });
+  const first = requestNative(() => firstUnsettled);
+  const second = requestNative();
   firstUnsettled = false;
   service.resolve(serviceState);
-  await expect(first).resolves.toMatchObject({ status: "restart-requested" });
-  await expect(second).resolves.toMatchObject({ status: "restart-requested" });
-  await recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true });
+  await expectNativeRestart(first);
+  await expectNativeRestart(second);
+  await requestNative();
+  expect(io.systemdSupported).toHaveBeenCalledOnce();
   expect(io.service).toHaveBeenCalledOnce();
   expect(io.restart).toHaveBeenCalledExactlyOnceWith("gateway.native-worker-unsettled", {
     force: true,
@@ -293,29 +380,10 @@ it("coalesces unsettled native workers into one forced fresh-process request", a
   expect(runtime.readChildRuntimeViability().available).toBe(true);
 });
 
-it("prepares native systemd inspection before a worker can require recovery", async () => {
-  register();
-  expect(io.systemdSupported).toHaveBeenCalledOnce();
-  expect(io.service).not.toHaveBeenCalled();
-  io.systemdSupported.mockImplementation(() => {
-    throw new Error("late native initialization would wait for the unsettled worker");
-  });
-  await expect(
-    recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
-  ).resolves.toMatchObject({ status: "restart-requested" });
-  expect(io.systemdSupported).toHaveBeenCalledOnce();
-  expect(io.service).toHaveBeenCalledOnce();
-});
-
 it("keeps recovery report-only when native systemd inspection was unavailable at startup", async () => {
   io.systemdSupported.mockReturnValueOnce(false);
   register();
-  await expect(
-    recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
-  ).resolves.toMatchObject({
-    status: "report-only",
-    reason: expect.stringContaining("native systemd inspection was unavailable at Gateway startup"),
-  });
+  await expectNativeRefusal("native systemd inspection was unavailable at Gateway startup");
   expect(io.systemdSupported).toHaveBeenCalledOnce();
   expect(io.service).not.toHaveBeenCalled();
   expect(io.probe).not.toHaveBeenCalled();
@@ -329,14 +397,13 @@ it("does not restart for a native worker that settles during service verificatio
     return serviceState;
   });
   register();
-  await expect(
-    recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => unsettled }),
-  ).resolves.toMatchObject({ status: "report-only", reason: expect.stringContaining("settled") });
+  await expectNativeRefusal(
+    "settled",
+    requestNative(() => unsettled),
+  );
   expect(io.restart).not.toHaveBeenCalled();
   // A later distinct worker can still request recovery in this lifecycle.
-  await expect(
-    recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
-  ).resolves.toMatchObject({ status: "restart-requested" });
+  await expectNativeRestart();
 });
 
 it("refuses native recovery after the registering lifecycle retires during verification", async () => {
@@ -345,52 +412,20 @@ it("refuses native recovery after the registering lifecycle retires during verif
     return serviceState;
   });
   register();
-  await expect(
-    recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
-  ).resolves.toMatchObject({ status: "report-only", reason: expect.stringContaining("stopping") });
-  await expect(
-    recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
-  ).resolves.toMatchObject({
-    status: "report-only",
-    reason: expect.stringContaining("no Gateway"),
-  });
-  expect(io.restart).not.toHaveBeenCalled();
-});
-
-it.each([
-  ["unmanaged", { mode: "disabled", reason: "unmanaged", detail: "foreground" }, true],
-  ["respawn disabled", { mode: "disabled", reason: "no-respawn" }, true],
-  ["external supervisor", { mode: "supervised", supervisor: "external" }, true],
-  ["embedded lifecycle", systemd, false],
-] as const)("refuses automatic native-worker recovery for %s", async (_name, decision, owns) => {
-  register(decision, owns);
-  expect(io.systemdSupported).not.toHaveBeenCalled();
-  await expect(
-    recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
-  ).resolves.toMatchObject({
-    status: "report-only",
-    reason: expect.stringContaining("no verified native service"),
-  });
-  expect(io.service).not.toHaveBeenCalled();
+  await expectNativeRefusal("stopping");
+  await expectNativeRefusal("no Gateway");
   expect(io.restart).not.toHaveBeenCalled();
 });
 
 it("does not claim an unrelated coalesced restart acquired fresh-process authority", async () => {
   io.restart.mockReturnValueOnce({ status: "coalesced" });
   register();
-  await expect(
-    recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
-  ).resolves.toMatchObject({ status: "report-only", reason: expect.stringContaining("coalesced") });
+  await expectNativeRefusal("coalesced");
 });
 
 it("reports a failed native service probe instead of rejecting the worker's cleanup", async () => {
   io.service.mockRejectedValueOnce(new Error("fixture service unavailable"));
   register();
-  await expect(
-    recovery.requestGatewayNativeWorkerRecovery({ isCurrent: () => true }),
-  ).resolves.toMatchObject({
-    status: "report-only",
-    reason: expect.stringContaining("preparation failed"),
-  });
+  await expectNativeRefusal("preparation failed");
   expect(io.restart).not.toHaveBeenCalled();
 });

@@ -2,13 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
-import { ExpectedCliError } from "../cli/failure-output.js";
+import { ExpectedCliError } from "../cli/expected-cli-error.js";
+import { getMockCallOutput } from "../cli/test-runtime-capture.js";
 import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.test-support.js";
@@ -48,13 +49,6 @@ function makeEvent(params: Partial<TrajectoryEvent> & { type: string }): Traject
     sessionKey,
     ...params,
   };
-}
-
-function runtimeOutput(runtime: RuntimeEnv): string {
-  return vi
-    .mocked(runtime.log)
-    .mock.calls.map((call) => String(call[0]))
-    .join("\n");
 }
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sessions-tail-");
@@ -139,11 +133,11 @@ describe("sessionsTailCommand", () => {
     await writeSessionEntry(key);
     await appendEvents(events, { key });
     await explicitTail(options);
-    return runtimeOutput(runtime);
+    return getMockCallOutput(runtime.log);
   }
 
   function expectOutput(contains: string[], absent: string[] = []) {
-    const output = runtimeOutput(runtime);
+    const output = getMockCallOutput(runtime.log);
     for (const text of contains) {
       expect(output).toContain(text);
     }
@@ -271,7 +265,7 @@ describe("sessionsTailCommand", () => {
   it("reports an empty default selection without failing or following", async () => {
     await tail({ agent: "main", follow: true });
 
-    expect(runtimeOutput(runtime)).toBe("No sessions found.");
+    expect(getMockCallOutput(runtime.log)).toBe("No sessions found.");
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
@@ -283,8 +277,10 @@ describe("sessionsTailCommand", () => {
     ["explicit key", ["older"]],
     ["different session id", ["latest"]],
     ["rejected", []],
+    ["interrupted", []],
   ])("selects trajectory sessions with a %s Gateway source", async (mode, expected, notice) => {
     storePath = path.join(tmpDir, "state", "agents", "main", "agent", "openclaw-agent.sqlite");
+    const work = new AsyncWorkScope();
     const entries = ["older", "concurrent", "latest", "queued"].map((label, index) => ({
       label,
       key: index === 0 ? sessionKey : `agent:main:${label}`,
@@ -318,6 +314,8 @@ describe("sessionsTailCommand", () => {
       );
     } else if (mode === "rejected") {
       mocks.callGatewayFromCliWithTransport.mockRejectedValue(new Error("missing scope"));
+    } else if (mode === "interrupted") {
+      mocks.callGatewayFromCliWithTransport.mockImplementation(async () => work.beginClose());
     }
 
     const auditProjection = ["reachable", "explicit store", "explicit key"].includes(mode);
@@ -344,11 +342,13 @@ describe("sessionsTailCommand", () => {
     const parse = vi.spyOn(JSON, "parse");
     onTestFinished(() => parse.mockRestore());
 
-    const selection = tail({
-      agent: "main",
-      store: mode === "explicit store" ? storePath : undefined,
-      sessionKey: mode === "explicit key" ? sessionKey : undefined,
-    });
+    const selection = work.run(() =>
+      tail({
+        agent: "main",
+        store: mode === "explicit store" ? storePath : undefined,
+        sessionKey: mode === "explicit key" ? sessionKey : undefined,
+      }),
+    );
     if (mode === "rejected") {
       await expect(selection).rejects.toThrow("missing scope");
     } else {
@@ -363,19 +363,12 @@ describe("sessionsTailCommand", () => {
       expect(runtime.error).not.toHaveBeenCalled();
     }
 
-    const output = runtimeOutput(runtime);
+    const output = getMockCallOutput(runtime.log);
     for (const entry of entries) {
       expect(output.includes(`${entry.label} ok`)).toBe(expected.includes(entry.label));
     }
-    expect(
-      vi
-        .mocked(runtime.log)
-        .mock.calls.filter(
-          ([line]) =>
-            String(line).startsWith("Gateway unreachable:") ||
-            String(line).startsWith("explicit store:"),
-        ),
-    ).toEqual(notice ? [[notice]] : []);
+    const notices = output.match(/^(Gateway unreachable|explicit store):.*$/gm) ?? [];
+    expect(notices).toEqual(notice ? [notice] : []);
     if (mode === "explicit store" || mode === "explicit key") {
       expect(mocks.callGatewayFromCliWithTransport).not.toHaveBeenCalled();
     }
@@ -397,8 +390,10 @@ describe("sessionsTailCommand", () => {
   it.each([
     { signal: "SIGINT" as const, exitCode: 130 },
     { signal: "SIGTERM" as const, exitCode: 143 },
+    { signal: "abort" as const, exitCode: undefined },
   ])("continues following until $signal and exits with $exitCode", async ({ signal, exitCode }) => {
     vi.useFakeTimers();
+    const work = new AsyncWorkScope();
     const initialListeners = listeners();
     await writeSessionEntry();
     await appendEvents([
@@ -409,24 +404,20 @@ describe("sessionsTailCommand", () => {
     vi.mocked(runtime.log).mockImplementation((message) => {
       if (!appended && String(message).includes("session.started")) {
         appended = true;
-        appendSqliteTrajectoryRuntimeEvents(
-          { agentId: "main", sessionId: "session-one", storePath },
-          [appendedEvent],
-        );
+        void appendEvents([appendedEvent]);
       }
     });
 
-    const run = explicitTail({ tail: "1", follow: true });
+    const run = work.run(() => explicitTail({ tail: "1", follow: true }));
     try {
       await vi.advanceTimersByTimeAsync(1_000);
     } finally {
-      process.emit(signal, signal);
+      void (signal === "abort" ? work.beginClose() : process.emit(signal, signal));
       await run;
     }
 
     expectOutput(["tool.result", "sqlite ok"]);
-    expect(runtime.exit).toHaveBeenCalledOnce();
-    expect(runtime.exit).toHaveBeenCalledWith(exitCode);
+    expect(vi.mocked(runtime.exit).mock.calls).toEqual(exitCode ? [[exitCode]] : []);
     expect(listeners()).toEqual(initialListeners);
   });
 

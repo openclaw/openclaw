@@ -1,10 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  configureAiTransportHost,
-  getAiTransportHost,
-  type AiProviderRequestCapabilities,
-  type AiProviderRequestPolicyInput,
-} from "../host.js";
+import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
 
 const mockOpenAI = vi.hoisted(() => ({
@@ -50,6 +45,7 @@ import {
   type ResolvedOpenAICompletionsCompat,
 } from "../transports/openai-completions-compat.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
+import { resolveTestOpenAIProviderCapabilities as resolveTestCapabilities } from "./openai-provider.test-support.js";
 import { makeProviderModel } from "./provider-model.test-support.js";
 
 const baseModel: Model<"openai-completions"> = makeProviderModel(
@@ -70,71 +66,6 @@ let previousAiTransportHost: ReturnType<typeof getAiTransportHost>;
 
 function createModel(overrides: Partial<Model<"openai-completions">> = {}) {
   return { ...baseModel, ...overrides };
-}
-
-function resolveTestEndpointClass(baseUrl: string | undefined): string {
-  if (!baseUrl) {
-    return "default";
-  }
-  const host = new URL(baseUrl).hostname;
-  const exactClasses: Record<string, string> = {
-    "api.openai.com": "openai-public",
-    "api.cerebras.ai": "cerebras-native",
-    "api.x.ai": "xai-native",
-    "api.moonshot.ai": "moonshot-native",
-    "api.moonshot.cn": "moonshot-native",
-    "llm.chutes.ai": "chutes-native",
-    "api.z.ai": "zai-native",
-    "api.deepseek.com": "deepseek-native",
-    "dashscope.aliyuncs.com": "modelstudio-native",
-    "127.0.0.1": "local",
-    localhost: "local",
-  };
-  const exactClass = exactClasses[host];
-  if (exactClass) {
-    return exactClass;
-  }
-  if (host.endsWith(".openai.azure.com")) {
-    return "azure-openai";
-  }
-  if (host.endsWith("openrouter.ai")) {
-    return "openrouter";
-  }
-  if (host.endsWith("opencode.ai")) {
-    return "opencode-native";
-  }
-  if (host.endsWith("xiaomimimo.com")) {
-    return "xiaomi-native";
-  }
-  return "custom";
-}
-
-function resolveTestCapabilities(
-  input: AiProviderRequestPolicyInput,
-): AiProviderRequestCapabilities {
-  const endpointClass = resolveTestEndpointClass(input.baseUrl);
-  const provider = input.provider;
-  const knownProviderFamily =
-    provider === "moonshotai" || provider === "moonshotai-cn"
-      ? "moonshot"
-      : provider === "openai" || provider === "azure-openai"
-        ? "openai-family"
-        : provider === "qwen" || provider === "dashscope"
-          ? "modelstudio"
-          : (provider ?? "unknown");
-  const usesConfiguredBaseUrl = endpointClass !== "default";
-  const usesKnownNativeOpenAIEndpoint =
-    endpointClass === "openai-public" ||
-    endpointClass === "openai" ||
-    endpointClass === "azure-openai";
-  return {
-    endpointClass,
-    knownProviderFamily,
-    supportsNativeStreamingUsageCompat: endpointClass === "moonshot-native",
-    supportsOpenAICompletionsStreamingUsageCompat: false,
-    usesExplicitProxyLikeEndpoint: usesConfiguredBaseUrl && !usesKnownNativeOpenAIEndpoint,
-    allowsAnthropicServiceTier: false,
-  };
 }
 
 type DuplicatedCompatFields = Pick<

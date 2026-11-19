@@ -9,7 +9,7 @@ registerEnglishCatalog(registerApprovalsEnglish);
 
 export function approvalRemainingLabel(expiresAtMs: number, nowMs: number): string {
   return expiresAtMs > nowMs
-    ? t("execApproval.expiresIn", { time: formatCountdown(expiresAtMs, nowMs, true) })
+    ? t("execApproval.expiresIn", { time: formatCountdown(expiresAtMs, nowMs) })
     : t("execApproval.expired");
 }
 
@@ -32,13 +32,17 @@ export function ApprovalCountdown(
     <openclaw-approval-countdown
       style={{ display: "contents" }}
       class={props.class}
+      data-urgent={props.expiresAtMs - now() < 60_000 ? "true" : undefined}
       role={props.role}
-      aria-label={props["aria-label"]}
+      aria-label={
+        props["aria-label"] ??
+        (props.role === "timer" ? approvalRemainingLabel(props.expiresAtMs, now()) : undefined)
+      }
       aria-hidden={props["aria-hidden"]}
       title={props.title}
     >
       {props.compact
-        ? formatCountdown(props.expiresAtMs, now(), true)
+        ? formatCountdown(props.expiresAtMs, now())
         : approvalRemainingLabel(props.expiresAtMs, now())}
     </openclaw-approval-countdown>
   );

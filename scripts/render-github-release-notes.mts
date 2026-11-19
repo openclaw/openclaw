@@ -37,6 +37,8 @@ type ReleaseNotesTarget = {
   tag: unknown;
   repository: unknown;
   regularStableVersion?: unknown;
+  mainPackageVersion?: unknown;
+  retiredLineReason?: string;
   contributionRecordPath?: string;
   validationManifest?: unknown;
 };
@@ -96,14 +98,30 @@ function normalizeVerification(verification: string, manifest: unknown) {
     .trimEnd();
 }
 
+// The published notice is the frozen context; it is not publication authority.
+// Callers still verify the complete body against the immutable release source.
+export function regularStableVersionFromReleaseBody(body: string) {
+  const version = body
+    .split("\n", 1)[0]
+    ?.match(/The latest version of OpenClaw at the time of this release is \[([^\]]+)\]/u)?.[1];
+  if (!version) {
+    fail("Release body is missing its frozen regular stable version.");
+  }
+  return version;
+}
+
 function extendedStableReleaseNotice({
   version,
   repository,
   regularStableVersion,
+  mainPackageVersion,
+  retiredLineReason,
 }: {
   version: string;
   repository: string;
   regularStableVersion: unknown;
+  mainPackageVersion?: unknown;
+  retiredLineReason?: string;
 }) {
   const release = parseReleaseVersion(version);
   if (!release || classifyReleaseTrain(release) !== "extended-stable") {
@@ -113,12 +131,21 @@ function extendedStableReleaseNotice({
     return "";
   }
   assertString(regularStableVersion, "regular stable version");
-  validateActiveExtendedStableLine(version, regularStableVersion);
+  const regularStable = parseReleaseVersion(regularStableVersion);
+  if (!regularStable || classifyReleaseTrain(regularStable) !== "stable") {
+    fail("regular stable version must name a regular final release");
+  }
+  // Main controls maintenance-line retirement; published Latest controls the notice.
+  validateActiveExtendedStableLine(
+    version,
+    mainPackageVersion ?? regularStableVersion,
+    retiredLineReason,
+  );
   const month = MONTH_NAMES[release.month - 1];
   if (!month) {
     fail(`unsupported extended-stable release month: ${release.month}`);
   }
-  return `This is a gateway-only \`extended-stable\` release, which is our current equivalent to LTS. This release is OpenClaw from the end of ${month} ${release.year}, plus critical security updates, reliability and performance fixes, and features like new model support. The latest version of OpenClaw at the time of this release is [${regularStableVersion}](https://github.com/${repository}/releases#release-v${regularStableVersion})`;
+  return `This is a gateway-only \`extended-stable\` release, ${retiredLineReason ? "published from a retired maintenance line by explicit maintainer decision." : "which is our current equivalent to LTS."} This release is OpenClaw from the end of ${month} ${release.year}, plus critical security updates, reliability and performance fixes, and features like new model support. The latest version of OpenClaw at the time of this release is [${regularStableVersion}](https://github.com/${repository}/releases#release-v${regularStableVersion})`;
 }
 
 export function formatContributionRecordProvenance(provenance: ContributionRecordProvenance) {
@@ -392,6 +419,8 @@ export function renderGithubReleaseNotes({
   tag,
   repository,
   regularStableVersion,
+  mainPackageVersion,
+  retiredLineReason,
   contributionRecordPath,
   validationManifest,
   verification = "",
@@ -409,7 +438,13 @@ export function renderGithubReleaseNotes({
     fail("docs-mirrored release notes require the docs-publication renderer");
   }
   const section = releaseNotesSectionForTag(changelog, version, tag);
-  const notice = extendedStableReleaseNotice({ version, repository, regularStableVersion });
+  const notice = extendedStableReleaseNotice({
+    version,
+    repository,
+    regularStableVersion,
+    mainPackageVersion,
+    retiredLineReason,
+  });
   const fullBody = joinBody(notice, section);
   const mode = fitsGithubReleaseBody(fullBody) ? "full" : "compact";
   const compactBody =
@@ -468,7 +503,7 @@ function usage() {
     --tag <tag> --repository <owner/repo> \\
     [--version <version>] [--regular-stable-version <version>] \\
     [--verification-file <path>] [--validation-manifest <path>] [--output <path>] \\
-    [--metadata-output <path>]
+    [--metadata-output <path>] [--main-package-version <version>] [--notice-body <path>]
   Verification uses the same target arguments with --verify-body <path>.
 `;
 }
@@ -482,6 +517,9 @@ function parseArgs(argv: string[]) {
     ["--tag", "tag"],
     ["--repository", "repository"],
     ["--regular-stable-version", "regularStableVersion"],
+    ["--main-package-version", "mainPackageVersion"],
+    ["--notice-body", "noticeBody"],
+    ["--retired-line-reason", "retiredLineReason"],
     ["--verification-file", "verificationFile"],
     ["--validation-manifest", "validationManifest"],
     ["--output", "output"],
@@ -548,15 +586,27 @@ function main() {
   const validationManifest: unknown = options.validationManifest
     ? JSON.parse(readFileSync(options.validationManifest, "utf8"))
     : undefined;
+  const noticeBody = options.noticeBody ? readFileSync(options.noticeBody, "utf8") : undefined;
   const target = {
     changelog,
     version,
     tag,
     repository,
-    regularStableVersion: options.regularStableVersion,
+    regularStableVersion:
+      noticeBody === undefined
+        ? options.regularStableVersion
+        : regularStableVersionFromReleaseBody(noticeBody),
+    mainPackageVersion: options.mainPackageVersion,
+    retiredLineReason: options.retiredLineReason,
     contributionRecordPath: source?.recordPath ?? undefined,
     validationManifest,
   };
+  if (
+    noticeBody !== undefined &&
+    !verifyGithubReleaseNotes({ ...target, body: noticeBody }).matches
+  ) {
+    fail("Frozen notice body does not match canonical release notes.");
+  }
   if (options.verifyBody) {
     const result = verifyGithubReleaseNotes({
       ...target,

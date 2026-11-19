@@ -3,7 +3,10 @@ import {
   resolveMSTeamsAdvertisedMedia,
   summarizeMSTeamsHtmlAttachments,
 } from "../attachments/html.js";
-import { extractHtmlFromAttachment } from "../attachments/shared.js";
+import {
+  extractHtmlFromAttachment,
+  replaceTeamsEmojiSpriteImagesWithAltText,
+} from "../attachments/shared.js";
 import type { MSTeamsAttachmentLike } from "../attachments/types.js";
 import { tryNormalizeBotFrameworkServiceUrl } from "../bot-framework-service-url.js";
 import type { StoredConversationReference } from "../conversation-store.js";
@@ -12,6 +15,7 @@ import {
   extractMSTeamsQuoteInfo,
   htmlToPlainText,
   normalizeMSTeamsConversationId,
+  normalizeMSTeamsMentionTags,
   stripMSTeamsMentionTags,
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
@@ -19,16 +23,21 @@ import type { MSTeamsIngressLifecycle } from "../msteams-ingress.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { wasMSTeamsMessageSentWithPersistence } from "../sent-message-cache.js";
 
-function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): string {
+function extractTextFromHtmlAttachments(
+  attachments: MSTeamsAttachmentLike[],
+  activity: MSTeamsTurnContext["activity"],
+): string {
   for (const attachment of attachments) {
     const raw = extractHtmlFromAttachment(attachment);
     if (!raw) {
       continue;
     }
     const text = htmlToPlainText(
-      raw
-        .replace(/<at[^>]*>.*?<\/at>/gis, " ")
-        .replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis, "$2 $1"),
+      // Teams emoji sprites are message text: keep their alt text when the
+      // media reference is discarded so emoji-only messages stay deliverable.
+      normalizeMSTeamsMentionTags(replaceTeamsEmojiSpriteImagesWithAltText(raw), activity, {
+        preserveHtml: true,
+      }).replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis, "$2 $1"),
     );
     if (text) {
       return text;
@@ -49,10 +58,10 @@ export async function prepareMSTeamsDebounceEntry(params: {
     ? activity.attachments
     : [];
   const rawText = activity.text?.trim() ?? "";
-  // HTML mentions are stripped before decoding so literally typed <at> tags survive.
+  // Normalize mention markup before decoding so literally typed <at> tags survive.
   const text = rawText
-    ? stripMSTeamsMentionTags(rawText)
-    : extractTextFromHtmlAttachments(attachments) ||
+    ? normalizeMSTeamsMentionTags(rawText, activity)
+    : extractTextFromHtmlAttachments(attachments, activity) ||
       stripMSTeamsMentionTags(serializeMSTeamsAdaptiveCardActionValue(activity.value) || "");
   const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
   const replyToId = activity.replyToId;
@@ -78,6 +87,41 @@ export async function prepareMSTeamsDebounceEntry(params: {
   };
 }
 
+/** Proactive sends replay this reference, so every inbound owner stores the same shape. */
+export function buildMSTeamsConversationReference(
+  activity: MSTeamsTurnContext["activity"],
+  threadId?: string,
+): StoredConversationReference {
+  const conversation = activity.conversation;
+  const from = activity.from;
+  const clientInfo = activity.entities?.find((entity) => entity.type === "clientInfo") as
+    | { timezone?: string }
+    | undefined;
+  // Proactive sends require the tenant and normalized regional service URL
+  // captured from the original Bot Framework activity.
+  const tenantId = activity.channelData?.tenant?.id ?? conversation?.tenantId;
+  const aadObjectId = from?.aadObjectId;
+  const serviceUrl = tryNormalizeBotFrameworkServiceUrl(activity.serviceUrl);
+  return {
+    activityId: activity.id,
+    user: from ? { id: from.id, name: from.name, aadObjectId: from.aadObjectId } : undefined,
+    agent: activity.recipient,
+    conversation: {
+      id: normalizeMSTeamsConversationId(conversation?.id ?? ""),
+      conversationType: conversation?.conversationType ?? "personal",
+      tenantId,
+    },
+    ...(tenantId ? { tenantId } : {}),
+    ...(aadObjectId ? { aadObjectId } : {}),
+    teamId: activity.channelData?.team?.id,
+    channelId: activity.channelId,
+    ...(serviceUrl ? { serviceUrl } : {}),
+    locale: activity.locale,
+    ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
+    ...(threadId ? { threadId } : {}),
+  };
+}
+
 export function assembleMSTeamsInboundFacts(entry: MSTeamsDebounceEntry) {
   const activity = entry.context.activity;
   const conversation = activity.conversation;
@@ -89,33 +133,7 @@ export function assembleMSTeamsInboundFacts(entry: MSTeamsDebounceEntry) {
   const teamId = activity.channelData?.team?.id;
   const threadId = isChannel ? (conversationMessageId ?? activity.replyToId) : undefined;
   const advertisedMedia = resolveMSTeamsAdvertisedMedia(entry.attachments);
-  const from = activity.from;
-  const clientInfo = activity.entities?.find((entity) => entity.type === "clientInfo") as
-    | { timezone?: string }
-    | undefined;
-  // Proactive sends require the tenant and normalized regional service URL
-  // captured from the original Bot Framework activity.
-  const tenantId = activity.channelData?.tenant?.id ?? conversation?.tenantId;
-  const aadObjectId = from?.aadObjectId;
-  const serviceUrl = tryNormalizeBotFrameworkServiceUrl(activity.serviceUrl);
-  const conversationRef: StoredConversationReference = {
-    activityId: activity.id,
-    user: from ? { id: from.id, name: from.name, aadObjectId: from.aadObjectId } : undefined,
-    agent: activity.recipient,
-    conversation: {
-      id: conversationId,
-      conversationType,
-      tenantId,
-    },
-    ...(tenantId ? { tenantId } : {}),
-    ...(aadObjectId ? { aadObjectId } : {}),
-    teamId,
-    channelId: activity.channelId,
-    ...(serviceUrl ? { serviceUrl } : {}),
-    locale: activity.locale,
-    ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
-    ...(threadId ? { threadId } : {}),
-  };
+  const conversationRef = buildMSTeamsConversationReference(activity, threadId);
 
   return {
     ...entry,

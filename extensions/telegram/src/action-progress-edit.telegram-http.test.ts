@@ -12,7 +12,6 @@ const { requests } = fixture;
 const withEditState = (run: () => Promise<void>) =>
   withOpenClawTestState({ prefix: "telegram-progress-edit-" }, async () => {
     resetTelegramClientOptionsCacheForTests();
-    requests.length = 0;
     await run();
   });
 const edit = (
@@ -31,6 +30,14 @@ const edit = (
     ...context,
   });
 const paragraph = (text: unknown) => ({ type: "paragraph", text });
+const checklistItem = (text: unknown, checked = false) => ({
+  has_checkbox: true,
+  ...(checked ? { is_checked: true } : {}),
+  blocks: [paragraph(text)],
+});
+function expectEdit(method: string, fields: Record<string, unknown>) {
+  expect(requests).toEqual([{ method, fields: expect.objectContaining(fields) }]);
+}
 
 it.each([
   { kind: "text", revoke: false },
@@ -71,12 +78,7 @@ it.each([
       expect(requests).toEqual([]);
     } else {
       await result;
-      expect(requests).toEqual([
-        {
-          method: "editMessageText",
-          fields: expect.objectContaining({ message_id: 42, text: "Progress after yield." }),
-        },
-      ]);
+      expectEdit("editMessageText", { message_id: 42, text: "Progress after yield." });
     }
   });
 });
@@ -85,7 +87,7 @@ it.each([false, true])(
   "edits an adopted snapshot with the native checklist and command layout (rich: %s)",
   async (richMessages) => {
     await withEditState(async () => {
-      const command = "printf '<ready>&' && ./verify --flag=\"<value>\"";
+      const command = "echo '<&>'";
       const progressSnapshot: ChannelProgressDraftCompositorSnapshot = {
         label: "Working",
         statusHeadline: command,
@@ -115,12 +117,7 @@ it.each([false, true])(
         { accountId: "worker", progressSnapshot },
       );
 
-      expect(requests).toEqual([
-        {
-          method: "editMessageText",
-          fields: expect.objectContaining({ chat_id: "123", message_id: 42 }),
-        },
-      ]);
+      expectEdit("editMessageText", { chat_id: "123", message_id: 42 });
       const fields = requests[0]!.fields;
       if (richMessages) {
         expect(fields.text).toBeUndefined();
@@ -133,15 +130,8 @@ it.each([false, true])(
             {
               type: "list",
               items: [
-                {
-                  has_checkbox: true,
-                  is_checked: true,
-                  blocks: [paragraph("Inspect <source> & config")],
-                },
-                {
-                  has_checkbox: true,
-                  blocks: [paragraph({ type: "bold", text: "Verify the result (in progress)" })],
-                },
+                checklistItem("Inspect <source> & config", true),
+                checklistItem({ type: "bold", text: "Verify the result (in progress)" }),
               ],
             },
           ],
@@ -149,9 +139,7 @@ it.each([false, true])(
       } else {
         expect(fields.rich_message).toBeUndefined();
         expect(fields.parse_mode).toBe("HTML");
-        expect(fields.text).toContain(
-          "printf '&lt;ready&gt;&amp;' &amp;&amp; ./verify --flag=\"&lt;value&gt;\"",
-        );
+        expect(fields.text).toContain("echo '&lt;&amp;&gt;'");
         expect(fields.text).toContain("[x] Inspect &lt;source&gt; &amp; config");
         expect(fields.text).toContain("[ ] <b>Verify the result (in progress)</b>");
         expect(fields.text).not.toContain("&amp;lt;");

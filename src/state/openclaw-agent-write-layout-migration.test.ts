@@ -44,7 +44,12 @@ function capture(database: DatabaseSync, withOrigins = true) {
       database,
       "SELECT wr FROM pragma_table_list WHERE name = 'memory_entry_origins'",
     )?.wr,
-    indexes: indexDefinitions(database),
+    indexes: rows(
+      database,
+      `SELECT name, sql FROM sqlite_schema
+      WHERE name IN ('idx_agent_transcript_event_parent', 'idx_agent_session_windows_conversation')
+      ORDER BY name`,
+    ),
     versions: [
       row(database, "PRAGMA user_version")?.user_version,
       row(database, "SELECT schema_version FROM schema_meta")?.schema_version,
@@ -58,37 +63,35 @@ function seed(database: DatabaseSync): void {
   seedVersion(database, 27);
   database.exec(`
     PRAGMA foreign_keys = ON;
-    INSERT INTO conversations
-      (conversation_id, channel, account_id, kind, peer_id, delivery_target, created_at, updated_at)
+    INSERT INTO conversations (conversation_id, channel, account_id, kind, peer_id, delivery_target, created_at, updated_at)
       VALUES ('conversation', 'synthetic', 'account', 'direct', 'peer', 'peer', 1, 1);
     INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
       VALUES ('agent:main:test', 'session', '{"sessionId":"session","updatedAt":1}', 1);
-    INSERT INTO session_windows
-      (session_id, session_key, primary_conversation_id, created_at, updated_at)
+    INSERT INTO session_windows (session_id, session_key, primary_conversation_id, created_at, updated_at)
       VALUES ('session', 'agent:main:test', 'conversation', 1, 1);
     INSERT INTO transcript_events (session_id, seq, event_json, created_at)
       VALUES ('session', 1, '{"type":"message","message":{"role":"user"}}', 1),
              ('session', 2, '{"type":"message","message":{"role":"assistant"}}', 2);
-    INSERT INTO transcript_event_identities
-      (session_id, event_id, seq, event_type, parent_id, message_idempotency_key, created_at)
+    INSERT INTO transcript_event_identities (session_id, event_id, seq, event_type, parent_id, message_idempotency_key, created_at)
       VALUES ('session', 'first', 1, 'message', NULL, 'once', 1),
              ('session', 'second', 2, 'message', 'first', NULL, 2);
-    INSERT INTO memory_entry_origins
-      (entry_key, agent_id, session_id, session_key, origin_class, observed_at)
+    INSERT INTO memory_entry_origins (entry_key, agent_id, session_id, session_key, origin_class, observed_at)
       VALUES ('entry', 'main', 'session', NULL, 'owner', 1),
              ('entry', 'other', 'session', 'other-key', 'untrusted', 2);
-    INSERT INTO cache_entries (scope, key, blob, updated_at)
-      VALUES ('unrelated', 'bytes', X'000100FF', 3);
+    INSERT INTO cache_entries (scope, key, blob, updated_at) VALUES ('unrelated', 'bytes', X'000100FF', 3);
     ANALYZE;
   `);
 }
 
-function indexDefinitions(database: DatabaseSync) {
-  return database
-    .prepare(`SELECT name, sql FROM sqlite_schema
-    WHERE name IN ('idx_agent_transcript_event_parent', 'idx_agent_session_windows_conversation')
-    ORDER BY name`)
-    .all();
+function expectWitnessRejects(
+  database: DatabaseSync,
+  witness: ReturnType<typeof agentWitness>,
+  mutation: string,
+  error: RegExp,
+) {
+  database.exec(`SAVEPOINT retained_content; ${mutation}`);
+  expect(() => assertWitnessPreserved(witness, agentWitness(database))).toThrow(error);
+  database.exec("ROLLBACK TO retained_content; RELEASE retained_content");
 }
 
 it("retains the exact schema-27 admission contract", () => {
@@ -148,22 +151,20 @@ it.each(["commit", "without-origins", "rollback"] as const)(
           INSERT INTO local_plugin_store VALUES ('retained', X'00FF');
         `);
       }
-      const captureWitness = () => agentWitness(database);
-      const originalWitness = outcome === "commit" ? captureWitness() : undefined;
+      const originalWitness = outcome === "commit" ? agentWitness(database) : undefined;
       if (originalWitness) {
         // Physical identity stays exact when no version transition occurred.
-        database.exec(
-          "SAVEPOINT physical_identity; UPDATE memory_entry_origins SET oid = oid + 10",
-        );
-        expect(() => assertWitnessPreserved(originalWitness, captureWitness())).toThrow(
+        expectWitnessRejects(
+          database,
+          originalWitness,
+          "UPDATE memory_entry_origins SET oid = oid + 10",
           /changed or lost/u,
         );
-        database.exec("ROLLBACK TO physical_identity; RELEASE physical_identity");
       }
       const before = capture(database, outcome !== "without-origins");
       await migrate(outcome);
       if (originalWitness) {
-        expect(assertWitnessPreserved(originalWitness, captureWitness())).toEqual({
+        expect(assertWitnessPreserved(originalWitness, agentWitness(database))).toEqual({
           warnings: [],
         });
         for (const mutation of [
@@ -172,12 +173,12 @@ it.each(["commit", "without-origins", "rollback"] as const)(
           "DROP INDEX local_origin_lookup",
           "UPDATE local_plugin_store SET rowid = rowid + 1",
         ]) {
-          database.exec("SAVEPOINT retained_content");
-          database.exec(mutation);
-          expect(() => assertWitnessPreserved(originalWitness, captureWitness())).toThrow(
+          expectWitnessRejects(
+            database,
+            originalWitness,
+            mutation,
             /changed or lost|noncanonical/u,
           );
-          database.exec("ROLLBACK TO retained_content; RELEASE retained_content");
         }
       }
       const expectedVersion = outcome === "rollback" ? 27 : TARGET_VERSION;
@@ -200,26 +201,22 @@ it.each(["commit", "without-origins", "rollback"] as const)(
       });
       if (outcome === "commit") {
         // Lookup/FK behavior and uniqueness survive index retirement and narrowing.
+        const query = (sql: string) => rows(database, sql);
         expect(
-          rows(
-            database,
-            "SELECT event_id FROM transcript_event_identities WHERE session_id = 'session' AND parent_id = 'first'",
-          ),
+          query(`SELECT event_id FROM transcript_event_identities
+          WHERE session_id = 'session' AND parent_id = 'first'`),
         ).toEqual([{ event_id: "second" }]);
         database.exec("UPDATE session_windows SET updated_at = 4 WHERE session_id = 'session'");
         expect(
-          rows(
-            database,
-            "SELECT session_id FROM session_windows WHERE primary_conversation_id = 'conversation'",
-          ),
+          query(`SELECT session_id FROM session_windows
+          WHERE primary_conversation_id = 'conversation'`),
         ).toEqual([{ session_id: "session" }]);
         database.exec("DELETE FROM conversations WHERE conversation_id = 'conversation'");
-        expect(
-          row(database, "SELECT primary_conversation_id FROM session_windows")
-            ?.primary_conversation_id,
-        ).toBeNull();
+        expect(query("SELECT primary_conversation_id FROM session_windows")).toEqual([
+          { primary_conversation_id: null },
+        ]);
         database.exec("DELETE FROM transcript_events WHERE session_id = 'session' AND seq = 1");
-        expect(rows(database, "SELECT event_id FROM transcript_event_identities")).toEqual([
+        expect(query("SELECT event_id FROM transcript_event_identities")).toEqual([
           { event_id: "second" },
         ]);
       }

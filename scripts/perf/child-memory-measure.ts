@@ -1,26 +1,49 @@
 // Source-owner measurement; fixtures use real Linux procfs and worker-spawned descendants.
+// node --import ./scripts/tsx.mjs scripts/perf/child-memory-measure.ts --owner <module> --seconds 120 --output <json>
+// Pair baseline/candidate on interleaved CPUs, then swap placement. Run --allocations
+// and --work-counts separately: their instrumentation is not timing-gate evidence.
+// On Node 26, --work-counts --assert-promise-budget checks promises per native read job.
+// For crossover runs, start child-memory-fixture.cjs forest 20 9 <roots.json> once,
+// then use --roots <roots.json> --trees 20 --watched 1|2|4|8|12|20 against each owner.
+// --trees 1 --descendants 9 measures an unchanged ten-process tree. All descendants
+// originate on nonleader threads; normal Node threads remain in every process.
+// For a native thread-heavy forest, compile child-memory-thread-fixture.c and use
+// its roots file with --trees 20 --descendants 13. --buffer-allocations counts
+// Buffer allocation requests separately; these captures are not timing evidence.
 import assert from "node:assert/strict";
+import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
+import { syncBuiltinESMExports } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { getHeapStatistics } from "node:v8";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
-import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
+import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
   options: {
     owner: { type: "string" },
     trees: { type: "string", default: "20" },
+    watched: { type: "string" },
+    roots: { type: "string" },
+    descendants: { type: "string", default: "2" },
     seconds: { type: "string", default: "60" },
+    "warmup-seconds": { type: "string", default: "5" },
     "start-file": { type: "string" },
     "gc-log": { type: "string" },
     allocations: { type: "boolean", default: false },
+    "work-counts": { type: "boolean", default: false },
+    "buffer-allocations": { type: "boolean", default: false },
+    "assert-buffer-budget": { type: "boolean", default: false },
+    "assert-promise-budget": { type: "boolean", default: false },
     runaway: { type: "boolean", default: false },
     output: { type: "string" },
   },
@@ -28,28 +51,81 @@ const { values } = parseArgs({
 assert.equal(process.platform, "linux");
 assert.ok(values.output, "--output is required");
 assert.ok(!(values.allocations && values["gc-log"]), "Profile allocation and promotion separately");
-const integer = (name: "trees" | "seconds", min: number) =>
+assert.ok(
+  !values["work-counts"] || (!values.allocations && !values["gc-log"]),
+  "Count async resources separately from allocation and promotion profiles",
+);
+assert.ok(
+  !values["assert-promise-budget"] || values["work-counts"],
+  "--assert-promise-budget requires --work-counts",
+);
+assert.ok(
+  !values["assert-buffer-budget"] || values["buffer-allocations"],
+  "--assert-buffer-budget requires --buffer-allocations",
+);
+const integer = (name: "trees" | "descendants" | "seconds", min: number) =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
 const trees = integer("trees", 1);
+const descendants = integer("descendants", 1);
+const watched = parseStrictIntegerOption({
+  raw: values.watched,
+  label: "--watched",
+  min: 1,
+  fallback: trees,
+});
+assert.ok(watched <= trees, "--watched cannot exceed --trees");
+assert.ok(!values.runaway || watched === trees, "--runaway requires every tree to be watched");
+const roots: unknown = values.roots ? JSON.parse(fs.readFileSync(values.roots, "utf8")) : undefined;
+assert.ok(
+  roots === undefined ||
+    (Array.isArray(roots) &&
+      roots.length === trees &&
+      roots.every((pid) => Number.isSafeInteger(pid) && pid > 0)),
+  "--roots must contain one positive PID per tree",
+);
+assert.ok(!values.runaway || !roots, "--runaway requires owned fixtures");
+assert.ok(!values.runaway || descendants === 2, "--runaway requires --descendants 2");
 const seconds = integer("seconds", 1);
+const warmupSeconds = parseStrictIntegerOption({
+  raw: values["warmup-seconds"],
+  label: "--warmup-seconds",
+  min: 1,
+  fallback: 5,
+});
 const outputPath = path.resolve(values.output);
 const profilePath = `${outputPath}.heapprofile`;
 const fixture = fileURLToPath(new URL("./child-memory-fixture.cjs", import.meta.url));
-const marker = (phase: string) =>
-  fs.writeSync(
-    1,
-    `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-  );
-const { watchChildMemory }: typeof import("../../src/process/child-memory.js") = await import(
+let countingBuffers = false;
+let procfsFiles = 0;
+const fsMethods = { open: fs.open, readFile: fs.readFile };
+if (values["buffer-allocations"]) {
+  for (const name of ["open", "readFile"] as const) {
+    Object.defineProperty(fs, name, {
+      value: new Proxy(fs[name], {
+        apply(target, thisArgument, args) {
+          if (countingBuffers && String(args[0]).startsWith("/proc/")) {
+            procfsFiles++;
+          }
+          return Reflect.apply(target, thisArgument, args);
+        },
+      }),
+    });
+  }
+  syncBuiltinESMExports();
+}
+const {
+  watchHostExecMemory,
+  getHostExecMemoryBudget,
+}: typeof import("../../src/process/child-memory.js") = await import(
   values.owner
     ? pathToFileURL(path.resolve(values.owner)).href
     : "../../src/process/child-memory.js"
 );
 if (values["gc-log"]) {
   assert.ok(global.gc, "Trace mode requires --expose-gc");
-  marker("identify-start");
+  writeGatewayGcTraceMarker("identify-start", profilePath);
   global.gc();
-  marker("identify-stop");
+  writeGatewayGcTraceMarker("identify-stop", profilePath);
 }
 
 function allocated(profile: HeapProfiler.SamplingHeapProfile) {
@@ -58,8 +134,10 @@ function allocated(profile: HeapProfiler.SamplingHeapProfile) {
   const visit = (node: HeapProfiler.SamplingHeapProfileNode, owner = false) => {
     const inOwner =
       owner ||
-      (node.callFrame.url.includes("child-memory") &&
-        !node.callFrame.url.includes("child-memory-measure"));
+      (values.owner
+        ? node.callFrame.url === pathToFileURL(path.resolve(values.owner)).href
+        : node.callFrame.url.includes("child-memory") &&
+          !node.callFrame.url.includes("child-memory-measure"));
     bytes += node.selfSize;
     if (inOwner) {
       ownerBytes += node.selfSize;
@@ -76,60 +154,126 @@ function allocated(profile: HeapProfiler.SamplingHeapProfile) {
   };
 }
 
+const watcherContext = new AsyncLocalStorage<boolean>();
+
 const children: ChildProcess[] = [];
 const stops: Array<() => void> = [];
+const startWatches: Array<() => () => void> = [];
 const inspector = new Session();
 let failure: Error | undefined;
 let bursting = false;
 let burstAt = 0;
 let killedAt = 0;
 let killDiagnostic = "";
+let runawayBaselineBytes = 0;
+let runawayBudgetBytes = 0;
 let diagnosticsStop: ReturnType<typeof startGatewayBenchDiagnostics> | undefined;
+const asyncResources: Record<string, number> = {};
+const resourceHook = values["work-counts"]
+  ? createHook({
+      init(_id, type) {
+        asyncResources[type] = (asyncResources[type] ?? 0) + 1;
+      },
+    })
+  : undefined;
+const bufferAllocations = { bytes: 0, calls: 0, unknownSizeReadChunks: 0 };
+const bufferMethods = {
+  alloc: Buffer.alloc.bind(Buffer),
+  allocUnsafe: Buffer.allocUnsafe.bind(Buffer),
+  allocUnsafeSlow: Buffer.allocUnsafeSlow.bind(Buffer),
+};
+function countBufferAllocations() {
+  const count = (size: number, slow = false) => {
+    bufferAllocations.bytes += size;
+    bufferAllocations.calls++;
+    if (slow && size === 65536) {
+      bufferAllocations.unknownSizeReadChunks++;
+    }
+  };
+  Buffer.alloc = (size, fill, encoding) => {
+    count(size);
+    return bufferMethods.alloc(size, fill, encoding);
+  };
+  Buffer.allocUnsafe = (size) => {
+    count(size);
+    return bufferMethods.allocUnsafe(size);
+  };
+  Buffer.allocUnsafeSlow = (size) => {
+    count(size, true);
+    return bufferMethods.allocUnsafeSlow(size);
+  };
+}
+let forestShape: { processes: number; threads: number; nonleaderChildren: number } | undefined;
 try {
-  // Prepare each identical tree sequentially. Setup allocation is outside capture.
-  for (let index = 0; index < trees; index++) {
-    const child = spawn(process.execPath, [fixture, "2"], {
-      detached: true,
-      stdio: ["pipe", "pipe", "inherit"],
-    });
-    children.push(child);
-    await new Promise<void>((resolve, reject) => {
-      let output = "";
-      const timeout = setTimeout(() => reject(new Error("Fixture readiness timed out")), 30_000);
-      const onExit = () => reject(new Error("Fixture exited during setup"));
-      child.once("error", reject);
-      child.once("exit", onExit);
-      child.stdout!.on("data", (chunk: Buffer) => {
-        output += chunk.toString();
-        if (bursting && index === trees - 1) {
-          const burst = /\{"event":"burst","at":(\d+)\}/.exec(output);
-          if (burst) {
-            burstAt = Number(burst[1]);
+  if (Array.isArray(roots)) {
+    const pids = new Set<number>(roots);
+    let threads = 0;
+    let nonleaderChildren = 0;
+    for (const pid of pids) {
+      const tids = fs.readdirSync(`/proc/${pid}/task`);
+      threads += tids.length;
+      for (const tid of tids) {
+        const text = fs.readFileSync(`/proc/${pid}/task/${tid}/children`, "utf8").trim();
+        for (const child of text ? text.split(/\s+/u).map(Number) : []) {
+          pids.add(child);
+          if (Number(tid) !== pid) {
+            nonleaderChildren++;
           }
         }
-        if (output.includes('"ready"')) {
-          clearTimeout(timeout);
-          child.removeListener("exit", onExit);
-          resolve();
+      }
+    }
+    assert.equal(pids.size, trees * (descendants + 1), "Fixture process count changed");
+    forestShape = { processes: pids.size, threads, nonleaderChildren };
+  }
+  // Prepare each identical tree sequentially. Setup allocation is outside capture.
+  for (let index = 0; index < trees; index++) {
+    const child: ChildProcess | undefined = roots
+      ? undefined
+      : spawn(process.execPath, [fixture, String(descendants)], {
+          detached: true,
+          stdio: ["pipe", "pipe", "inherit"],
+        });
+    if (child) {
+      children.push(child);
+      await new Promise<void>((resolve, reject) => {
+        let output = "";
+        const timeout = setTimeout(() => reject(new Error("Fixture readiness timed out")), 30_000);
+        const onExit = () => reject(new Error("Fixture exited during setup"));
+        child.once("error", reject);
+        child.once("exit", onExit);
+        child.stdout!.on("data", (chunk: Buffer) => {
+          output += chunk.toString();
+          if (bursting && index === trees - 1) {
+            const burst = /\{"event":"burst","at":(\d+)\}/.exec(output);
+            if (burst) {
+              burstAt = Number(burst[1]);
+            }
+          }
+          if (output.includes('"ready"')) {
+            clearTimeout(timeout);
+            child.removeListener("exit", onExit);
+            resolve();
+          }
+        });
+      });
+      child.on("exit", () => {
+        if (bursting && index === trees - 1) {
+          killedAt = Date.now();
+        } else {
+          failure ??= new Error("Fixture exited during measurement");
         }
       });
-    });
-    child.on("exit", () => {
-      if (bursting && index === trees - 1) {
-        killedAt = Date.now();
-      } else {
-        failure ??= new Error("Fixture exited during measurement");
-      }
-    });
-    stops.push(
-      watchChildMemory({
-        pid: child.pid,
-        limitBytes: 768 * 1024 ** 2,
+    }
+    const pid: number | undefined = Array.isArray(roots) ? roots[index] : child?.pid;
+    assert.ok(pid);
+    const startWatch = () =>
+      watchHostExecMemory({
+        pid,
         onLimit: () => {
           if (bursting && index === trees - 1) {
-            process.kill(-child.pid!, "SIGKILL");
+            process.kill(-pid!, "SIGKILL");
           } else {
-            failure ??= new Error("Idle fixture exceeded its memory bound");
+            failure ??= new Error("Idle forest exceeded its shared memory budget");
           }
         },
         onDiagnostic: (text) => {
@@ -139,10 +283,51 @@ try {
             failure ??= new Error(text);
           }
         },
-      }),
+      });
+    if (index < watched) {
+      startWatches.push(startWatch);
+    }
+  }
+  if (values.runaway) {
+    // Census the real forest before the automatic owner first resolves its budget.
+    const pending = new Set(children.map((child) => child.pid!));
+    for (const pid of pending) {
+      const status = fs.readFileSync(`/proc/${pid}/status`, "utf8");
+      runawayBaselineBytes += Number(/^VmRSS:\s+(\d+)/mu.exec(status)?.[1] ?? 0) * 1024;
+      for (const tid of fs.readdirSync(`/proc/${pid}/task`)) {
+        for (const text of fs
+          .readFileSync(`/proc/${pid}/task/${tid}/children`, "utf8")
+          .trim()
+          .split(/\s+/u)) {
+          if (Number(text) > 0) {
+            pending.add(Number(text));
+          }
+        }
+      }
+    }
+    // Match the automatic owner's whole-MiB budget while retaining 384 MiB of headroom.
+    const target = Math.ceil((runawayBaselineBytes + 384 * 1024 ** 2) / 1024 ** 2) * 1024 ** 2;
+    const constrainedBytes = Math.ceil(Math.max(target / 0.75, (target + 256 * 1024 ** 2) / 0.875));
+    const constrainedMemory = Object.getOwnPropertyDescriptor(process, "constrainedMemory");
+    const rss = Object.getOwnPropertyDescriptor(process.memoryUsage, "rss");
+    assert.ok(constrainedMemory && rss);
+    try {
+      // Task-contained qualification, restored before normal sampling begins.
+      process.constrainedMemory = () => constrainedBytes;
+      process.memoryUsage.rss = () => 0;
+      runawayBudgetBytes = getHostExecMemoryBudget()!.memoryBytes;
+    } finally {
+      Object.defineProperty(process, "constrainedMemory", constrainedMemory);
+      Object.defineProperty(process.memoryUsage, "rss", rss);
+    }
+    assert.ok(
+      Math.abs(runawayBudgetBytes - target) <= 1,
+      "The physical host cannot fit the forest plus 384 MiB shared headroom",
     );
   }
-  await delay(5000);
+  // Supervisor callers carry request context in both benchmark arms.
+  startWatches.forEach((startWatch) => stops.push(watcherContext.run(true, startWatch)));
+  await delay(warmupSeconds * 1000);
   fs.writeSync(
     1,
     `PHASE warmed ${JSON.stringify({ pid: process.pid, trees, ageSeconds: process.uptime() })}\n`,
@@ -164,11 +349,27 @@ try {
     });
   }
   diagnosticsStop = startGatewayBenchDiagnostics();
+  const hostLoadBefore = os.loadavg();
+  const memoryBefore = process.memoryUsage();
+  const allocatedBefore = getHeapStatistics().total_allocated_bytes;
+  const threadCpuStart = process.threadCpuUsage();
   const cpuStart = process.cpuUsage();
-  marker("heap-start");
+  resourceHook?.enable();
+  if (values["buffer-allocations"]) {
+    countBufferAllocations();
+    countingBuffers = true;
+  }
+  writeGatewayGcTraceMarker("heap-start", profilePath);
   await delay(seconds * 1000);
-  marker("heap-stop");
+  writeGatewayGcTraceMarker("heap-stop", profilePath);
+  resourceHook?.disable();
+  Object.assign(Buffer, bufferMethods);
+  countingBuffers = false;
   const cpu = process.cpuUsage(cpuStart);
+  const threadCpu = process.threadCpuUsage(threadCpuStart);
+  const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocatedBefore;
+  const memoryAfter = process.memoryUsage();
+  const hostLoadAfter = os.loadavg();
   const diagnostics = diagnosticsStop();
   diagnosticsStop = undefined;
   let allocation: ReturnType<typeof allocated> | null = null;
@@ -177,16 +378,45 @@ try {
     fs.writeFileSync(profilePath, JSON.stringify(profile));
     allocation = allocated(profile);
   }
+  if (Array.isArray(roots)) {
+    for (const pid of roots) {
+      process.kill(pid, 0);
+    }
+  }
   assert.equal(failure, undefined);
   const result = {
-    scope:
-      "watchChildMemory with real procfs; 20 independent trees by default, two worker-spawned descendants per tree",
-    timingGateEligible: !values.allocations && !values["gc-log"],
+    scope: "watchHostExecMemory shared budget with real procfs and worker-spawned descendants",
+    timingGateEligible:
+      !values.runaway &&
+      !values.allocations &&
+      !values["gc-log"] &&
+      !values["work-counts"] &&
+      !values["buffer-allocations"],
+    forestShape,
     trees,
+    watched,
+    descendantsPerTree: descendants,
+    processesPerTree: descendants + 1,
     seconds,
+    warmupSeconds,
     treeSeconds: trees * seconds,
     allocation,
+    bufferAllocationRequests: values["buffer-allocations"]
+      ? {
+          ...bufferAllocations,
+          procfsFiles,
+          bytesPerProcfsFile: bufferAllocations.bytes / procfsFiles,
+          bytesPerSecond: bufferAllocations.bytes / seconds,
+          scope: "Buffer.alloc/allocUnsafe/allocUnsafeSlow requested bytes; not retained storage",
+        }
+      : null,
     cpuMs: (cpu.user + cpu.system) / 1000,
+    mainThreadCpuMs: (threadCpu.user + threadCpu.system) / 1000,
+    v8AllocationBytes: allocatedBytes,
+    v8AllocationBytesPerSecond: allocatedBytes / seconds,
+    memory: { before: memoryBefore, after: memoryAfter },
+    hostLoad: { before: hostLoadBefore, after: hostLoadAfter },
+    asyncResources: values["work-counts"] ? asyncResources : null,
     diagnostics,
     promotion: values["gc-log"]
       ? readGatewayGcTrace(path.resolve(values["gc-log"]), profilePath)
@@ -199,9 +429,11 @@ try {
     runaway.stdin!.write("burst\n");
     await exit;
     assert.ok(burstAt && killedAt, "Runaway request was not observed and killed within 10 seconds");
-    assert.match(killDiagnostic, /Command killed for exceeding its host memory bound/);
+    assert.match(killDiagnostic, /shared host exec memory budget was exceeded/);
     const kill = {
       concurrentTrees: trees,
+      baselineBytes: runawayBaselineBytes,
+      sharedBudgetBytes: runawayBudgetBytes,
       scope: "allocation request to root exit, including page touching",
       latencyMs: killedAt - burstAt,
       diagnostic: killDiagnostic,
@@ -211,7 +443,30 @@ try {
   }
   fs.writeFileSync(outputPath, `${JSON.stringify(result, null, 2)}\n`);
   fs.writeSync(1, `${JSON.stringify(result)}\n`);
+  if (values["assert-buffer-budget"]) {
+    assert.ok(procfsFiles > 0, "No procfs reads observed during capture");
+    assert.ok(
+      bufferAllocations.bytes / procfsFiles <= 8192,
+      "Procfs sampling exceeded 8 KiB of requested Buffer storage per file",
+    );
+  }
+  if (values["assert-promise-budget"]) {
+    const readJobs = asyncResources.FSREQCALLBACK ?? 0;
+    assert.ok(
+      readJobs > 0,
+      "No filesystem polling observed; increase --seconds to capture a sample",
+    );
+    assert.ok(
+      (asyncResources.PROMISE ?? 0) <= 4 * readJobs,
+      "Child-memory polling exceeded four promises per native read job",
+    );
+  }
 } finally {
+  Object.assign(Buffer, bufferMethods);
+  Object.assign(fs, fsMethods);
+  syncBuiltinESMExports();
+  watcherContext.disable();
+  resourceHook?.disable();
   diagnosticsStop?.();
   stops.forEach((stop) => stop());
   inspector.disconnect();

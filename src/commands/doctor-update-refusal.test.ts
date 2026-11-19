@@ -1,6 +1,8 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../test/helpers/file-snapshots.js";
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { renderGatewayServiceStartHints } from "../cli/daemon-cli/shared.js";
@@ -211,15 +213,12 @@ async function withFixture(
 }
 
 async function refusalError(work: Promise<unknown>): Promise<Error> {
-  try {
-    await work;
-  } catch (error) {
-    if (error instanceof Error) {
-      return error;
-    }
-    throw error;
-  }
-  throw new Error("Expected Doctor to refuse before repair");
+  const error = await work.then(
+    () => assert.fail("Expected Doctor to refuse before repair"),
+    (reason: unknown) => reason,
+  );
+  assert(error instanceof Error);
+  return error;
 }
 
 function maintenanceRefusal(root: string) {
@@ -309,7 +308,7 @@ it.each([
       expect(message.indexOf(reason)).toBeLessThan(
         message.indexOf("The previous source is intact in Git."),
       );
-      expect(fs.readFileSync(databasePath)).toEqual(before);
+      expectBytesEqual(fs.readFileSync(databasePath), before, "schema refusal database");
     } else {
       expect(
         message.startsWith(`Doctor could not enter maintenance. Error: ${activationReason}`),
@@ -366,13 +365,11 @@ it("keeps non-driver schema admission and maintenance refusal unchanged", async 
 it.each(["missing", "ambiguous", "same-tree", "earlier-rebase", "stale"] as const)(
   "does not guess a previous commit with %s history",
   async (history) => {
-    await withFixture(history, async ({ root, previous, candidate, schemas }) => {
+    await withFixture(history, async ({ root, schemas }) => {
       const message = (await schemaRefusal(schemas)).message;
       for (const output of [message, await warnings()]) {
         expect(output).toContain("The previous commit could not be determined; inspect");
         expect(output).toContain(`git -C ${quote(root)} reflog`);
-        expect(output).not.toContain(`checkout ${previous}`);
-        expect(output).not.toContain(`checkout ${candidate}`);
         expect(output).not.toContain("Previous source commit:");
         expect(output).not.toContain(" checkout ");
       }

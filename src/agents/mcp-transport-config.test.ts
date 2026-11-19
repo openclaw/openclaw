@@ -37,22 +37,19 @@ describe("resolveMcpTransportConfig", () => {
       },
     });
 
-    expect(resolved).toEqual({
-      kind: "stdio",
-      transportType: "stdio",
-      command: "node",
-      args: undefined,
-      cwd: undefined,
-      description: "node",
-      ...defaults,
-      env: {
-        SAFE_VALUE: "ok",
-        PORT: "3000",
-        ENABLED: "true",
-        GITHUB_TOKEN: "token",
-        HTTP_PROXY: "http://proxy.example",
-      },
-    });
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        kind: "stdio",
+        command: "node",
+        env: {
+          SAFE_VALUE: "ok",
+          PORT: "3000",
+          ENABLED: "true",
+          GITHUB_TOKEN: "token",
+          HTTP_PROXY: "http://proxy.example",
+        },
+      }),
+    );
     for (const key of Object.keys(blocked)) {
       expect(logWarn).toHaveBeenCalledWith(warning("probe", key));
     }
@@ -71,7 +68,6 @@ describe("resolveMcpTransportConfig", () => {
         resolveMcpTransportConfig(server, { command: "node", env: { [key]: "/tmp/unsafe" } }),
       ).toEqual(expect.objectContaining({ env: {} }));
     }
-    expect(logWarn).toHaveBeenCalledTimes(5);
     expect(vi.mocked(logWarn).mock.calls).toEqual(
       warnings.map(([server, key]) => [warning(server, key)]),
     );
@@ -112,16 +108,38 @@ describe("resolveMcpTransportConfig", () => {
     });
   });
 
+  it("preserves literal TLS client paths from config", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      url: "https://mcp.example.com/sse",
+      clientCert: " cert.pem ",
+      clientKey: " key.pem ",
+    });
+
+    expect(resolved).toEqual(
+      expect.objectContaining({
+        kind: "http",
+        clientCert: " cert.pem ",
+        clientKey: " key.pem ",
+      }),
+    );
+  });
+
+  it("treats whitespace-only TLS client paths from config as absent", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      url: "https://mcp.example.com/sse",
+      clientCert: "   ",
+      clientKey: "\t",
+    });
+
+    expect(resolved).toEqual(expect.objectContaining({ kind: "http" }));
+    expect(resolved).not.toHaveProperty("clientCert");
+    expect(resolved).not.toHaveProperty("clientKey");
+  });
+
   it.each([
-    {
-      name: "rejects non-HTTP URL schemes",
-      server: { url: "ftp://mcp.example.com/tools", transport: "streamable-http" },
-    },
-    {
-      name: "rejects http as a canonical transport",
-      server: { url: "https://mcp.example.com/http", transport: "http" },
-    },
-  ])("$name", ({ server }) => {
+    { url: "ftp://mcp.example.com/tools", transport: "streamable-http" },
+    { url: "https://mcp.example.com/http", transport: "http" },
+  ])("rejects unsupported transport or scheme: %j", (server) => {
     expect(resolveMcpTransportConfig("probe", server)).toBeNull();
   });
 });

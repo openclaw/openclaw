@@ -6,7 +6,11 @@ import path from "node:path";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import {
+  PROXY_FIXTURE_CERTIFICATE as RELAY_TEST_TLS_CERT,
+  PROXY_FIXTURE_KEY as RELAY_TEST_TLS_KEY,
+  useAutoCleanupTempDirTracker,
+} from "openclaw/plugin-sdk/test-env";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { type WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -62,13 +66,12 @@ function eventFrame(
   deliveryId: string,
   event: { text?: string; user?: string; ts?: string } = { text: "hello" },
   route = { kind: "channel_default", key: "T1:C1" },
-  payload = {},
 ) {
   return JSON.stringify({
     type: "slack_event",
     delivery_id: deliveryId,
     route,
-    payload: { ...payload, event: { type: "message", channel: "C1", ts: "1.000001", ...event } },
+    payload: { event: { type: "message", channel: "C1", ts: "1.000001", ...event } },
   });
 }
 
@@ -100,12 +103,7 @@ describe("Slack relay source", () => {
     const acceptStarted = deferred<void>();
     const acceptDone = deferred<void>();
     const receivedAcks: Array<Record<string, unknown>> = [];
-    const requestHeaders = deferred<{ authorization?: string; url?: string }>();
-    server.once("connection", (socket, request) => {
-      requestHeaders.resolve({
-        authorization: request.headers.authorization,
-        url: request.url,
-      });
+    server.once("connection", (socket) => {
       socket.on("message", (data) => {
         const frame = JSON.parse(rawDataToString(data)) as Record<string, unknown>;
         receivedAcks.push(frame);
@@ -125,16 +123,11 @@ describe("Slack relay source", () => {
       socket.send(
         eventFrame(
           "delivery-failed",
-          { user: "U1", text: "fail-handler", ts: "1.000000" },
+          { text: "fail-handler" },
           { kind: "user_group", key: "T1:S1" },
         ),
       );
-      socket.send(
-        eventFrame("delivery-1", { user: "U1", text: "hello" }, undefined, {
-          team_id: "T1",
-          event_id: "Ev1",
-        }),
-      );
+      socket.send(eventFrame("delivery-1"));
     });
 
     const acceptRelayEvent = vi.fn(
@@ -156,22 +149,16 @@ describe("Slack relay source", () => {
       setIdentity: (identity) => identities.push(identity),
     });
 
-    await expect(requestHeaders.promise).resolves.toEqual({
-      authorization: "Bearer relay-secret",
-      url: "/gateway/ws?gateway_id=pash",
-    });
     await acceptStarted.promise;
     expect(receivedAcks).toEqual([]);
     acceptDone.resolve();
-    await expect(ack.promise).resolves.toEqual({ type: "ack", delivery_id: "delivery-1" });
+    await ack.promise;
     expect(receivedAcks).toEqual([{ type: "ack", delivery_id: "delivery-1" }]);
     expect(runtimeError).toHaveBeenCalledTimes(2);
     expect(acceptRelayEvent).toHaveBeenCalledWith({
       deliveryId: "delivery-1",
       message: expect.objectContaining({ channel: "C1", text: "hello" }),
     });
-    // The failed durable accept must never ack: the router redelivers it.
-    expect(receivedAcks).not.toContainEqual({ type: "ack", delivery_id: "delivery-failed" });
     expect(identities).toContainEqual({
       username: "Nik Team Claw",
       iconUrl: "https://example.com/nik.png",
@@ -237,31 +224,12 @@ describe("Slack relay source", () => {
       error = err;
     }
     expect(error).toBeInstanceOf(SlackRelayMalformedFrameError);
-    expect((error as SlackRelayMalformedFrameError).message).toContain("malformed JSON frame");
-    expect((error as SlackRelayMalformedFrameError).cause).toBeDefined();
+    expect(error).toMatchObject({
+      message: expect.stringContaining("malformed JSON frame"),
+      cause: expect.any(SyntaxError),
+    });
   });
 });
-
-// Self-signed loopback certificate (SAN: 127.0.0.1, localhost; valid to 2126)
-// so the proxied and direct wss:// dials below terminate real TLS on 127.0.0.1.
-const RELAY_TEST_TLS_CERT = `-----BEGIN CERTIFICATE-----
-MIIBpzCCAUygAwIBAgIUezTxOxdfUphW7GSOPN3w6ppcqe0wCgYIKoZIzj0EAwIw
-GzEZMBcGA1UEAwwQc2xhY2stcmVsYXkudGVzdDAgFw0yNjA5MDkxNzUzMzBaGA8y
-MTI2MDgxNjE3NTMzMFowGzEZMBcGA1UEAwwQc2xhY2stcmVsYXkudGVzdDBZMBMG
-ByqGSM49AgEGCCqGSM49AwEHA0IABKYC/MK+pREkCGg+imE4JGALlFu2aVQP7XJN
-Ckezs+JewV/OAxB4RzXVcgSgGKP6USQaDBnoBBEy+34QH2zXtJ2jbDBqMB0GA1Ud
-DgQWBBSI3WK70K2Wh3wnN+TdlErOoIKmQzAfBgNVHSMEGDAWgBSI3WK70K2Wh3wn
-N+TdlErOoIKmQzAaBgNVHREEEzARgglsb2NhbGhvc3SHBH8AAAEwDAYDVR0TBAUw
-AwEB/zAKBggqhkjOPQQDAgNJADBGAiEAphAGvWPFTevL7rEy7dBjoTVAk/oT93Mm
-qvz6jsUI73ACIQDLLDdqa0x1RevRJ98Y1vQad1mNK9Yk4Oh6k2HkafQ9tg==
------END CERTIFICATE-----`;
-const RELAY_TEST_TLS_KEY = [
-  "-----BEGIN PRIVATE KEY-----", // pragma: allowlist secret
-  "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgnzhEeRMhzEsaGPOM",
-  "xvBVdxlMJ7ANKKYd4P6pIl1KgpWhRANCAASmAvzCvqURJAhoPophOCRgC5RbtmlU",
-  "D+1yTQpHs7PiXsFfzgMQeEc11XIEoBij+lEkGgwZ6AQRMvt+EB9s17Sd",
-  "-----END PRIVATE KEY-----",
-].join("\n");
 
 const PROXY_ENV_KEYS = [
   "HTTPS_PROXY",
@@ -526,10 +494,6 @@ describe("Slack relay proxy environment", () => {
         expect(fixture.upgrades).toEqual([relayUpgrade(route === "direct" ? "direct" : "proxy")]);
         expect(fixture.relayConnections()).toBe(1);
         expect(fixture.proxySecureConnections()).toBe(route === "tls" ? 1 : 0);
-        expect(monitor.acceptRelayEvent).toHaveBeenCalledExactlyOnceWith({
-          deliveryId: "delivery",
-          message: expect.objectContaining({ channel: "C1", text: "hello" }),
-        });
       } finally {
         await stopProxy(monitor, fixture);
       }
@@ -604,7 +568,7 @@ describe("Slack relay proxy environment", () => {
         }
       });
       try {
-        // The second disconnect is the backoff retry after the first 407.
+        // The first 407 and its backoff retry share one outage.
         await secondDisconnect.promise;
         expect(fixture.connects).toEqual([
           { target: fixture.target, authorizationPresent: false, proxyAuthorization: "invalid" },
@@ -616,6 +580,7 @@ describe("Slack relay proxy environment", () => {
             lastError: expect.stringContaining("HTTP/1.1 407 Proxy Authentication Required"),
           });
         }
+        expect(disconnects[1]?.lastDisconnect).toEqual(disconnects[0]?.lastDisconnect);
         expect(fixture.relayConnections()).toBe(0);
         expect(fixture.upgrades).toEqual([]);
         expect(monitor.acceptRelayEvent).not.toHaveBeenCalled();

@@ -53,14 +53,21 @@ describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-res
       });
     }
 
-    it("bounds unused block-delivery work after unfenced XML", async () => {
-      ctx.params.onBlockReply = undefined;
-      const source =
-        `Visible\n${markup[2]}\n` +
-        Array.from(
-          { length: 100 },
-          (_, index) => `Paragraph ${index}: the reply continues.\n`,
-        ).join("");
+    const unfenced =
+      `Visible\n${markup[2]}\n` +
+      Array.from({ length: 100 }, (_, index) => `Paragraph ${index}: the reply continues.\n`).join(
+        "",
+      );
+    const quoted =
+      `\`\`\`xml\n${markup[2]}\n\`\`\`\n\n` +
+      "Explanation.\n\n- Item\n\n```python\nprint('hello')\n```\n\n".repeat(128);
+    it.each([
+      ["unfenced without block delivery", unfenced, false],
+      ["quoted with block delivery", quoted, true],
+    ] as const)("bounds tool XML parse work: %s", async (_name, source, blockDelivery) => {
+      if (!blockDelivery) {
+        ctx.params.onBlockReply = undefined;
+      }
       const regions = vi.spyOn(codeRegions, "findCodeRegions");
       onTestFinished(() => regions.mockRestore());
       let text = "";
@@ -69,29 +76,8 @@ describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-res
         text += delta;
         await update(text, "text_delta", delta);
       }
-      expect(ctx.state.assistantStream?.text).toBe(source.replace(markup[2], "").trimEnd());
-      expect(regions.mock.calls.reduce((total, [parsed]) => total + parsed.length, 0)).toBeLessThan(
-        source.length * 8,
-      );
-    });
-
-    it("bounds Markdown parse work after quoted tool XML in token-sized deltas", async () => {
-      const example = `\`\`\`xml\n${markup[2]}\n\`\`\`\n\n`;
-      const continuation = "Explanation.\n\n- Item\n\n```python\nprint('hello')\n```\n\n".repeat(
-        128,
-      );
-      const source = example + continuation;
-      const regions = vi.spyOn(codeRegions, "findCodeRegions");
-      onTestFinished(() => {
-        regions.mockRestore();
-      });
-      let text = "";
-      for (let offset = 0; offset < source.length; offset += 4) {
-        const delta = source.slice(offset, offset + 4);
-        text += delta;
-        await update(text, "text_delta", delta);
-      }
-      expect(ctx.state.assistantStream?.text).toBe(source.trimEnd());
+      const expected = blockDelivery ? source : source.replace(markup[2], "");
+      expect(ctx.state.assistantStream?.text).toBe(expected.trimEnd());
       expect(regions.mock.calls.reduce((total, [parsed]) => total + parsed.length, 0)).toBeLessThan(
         source.length * 8,
       );

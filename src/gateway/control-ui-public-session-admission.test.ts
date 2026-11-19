@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -25,6 +25,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const rendered = (body: string) => ({ kind: "ok", value: { body } });
+
 describe("public reader admission", () => {
   it("shares a superseded render and its replacement across twenty readers and later refreshes", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -49,15 +51,11 @@ describe("public reader admission", () => {
     expect(work).toHaveBeenCalledTimes(2);
 
     const otherWork = vi.fn(async () => "Other configuration");
-    expect(await gate.run({ ...request(), config: {}, work: otherWork })).toMatchObject({
-      kind: "ok",
-      value: { body: "Other configuration" },
-    });
+    expect(await gate.run({ ...request(), config: {}, work: otherWork })).toMatchObject(
+      rendered("Other configuration"),
+    );
     expect(otherWork).toHaveBeenCalledTimes(1);
-    expect(await gate.run({ ...request(), work })).toMatchObject({
-      kind: "ok",
-      value: { body: "Public text" },
-    });
+    expect(await gate.run({ ...request(), work })).toMatchObject(rendered("Public text"));
     expect(work).toHaveBeenCalledTimes(2);
   });
 
@@ -75,10 +73,9 @@ describe("public reader admission", () => {
     await scope.drain();
     expect(work).toHaveBeenCalledTimes(1);
     expect(consume).not.toHaveBeenCalled();
-    expect(await gate.run({ ...request(), work: async () => "Fresh text" })).toMatchObject({
-      kind: "ok",
-      value: { body: "Fresh text" },
-    });
+    expect(await gate.run({ ...request(), work: async () => "Fresh text" })).toMatchObject(
+      rendered("Fresh text"),
+    );
   });
 
   it("does not repeatedly render content too large for the cache", async () => {
@@ -100,7 +97,7 @@ describe("public reader admission", () => {
     initiator.beginClose(new Error("HTTP reader disconnected"));
     release.resolve("Superseded text");
     await rejected;
-    await expect(second).resolves.toMatchObject({ kind: "ok", value: { body: "Fresh text" } });
+    await expect(second).resolves.toMatchObject(rendered("Fresh text"));
     expect(work).toHaveBeenCalledTimes(2);
     await Promise.all([initiator.drain(), survivor.drain()]);
   });
@@ -170,20 +167,17 @@ describe("public reader admission", () => {
     sessionChanges.emit({ sessionKey: request().sessionKey, scope: "runtime" });
     transcript.resolve("Published transcript");
     card.resolve("Outdated live status");
-    expect(await page).toMatchObject({ kind: "ok", value: { body: "Published transcript" } });
-    expect(await preview).toMatchObject({ kind: "ok", value: { body: "Current live status" } });
+    expect(await page).toMatchObject(rendered("Published transcript"));
+    expect(await preview).toMatchObject(rendered("Current live status"));
     const currentCard = await gate.run({ ...request(), kind: "card", work: cardWork });
     expect(currentCard.kind).toBe("ok");
     expect(cardWork).toHaveBeenCalledTimes(2);
     sessionChanges.emit({ all: true, scope: "subagent-runs" });
-    expect(await gate.run({ ...request(), work: transcriptWork })).toMatchObject({
-      kind: "ok",
-      value: { body: "Published transcript" },
-    });
+    expect(await gate.run({ ...request(), work: transcriptWork })).toMatchObject(
+      rendered("Published transcript"),
+    );
     expect(transcriptWork).toHaveBeenCalledTimes(1);
-    if (currentCard.kind !== "ok" || !currentCard.value) {
-      throw new Error("Public card did not return its representation");
-    }
+    assert(currentCard.kind === "ok" && currentCard.value);
     expect(currentCard.value.isCurrent()).toBe(false);
   });
 
@@ -200,9 +194,7 @@ describe("public reader admission", () => {
 
     release.resolve(body);
     const completed = await slow;
-    if (completed.kind !== "ok" || !completed.value || fast.kind !== "ok" || !fast.value) {
-      throw new Error("Public builds did not return their representations");
-    }
+    assert(completed.kind === "ok" && completed.value && fast.kind === "ok" && fast.value);
     expect(completed.value.body).toBe(body);
     expect(completed.value.isCurrent()).toBe(true);
     expect(fast.value.isCurrent()).toBe(false);

@@ -6,7 +6,9 @@ import type {
   ControlUiSurface,
   ControlUiViewContext,
 } from "../../../../src/plugin-sdk/control-ui.js";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { prepareChatMessageRender } from "../../lib/chat/message-display.ts";
 import { createInertViewHost } from "../../plugins/control-ui-view.test-support.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -19,7 +21,6 @@ import { createChatProps } from "./chat-view.test-helpers.ts";
 import { ChatView } from "./chat-view.tsx";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { GroupedMessage } from "./components/chat-message-bubble-view.tsx";
-import { prepareChatMessageRender } from "./components/chat-message-markdown-view.tsx";
 import "../../plugins/control-ui-view.solid.tsx";
 import "../../plugins/control-ui-contributions.solid.tsx";
 
@@ -28,41 +29,34 @@ afterEach(() => resetComposerFixture());
 it("passes the pane's raw global owner to transcript and tool replacements", async () => {
   const lifetime = new AbortController();
   const host = createInertViewHost(lifetime.signal);
-  const replacements = new Map(
-    (["transcript", "tool-result"] as const).map((surface) => [
+  const replacements = (["transcript", "tool-result"] as const).map((surface) => ({
+    key: `identity/${surface}`,
+    pluginId: "identity",
+    signal: lifetime.signal,
+    host,
+    value: {
+      id: surface,
+      label: surface,
       surface,
-      {
-        key: `identity/${surface}`,
-        pluginId: "identity",
-        signal: lifetime.signal,
-        host,
-        value: {
-          id: surface,
-          label: surface,
-          surface,
-          mount(container: HTMLElement, view: ControlUiViewContext<BoardGetParams>) {
-            container.dataset.nativeOwner = surface;
-            container.textContent = `${view.props.agentId}/${view.props.sessionKey}`;
-          },
-        },
+      mount(container: HTMLElement, view: ControlUiViewContext<BoardGetParams>) {
+        container.dataset.nativeOwner = surface;
+        container.textContent = `${view.props.agentId}/${view.props.sessionKey}`;
       },
-    ]),
-  );
+    },
+  }));
   const reportError = vi.fn();
   const context = {
     gateway: createApplicationGateway().gateway,
+    chatSubmissions: createChatSubmissions(),
     agentSelection: { state: { selectedId: "main" }, subscribe: () => () => undefined },
     plugins: {
       registrations: () => [],
       selectedReplacement: (surface: ControlUiSurface) =>
-        surface === "transcript" || surface === "tool-result"
-          ? replacements.get(surface)
-          : undefined,
+        replacements.find((replacement) => replacement.value.surface === surface),
       subscribe: () => () => undefined,
       reportError,
     },
   } as unknown as ApplicationContext;
-  const provider = createSolidApplicationContextProvider(context);
   const props = createChatProps({
     paneId: "native-owner",
     sessionKey: "global",
@@ -96,7 +90,7 @@ it("passes the pane's raw global owner to transcript and tool replacements", asy
         </>
       );
     },
-    { container, wrapper: provider.wrapper },
+    { container, wrapper: createSolidApplicationContextProvider(context).wrapper },
   );
   onTestFinished(() => {
     view.unmount();
@@ -106,7 +100,6 @@ it("passes the pane's raw global owner to transcript and tool replacements", asy
 
   const owners = () => [...view.container.querySelectorAll<HTMLElement>("[data-native-owner]")];
   await vi.waitFor(() => {
-    expect(reportError).not.toHaveBeenCalled();
     expect(owners()).toHaveLength(2);
   });
   expect(

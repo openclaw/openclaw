@@ -90,8 +90,10 @@ describe("worker placement terminal persistence", () => {
     expect(await h.store.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
 
-  it("atomically fails a draining pending result and preserves its bounded reason across restart", async () => {
-    const { claim, pending } = await pendingResult();
+  it("atomically fails one session's draining result and preserves its bounded reason across restart", async () => {
+    const active = await advanceToActive();
+    const second = await advanceToActive(sessionIdentity("other"), active.environmentId);
+    const { claim, pending } = await pendingResult(active);
     await h.store.startWorkspaceResultDrain(claim);
     const { closedClaims, unregister } = trackClosedClaims();
     h.nowMs = 2_000;
@@ -109,6 +111,12 @@ describe("worker placement terminal persistence", () => {
     expect(failed.terminalReason).toMatch(/^cloud worker disappeared: provider-detail/u);
     expect(failed.recoveryError).toBe(failed.terminalReason);
     expect(h.store.get(claim.sessionId)).toMatchObject(terminal);
+    expect(h.store.get(second.sessionId)).toMatchObject({
+      state: "active",
+      environmentId: active.environmentId,
+      terminalReason: null,
+      terminalAtMs: null,
+    });
     const failure = {
       sessionId: claim.sessionId,
       recoveryError: "synthetic cleanup failure",
@@ -200,28 +208,6 @@ describe("worker placement terminal persistence", () => {
     expect(await turn.complete('{"status":"ok"}')).toBe(true);
     expect(await failResult(pending)).toMatchObject({ state: "failed", turnClaim: null });
     expect(await h.store.listPendingWorkspaceResultsAsync()).toEqual([]);
-  });
-
-  it("does not leak terminal diagnostics between sessions sharing an environment", async () => {
-    const environmentId = "environment-shared";
-    const first = await advanceToActive(SESSION, environmentId);
-    const otherSession = sessionIdentity("other");
-    const second = await advanceToActive(otherSession, environmentId);
-    const { pending } = await pendingResult(first);
-
-    const reason = "cloud worker disappeared: shared lease destroyed";
-    const failed = await failResult(pending, reason);
-
-    expect(failed).toMatchObject({
-      terminalReason: reason,
-      terminalAtMs: 1_000,
-    });
-    expect(h.store.get(second.sessionId)).toMatchObject({
-      state: "active",
-      environmentId,
-      terminalReason: null,
-      terminalAtMs: null,
-    });
   });
 
   it.each(["missing result", "delete abort"] as const)(

@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   catalogModel,
@@ -31,15 +32,11 @@ suite.define(() => {
             catalogModel("openai", "gpt-4.1-mini", "GPT-4.1 mini"),
           ],
           methodResponses: {
-            "agents.list": {
-              defaultId: "main",
-              mainKey: "main",
-              scope: "per-sender",
-              agents: [
-                { id: "main", name: "QA Main" },
-                { id: "research", name: "QA Research" },
-              ],
-            },
+            "agents.list": agentRoster(
+              { main: "QA Main", research: "QA Research" },
+              "main",
+              "per-sender",
+            ),
             "config.get": sourceConfigSnapshot(config, "qa-settings-original"),
             "models.authStatus": {
               ts: 1,
@@ -61,9 +58,7 @@ suite.define(() => {
         const agentPicker = page.locator(".settings-sidebar openclaw-agent-select");
         if (switchAgent) {
           await agentPicker.locator(".agent-select__trigger").click();
-          await agentPicker
-            .getByRole("menuitemradio", { name: "QA Research", exact: true })
-            .click();
+          await agentPicker.getByRole("option", { name: "QA Research", exact: true }).click();
           await expect
             .poll(() => agentPicker.locator(".agent-select__label").textContent())
             .toContain("QA Research");

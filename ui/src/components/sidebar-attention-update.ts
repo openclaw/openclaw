@@ -1,11 +1,19 @@
+import {
+  projectUpdateRunHistory,
+  type UpdateRunServingIdentity,
+} from "../../../src/infra/update-run-history-projection.ts";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { isUpdateActionable } from "../app/update-schedule-projection.ts";
+import {
+  isFinishingUpdateCampaign,
+  isUpdateActionable,
+} from "../app/update-schedule-projection.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   isUpdateAttentionForced,
   resolveUpdateAttentionDismissal,
+  type SidebarAttentionDismissal,
 } from "./sidebar-attention-dismissals.ts";
 import type { SidebarInboxEntry } from "./sidebar-attention-entries.ts";
 
@@ -24,13 +32,22 @@ export function isReleaseUpdateAvailable(
 export function isUpdateRunAttentionVisible(
   run: UpdateRunRecord | null,
   acknowledged: boolean,
+  serving?: UpdateRunServingIdentity,
 ): boolean {
   return Boolean(
     run &&
+    !projectUpdateRunHistory(run, serving) &&
     (run.status === "running" ||
       (!acknowledged &&
         run.finishedAtMs !== null &&
         Date.now() - run.finishedAtMs < 24 * 60 * 60 * 1000)),
+  );
+}
+
+/** Stored dismissals an Inbox entry keeps, including one its update row shows without offering. */
+export function retainedDismissals(entry: SidebarInboxEntry): SidebarAttentionDismissal[] {
+  return [entry.dismissal, entry.type === "update" ? entry.retainedDismissal : null].flatMap(
+    (dismissal) => (dismissal ? [dismissal] : []),
   );
 }
 
@@ -40,7 +57,13 @@ export function resolveSidebarUpdateAttention(
   const snapshot = context.overlays.snapshot;
   const campaign = snapshot.updateSchedule?.campaign;
   const run = snapshot.updateRun;
-  const runVisible = isUpdateRunAttentionVisible(run, snapshot.updateRunAcknowledged);
+  const runVisible = isUpdateRunAttentionVisible(
+    run,
+    snapshot.updateRunAcknowledged,
+    context.gateway.snapshot.phase === "connected"
+      ? context.gateway.snapshot.hello?.server
+      : undefined,
+  );
   const statusBanner =
     snapshot.updateStatusCheckBanner ?? (run ? null : snapshot.updateStatusBanner);
   const busy =
@@ -67,9 +90,17 @@ export function resolveSidebarUpdateAttention(
   ) {
     return null;
   }
-  const dismissal =
+  const runDismissal =
     runVisible && run?.status !== "running"
       ? { kind: "updateAvailable" as const, signature: JSON.stringify(["run", run?.runId]) }
+      : null;
+  // A finishing restart leads the row it shares with the run that owes it, so dismissing the
+  // run's outcome cannot also hide the restart. A stored dismissal of that outcome applies
+  // again once the restart is gone.
+  const finishing = isFinishingUpdateCampaign(snapshot.updateSchedule);
+  const dismissal =
+    runDismissal && !finishing
+      ? runDismissal
       : resolveUpdateAttentionDismissal({
           gatewayBootId: context.gateway.snapshot.hello?.server?.bootId,
           updateAvailable: snapshot.updateAvailable,
@@ -80,6 +111,7 @@ export function resolveSidebarUpdateAttention(
     type: "update",
     category: "system",
     dismissal: canUpdate && !forced ? dismissal : null,
+    retainedDismissal: finishing ? runDismissal : null,
     requiresAction: forced || (canUpdate && actionable),
     severity: snapshot.updateStatusBanner?.tone === "danger" ? "error" : "warning",
   };

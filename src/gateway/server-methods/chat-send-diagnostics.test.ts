@@ -16,6 +16,8 @@ import {
   measureDiagnosticsTimelineSpan as measureSpan,
   measureDiagnosticsTimelineSpanSync as measureSpanSync,
   withDiagnosticsTimelineObserver as observeTimeline,
+  transitionAdmissionPhase,
+  type AdmissionDiagnostics,
 } from "../../infra/diagnostics-timeline.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { startChatSendDiagnostics } from "./chat-send-diagnostics.js";
@@ -55,6 +57,28 @@ test.each([999.9, 1_000])(
   },
 );
 
+test.each([false, true])(
+  "does not format fast-send timings with diagnostics enabled=%s",
+  async (enabled) => {
+    setDiagnosticsEnabledForProcess(enabled);
+    using _ = {
+      [Symbol.dispose]: onTrustedInternalDiagnosticEvent(() => {}, {
+        include: ["diagnostic.phase.completed"],
+      }),
+    };
+    const { info, diagnostics } = createDiagnostics();
+    const round = vi.spyOn(Math, "round");
+    diagnostics.scope("authority");
+    diagnostics.observeSpan("attempt.tool_catalog", undefined, 40);
+    at(100, () => diagnostics.acknowledge());
+    diagnostics.observeSpan("workspace", undefined, 20);
+    at(200, diagnostics.finish);
+    expect(info).not.toHaveBeenCalled();
+    expect(round).not.toHaveBeenCalled();
+    await waitForDiagnosticEventsDrained();
+  },
+);
+
 test.each(["startup", "steer", "queued"] as const)(
   "acknowledgement splits overlapping phases into request and %s observations",
   async (stage) => {
@@ -66,6 +90,7 @@ test.each(["startup", "steer", "queued"] as const)(
     using _ = { [Symbol.dispose]: stop };
     const { info, diagnostics } = createDiagnostics();
     const request = diagnostics.scope("persist")!;
+    diagnostics.setRunIdentity("synthetic-session", "synthetic-run");
     at(10, () => request.mark("response"));
     const snapshot = diagnostics.scope("snapshot")!;
     at(15, request.finish);
@@ -81,7 +106,10 @@ test.each(["startup", "steer", "queued"] as const)(
       isTerminal: () => false,
     });
     expect(events).toEqual([]);
-    expectLog(info, `slow chat send 1400ms stage=${stage} ack=15ms snapshot=2000ms dispatch=200ms`);
+    expectLog(
+      info,
+      `slow chat send 1400ms stage=${stage} sessionId=synthetic-session runId=synthetic-run ack=15ms snapshot=2000ms dispatch=200ms`,
+    );
 
     at(4_000, () => snapshot.mark("effects"));
     snapshot.finish();
@@ -123,6 +151,72 @@ test("error unwinding retires scopes without diagnostic failures replacing the s
   expectLog(info, "slow chat send 1200ms stage=request persist=1200ms detail.persist.stage=400ms");
 });
 
+test("steer dispatch separates a long prepared reply from preparation", async () => {
+  setDiagnosticsEnabledForProcess(true);
+  const events: DiagnosticEventPayload[] = [];
+  using _ = {
+    [Symbol.dispose]: onTrustedInternalDiagnosticEvent((event) => events.push(event), {
+      include: ["diagnostic.phase.completed"],
+    }),
+  };
+  const { info, diagnostics } = createDiagnostics();
+  at(51, () => diagnostics.acknowledge("steer"));
+  const dispatch = diagnostics.scope("dispatch")!;
+  dispatch.mark("replyInitialization");
+  await observeTimeline(diagnostics.observeSpan, () =>
+    measureSpan("auto_reply.dispatch_reply_from_config", () =>
+      measureSpan("reply.run_reply_resolver", async () => {
+        measureSpanSync("reply.init_session_state", () => at(121));
+        dispatch.mark("preparation");
+        at(135);
+        await measureSpan("reply.run_prepared_reply", async () => at(476_517));
+        at(476_537);
+      }),
+    ),
+  );
+  diagnostics.finish();
+  expectLog(
+    info,
+    "slow chat send 476486ms stage=steer ack=51ms preparation=14ms replyInitialization=70ms dispatch=20ms run=476382ms detail.auto_reply.dispatch_reply_from_config=476486ms detail.reply.init_session_state=70ms detail.reply.run_prepared_reply=476382ms detail.reply.run_reply_resolver=476486ms",
+  );
+  await waitForDiagnosticEventsDrained();
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      name: "chat.send.run",
+      durationMs: 476_382,
+      details: { stage: "steer" },
+    }),
+  );
+});
+
+test.each(["startup", "queued"] as const)(
+  "%s diagnostics stop accounting for a prepared reply at their existing boundary",
+  async (stage) => {
+    const { info, diagnostics } = createDiagnostics();
+    diagnostics.acknowledge();
+    const dispatch = diagnostics.scope("dispatch")!;
+    dispatch.mark("preparation");
+    at(1_100);
+    await observeTimeline(diagnostics.observeSpan, () =>
+      measureSpan("reply.run_prepared_reply", async () => {
+        at(1_200);
+        diagnostics.finish({
+          isSteered: () => false,
+          isEnqueued: () => stage === "queued",
+          isTerminal: () => false,
+        });
+        at(477_582);
+      }),
+    );
+    dispatch.finish();
+    diagnostics.finish();
+    expectLog(
+      info,
+      `slow chat send 1200ms stage=${stage} ack=0ms preparation=1100ms dispatch=0ms run=100ms detail.reply.run_prepared_reply=100ms`,
+    );
+  },
+);
+
 test("startup spans stay request-owned and include unfinished parents without timeline logging", async () => {
   const { info: firstLog, diagnostics: first } = createDiagnostics();
   const { info: secondLog, diagnostics: second } = createDiagnostics();
@@ -160,7 +254,7 @@ test("span observer failures preserve synchronous and asynchronous results and e
   await expect(observeTimeline(() => observer, rejectOperation)).rejects.toBe(failure);
 });
 
-test("slow startup consumes the sandbox owner's nested timing facts", async () => {
+test("slow startup separates allocation wait from the sandbox owner's nested preparation", async () => {
   const { info, diagnostics } = createDiagnostics();
   diagnostics.acknowledge();
   await observeTimeline(diagnostics.observeSpan, () =>
@@ -169,11 +263,10 @@ test("slow startup consumes the sandbox owner's nested timing facts", async () =
       () =>
         withWorktreePreparationTiming("sandbox", async () => {
           markManagedWorktreePreparation();
-          await timeWorktreePreparationPhase("templatePrepare", async () => {
-            at(50_000);
-          });
-          await timeWorktreePreparationPhase("containerStart", async () => {
-            at(75_000);
+          await timeWorktreePreparationPhase("allocationWait", async () => at(490_000));
+          await timeWorktreePreparationPhase("reservation", async () => {
+            await timeWorktreePreparationPhase("templatePrepare", async () => at(540_000));
+            await timeWorktreePreparationPhase("containerStart", async () => at(546_000));
           });
         }),
       { attributes: { stage: "attempt.setup" } },
@@ -182,6 +275,22 @@ test("slow startup consumes the sandbox owner's nested timing facts", async () =
   diagnostics.finish();
   expectLog(
     info,
-    "slow chat send 75000ms stage=startup ack=0ms detail.attempt.setup=75000ms detail.worktree.sandbox=75000ms detail.worktree.sandbox.containerStart=25000ms detail.worktree.sandbox.templatePrepare=50000ms detail.worktree.sandbox.unattributed=0ms",
+    "slow chat send 546000ms stage=startup ack=0ms detail.attempt.setup=546000ms detail.worktree.sandbox=546000ms detail.worktree.sandbox.allocationWait=490000ms detail.worktree.sandbox.containerStart=6000ms detail.worktree.sandbox.reservation=56000ms detail.worktree.sandbox.templatePrepare=50000ms detail.worktree.sandbox.unattributed=0ms",
   );
+});
+
+test("slow sends retain admission time across fallback attempts", () => {
+  const { info, diagnostics } = createDiagnostics();
+  diagnostics.acknowledge();
+  const first: AdmissionDiagnostics = {};
+  const second: AdmissionDiagnostics = {};
+  observeTimeline(diagnostics.observeSpan, () => {
+    transitionAdmissionPhase(first, "writerMs");
+    at(120_000, () => transitionAdmissionPhase(first));
+    transitionAdmissionPhase(second, "writerMs");
+    at(130_000, () => transitionAdmissionPhase(second, "placementMs"));
+    at(135_000, () => transitionAdmissionPhase(second));
+  });
+  diagnostics.finish();
+  expect(info.mock.calls[0]?.[0]).toContain('"writerMs":130000,"placementMs":5000');
 });

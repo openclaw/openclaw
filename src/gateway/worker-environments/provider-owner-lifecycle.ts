@@ -1,8 +1,10 @@
 import type { SecretRef } from "../../config/types.secrets.js";
 import { WorkerProviderError, type WorkerProvider } from "../../plugins/types.js";
+import { assertWorkerResourceReceiptMatch } from "../../plugins/worker-resource-receipt.js";
 import { measureGatewayRestartTrace } from "../restart-trace.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import {
+  CONVERSATION_CLEANUP_PARKED,
   hasForcedWorkerEnvironmentAbandonment,
   workerEnvironmentServiceError as serviceError,
 } from "./environment-errors.js";
@@ -11,6 +13,7 @@ import type {
   WorkerEnvironmentAbandonment,
   WorkerProviderLifecycleOptions,
 } from "./provider-lifecycle.types.js";
+import { createWorkerReconcileCancellation } from "./provider-provisioning-cancellation.js";
 import {
   requireProviderOperationTimeoutMs,
   requireWorkerAllocation,
@@ -43,6 +46,7 @@ export function createWorkerProviderOwnerLifecycle(
     | "isStopping"
     | "warn"
   > & {
+    ownerSignal: AbortSignal;
     providerFor: (providerId: string) => WorkerProvider;
     onOwnerStopped?: (environmentId: string) => void;
   },
@@ -53,6 +57,8 @@ export function createWorkerProviderOwnerLifecycle(
   const lifecycleLease = (record: WorkerEnvironmentRecord, leaseId: string) => ({
     leaseId,
     profile: requireWorkerProfile(record.profileSnapshot.settings),
+    ...(record.resourceReceipt ? { resourceReceipt: record.resourceReceipt } : {}),
+    ...(record.retention ? { retention: record.retention.policy } : {}),
   });
 
   const requireCurrentOwner = (record: WorkerEnvironmentRecord): WorkerEnvironmentRecord => {
@@ -65,6 +71,36 @@ export function createWorkerProviderOwnerLifecycle(
     ) {
       throw serviceError("invalid_state", "Worker environment owner changed during teardown");
     }
+    return current;
+  };
+
+  const requireCurrentProvisionOwner = (
+    record: WorkerEnvironmentRecord,
+    enrollmentSetupId?: string,
+  ): WorkerEnvironmentRecord => {
+    const current = store.get(record.environmentId);
+    const setupId = enrollmentSetupId ?? record.nodeSetupId;
+    if (
+      !current ||
+      current.ownerEpoch !== record.ownerEpoch ||
+      current.provisionOperationId !== record.provisionOperationId ||
+      (current.state !== "requested" && current.state !== "provisioning") ||
+      current.leaseId !== record.leaseId ||
+      (setupId !== null && current.nodeSetupId !== setupId) ||
+      (current.nodeDeviceId !== record.nodeDeviceId &&
+        (record.nodeDeviceId !== null || !setupId)) ||
+      current.destroyRequestedAtMs !== null
+    ) {
+      throw new Error("Worker provisioning operation is closed");
+    }
+    if (record.resourceReceipt) {
+      assertWorkerResourceReceiptMatch(
+        record.resourceReceipt,
+        current.resourceReceipt ?? undefined,
+      );
+    }
+    // Pairing publishes the first node while this operation still owns provisioning.
+    // The caller retains this admitted binding so a later replacement is not progress.
     return current;
   };
 
@@ -158,22 +194,60 @@ export function createWorkerProviderOwnerLifecycle(
     provider: WorkerProvider,
     lease: Parameters<WorkerProvider["destroy"]>[0],
   ) => {
+    if (record.resourceReceipt && !provider.supportsResourceReceipts) {
+      throw serviceError(
+        "provider_failure",
+        "Worker provider cannot honor the recorded resource receipt",
+      );
+    }
+    if (record.resourceReceipt && record.resourceReceipt.leaseId !== lease.leaseId) {
+      throw serviceError(
+        "invalid_state",
+        "Worker cleanup allocation differs from its resource receipt",
+      );
+    }
     const timeoutMs =
-      options.providerCallTimeoutMs === undefined
-        ? requireProviderOperationTimeoutMs(
-            "destroy",
-            provider.resolveDestroyTimeoutMs?.(lease.profile),
-          )
-        : undefined;
+      options.providerCallTimeoutMs ??
+      requireProviderOperationTimeoutMs(
+        "destroy",
+        provider.resolveDestroyTimeoutMs?.(lease.profile),
+      ) ??
+      300_000;
     await options.callProvider(
       record.environmentId,
       "destroy",
-      () => {
+      async () => {
         // An earlier timed-out operation can keep this call queued across owner changes.
         if (requireCurrentOwner(record).state !== record.state) {
           throw serviceError("invalid_state", "Worker environment owner changed during teardown");
         }
-        return provider.destroy(lease);
+        // Turn cancellation must still finish compensating cleanup. Only the Gateway
+        // lifecycle and provider deadline interrupt teardown, retaining its durable intent.
+        using cancellation = createWorkerReconcileCancellation(options.ownerSignal);
+        const deadline = new AbortController();
+        const signal = AbortSignal.any([cancellation.signal, deadline.signal]);
+        signal.throwIfAborted();
+        const timer = setTimeout(
+          () => deadline.abort(new Error("Worker provider destroy timed out")),
+          timeoutMs,
+        );
+        timer.unref();
+        try {
+          const assertCurrent = () => {
+            signal.throwIfAborted();
+            if (requireCurrentOwner(record).state !== record.state) {
+              throw serviceError("invalid_state", "Worker teardown owner changed");
+            }
+          };
+          assertCurrent();
+          await provider.destroy({ ...lease, signal, assertCurrent });
+          // Drain can cancel new effects, not discard an already confirmed deletion.
+          if (requireCurrentOwner(record).state !== record.state) {
+            throw serviceError("invalid_state", "Worker teardown owner changed");
+          }
+        } finally {
+          clearTimeout(timer);
+        }
       },
       timeoutMs,
     );
@@ -213,7 +287,10 @@ export function createWorkerProviderOwnerLifecycle(
       nodeDeviceId: null,
       sshEndpoint: null,
       sharedHost: false,
-      lastError: destroying.lastError ?? "Worker bootstrap failed after provider teardown",
+      lastError:
+        (destroying.lastError?.startsWith(CONVERSATION_CLEANUP_PARKED)
+          ? destroying.lastError.split("\n")[1]
+          : destroying.lastError) ?? "Worker bootstrap failed after provider teardown",
     });
   };
 
@@ -392,6 +469,7 @@ export function createWorkerProviderOwnerLifecycle(
   const destroy = async (
     environmentId: string,
     destroyOptions: {
+      authorize?: () => void;
       requireUnattached?: boolean;
       abandonment?: WorkerEnvironmentAbandonment;
       forceAbandon?: () => Promise<void>;
@@ -407,20 +485,36 @@ export function createWorkerProviderOwnerLifecycle(
       const abandonment = destroyOptions.abandonment;
       abandonment?.authorize?.();
       let record = store.get(environmentId);
+      // Accepted cleanup keeps its custody. Forced discard is a separate decision
+      // that needs current authority until its own intent is recorded.
+      const assertRequestCurrent = (current: WorkerEnvironmentRecord | undefined) => {
+        if (
+          !current ||
+          current.destroyRequestedAtMs === null ||
+          (destroyOptions.forceAbandon && !hasForcedWorkerEnvironmentAbandonment(current))
+        ) {
+          destroyOptions.authorize?.();
+        }
+      };
+      assertRequestCurrent(record);
       if (!record) {
-        await destroyOptions.forceAbandon?.();
+        // Only internal maintenance can clean dangling placements without an environment
+        // in which to accept a requester's forced-discard decision.
+        if (!destroyOptions.authorize) {
+          await destroyOptions.forceAbandon?.();
+        }
         throw serviceError("environment_not_found", `Unknown worker environment: ${environmentId}`);
       }
-      if (
+      const terminal =
         ["destroyed", "failed", "orphaned"].includes(record.state) &&
         (!abandonment ||
           record.state === "destroyed" ||
-          (record.state === "failed" && !record.leaseId))
-      ) {
-        await destroyOptions.forceAbandon?.();
+          (record.state === "failed" && !record.leaseId));
+      if (terminal && !destroyOptions.forceAbandon) {
         return record;
       }
       if (
+        !terminal &&
         abandonment &&
         (record.providerId !== DEVICE_WORKER_PROVIDER_ID ||
           record.ownerEpoch !== abandonment.ownerEpoch ||
@@ -434,7 +528,7 @@ export function createWorkerProviderOwnerLifecycle(
           "Abandoned device worker owner changed before retirement",
         );
       }
-      if (destroyOptions.requireUnattached && record.attachedSessionIds.length > 0) {
+      if (!terminal && destroyOptions.requireUnattached && record.attachedSessionIds.length > 0) {
         throw serviceError(
           "invalid_state",
           "Attached cloud workers must be stopped through sessions.reclaim",
@@ -442,7 +536,11 @@ export function createWorkerProviderOwnerLifecycle(
       }
       // Environment reconciliation owns retries of accepted cleanup. A background
       // placement projection must not replay its failed provider call or claim success.
-      if (destroyOptions.retryRequested === false && record.destroyRequestedAtMs !== null) {
+      if (
+        !terminal &&
+        destroyOptions.retryRequested === false &&
+        record.destroyRequestedAtMs !== null
+      ) {
         throw serviceError(
           "invalid_state",
           `Worker environment cleanup is still pending: ${record.lastError ?? record.state}`,
@@ -452,7 +550,12 @@ export function createWorkerProviderOwnerLifecycle(
       const assertDestroyOwner = () => {
         abandonment?.authorize?.();
         const current = requireCurrentOwner(destroyOwner);
-        if (destroyOptions.requireUnattached && current.attachedSessionIds.length > 0) {
+        assertRequestCurrent(current);
+        if (
+          !terminal &&
+          destroyOptions.requireUnattached &&
+          current.attachedSessionIds.length > 0
+        ) {
           throw serviceError(
             "invalid_state",
             "Attached cloud workers must be stopped through sessions.reclaim",
@@ -478,6 +581,9 @@ export function createWorkerProviderOwnerLifecycle(
       }
       // Persist the operator's discard decision before placement draining can survive a crash.
       await destroyOptions.forceAbandon?.();
+      if (terminal) {
+        return record;
+      }
       try {
         const destroyed = await finishDestroy(
           record,
@@ -547,6 +653,7 @@ export function createWorkerProviderOwnerLifecycle(
   return {
     identityResolverFor,
     requireCurrentOwner,
+    requireCurrentProvisionOwner,
     stopOwner,
     beginDrain,
     finishProvenDestroy,

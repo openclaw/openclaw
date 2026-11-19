@@ -5,10 +5,9 @@ import {
   compareScheduledDecisions,
   type ScheduledDivergence,
 } from "../../../cron/execution-context-projection.js";
-import {
-  resolveScheduledPrincipal,
-  type ScheduledAdmissionFacts,
-  type ScheduledExecutionContextResult,
+import type {
+  ScheduledAdmissionFacts,
+  ScheduledExecutionContextResult,
 } from "../../../cron/execution-context.js";
 import type { CronStoredJob } from "../../../cron/types.js";
 import { countLabel as pluralize } from "../../doctor-state-integrity-format.js";
@@ -28,7 +27,7 @@ export type ScheduledContextReport = {
     cause: "removed" | "archived" | "worktree-missing";
     worktreePath?: string;
   }>;
-  unbound: Array<{ job: JobRef; parentSessionKey: string; cause: "key-only" | "reset" }>;
+  unbound: Array<{ job: JobRef; parentSessionKey: string }>;
   runtimeOwner: Array<{ job: JobRef; cliBackend: string }>;
   missingChatType: Array<{ job: JobRef; parentSessionKey: string }>;
   failed: Array<{ job: JobRef; reason: string }>;
@@ -96,10 +95,7 @@ export function classifyScheduledJob(
   }
   const { principal, authority } = result.facts;
   if (principal.kind === "unbound-parent") {
-    // The builder demotes a reset parent link to unbound; the stored link tells them apart.
-    const stored = resolveScheduledPrincipal(job, facts);
-    const cause = "kind" in stored && stored.kind === "parent" ? "reset" : "key-only";
-    report.unbound.push({ job: ref, parentSessionKey: principal.parentSessionKey, cause });
+    report.unbound.push({ job: ref, parentSessionKey: principal.parentSessionKey });
   }
   const lost = compareScheduledDecisions(job, facts, result).changes.filter(
     (change) => change.label === "loss",
@@ -107,7 +103,8 @@ export function classifyScheduledJob(
   if (lost.length > 0) {
     report.losses.push({ job: ref, fields: lost, ownerCheck: observation.ownerCheck });
   }
-  // Scheduled CLI runs carry no owner bit today, so only an owner context changes them.
+  // Scheduled CLI runs used to coerce the absent owner bit to false; an owner context now
+  // gives them the owner-only tools their embedded runs already had.
   if (observation.cliBackend && authority.owner) {
     report.runtimeOwner.push({ job: ref, cliBackend: observation.cliBackend });
   }
@@ -132,6 +129,10 @@ function describeLostField(change: LostField): string {
       return "unsandboxed execution (the creating conversation requires a sandbox)";
     case "admissionSource":
       return "operator admission";
+    case "automationsCli":
+      return "unscoped automations tool on CLI backends (now limited to this automation, as on embedded runs)";
+    case "requesterYield":
+      return "sessions_yield (scheduled runs cannot wait for child sessions; the run must finish its turn)";
     default:
       return change.field;
   }
@@ -152,7 +153,7 @@ function section(heading: string, lines: string[], footer?: string): string[] {
 export function formatScheduledContextReport(report: ScheduledContextReport): string | null {
   const lines = [
     ...section(
-      `${pluralize(report.losses.length, "automation")} will lose access because runs use the authority of the conversation and person that created ${report.losses.length === 1 ? "it" : "them"}:`,
+      `${pluralize(report.losses.length, "automation")} will lose access at the next run:`,
       report.losses.map(
         (entry) =>
           `- ${label(entry.job)}: ${entry.fields.map(describeLostField).join("; ")}${
@@ -175,19 +176,14 @@ export function formatScheduledContextReport(report: ScheduledContextReport): st
     ...section(
       `${pluralize(report.unbound.length, "automation")} ${report.unbound.length === 1 ? "is" : "are"} not bound to the conversation that created ${report.unbound.length === 1 ? "it" : "them"}:`,
       report.unbound.map(
-        (entry) =>
-          `- ${label(entry.job)}: \`${entry.parentSessionKey}\` ${
-            entry.cause === "reset"
-              ? "was reset after the automation was created"
-              : "is recorded by key only"
-          }`,
+        (entry) => `- ${label(entry.job)}: \`${entry.parentSessionKey}\` is recorded by key only`,
       ),
       "  These keep their current behavior and do not use the conversation's board, memory or workspace. Recreate one from its conversation to bind it.",
     ),
     ...section(
-      `${pluralize(report.runtimeOwner.length, "automation")} ${report.runtimeOwner.length === 1 ? "runs" : "run"} on a CLI backend, where scheduled runs get no owner-only tools today while embedded runs do:`,
+      `${pluralize(report.runtimeOwner.length, "automation")} ${report.runtimeOwner.length === 1 ? "runs" : "run"} on a CLI backend, where scheduled runs now get the owner-only tools embedded runs already had:`,
       report.runtimeOwner.map((entry) => `- ${label(entry.job)}: ${entry.cliBackend}`),
-      "  Once both runtimes read the same scheduled-run authority, these runs get the owner-only tools they already have on embedded runs.",
+      "  Earlier versions gave these scheduled CLI runs no owner-only tools; both runtimes now read the same scheduled-run authority.",
     ),
     ...section(
       `${pluralize(report.missingChatType.length, "automation")} ${report.missingChatType.length === 1 ? "has" : "have"} a creating conversation with no stored chat type, so ${report.missingChatType.length === 1 ? "its" : "their"} runs get no conversation memory:`,

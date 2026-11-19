@@ -24,6 +24,20 @@ describe("local preview navigation policy", () => {
     assertInvocationCurrent: () => {},
     assertLocalLoopbackCurrent: () => {},
   };
+  const loopback = "http://127.0.0.1/";
+  const withPreview = <T>(run: () => Promise<T>) => withBrowserRequestScope(scope, run);
+  const checkPolicy = (
+    policy: ReturnType<typeof browserNavigationPolicyForProfile>,
+    url = loopback,
+  ) => assertBrowserNavigationAllowed({ url, ...policy });
+  const openPreview = (ctx: ReturnType<typeof createBrowserRouteContext>, url: string) =>
+    withPreview(() =>
+      createBrowserRouteDispatcher(ctx).dispatch({
+        method: "POST",
+        path: "/tabs/open",
+        body: { url },
+      }),
+    );
   beforeEach(() => {
     let reachable = false;
     vi.mocked(chrome.isChromeReachable)
@@ -61,27 +75,21 @@ describe("local preview navigation policy", () => {
     }
     return browserNavigationPolicyForProfile(ctx, profileCtx);
   }
+  async function navigate(url = loopback, browser?: Parameters<typeof resolveBrowserConfig>[0]) {
+    return checkPolicy(await navigationPolicy(browser), url);
+  }
   it.each(["http://127.0.0.1:49187/", "http://localhost:49187/", "http://[::1]:49187/"])(
     "allows an unrestricted local managed preview at %s",
-    async (url) => {
-      await withBrowserRequestScope(scope, async () => {
-        await expect(
-          assertBrowserNavigationAllowed({ url, ...(await navigationPolicy()) }),
-        ).resolves.toBeUndefined();
-      });
-    },
+    (url) =>
+      withPreview(async () => {
+        await expect(navigate(url)).resolves.toBeUndefined();
+      }),
   );
   it("rejects a reachable external loopback browser before opening a preview tab", async () => {
     vi.mocked(chrome.isChromeReachable).mockResolvedValue(true);
     vi.mocked(chrome.isChromeCdpReady).mockResolvedValue(true);
     const { ctx, state } = browserContext();
-    const response = await withBrowserRequestScope(scope, () =>
-      createBrowserRouteDispatcher(ctx).dispatch({
-        method: "POST",
-        path: "/tabs/open",
-        body: { url: "http://127.0.0.1:49187/external-preview" },
-      }),
-    );
+    const response = await openPreview(ctx, "http://127.0.0.1:49187/external-preview");
     expect(response.status).toBe(400);
     expect(response.body).toMatchObject({ reason: "navigation_blocked" });
     expect(chrome.launchOpenClawChrome).not.toHaveBeenCalled();
@@ -114,118 +122,77 @@ describe("local preview navigation policy", () => {
         }),
       );
       const { ctx } = browserContext();
-      const response = await withBrowserRequestScope(scope, () =>
-        createBrowserRouteDispatcher(ctx).dispatch({
-          method: "POST",
-          path: "/tabs/open",
-          body: { url },
-        }),
-      );
-      expect(chrome.launchOpenClawChrome).toHaveBeenCalledOnce();
+      const response = await openPreview(ctx, url);
       expect(response.status).toBe(expectedStatus);
       expect(create).toHaveBeenCalledTimes(expectedCreates);
       if (expectedCreates) {
         expect(response.body).toMatchObject({ targetId: "FALLBACK", url });
-        expect(create).toHaveBeenCalledWith(expect.objectContaining({ url }));
       } else {
         expect(response.body).toMatchObject({ reason: "navigation_blocked" });
       }
     },
   );
   it("revokes a captured preview policy when its owned process exits", async () => {
-    await withBrowserRequestScope(scope, async () => {
+    await withPreview(async () => {
       const { ctx, profileCtx, state } = browserContext();
       await profileCtx.ensureBrowserAvailable();
       const policy = browserNavigationPolicyForProfile(ctx, profileCtx);
-      await assertBrowserNavigationAllowed({ url: "http://127.0.0.1/", ...policy });
+      await checkPolicy(policy);
       const running = expectDefined(state.profiles.get("openclaw")?.running, "owned browser");
       running.proc.emit("exit", 0, null);
-      await expect(
-        assertBrowserNavigationAllowed({ url: "http://127.0.0.1/", ...policy }),
-      ).rejects.toThrow("current OpenClaw-owned local browser process");
+      await expect(checkPolicy(policy)).rejects.toThrow(
+        "current OpenClaw-owned local browser process",
+      );
     });
   });
   it("requires a host invocation assertion for an automatic preview grant", async () => {
     await withBrowserRequestScope({ ...scope, assertInvocationCurrent: undefined }, async () => {
-      await expect(
-        assertBrowserNavigationAllowed({ url: "http://127.0.0.1/", ...(await navigationPolicy()) }),
-      ).rejects.toThrow(/private|internal|special-use/i);
+      await expect(navigate()).rejects.toThrow(/private|internal|special-use/i);
     });
   });
   it("expires an inherited asynchronous preview grant when the request ends", async () => {
     const resume = createDeferred<void>();
     let lateCheck: Promise<void> | undefined;
-    await withBrowserRequestScope(scope, async () => {
+    await withPreview(async () => {
       const policy = await navigationPolicy();
       lateCheck = (async () => {
         await resume.promise;
-        await expect(
-          assertBrowserNavigationAllowed({ url: "http://127.0.0.1/", ...policy }),
-        ).rejects.toThrow("Browser request has completed");
+        await expect(checkPolicy(policy)).rejects.toThrow("Browser request has completed");
       })();
     });
     resume.resolve();
     await lateCheck;
   });
   it.each([
-    { name: "explicit empty policy", browser: { ssrfPolicy: {} } },
-    {
-      name: "explicit strict policy",
-      browser: { ssrfPolicy: { dangerouslyAllowPrivateNetwork: false } },
-    },
-    {
-      name: "explicit other allowlist",
-      browser: { ssrfPolicy: { allowedHostnames: ["preview.example"] } },
-    },
-    { name: "explicit deny", browser: { ssrfPolicy: { blockedHostnames: ["127.0.0.1"] } } },
-    {
-      name: "remote CDP",
-      browser: { profiles: { openclaw: { cdpUrl: "https://browser.example" } } },
-    },
-    { name: "loopback attach-only", browser: { attachOnly: true } },
-    {
-      name: "explicit browser proxy",
-      browser: { extraArgs: ["--proxy-server=http://proxy.example"] },
-    },
-    {
-      name: "existing session",
-      browser: { profiles: { openclaw: { driver: "existing-session" as const } } },
-    },
-  ])("preserves $name", async ({ browser }) => {
-    await withBrowserRequestScope(scope, async () => {
-      await expect(
-        assertBrowserNavigationAllowed({
-          url: "http://127.0.0.1:49187/",
-          ...(await navigationPolicy(browser)),
-        }),
-      ).rejects.toThrow();
-    });
-  });
+    ["explicit empty policy", { ssrfPolicy: {} }],
+    ["explicit strict policy", { ssrfPolicy: { dangerouslyAllowPrivateNetwork: false } }],
+    ["explicit other allowlist", { ssrfPolicy: { allowedHostnames: ["preview.example"] } }],
+    ["explicit deny", { ssrfPolicy: { blockedHostnames: ["127.0.0.1"] } }],
+    ["remote CDP", { profiles: { openclaw: { cdpUrl: "https://browser.example" } } }],
+    ["loopback attach-only", { attachOnly: true }],
+    ["explicit browser proxy", { extraArgs: ["--proxy-server=http://proxy.example"] }],
+    ["existing session", { profiles: { openclaw: { driver: "existing-session" } } }],
+  ] satisfies Array<[string, Parameters<typeof resolveBrowserConfig>[0]]>)(
+    "preserves %s",
+    (_name, browser) =>
+      withPreview(async () => {
+        await expect(navigate("http://127.0.0.1:49187/", browser)).rejects.toThrow();
+      }),
+  );
   it("does not leak the default into another request or the stored policy", async () => {
     const policy = await navigationPolicy();
-    await withBrowserRequestScope(scope, async () => {
-      await assertBrowserNavigationAllowed({
-        url: "http://127.0.0.1/",
-        ...(await navigationPolicy()),
-      });
-    });
-    await expect(
-      assertBrowserNavigationAllowed({ url: "http://127.0.0.1/", ...policy }),
-    ).rejects.toThrow();
-    await expect(
-      assertBrowserNavigationAllowed({ url: "http://127.0.0.1/", ...(await navigationPolicy()) }),
-    ).rejects.toThrow();
+    await withPreview(() => navigate());
+    await expect(checkPolicy(policy)).rejects.toThrow();
+    await expect(navigate()).rejects.toThrow();
   });
   it.each([
     "http://10.0.0.1/",
     "http://169.254.169.254/",
     "http://[fd00::1]/",
     "http://127.0.0.2/",
-  ])("keeps other protected addresses blocked: %s", async (url) => {
-    await withBrowserRequestScope(scope, async () => {
-      await expect(
-        assertBrowserNavigationAllowed({ url, ...(await navigationPolicy()) }),
-      ).rejects.toThrow();
-    });
-  });
+  ])("keeps other protected addresses blocked: %s", (url) =>
+    withPreview(async () => {
+      await expect(navigate(url)).rejects.toThrow();
+    }),
+  );
 });

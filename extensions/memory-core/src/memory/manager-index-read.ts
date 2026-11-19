@@ -31,13 +31,15 @@ export function readMemoryIndex(db: EngineConnection, command: MemoryIndexReadCo
         value: readMemorySourceChunks(db, command.input.source, command.input.path),
       };
     case "cache.read": {
-      const cached = loadMemoryEmbeddingCache({ ...command.input, db });
-      const identity = command.input.providerIdentities[0];
-      if (command.input.rebuild && identity) {
+      const cached =
+        command.input.cacheEnabled === false
+          ? new Map<string, number[]>()
+          : loadMemoryEmbeddingCache({ ...command.input, db });
+      if (command.input.published) {
         loadMemoryRebuildEmbeddings({
           db,
-          identity,
-          query: command.input.rebuild,
+          identities: command.input.providerIdentities,
+          query: command.input.published,
           cached,
         });
       }

@@ -1,5 +1,6 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForAbortSignal as waitForAbort } from "../../infra/abort-signal.js";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
@@ -7,15 +8,6 @@ import {
 } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
-
-const waitForAbort = (signal: AbortSignal | undefined): Promise<void> =>
-  new Promise((resolve) => {
-    if (!signal || signal.aborted) {
-      resolve();
-      return;
-    }
-    signal.addEventListener("abort", () => resolve(), { once: true });
-  });
 
 afterEach(() => {
   vi.useRealTimers();
@@ -104,7 +96,7 @@ describe("createBlockReplyPipeline dedup with threading", () => {
 
   it.each([
     ["a joiner crossing the limit", 20, " ", "caption", true],
-    ["an exact-limit caption", 21, " ", "caption", false],
+    ["an authored separator at the limit", 20, " ", "\nphoto!", false],
     ["captionless media without another joiner", 15, "\n\n", undefined, false],
   ] as const)(
     "preserves delivery and metadata for %s",
@@ -123,7 +115,7 @@ describe("createBlockReplyPipeline dedup with threading", () => {
         {
           assistantMessageIndex: 7,
           assistantTranscriptMediaUrls: ["file:///photo.png"],
-          ...(caption ? { blockSourceText: "caption", blockSourceRange: [12, 19] as const } : {}),
+          ...(caption ? { blockSourceText: caption, blockSourceRange: [12, 19] as const } : {}),
         },
       );
       await send(
@@ -143,7 +135,7 @@ describe("createBlockReplyPipeline dedup with threading", () => {
             ]
           : [
               {
-                text: caption ? buffered + joiner + "caption" : buffered,
+                text: caption ? buffered + caption : buffered,
                 mediaUrls: ["file:///photo.png"],
               },
             ],

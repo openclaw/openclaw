@@ -26,7 +26,15 @@ type TimeSeriesProps = {
 };
 
 export function deriveTimeSeries(
-  detail: UsageProps["detail"],
+  detail: Pick<
+    UsageProps["detail"],
+    | "timeSeries"
+    | "timeSeriesStatus"
+    | "timeSeriesMode"
+    | "timeSeriesBreakdownMode"
+    | "timeSeriesCursorStart"
+    | "timeSeriesCursorEnd"
+  >,
   range: ReturnType<typeof prepareUsageDateRange>,
   usage: UsageSessionEntry["usage"],
 ) {
@@ -72,7 +80,7 @@ export function deriveTimeSeries(
   const first = selectedPoints[0];
   const last = selectedPoints.at(-1);
   const filteredUsage =
-    hasSelection && usage && first && last && timeSeries?.usageReport?.state !== "unavailable"
+    hasSelection && usage && first && last
       ? {
           ...usage,
           ...filteredTokens,
@@ -84,15 +92,6 @@ export function deriveTimeSeries(
       : undefined;
   if (status.error && !status.hasLoaded) {
     return { chart: null, emptyKey: null, showTitle: true, showStatus: true, filteredUsage };
-  }
-  if (timeSeries?.usageReport?.state === "unavailable") {
-    return {
-      chart: null,
-      emptyKey: "usage.unavailable",
-      showTitle: true,
-      showStatus: true,
-      filteredUsage,
-    };
   }
   if (!timeSeries || timeSeries.points.length < 2) {
     return {
@@ -401,19 +400,15 @@ function TimeSeriesChart(props: {
         <div class="card-title usage-section-title">{t("usage.details.usageOverTime")}</div>
         <div class="timeseries-controls">
           {model().hasSelection ? (
-            <div class="settings-segmented settings-segmented--accent small">
-              <button
-                class="btn btn--sm settings-segmented__btn settings-segmented__btn--active"
-                onClick={() => props.callbacks.onTimeSeriesCursorRangeChange(null, null)}
-              >
-                {t("usage.details.reset")}
-              </button>
-            </div>
+            <button
+              class="btn btn--sm"
+              onClick={() => props.callbacks.onTimeSeriesCursorRangeChange(null, null)}
+            >
+              {t("usage.details.reset")}
+            </button>
           ) : undefined}
           <SettingsSegmented
             mode="buttons"
-            variant="accent"
-            class="small"
             value={model().mode}
             onChange={props.callbacks.onTimeSeriesModeChange}
             onReselect={props.callbacks.onTimeSeriesModeChange}
@@ -425,8 +420,6 @@ function TimeSeriesChart(props: {
           {!model().isCumulative ? (
             <SettingsSegmented
               mode="buttons"
-              variant="accent"
-              class="small"
               value={model().breakdownMode}
               onChange={props.callbacks.onTimeSeriesBreakdownChange}
               onReselect={props.callbacks.onTimeSeriesBreakdownChange}

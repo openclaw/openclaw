@@ -186,25 +186,27 @@ describePosix("prior-CI forward main admission", () => {
   ] as const)("refuses a local-only probe failure: %s", (fault) => {
     const state = f.state();
     const secret = "fixture-sensitive-token-not-a-real-credential";
+    const finalProbeFault: Partial<typeof state.priorCi> = {};
     let probe: { role: string; oid: string; exit: number } | undefined;
     if (fault === "stderr" || fault === "exit") {
-      state.priorCi.localOnlyQueryFault = fault;
+      finalProbeFault.localOnlyQueryFault = fault;
       state.observations = [{}, {}, {}, {}, { advanceMain: true }];
     } else if (fault === "verified pin") {
       const previous = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
-      state.priorCi.localOnlyFailureOid = f.base;
-      state.priorCi.localOnlyFailureStderr = "fatal: fixture verified pin is unreadable";
+      finalProbeFault.localOnlyFailureOid = f.base;
+      finalProbeFault.localOnlyFailureStderr = "fatal: fixture verified pin is unreadable";
       state.observations = [{}, {}, {}, { main: previous }, { advanceMain: true }];
       probe = { role: "verified-main", oid: f.base, exit: 128 };
     } else if (fault === "unsupported Git" || fault === "oversized stderr") {
       const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
       state.observations = [{}, {}, {}, {}, { main }];
       if (fault === "unsupported Git") {
-        state.priorCi.unsupportedNoLazy = true;
+        finalProbeFault.unsupportedNoLazy = true;
         probe = { role: "previous-main", oid: f.base, exit: 129 };
       } else {
-        state.priorCi.localOnlyFailureOid = main;
-        state.priorCi.localOnlyFailureStderr = "Authorization: Bearer " + "sensitive".repeat(2_000);
+        finalProbeFault.localOnlyFailureOid = main;
+        finalProbeFault.localOnlyFailureStderr =
+          "Authorization: Bearer " + "sensitive".repeat(2_000);
         probe = { role: "reread-main", oid: main, exit: 128 };
       }
     } else {
@@ -216,13 +218,15 @@ describePosix("prior-CI forward main admission", () => {
         writeFileSync(join(f.worktree, "tsconfig.json"), "{ invalid caller tsconfig");
       }
       state.observations = [{}, {}, {}, { main: previous }, { main }];
-      state.priorCi.localOnlyFailureOid = failed;
-      state.priorCi.localOnlyFailureStderr =
+      finalProbeFault.localOnlyFailureOid = failed;
+      finalProbeFault.localOnlyFailureStderr =
         `fatal: fixture-local object unavailable\nAuthorization: Bearer ${secret}\n` +
         "diagnostic detail ".repeat(200);
       state.priorCi.revokeAdminOnMainFetch = true;
       probe = { role: fault, oid: failed, exit: 128 };
     }
+    // Keep initial commit acquisition valid; fail the final local-only window.
+    state.observations.at(-1)!.priorCi = finalProbeFault;
     f.save(state);
     const result = refuse("final prior-CI main cannot be verified with local-only Git");
     if (probe) {
@@ -275,10 +279,12 @@ describePosix("prior-CI forward main admission", () => {
     "final GraphQL recalculation",
     "remote-only final main",
     "remote-only recalculation",
+    "remote-only delayed recalculation",
     "final known status",
   ] as const)("lands pinned head after %s advance", (stage) => {
     const remoteOnly = stage.startsWith("remote-only");
     const recalculating = stage.includes("recalculation");
+    const delayedRecalculation = stage === "remote-only delayed recalculation";
     let main = remoteOnly ? f.base : f.commit(f.tree("before\n", "advanced\n"), [f.base]);
     const state = f.state();
     const settled = {
@@ -292,7 +298,10 @@ describePosix("prior-CI forward main admission", () => {
         : [
             ...unchanged(final ? 4 : 1),
             remoteOnly
-              ? { advanceMain: true, ...(recalculating ? { pr: unknown } : {}) }
+              ? {
+                  advanceMain: true,
+                  ...(recalculating && !delayedRecalculation ? { pr: unknown } : {}),
+                }
               : {
                   main,
                   ...(recalculating
@@ -355,6 +364,16 @@ describePosix("prior-CI forward main admission", () => {
 
     admit();
     expect(f.state().settlementSleeps).toEqual([2, 4, 8, 8]);
+  });
+
+  it("refuses a final GraphQL fork from the preliminary observed tip", () => {
+    const first = f.commit(f.tree("before\n", "first advance\n"), [f.base]);
+    const fork = f.commit(f.tree("before\n", "forked advance\n"), [f.base]);
+    configureMerge(f, {
+      observations: [...unchanged(3), { main: first }, { main: fork }],
+    });
+
+    refuse("both observed and verified main");
   });
 
   it.each([
@@ -499,22 +518,27 @@ describePosix("prior-CI forward main admission", () => {
     }
   });
 
-  it.each(["head", "rewind"])("refuses changed %s during rematerialization", (fault) => {
-    const state = f.state();
-    state.observations = [
-      ...unchanged(4),
-      { advanceMain: true },
-      fault === "head" ? { pr: { headRefOid: f.base } } : { main: f.base },
-    ];
-    f.save(state);
-    const result = refuse(
-      fault === "rewind"
-        ? "both observed and verified main"
-        : "PR or main changed during observation",
-    );
-    expect(result.error, result.output).toBeUndefined();
-    expect(f.git(["cat-file", "-t", f.state().mainAdvances[0]!])).toBe("commit");
-  });
+  it.each(["head", "rewind", "rewind UNKNOWN"])(
+    "refuses changed %s during rematerialization",
+    (fault) => {
+      const state = f.state();
+      state.observations = [
+        ...unchanged(4),
+        { advanceMain: true },
+        fault === "head"
+          ? { pr: { headRefOid: f.base } }
+          : { main: f.base, ...(fault === "rewind UNKNOWN" ? { pr: unknown } : {}) },
+      ];
+      f.save(state);
+      const result = refuse(
+        fault === "rewind"
+          ? "both observed and verified main"
+          : "PR or main changed during observation",
+      );
+      expect(result.error, result.output).toBeUndefined();
+      expect(f.git(["cat-file", "-t", f.state().mainAdvances[0]!])).toBe("commit");
+    },
+  );
   it("refuses changed publisher source on new main", () => {
     const blob = f.git(["hash-object", "-w", "--stdin"], "changed protected publisher source\n");
     const replace = (tree: string, name: string, entry: string) =>

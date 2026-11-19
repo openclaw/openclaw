@@ -17,6 +17,7 @@ suite.define(() => {
     ];
     const markdown = "Global progress after startup";
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       agentModel: "openai/startup-model",
       defaultAgentId: "ops",
       deferredMethods: ["chat.startup"],

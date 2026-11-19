@@ -18,11 +18,11 @@ import {
   captionSnapshot,
   testBrowser,
   releaseTab,
-  type TestSession,
 } from "./session-runtime.test-support.js";
 import type { MeetingTranscriptSnapshot } from "./session-types.js";
 
 const participant = { url: "https://meeting.example/room", agentId: "operator" };
+const noSources = { sourceOrder: 1, sources: [] };
 
 async function captionFixture(
   captureTranscript: NonNullable<Parameters<typeof createTestRuntime>[0]["captureTranscript"]>,
@@ -37,7 +37,11 @@ afterEach(() => {
 });
 
 describe("MeetingSessionRuntime startup custody", () => {
+  const cleanups: Array<() => Promise<void>> = [];
   afterEach(async () => {
+    for (const cleanup of cleanups.splice(0).toReversed()) {
+      await cleanup();
+    }
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
   });
@@ -49,6 +53,11 @@ describe("MeetingSessionRuntime startup custody", () => {
     const closedProviders: string[] = [];
     const createdProviders: string[] = [];
     const spoken: string[] = [];
+    const pending: Promise<unknown>[] = [];
+    const track = <T>(operation: Promise<T>) => {
+      pending.push(operation);
+      return operation;
+    };
     let firstSessionId: string | undefined;
     const { runtime } = createTestRuntime({
       talkBack: true,
@@ -81,9 +90,7 @@ describe("MeetingSessionRuntime startup custody", () => {
             }
           },
           isConnected: () => liveProviders.has(session.id),
-          sendUserMessage: () => {
-            spoken.push(session.id);
-          },
+          sendUserMessage: () => void spoken.push(session.id),
         });
         const provider = makeVoiceProvider(() => {
           liveProviders.add(session.id);
@@ -110,15 +117,9 @@ describe("MeetingSessionRuntime startup custody", () => {
           handleToolCall: async () => {},
           transport: {
             onFatal: () => {},
-            startInput: () => {
-              liveInputs.add(session.id);
-            },
-            stop: async () => {
-              liveInputs.delete(session.id);
-            },
-            dispose: async () => {
-              liveInputs.delete(session.id);
-            },
+            startInput: () => void liveInputs.add(session.id),
+            stop: async () => void liveInputs.delete(session.id),
+            dispose: async () => void liveInputs.delete(session.id),
             writeOutput: async () => {},
             clearOutput: async () => {},
           },
@@ -133,6 +134,13 @@ describe("MeetingSessionRuntime startup custody", () => {
       url: "https://meeting.example/held",
       agentId: "main",
     });
+    cleanups.push(async () => {
+      connectAllowed.resolve();
+      await Promise.allSettled(pending);
+      for (const active of runtime.list()) {
+        await runtime.leave(active.id);
+      }
+    });
     return {
       runtime,
       session,
@@ -143,11 +151,8 @@ describe("MeetingSessionRuntime startup custody", () => {
       closedProviders,
       createdProviders,
       spoken,
-      finish: async (pending: Array<Promise<unknown> | undefined>) => {
-        connectAllowed.resolve();
-        await Promise.all(pending.filter((operation) => operation !== undefined));
-        await runtime.leave(session.id);
-      },
+      track,
+      speak: (text: string) => track(runtime.speak(session.id, text)),
     };
   }
 
@@ -163,103 +168,87 @@ describe("MeetingSessionRuntime startup custody", () => {
 
   it("settles prior connecting work before admitting a same-URL replacement", async () => {
     const f = await createStartupFixture();
-    const speaking = f.runtime.speak(f.session.id, "Hello");
-    let replacement: TestSession | undefined;
-    let replacing: Promise<void> | undefined;
+    const speaking = f.speak("Hello");
     let priorLiveAtReplacement: boolean | undefined;
-    try {
-      await f.connectStarted.promise;
-      replacing = (async () => {
+    await f.connectStarted.promise;
+    const replacing = f.track(
+      (async () => {
         await f.runtime.leave(f.session.id);
-        replacement = (await f.runtime.join({ url: f.session.url, agentId: "replacement" }))
-          .session;
+        const { session: replacement } = await f.runtime.join({
+          url: f.session.url,
+          agentId: "replacement",
+        });
         priorLiveAtReplacement = f.liveProviders.has(f.session.id);
         await f.runtime.speak(replacement.id, "Replacement");
         expect(f.liveProviders.has(replacement.id)).toBe(true);
-      })();
-      await completeUnrelatedMeeting(f.runtime);
-      f.connectAllowed.resolve();
-      await Promise.all([replacing, speaking]);
-      expect(priorLiveAtReplacement).toBe(false);
-    } finally {
-      await f.finish([speaking, replacing]);
-      if (replacement) {
-        await f.runtime.leave(replacement.id);
-      }
-    }
+      })(),
+    );
+    await completeUnrelatedMeeting(f.runtime);
+    f.connectAllowed.resolve();
+    await Promise.all([replacing, speaking]);
+    expect(priorLiveAtReplacement).toBe(false);
   });
 
   it("keeps unrelated-URL work independent of a connecting provider", async () => {
     const f = await createStartupFixture();
-    const speaking = f.runtime.speak(f.session.id, "Hello");
-    let other: TestSession | undefined;
-    try {
-      await f.connectStarted.promise;
-      other = (await f.runtime.join({ url: "https://meeting.example/other", agentId: "main" }))
-        .session;
-      await f.runtime.speak(other.id, "Other meeting");
-      await f.runtime.leave(other.id);
-      expect(f.liveProviders.has(f.session.id)).toBe(true);
-      expect(f.liveProviders.has(other.id)).toBe(false);
-    } finally {
-      await f.finish([speaking]);
-      if (other) {
-        await f.runtime.leave(other.id);
-      }
-    }
+    const speaking = f.speak("Hello");
+    await f.connectStarted.promise;
+    const { session: other } = await f.runtime.join({
+      url: "https://meeting.example/other",
+      agentId: "main",
+    });
+    await f.runtime.speak(other.id, "Other meeting");
+    await f.runtime.leave(other.id);
+    expect(f.liveProviders.has(f.session.id)).toBe(true);
+    expect(f.liveProviders.has(other.id)).toBe(false);
+    f.connectAllowed.resolve();
+    await speaking;
   });
 
   it.each(["leave", "external end", "connect failure"] as const)(
     "settles pending startup once without publishing speech after %s",
     async (outcome) => {
       const f = await createStartupFixture({ failConnect: outcome === "connect failure" });
-      const speaking = f.runtime.speak(f.session.id, "Hello");
+      const speaking = f.speak("Hello");
       const settled =
         outcome === "connect failure"
           ? expect(speaking).rejects.toThrow("synthetic connect failure")
           : expect(speaking).resolves.toMatchObject({ found: true, spoken: false });
-      let leaving: Promise<unknown> | undefined;
       let liveAtLeave: boolean | undefined;
-      try {
-        await f.connectStarted.promise;
-        expect(f.liveProviders.has(f.session.id)).toBe(true);
-        expect(f.liveInputs.has(f.session.id)).toBe(true);
-        if (outcome === "external end") {
-          f.runtime.markSessionEnded(f.session, "External session ended");
-        }
-        leaving = f.runtime.leave(f.session.id).then((result) => {
+      await f.connectStarted.promise;
+      expect(f.liveProviders.has(f.session.id)).toBe(true);
+      expect(f.liveInputs.has(f.session.id)).toBe(true);
+      if (outcome === "external end") {
+        f.runtime.markSessionEnded(f.session, "External session ended");
+      }
+      const leaving = f.track(
+        f.runtime.leave(f.session.id).then((result) => {
           liveAtLeave = f.liveProviders.has(f.session.id) || f.liveInputs.has(f.session.id);
           return result;
-        });
-        await completeUnrelatedMeeting(f.runtime);
-        f.connectAllowed.resolve();
-        await Promise.all([leaving, settled]);
-        expect(liveAtLeave).toBe(false);
-        expect(f.liveProviders.size).toBe(0);
-        expect(f.liveInputs.size).toBe(0);
-        expect(f.closedProviders).toEqual([f.session.id]);
-        expect(f.spoken).toEqual([]);
-        await f.runtime.leave(f.session.id);
-        expect(f.closedProviders).toEqual([f.session.id]);
-      } finally {
-        await f.finish([settled, leaving]);
-      }
+        }),
+      );
+      await completeUnrelatedMeeting(f.runtime);
+      f.connectAllowed.resolve();
+      await Promise.all([leaving, settled]);
+      expect(liveAtLeave).toBe(false);
+      expect(f.liveProviders.size).toBe(0);
+      expect(f.liveInputs.size).toBe(0);
+      expect(f.closedProviders).toEqual([f.session.id]);
+      expect(f.spoken).toEqual([]);
+      await f.runtime.leave(f.session.id);
+      expect(f.closedProviders).toEqual([f.session.id]);
     },
   );
 
   it("coalesces simultaneous speaks before invoking provider setup", async () => {
     const f = await createStartupFixture();
-    const first = f.runtime.speak(f.session.id, "First");
-    const second = f.runtime.speak(f.session.id, "Second");
-    try {
-      await f.connectStarted.promise;
-      await completeUnrelatedMeeting(f.runtime);
-      f.connectAllowed.resolve();
-      await Promise.all([first, second]);
-      expect(f.createdProviders).toEqual([f.session.id]);
-    } finally {
-      await f.finish([first, second]);
-    }
+    const first = f.speak("First");
+    const second = f.speak("Second");
+    await f.connectStarted.promise;
+    await completeUnrelatedMeeting(f.runtime);
+    f.connectAllowed.resolve();
+    await Promise.all([first, second]);
+    expect(f.createdProviders).toEqual([f.session.id]);
   });
 });
 
@@ -398,7 +387,7 @@ describe("MeetingSessionRuntime participation ownership", () => {
     ];
     const { runtime, session } = await captionFixture(async () => snapshots.shift());
     await runtime.transcript(session.id);
-    expect(runtime.participationContext(session.id)).toMatchObject({ sourceOrder: 1, sources: [] });
+    expect(runtime.participationContext(session.id)).toMatchObject(noSources);
     await runtime.transcript(session.id);
     const context = runtime.participationContext(session.id);
     expect(context).toMatchObject({
@@ -408,19 +397,14 @@ describe("MeetingSessionRuntime participation ownership", () => {
     const sourceId = context.sources[0]?.sourceId;
     expect(sourceId).toBeTruthy();
     await runtime.transcript(session.id);
-    expect(runtime.participationContext(session.id)).toMatchObject({ sourceOrder: 1, sources: [] });
+    expect(runtime.participationContext(session.id)).toMatchObject(noSources);
     expect(runtime.inspectParticipationSource(session.id, sourceId!)).toBeUndefined();
     await runtime.leave(session.id);
   });
 
   it("invalidates caption authority on an empty new epoch without minting a source event", async () => {
     const oldSnapshot = captionSnapshot(
-      [
-        {
-          text: "Please share the recap",
-          source: { ...TEST_CAPTION_SOURCE, epoch: "old-page" },
-        },
-      ],
+      [{ text: "Please share the recap", source: { ...TEST_CAPTION_SOURCE, epoch: "old-page" } }],
       { epoch: "old-page" },
     );
     const snapshots: MeetingTranscriptSnapshot[] = [
@@ -434,9 +418,9 @@ describe("MeetingSessionRuntime participation ownership", () => {
     expect(sourceId).toBeTruthy();
     await runtime.transcript(session.id);
     expect(runtime.inspectParticipationSource(session.id, sourceId!)).toBeUndefined();
-    expect(runtime.participationContext(session.id)).toMatchObject({ sourceOrder: 1, sources: [] });
+    expect(runtime.participationContext(session.id)).toMatchObject(noSources);
     await runtime.transcript(session.id);
-    expect(runtime.participationContext(session.id)).toMatchObject({ sourceOrder: 1, sources: [] });
+    expect(runtime.participationContext(session.id)).toMatchObject(noSources);
     await runtime.leave(session.id);
   });
 });
@@ -501,10 +485,7 @@ describe("MeetingSessionRuntime observation provenance", () => {
 
       vi.setSystemTime(firstObservedAt + 120_001);
       await runtime.transcript(session.id);
-      expect(runtime.participationContext(session.id)).toMatchObject({
-        sourceOrder: 1,
-        sources: [],
-      });
+      expect(runtime.participationContext(session.id)).toMatchObject(noSources);
       expect(runtime.inspectParticipationSource(session.id, sourceId)).toBeUndefined();
       expect(() => inspected!.assertCurrent()).toThrow("no longer current");
     } finally {

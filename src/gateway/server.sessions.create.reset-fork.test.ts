@@ -23,6 +23,10 @@ test.each([false, true])("does not revive reset context in forks (active=%s)", a
     sessionKey: parentKey,
     storePath,
   };
+  const contextMessages = async (sessionId = parentSessionId, sessionKey = parentKey) =>
+    (
+      await SessionManager.openModelContextAsync({ ...parentScope, sessionId, sessionKey })
+    ).buildSessionContext().messages;
   onTestFinished(() => {
     embeddedRunMock.activeIds.delete(parentSessionId);
     testState.sessionConfig = undefined;
@@ -63,8 +67,7 @@ test.each([false, true])("does not revive reset context in forks (active=%s)", a
   }
   const originalEvents = await loadTranscriptEvents(parentScope);
   expect(originalEvents).toContainEqual(expect.objectContaining({ type: "reset", reason: "new" }));
-  const parent = await SessionManager.openModelContextAsync(parentScope);
-  const parentMessages = parent.buildSessionContext().messages;
+  const parentMessages = await contextMessages();
   expect(parentMessages).toMatchObject(activeMessages);
 
   // The shared fixture simulates run liveness; reset, fork, and transcript reads stay real.
@@ -81,13 +84,7 @@ test.each([false, true])("does not revive reset context in forks (active=%s)", a
   expect(created.payload?.key).toBe(childKey);
   const childSessionId = requireNonEmptyString(created.payload?.sessionId, "forked session id");
   expect(childSessionId).not.toBe(parentSessionId);
-  const child = await SessionManager.openModelContextAsync({
-    agentId: "main",
-    sessionId: childSessionId,
-    sessionKey: childKey,
-    storePath,
-  });
-  expect(child.buildSessionContext().messages).toEqual([]);
+  expect(await contextMessages(childSessionId, childKey)).toEqual([]);
   const history = await rpcReq<{ messages: unknown[] }>(ws, "chat.history", {
     sessionKey: childKey,
   });
@@ -106,12 +103,11 @@ test.each([false, true])("does not revive reset context in forks (active=%s)", a
     fork: true,
   });
   expect(full.ok, JSON.stringify(full.error)).toBe(true);
-  const fullChild = await SessionManager.openModelContextAsync({
-    agentId: "main",
-    sessionId: requireNonEmptyString(full.payload?.sessionId, "full fork session id"),
-    sessionKey: requireNonEmptyString(full.payload?.key, "full fork session key"),
-    storePath,
-  });
-  expect(fullChild.buildSessionContext().messages).toEqual(parentMessages);
+  expect(
+    await contextMessages(
+      requireNonEmptyString(full.payload?.sessionId, "full fork session id"),
+      requireNonEmptyString(full.payload?.key, "full fork session key"),
+    ),
+  ).toEqual(parentMessages);
   expect(await loadTranscriptEvents(parentScope)).toEqual(originalEvents);
 });

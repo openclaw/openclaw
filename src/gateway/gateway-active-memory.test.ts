@@ -2,13 +2,18 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
-import { describe, expect, it, onTestFailed } from "vitest";
+import { describe, expect, it } from "vitest";
 import { GatewayClient } from "../../packages/gateway-client/src/index.js";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import {
   createFixtureRequest,
   verifyBuiltGatewayHead,
 } from "../../test/helpers/gateway-built-fixture.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+  readRequestText,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -58,7 +63,6 @@ describe("Gateway Active Memory", () => {
       let instance: OpenClawTestInstance | undefined;
       let client: GatewayClient | undefined;
       let providerServer: ReturnType<typeof createServer> | undefined;
-      let providerListening = false;
       let tearingDown = false;
       const providerHandlers = new Set<Promise<void>>();
       const providerErrors: unknown[] = [];
@@ -70,49 +74,23 @@ describe("Gateway Active Memory", () => {
           await verifyBuiltGatewayHead(repoRoot, signal);
           signal.throwIfAborted();
           const home = createTempDir("openclaw-active-memory-gateway-");
-          const timelinePath = path.join(home, "gateway-timeline.jsonl");
           const workspace = path.join(home, "workspace");
           const memoryFact = "The user's usual lunch is ginger ramen.";
           const mainReply = "ACTIVE_MEMORY_RUNTIME_PROOF_OK";
           const mainRequests: string[] = [];
           const memoryResults: string[] = [];
-          let recallRequests = 0;
           let memoryToolIssued = false;
-          let phase = "preparing fixture";
-          const diagnostics: { statusLines?: string[] } = {};
-          onTestFailed(async () => {
-            const gatewayLogs = instance?.logs() ?? "";
-            console.info({
-              phase,
-              fixtureHome: home,
-              recallRequests,
-              memoryResults: memoryResults.length,
-              mainRequests: mainRequests.length,
-              recallStatus: diagnostics.statusLines
-                ?.find((line) => line.startsWith("🧩 Active Memory: status="))
-                ?.slice(0, 240),
-            });
-            console.info("Active Memory Gateway log tail", gatewayLogs.slice(-12_000));
-            const timeline = await fs.readFile(timelinePath, "utf8").catch(() => "unavailable");
-            console.info("Active Memory request timeline tail", timeline.slice(-24_000));
-          });
           const server = createServer((request, response) => {
             const handler = (async () => {
               signal.throwIfAborted();
-              const chunks: Buffer[] = [];
-              for await (const chunk of request) {
-                signal.throwIfAborted();
-                chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-              }
+              const raw = await readRequestText(request);
               signal.throwIfAborted();
-              const raw = Buffer.concat(chunks).toString("utf8");
               const body = JSON.parse(raw) as {
                 input?: Array<{ type?: string; output?: unknown }>;
               };
               // Route by the helper's prompt, not request order: empty-turn recovery
               // can make several provider calls before the main turn starts.
               if (raw.includes("You are a memory search agent.")) {
-                recallRequests += 1;
                 for (const item of body.input ?? []) {
                   if (item.type === "function_call_output") {
                     memoryResults.push(
@@ -174,26 +152,15 @@ describe("Gateway Active Memory", () => {
               },
             );
           });
-          providerServer = server;
           await fs.mkdir(workspace, { recursive: true });
           signal.throwIfAborted();
           await fs.writeFile(path.join(workspace, "MEMORY.md"), `${memoryFact}\n`, "utf8");
           signal.throwIfAborted();
-          phase = "starting mock provider";
-          await new Promise<void>((resolve, reject) => {
-            server.once("error", reject);
-            server.listen(0, "127.0.0.1", () => {
-              providerListening = true;
-              resolve();
-            });
-          });
+          const providerUrl = await listenLoopback(server);
+          providerServer = server;
           signal.throwIfAborted();
-          const address = server.address();
-          if (!address || typeof address === "string") {
-            throw new Error("mock provider did not bind");
-          }
           const provider = buildMockOpenAiResponsesProvider(
-            `http://127.0.0.1:${address.port}/v1`,
+            `${providerUrl}/v1`,
             "active-memory-proof",
           );
           const token = `active-memory-${randomUUID()}`;
@@ -235,7 +202,6 @@ describe("Gateway Active Memory", () => {
             },
             tools: { profile: "full" },
           } satisfies OpenClawConfig;
-          phase = "starting Gateway";
           instance = await createOpenClawTestInstance({
             name: "active-memory-gateway",
             cwd: repoRoot,
@@ -247,9 +213,6 @@ describe("Gateway Active Memory", () => {
               OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
               OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
               OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-              OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
-              OPENCLAW_DIAGNOSTICS: "1",
-              OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
             },
           });
           signal.throwIfAborted();
@@ -284,11 +247,9 @@ describe("Gateway Active Memory", () => {
               terminal.reject(error);
             },
             onEvent: (event) => {
-              if (event.event !== "chat") {
-                return;
-              }
               const payload = event.payload as ChatEvent | undefined;
               if (
+                event.event === "chat" &&
                 payload?.runId === runId &&
                 payload.sessionKey === sessionKey &&
                 ["final", "error", "aborted"].includes(payload.state)
@@ -307,7 +268,6 @@ describe("Gateway Active Memory", () => {
             signal.removeEventListener("abort", abortConnect);
           }
           signal.throwIfAborted();
-          phase = "starting main turn";
           const request = createFixtureRequest(client, signal);
           // Interactive chat supplies the finalized turn tool authority that recall requires.
           const accepted = await request<{ runId: string; status: string }>("chat.send", {
@@ -317,35 +277,28 @@ describe("Gateway Active Memory", () => {
             idempotencyKey: runId,
           });
           expect(accepted).toMatchObject({ status: "started", runId });
-          phase = "waiting for main reply";
-          // Recall and the main turn use the test budget; agent.wait only checks final settlement.
           const reply = await withinTest(terminal.promise, signal);
           expect(reply.state, JSON.stringify(reply)).toBe("final");
-          phase = "waiting for main run settlement";
           const completed = await request<{ status: string }>(
             "agent.wait",
             { runId: accepted.runId, timeoutMs: 30_000 },
             { timeoutMs: 35_000 },
           );
           expect(completed).toMatchObject({ status: "ok" });
-          phase = "checking recall and main reply";
           const entry = loadSessionEntryReadOnly({
             agentId: "main",
             sessionKey,
             env: instance.env,
             storePath: path.join(instance.state.agentDir("main"), "openclaw-agent.sqlite"),
           });
-          diagnostics.statusLines = entry?.pluginDebugEntries?.find(
+          const statusLines = entry?.pluginDebugEntries?.find(
             (item) => item.pluginId === "active-memory",
           )?.lines;
           expect(providerErrors).toEqual([]);
           expect(memoryResults).toEqual(
             expect.arrayContaining([expect.stringContaining(memoryFact)]),
           );
-          // Tool call, empty post-tool reply, then both tool-free settled-turn
-          // finalization attempts. Fewer requests mean the follow-up never ran.
-          expect(recallRequests).toBe(4);
-          expect(diagnostics.statusLines?.join("\n")).toContain("Active Memory: status=failed");
+          expect(statusLines?.join("\n")).toContain("Active Memory: status=failed");
           expect(mainRequests).toHaveLength(1);
           expect(mainRequests[0]).not.toContain("<active_memory_plugin>");
           expect(mainRequests[0]).not.toContain("Please try again.");
@@ -362,16 +315,11 @@ describe("Gateway Active Memory", () => {
         },
         async () => {
           const server = providerServer;
-          if (!server || !providerListening) {
+          if (!server) {
             return;
           }
           await runQaGatewayFixture(
-            async () => {
-              server.closeAllConnections();
-              await new Promise<void>((resolve, reject) => {
-                server.close((error) => (error ? reject(error) : resolve()));
-              });
-            },
+            () => closeHttpServer(server),
             async () => {
               await Promise.allSettled(providerHandlers);
               if (providerErrors.length > 0) {

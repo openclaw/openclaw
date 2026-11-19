@@ -7,7 +7,6 @@ import type {
   CliOutput,
   CliUsage,
 } from "./cli-output-contracts.js";
-import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
 import type { CliEventProjectionState, ThinkingTracker } from "./cli-output-events.js";
 import {
   createLeadingTaggedReasoningRouter,
@@ -42,9 +41,9 @@ import {
 } from "./cli-output-records.js";
 import { appendCliResultText, recordItemText, withCliRawFinalText } from "./cli-output-results.js";
 import {
+  chargeClaudeStreamJsonLine,
   CLI_STREAM_JSON_OUTPUT_LIMITS,
   frameBoundedCliJsonlChunk,
-  measureClaudePartialMessage,
   streamJsonOutputLimitErrorText,
 } from "./cli-output-stream-limits.js";
 import { resolveCliStreamOutput } from "./cli-output-stream-output.js";
@@ -78,7 +77,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let parseErrorText = "";
   let rawChars = 0;
   let rawLines = 0;
-  let ordinaryClaudeLines = 0;
+  let countedClaudeFrames = 0;
   const texts: string[] = [];
   // The last item text is the final message only until a later message or tool
   // call begins; boundary flags set before that text must not blank it.
@@ -200,8 +199,8 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       ? ""
       : assistantText.slice(Math.max(currentMessageStart, flushedMessageStart)).trim());
 
-  const accountClaudeJsonlLine = (lineChars: number, partialMessage = false): boolean => {
-    if (!partialMessage && ++ordinaryClaudeLines > outputLimits.maxTurnLines) {
+  const accountClaudeJsonlLine = (lineChars: number, countsFrame = false): boolean => {
+    if (countsFrame && ++countedClaudeFrames > outputLimits.maxTurnLines) {
       parseErrorText = streamJsonOutputLimitErrorText("lines", outputLimits.maxTurnLines);
       lineBuffer.pending = "";
       return false;
@@ -413,7 +412,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       resetReplySegment();
     }
 
-    let result = parseClaudeCliJsonlResult({
+    const result = parseClaudeCliJsonlResult({
       backend: params.backend,
       providerId: params.providerId,
       parsed,
@@ -428,10 +427,8 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         result.terminalFailure?.reason === "turn_stopped" ? result.terminalFailure : undefined;
       const stoppedTurnErrorText = stoppedTurn ? (result.errorText ?? "") : "";
       if (stoppedTurn) {
-        const delivered = { ...result };
-        delete delivered.errorText;
-        delete delivered.terminalFailure;
-        result = delivered;
+        delete result.errorText;
+        delete result.terminalFailure;
       } else if (result.errorText) {
         output = result;
         return;
@@ -451,7 +448,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
               onVisibleText: emitClaudeVisibleText,
             });
           }
-          result = { ...result, text: taggedResult.visibleText.trim() };
+          result.text = taggedResult.visibleText.trim();
         }
       }
       // Empty terminal result can follow already-streamed text; keep that text.
@@ -496,6 +493,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
           ? { text: "", errorText: stoppedTurnErrorText, terminalFailure: stoppedTurn }
           : {}),
         ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
+        ...(output?.interimNativeReplies
+          ? { interimNativeReplies: output.interimNativeReplies }
+          : {}),
         ...(diagnosticUsage ? { diagnosticUsage } : {}),
       };
       // The result envelope carries the final message when present.
@@ -506,6 +506,13 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         !output.errorText &&
         !output.terminalFailure
       ) {
+        const finalText = output.rawFinalText ?? nextText;
+        if (sessionId && resumeCheckpointId && finalText) {
+          output.interimNativeReplies = [
+            ...(output.interimNativeReplies ?? []),
+            { text: finalText, cliSessionId: sessionId, externalId: resumeCheckpointId },
+          ];
+        }
         params.onCompletedReply?.(completedText, textParts.length - 1);
       }
       // An interim result commits its segment. Rebase boundary state so later
@@ -659,21 +666,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     }
     const parsedRecords = decodeCliRecords(line);
     if (claudeStreamJson) {
-      const partialChars =
-        parsedRecords.length === 1
-          ? measureClaudePartialMessage(parsedRecords[0]!, rawLine)
-          : undefined;
-      const normalized =
-        parsedRecords.length === 1
-          ? normalizeClaudeCliStreamJsonRecord(parsedRecords[0]!)
-          : undefined;
-      // Neither media omission nor token-envelope discounts may erase wire whitespace.
-      const retainedChars =
-        partialChars ??
-        (normalized
-          ? Math.max(normalized.line.length, rawLine.length - normalized.omittedRawChars)
-          : rawLine.length);
-      if (!accountClaudeJsonlLine(retainedChars, partialChars !== undefined)) {
+      const record = parsedRecords.length === 1 ? parsedRecords[0] : undefined;
+      const charge = chargeClaudeStreamJsonLine(record, rawLine);
+      if (!accountClaudeJsonlLine(charge.chars, charge.countsFrame)) {
         return;
       }
     }

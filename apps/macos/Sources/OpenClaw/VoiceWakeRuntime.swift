@@ -10,21 +10,21 @@ import AppKit
 actor VoiceWakeRuntime {
     private let state: AppVoiceRuntime.State
     private let sessions: VoiceSessionCoordinator
-    private let overlay: VoiceWakeOverlayController
     private let permissions: VoicePermissions
+    private let prepareForward: AppVoiceRuntime.PrepareForward
     private let forward: AppVoiceRuntime.Forward
 
     init(
         state: @escaping AppVoiceRuntime.State,
         sessions: VoiceSessionCoordinator,
-        overlay: VoiceWakeOverlayController,
         permissions: VoicePermissions,
+        prepareForward: @escaping AppVoiceRuntime.PrepareForward,
         forward: @escaping AppVoiceRuntime.Forward)
     {
         self.state = state
         self.sessions = sessions
-        self.overlay = overlay
         self.permissions = permissions
+        self.prepareForward = prepareForward
         self.forward = forward
     }
 
@@ -311,13 +311,10 @@ actor VoiceWakeRuntime {
 
         let token = self.overlayToken
         self.overlayToken = nil
-        guard dismissOverlay else { return }
-        Task { @MainActor [sessions, overlay] in
-            if let token {
-                sessions.dismiss(token: token, reason: .explicit, outcome: .empty)
-            } else {
-                overlay.dismiss()
-            }
+        // Wake cleanup owns only its capture token, never a PTT or finalized send overlay.
+        guard dismissOverlay, let token else { return }
+        Task { @MainActor [sessions] in
+            sessions.dismiss(token: token, reason: .explicit, outcome: .empty)
         }
     }
 
@@ -621,11 +618,11 @@ actor VoiceWakeRuntime {
                     voiceWakeTrigger: triggerWord)
             }
         } else if !finalTranscript.isEmpty {
-            if sendChime != .none {
-                await MainActor.run { VoiceWakeChimePlayer.play(sendChime) }
-            }
-            Task.detached { [forward] in
-                await forward(finalTranscript, triggerWord)
+            Task.detached { [prepareForward, forward] in
+                let invocation = await prepareForward(finalTranscript, triggerWord)
+                if case .success = await forward(invocation), sendChime != .none {
+                    await MainActor.run { VoiceWakeChimePlayer.play(sendChime) }
+                }
             }
         }
         self.overlayToken = nil

@@ -30,7 +30,6 @@ function createGatewayFixture(getGateway: PageOptions["getGateway"], invalidateR
   const callbacks = {
     onIdentityChange: vi.fn(),
     ensureInitialData: vi.fn(),
-    onSnapshot: vi.fn(),
     onPageActivation: vi.fn(),
     invalidateRequests,
   };
@@ -89,29 +88,15 @@ it("rebinds an equivalent replacement source and ignores the retired subscriptio
   setGateway(second.gateway);
   flush();
   expect(previous && page.isCurrent(previous)).toBe(false);
+  expect(
+    page.isRouteDataCurrent({ gateway: first.gateway, gatewaySnapshot: first.gateway.snapshot }),
+  ).toBe(false);
   expect([first.listeners.size, second.listeners.size]).toEqual([0, 1]);
   expectChange(onIdentityChange, { sourceChanged: true, identityChanged: true });
   const epoch = page.epoch;
   first.publish({ ...first.gateway.snapshot, phase: "reconnecting" });
   expect(page).toMatchObject({ epoch, connected: true });
   expect(invalidateRequests).toHaveBeenCalledOnce();
-});
-
-it("accepts route metadata clones only within the same source and hello epoch", () => {
-  const current = source({ hello: {} as NonNullable<ApplicationGatewaySnapshot["hello"]> });
-  const initial = current.gateway.snapshot;
-  const { page, onSnapshot, ensureInitialData } = createGatewayFixture(() => current.gateway);
-  const route = { gateway: current.gateway, gatewaySnapshot: initial };
-  const scope = page.capture();
-  current.publish({ ...initial, suspensionPhase: "draining" });
-  current.publish({ ...initial, suspensionPhase: "accepting" });
-  expectChange(onSnapshot, { becameAvailable: true, becameConnected: false });
-  expect(page.isRouteDataCurrent(route)).toBe(true);
-  expect(scope && page.isCurrent(scope)).toBe(true);
-  expect(ensureInitialData).toHaveBeenCalledOnce();
-  expect(page.isRouteDataCurrent({ ...route, gateway: source(initial).gateway })).toBe(false);
-  current.publish({ ...initial, hello: {} as NonNullable<ApplicationGatewaySnapshot["hello"]> });
-  expect(page.isRouteDataCurrent(route)).toBe(false);
 });
 
 it("releases page-activation listeners with the Solid owner", () => {

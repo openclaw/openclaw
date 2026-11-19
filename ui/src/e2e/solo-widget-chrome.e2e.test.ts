@@ -2,6 +2,7 @@ import type { BoardSnapshot } from "@openclaw/gateway-protocol";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
   controlUiSessionUrl,
@@ -32,18 +33,14 @@ function snapshot(overrides: Partial<BoardSnapshot> = {}): BoardSnapshot {
       { tabId: "research", title: "Research", position: 1, chatDock: "right" },
     ],
     widgets: [
-      {
+      createBoardWidget({
         name: "release-status",
-        tabId: "main",
         title: "Release status",
-        contentKind: "html",
         sizeW: 12,
         sizeH: 8,
-        position: 0,
         grantState: "granted",
-        revision: 1,
         declared: { tools: ["health"], netOrigins: [] },
-      },
+      }),
     ],
     ...overrides,
   };

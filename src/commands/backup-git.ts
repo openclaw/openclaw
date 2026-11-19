@@ -1,5 +1,6 @@
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -49,7 +50,7 @@ async function resolveCreateDatabases(options: BackupGitCreateOptions) {
       (options.agents ?? []).map((agent) => {
         const trimmed = agent.trim();
         if (!trimmed) {
-          throw new Error("--agent must not be blank");
+          throwExpectedCliError("--agent must not be blank");
         }
         return normalizeAgentId(trimmed);
       }),
@@ -57,10 +58,12 @@ async function resolveCreateDatabases(options: BackupGitCreateOptions) {
   ];
   const explicit = options.global === true || normalizedAgents.length > 0;
   if (options.all && explicit) {
-    throw new Error("Use --all by itself, or select --global and --agent scopes explicitly.");
+    throwExpectedCliError("Use --all by itself, or select --global and --agent scopes explicitly.");
   }
   if (!options.all && !explicit) {
-    throw new Error("Choose at least one Git backup scope: --all, --global, or --agent <id>.");
+    throwExpectedCliError(
+      "Choose at least one Git backup scope: --all, --global, or --agent <id>.",
+    );
   }
   const globalPath = options.all || options.global ? resolveOpenClawStateSqlitePath() : undefined;
   if (globalPath) {
@@ -97,16 +100,16 @@ function resolveOneIdentity(options: BackupGitScopeOptions): GitBackupIdentity {
   const agent = options.agent?.trim();
   const store = options.store?.trim();
   if (options.store !== undefined && !store) {
-    throw new Error("--store must not be blank");
+    throwExpectedCliError("--store must not be blank");
   }
   const scopes = Number(options.global === true) + Number(Boolean(agent)) + Number(Boolean(store));
   if (scopes > 1) {
-    throw new Error(
+    throwExpectedCliError(
       "Choose exactly one Git backup scope: --global, --agent <id>, or --store <id>.",
     );
   }
   if (scopes === 0) {
-    throw new Error("Choose a Git backup scope: --global, --agent <id>, or --store <id>.");
+    throwExpectedCliError("Choose a Git backup scope: --global, --agent <id>, or --store <id>.");
   }
   if (store) {
     return { role: "generic", id: store };
@@ -129,7 +132,7 @@ export async function backupGitInitCommand(
     writeRuntimeJson(runtime, result);
   } else {
     runtime.log(
-      `Git backup repository ready: ${sanitizeTerminalText(shortenHomePath(result.repositoryPath))}`,
+      terminalText`Git backup repository ready: ${shortenHomePath(result.repositoryPath)}`,
     );
   }
   return result;
@@ -169,19 +172,17 @@ export async function backupGitCreateCommand(runtime: RuntimeEnv, options: Backu
     if (options.json) {
       writeRuntimeJson(runtime, result);
     } else if (result.noChanges) {
-      runtime.log(
-        `Git backup: no changes (${sanitizeTerminalText(shortenHomePath(repositoryPath))})`,
-      );
+      runtime.log(terminalText`Git backup: no changes (${shortenHomePath(repositoryPath)})`);
     } else {
-      runtime.log(`Git backup committed: ${result.commit}`);
+      runtime.log(terminalText`Git backup committed: ${result.commit}`);
     }
     if (result.pushWarning) {
       // Keep escaped line breaks outside URL query values during console redaction.
-      const warning = result.pushWarning.split("\n").map(sanitizeTerminalText).join(" \\n ");
-      runtime.error(`Warning: Git backup committed, but push failed: ${warning}`);
+      const warning = result.pushWarning.split("\n").join(" \\n ");
+      runtime.error(terminalText`Warning: Git backup committed, but push failed: ${warning}`);
     }
     for (const warning of result.warnings) {
-      runtime.error(`Warning: ${sanitizeTerminalText(warning)}`);
+      runtime.error(terminalText`Warning: ${warning}`);
     }
     return result;
   } catch (error) {
@@ -207,13 +208,11 @@ export async function backupGitLogCommand(
   if (options.json) {
     writeRuntimeJson(runtime, { repositoryPath, entries });
   } else if (entries.length === 0) {
-    runtime.log(
-      `No Git backup commits in ${sanitizeTerminalText(shortenHomePath(repositoryPath))}.`,
-    );
+    runtime.log(terminalText`No Git backup commits in ${shortenHomePath(repositoryPath)}.`);
   } else {
     runtime.log(
       entries
-        .map((entry) => `${entry.commit}\t${entry.date}\t${sanitizeTerminalText(entry.message)}`)
+        .map((entry) => terminalText`${entry.commit}\t${entry.date}\t${entry.message}`)
         .join("\n"),
     );
   }
@@ -234,10 +233,10 @@ export async function backupGitVerifyCommand(
   } else {
     for (const table of result.tables) {
       runtime.log(
-        `${table.ok ? "ok" : "failed"}\t${sanitizeTerminalText(table.table)}\t${table.rows}\t${table.sha256}`,
+        terminalText`${table.ok ? "ok" : "failed"}\t${table.table}\t${table.rows}\t${table.sha256}`,
       );
     }
-    runtime.log(`Git backup verified: ${result.commit}`);
+    runtime.log(terminalText`Git backup verified: ${result.commit}`);
   }
   return result;
 }
@@ -261,16 +260,16 @@ export async function backupGitRestoreCommand(
     writeRuntimeJson(runtime, result);
   } else {
     runtime.log(
-      `Git backup restored: ${sanitizeTerminalText(shortenHomePath(result.targetPath))} (${result.commit})`,
+      terminalText`Git backup restored: ${shortenHomePath(result.targetPath)} (${result.commit})`,
     );
     if (result.excludedTables.length > 0) {
       runtime.error(
-        `Warning: this redacted backup omits tables: ${result.excludedTables.map(sanitizeTerminalText).join(", ")}`,
+        terminalText`Warning: this redacted backup omits tables: ${result.excludedTables.join(", ")}`,
       );
     }
     if (result.excludedConfigStateKeyPrefixes.length > 0) {
       runtime.error(
-        `Warning: this redacted backup omits machine-state values under: ${result.excludedConfigStateKeyPrefixes.map(sanitizeTerminalText).join(", ")}`,
+        terminalText`Warning: this redacted backup omits machine-state values under: ${result.excludedConfigStateKeyPrefixes.join(", ")}`,
       );
     }
   }

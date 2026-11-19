@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computerCapabilities } from "../gateway/desktop/computer.test-support.js";
@@ -28,100 +28,84 @@ const transport: ComputerToolTransport = {
   },
 };
 
-describe.each([false, true])(
-  "session placement computer tool policy (prepared: %s)",
-  (prepared) => {
-    it.each<[string, OpenClawConfig["tools"], boolean, boolean?]>([
-      ["default", {}, true],
-      ["additive sandbox tools", { sandbox: { tools: { alsoAllow: ["web_fetch"] } } }, true],
-      ["explicit sandbox allow", { sandbox: { tools: { allow: ["read"] } } }, false],
-      ["explicit sandbox deny", { sandbox: { tools: { deny: ["computer"] } } }, false],
-      ["inactive sandbox allow", { sandbox: { tools: { allow: ["read"] } } }, true, false],
-      ["global deny", { deny: ["computer"] }, false],
-      ["coding profile", { profile: "coding" }, false],
-    ])(
-      "applies %s policy to the real harness host tool surface",
-      async (_name, tools, allowed, sandboxed = true) => {
-        const workspaceDir = tempDirs.make("placement-computer-");
-        const config: OpenClawConfig = { plugins: { enabled: false }, tools };
-        const host = await createAdmittedHostCapabilityTestFixture({
+it.each<[string, OpenClawConfig["tools"], boolean, boolean?, boolean?]>([
+  ["default", {}, true],
+  ["prepared default", {}, true, true, true],
+  ["prepared denial", { deny: ["computer"] }, false, true, true],
+  ["additive sandbox tools", { sandbox: { tools: { alsoAllow: ["web_fetch"] } } }, true],
+  ["explicit sandbox allow", { sandbox: { tools: { allow: ["read"] } } }, false],
+  ["explicit sandbox deny", { sandbox: { tools: { deny: ["computer"] } } }, false],
+  ["inactive sandbox allow", { sandbox: { tools: { allow: ["read"] } } }, true, false],
+  ["global deny", { deny: ["computer"] }, false],
+  ["coding profile", { profile: "coding" }, false],
+])(
+  "applies %s policy to the real harness host tool surface",
+  async (_name, tools, allowed, sandboxed = true, prepared = false) => {
+    const workspaceDir = tempDirs.make("placement-computer-");
+    const config: OpenClawConfig = { plugins: { enabled: false }, tools };
+    const host = await createAdmittedHostCapabilityTestFixture({
+      ...scope,
+      cwd: workspaceDir,
+      workspaceDir,
+      config,
+    });
+    const surface = host.hostCapabilities.createToolSurface!;
+    let desktop: ComputerToolTransport | null = transport;
+    const options = {
+      ...scope,
+      workspaceDir,
+      config,
+      modelHasVision: true,
+      sandbox: sandboxed
+        ? createAgentToolsSandboxContext({
+            workspaceDir,
+            tools: resolveSandboxToolPolicyForAgent(config, "main"),
+          })
+        : undefined,
+      toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
+    };
+    try {
+      const ordinary = surface(options);
+      if (sandboxed) {
+        expect(ordinary.some((tool) => tool.name === "computer")).toBe(false);
+      }
+      await withSessionPlacementComputer(
+        {
           ...scope,
-          cwd: workspaceDir,
-          workspaceDir,
-          config,
-        });
-        const options = {
-          ...scope,
-          workspaceDir,
-          config,
-          modelHasVision: true,
-          sandbox: sandboxed
-            ? createAgentToolsSandboxContext({
-                workspaceDir,
-                tools: resolveSandboxToolPolicyForAgent(config, "main"),
+          isActive: () => true,
+          sandboxToolPolicy: resolveSandboxToolPolicyForAgent(config, "main", {
+            containedToolNames: ["computer"],
+          }),
+          bind: (run) => {
+            expect(run).toBe(host.admittedRunContext.operationalRunInstance);
+            return desktop;
+          },
+        },
+        async () => {
+          const conversationCapabilityProfile = prepared
+            ? resolveConversationCapabilityProfile({
+                ...options,
+                sandboxToolPolicy: options.sandbox?.tools,
               })
-            : undefined,
-          toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
-        };
-        try {
-          const ordinary = host.hostCapabilities.createToolSurface?.(options) ?? [];
-          if (sandboxed) {
-            expect(ordinary.some((tool) => tool.name === "computer")).toBe(false);
+            : undefined;
+          const bound = surface({ ...options, conversationCapabilityProfile });
+          const computer = bound.find((tool) => tool.name === "computer");
+          expect(Boolean(computer)).toBe(allowed);
+          if (computer) {
+            expect(computer.parameters).not.toHaveProperty("properties.node");
+            expect(computer.parameters).not.toHaveProperty("properties.gatewayUrl");
+            expect(computer.description).toContain("this session's desktop");
           }
-          await withSessionPlacementComputer(
-            {
-              ...scope,
-              isActive: () => true,
-              sandboxToolPolicy: resolveSandboxToolPolicyForAgent(config, "main", {
-                containedToolNames: ["computer"],
-              }),
-              bind: (run) => {
-                expect(run).toBe(host.admittedRunContext.operationalRunInstance);
-                return transport;
-              },
-            },
-            async () => {
-              const conversationCapabilityProfile = prepared
-                ? resolveConversationCapabilityProfile({
-                    ...options,
-                    sandboxToolPolicy: options.sandbox?.tools,
-                  })
-                : undefined;
-              const bound =
-                host.hostCapabilities.createToolSurface?.({
-                  ...options,
-                  conversationCapabilityProfile,
-                }) ?? [];
-              if (!sandboxed) {
-                expect(bound.map((tool) => tool.name)).toEqual(
-                  expect.arrayContaining(ordinary.map((tool) => tool.name)),
-                );
-              }
-              const computer = bound.find((tool) => tool.name === "computer");
-              expect(Boolean(computer)).toBe(allowed);
-              if (computer) {
-                expect(computer.parameters).not.toHaveProperty("properties.node");
-                expect(computer.parameters).not.toHaveProperty("properties.gatewayUrl");
-                expect(computer.description).toContain("this session's desktop");
-              }
-            },
-          );
-          await withSessionPlacementComputer(
-            { ...scope, isActive: () => true, bind: () => null },
-            async () => {
-              expect(
-                host.hostCapabilities
-                  .createToolSurface?.({ ...options, sandbox: undefined })
-                  ?.some((tool) => tool.name === "computer"),
-              ).toBe(false);
-            },
-          );
-        } finally {
-          host.closeHost();
-          host.closeAdmission();
-        }
-      },
-    );
+          desktop = null;
+          expect(
+            surface({ ...options, sandbox: undefined }).some((tool) => tool.name === "computer"),
+          ).toBe(false);
+        },
+      );
+    } finally {
+      host.closeHost();
+      host.closeAdmission();
+    }
   },
 );
 

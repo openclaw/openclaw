@@ -26,13 +26,17 @@ const steps = [
   })),
 ];
 
-async function openProgress(page: Page) {
+async function openProgress(page: Page, active = true) {
   const card = { sessionKey, revision: 1, updatedAt: Date.now(), steps };
   const gateway = await installMockGateway(page, {
     featureMethods: [...defaultControlUiFeatureMethods, "chat.history", "chat.send"],
     sessionKey,
-    sessionInfo: { key: sessionKey, hasActiveRun: true, activeRunIds: ["polish-run"] },
-    inFlightRun: { runId: "polish-run" },
+    sessionInfo: {
+      key: sessionKey,
+      hasActiveRun: active,
+      activeRunIds: active ? ["polish-run"] : [],
+    },
+    ...(active ? { inFlightRun: { runId: "polish-run" } } : {}),
     methodResponses: { "progressCard.get": { card } },
   });
   await page.goto(`${suite.server.baseUrl}chat`);
@@ -49,6 +53,29 @@ async function openProgress(page: Page) {
 }
 
 suite.define(() => {
+  it.each([1440, 390])(
+    "keeps paused and pending progress markers at their compact size at %i px",
+    async (width) => {
+      const context = await suite.newBrowserContext({ viewport: { width, height: 1000 } });
+      try {
+        const page = await context.newPage();
+        const { details } = await openProgress(page, false);
+        const size = expect.closeTo(((width === 1440 ? 13 : 12) * 24) / 21.5, 2);
+        for (const status of ["paused", "pending"]) {
+          const marker = await details
+            .locator(`.session-progress-card__step-marker[data-status="${status}"] > svg`)
+            .first()
+            .evaluate((svg) => {
+              const bounds = svg.getBoundingClientRect();
+              return [bounds.width, bounds.height, getComputedStyle(svg).strokeWidth];
+            });
+          expect(marker).toEqual([size, size, "1.5px"]);
+        }
+      } finally {
+        await suite.closeBrowserContext(context);
+      }
+    },
+  );
   it.each([
     { width: 1440, touch: false },
     { width: 390, touch: false },
@@ -71,7 +98,9 @@ suite.define(() => {
             // A Home dock is suppressed while that same conversation owns the page.
             await page.goto(`${suite.server.baseUrl}new`);
             await openProgressHomeDock(page);
-            await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
+            await gateway.waitForRequest("sessions.messages.subscribe", {
+              match: { key: sessionKey },
+            });
           }
           const disclosure =
             placement === "details"
@@ -92,9 +121,8 @@ suite.define(() => {
                 const icon = marker.getBoundingClientRect();
                 const bounds = text.getBoundingClientRect();
                 const line = Number.parseFloat(getComputedStyle(text).lineHeight);
-                const markerLine = row.closest("[data-desktop-details]") ? bounds.height : line;
                 return {
-                  delta: Math.abs(icon.top + icon.height / 2 - (bounds.top + markerLine / 2)),
+                  delta: Math.abs(icon.top + icon.height / 2 - (bounds.top + line / 2)),
                   lines: bounds.height / line,
                 };
               }),
@@ -171,7 +199,7 @@ suite.define(() => {
         // Keep the Home identity, but release its full-page presentation before docking.
         await page.goto(`${suite.server.baseUrl}new`);
         await openProgressHomeDock(page);
-        await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
+        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
         const home = page.locator("openclaw-home-session");
         const disclosure = home.locator('[data-progress-card-placement="composer"]');
         await disclosure.waitFor();

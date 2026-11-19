@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import { parse } from "acorn";
 import { afterEach, expect, it } from "vitest";
@@ -7,6 +8,8 @@ import {
   discoverStandaloneWorkers,
   prepareStandaloneWorkers,
 } from "../../scripts/lib/bun-standalone-workers.mjs";
+import { runtimeProcessBuildEntries } from "../../scripts/lib/runtime-process-build-entries.mts";
+import { createStandaloneRuntimeProcessEntrypoints } from "../../src/infra/runtime-process-manifest.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
@@ -17,6 +20,29 @@ function fixture(files: Record<string, string>) {
   writeFixtureFiles(runtimeRoot, files);
   return runtimeRoot;
 }
+
+it("admits Knowledge's package-declared workers into the standalone and source build graphs", () => {
+  const packageRoot = new URL("../../extensions/knowledge/", import.meta.url);
+  const manifest = JSON.parse(fs.readFileSync(new URL("package.json", packageRoot), "utf8")) as {
+    openclaw: { build: { workerEntries: string[] } };
+  };
+  const outputs = manifest.openclaw.build.workerEntries.map(
+    (entry) => `dist/extensions/knowledge/${entry.replace(/^\.\//u, "").replace(/\.ts$/u, ".js")}`,
+  );
+  const runtimeRoot = fixture(Object.fromEntries(outputs.map((entry) => [entry, "export {};\n"])));
+  const declarations = Object.fromEntries(
+    Object.entries(
+      createStandaloneRuntimeProcessEntrypoints(import.meta.url, ["knowledge"]),
+    ).filter(([name]) => name.startsWith("plugin:")),
+  );
+  expect(discoverStandaloneWorkers({ runtimeRoot, runtimeEntrypoints: declarations })).toEqual(
+    outputs.toSorted(),
+  );
+  for (const entry of manifest.openclaw.build.workerEntries) {
+    const output = `extensions/knowledge/${entry.replace(/^\.\//u, "").replace(/\.ts$/u, "")}`;
+    expect(runtimeProcessBuildEntries[output]).toBe(fileURLToPath(new URL(entry, packageRoot)));
+  }
+});
 
 it("embeds only declared targets, including names without worker suffixes", () => {
   const runtimeRoot = fixture({

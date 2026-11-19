@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync, constants } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as sqliteQueries from "../../../infra/kysely-sync.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import {
@@ -20,6 +21,7 @@ import {
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import * as subagentCodec from "./subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
 import {
   isReleasedSubagentRunRecord,
@@ -76,6 +78,74 @@ describe("subagent registry sqlite store", () => {
       await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       tempStateDir = null;
     }
+  });
+
+  it("commits terminal removal facts with deletion and rolls both back on failure", () => {
+    const runs = ["delivered", "suspended", "discarded", "failed"].map((status) =>
+      createRun({
+        runId: `removal-${status}`,
+        requesterAgentId: "main",
+        delivery:
+          status === "delivered"
+            ? { status: "delivered", deliveredAt: 300 }
+            : status === "suspended"
+              ? { status: "suspended", suspendedAt: 300, suspendedReason: "permanent_failure" }
+              : status === "discarded"
+                ? { status: "discarded", discardedAt: 300, discardReason: "expired" }
+                : {
+                    status: "failed",
+                    disposition: "permanent_failure",
+                    lastError: "requester deleted",
+                  },
+      }),
+    );
+    saveRuns(...runs);
+    const ids = runs.map((run) => run.runId);
+    const readFacts = () =>
+      openOpenClawStateDatabase()
+        .db.prepare(
+          "SELECT run_id, payload_json FROM session_state_events WHERE kind = 'child_delivery_removed' ORDER BY run_id",
+        )
+        .all();
+    expect(() =>
+      runOpenClawStateWriteTransaction((database) => {
+        writeSubagentRunValuesInDatabase(database, [], ids);
+        throw new Error("rollback removal");
+      }),
+    ).toThrow("rollback removal");
+    expect(readFacts()).toEqual([]);
+    expect(loadSubagentRegistryFromSqlite().size).toBe(4);
+    runOpenClawStateWriteTransaction((database) =>
+      writeSubagentRunValuesInDatabase(database, [], ids),
+    );
+    reopen();
+    expect(loadSubagentRegistryFromSqlite().size).toBe(0);
+    expect(
+      readFacts().map((row) =>
+        Object.assign({ runId: row.run_id }, JSON.parse(String(row.payload_json))),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        runId: "removal-delivered",
+        outcome: "delivered",
+        deliveredAt: 300,
+      }),
+      expect.objectContaining({
+        runId: "removal-discarded",
+        outcome: "discarded",
+        reason: "expired",
+      }),
+      expect.objectContaining({
+        runId: "removal-failed",
+        outcome: "discarded",
+        lastError: "requester deleted",
+      }),
+      expect.objectContaining({
+        runId: "removal-suspended",
+        outcome: "suspended",
+        reason: "permanent_failure",
+      }),
+    ]);
   });
 
   it("reads unbound old-schema rows and rolls back first-use parent-store columns with registration", async () => {
@@ -296,6 +366,45 @@ describe("subagent registry sqlite store", () => {
       writePayload(run.runId, JSON.stringify({ parentCompletion }));
       expect(loadSubagentRegistryFromSqlite().size).toBe(0);
       expect(readCompact().size).toBe(0);
+    }
+  });
+
+  it("decodes owned compact rows without copying while preserving stored identities", () => {
+    const run = createRun({
+      delivery: {
+        status: "pending",
+        requesterDelivery: {
+          state: "consumed",
+          runId: "requester-continuation",
+          at: 300,
+        },
+      },
+    });
+    saveRuns(run);
+    const database = openOpenClawStateDatabase();
+    database.db
+      .prepare(
+        "UPDATE subagent_runs SET run_id = ?, child_session_key = ?, requester_session_key = ? WHERE run_id = ?",
+      )
+      .run(` ${run.runId} `, ` ${run.childSessionKey} `, ` ${run.requesterSessionKey} `, run.runId);
+    const storedBefore = database.db.prepare("SELECT * FROM subagent_runs").get();
+    const queries = vi.spyOn(sqliteQueries, "executeSqliteQuerySync");
+    const decode = vi.spyOn(subagentCodec, "rowToSubagentRunRecord");
+    try {
+      const compact = loadSubagentSessionListRunsFromSqlite(undefined, database);
+      expect([...compact.keys()]).toEqual([run.runId]);
+      expect(compact.get(run.runId)).toMatchObject({
+        runId: run.runId,
+        childSessionKey: run.childSessionKey,
+        requesterSessionKey: run.requesterSessionKey,
+        delivery: run.delivery,
+      });
+      // A compact query owns its rows; a second row allocation adds no isolation.
+      expect(decode.mock.calls[0]?.[0]).toBe(queries.mock.results.at(-1)?.value.rows[0]);
+      expect(database.db.prepare("SELECT * FROM subagent_runs").get()).toEqual(storedBefore);
+    } finally {
+      decode.mockRestore();
+      queries.mockRestore();
     }
   });
 

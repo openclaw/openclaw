@@ -41,8 +41,8 @@ try {
   }
   process.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE = includeFile;
   const rows = [];
-  for (const index of [undefined, 1, 2, 3]) {
-    ctx.config.shard = index ? { index, count: 3 } : undefined;
+  for (const index of [undefined, 1, 2]) {
+    ctx.config.shard = index ? { index, count: 2 } : undefined;
     const native = new BaseSequencer(ctx);
     const original = index ? await native.shard(specifications) : specifications;
     const selected = {};
@@ -163,7 +163,7 @@ try {
     actual: selectionIds(await sequencer.sort(boundedSpecs)),
   };
   const mixed = [...schedulingSpecs];
-  for (const name of ["unit-mock-registry", "chromium", "unit-timing"]) {
+  for (const name of ["unit-mock-registry", "chromium", "chromium-mock-registry", "unit-timing"]) {
     const project = ctx.getProjectByName(name);
     const specs = schedulingSpecs.map((spec) => project.createSpecification(spec.moduleId));
     scheduling.preserved.push({
@@ -225,7 +225,7 @@ try {
   // Exercise the registered pool boundary with no members in this runtime's shard.
   process.env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE = includeFile;
   fs.writeFileSync(includeFile, "[]");
-  ctx.config.shard = { index: 1, count: 3 };
+  ctx.config.shard = { index: 1, count: 2 };
   const empty = await ctx.runTestSpecifications(specifications);
   fs.writeFileSync(
     output,

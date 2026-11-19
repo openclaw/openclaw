@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
@@ -545,6 +545,11 @@ function captureDocker(env: NodeJS.ProcessEnv = {}) {
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 if (args[0] === 'run' && args.includes('-i')) fs.readFileSync(0);
+if (args[0] === 'run' && process.env.CHECK_WRITABLE_PREFIX === '1') {
+  const mount = args.find(arg => arg.endsWith(':/npm-global'));
+  const mode = fs.statSync(mount.slice(0, -':/npm-global'.length)).mode & 0o007;
+  if (mode !== 0o007) throw new Error('npm prefix is inaccessible to the container user: ' + mode);
+}
 fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + '\\n');
 `,
   );
@@ -570,6 +575,11 @@ fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + '\\n');
     : [];
   return { root, candidate, result, runs };
 }
+
+it("makes the disposable npm prefix writable to the container user", () => {
+  const { result } = captureDocker({ CHECK_WRITABLE_PREFIX: "1" });
+  expect(result.status, result.stderr).toBe(0);
+});
 
 it.each([false, true])("isolates install and runtime credentials (upgrade=%s)", (upgrade) => {
   const { root, candidate, result, runs } = captureDocker({
@@ -607,4 +617,56 @@ it.each([false, true])("isolates install and runtime credentials (upgrade=%s)", 
   expect(readFileSync(path.join(root, "output/run-metadata.txt"), "utf8")).toBe(
     "schema=1\nexit_code=0\nlive_output=job_log\n",
   );
+});
+
+it("loads tool validation from the mounted Telegram source harness", () => {
+  const { result, runs } = captureDocker();
+  expect(result.status, result.stderr).toBe(0);
+  const mountedRoot = mkTempRoot();
+  writeFixture(mountedRoot, "package.json", { type: "module" });
+  const mounts = runs[1]!.flatMap((arg, index, args) =>
+    arg === "-v" ? [args[index + 1]!.split(":")] : [],
+  );
+  for (const [source, target] of mounts) {
+    if (
+      source &&
+      target &&
+      target !== "/app/package.json" &&
+      path.posix.dirname(target) === "/app" &&
+      [".mjs", ".json"].includes(path.posix.extname(target))
+    ) {
+      cpSync(source, path.join(mountedRoot, path.posix.basename(target)));
+    }
+    if (target === "/app/packages") {
+      // Copy source rather than symlink it: relative imports must stay inside the mount layout.
+      for (const name of ["llm-core", "normalization-core"]) {
+        const packageRoot = path.join(mountedRoot, "packages", name);
+        cpSync(path.join(source!, name, "src"), path.join(packageRoot, "src"), { recursive: true });
+        cpSync(path.join(source!, name, "package.json"), path.join(packageRoot, "package.json"));
+      }
+    }
+  }
+  symlinkSync(
+    path.join(repoRoot, "node_modules"),
+    path.join(mountedRoot, "node_modules"),
+    "junction",
+  );
+  const loaded = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "-e",
+      `import assert from "node:assert/strict";
+import { validateToolArguments } from "./packages/llm-core/src/validation.ts";
+const tool = {
+  name: "count",
+  parameters: { type: "object", properties: { count: { type: "integer" } }, required: ["count"] },
+};
+assert.deepEqual(validateToolArguments(tool, { name: "count", arguments: { count: "2" } }), { count: 2 });`,
+    ],
+    { cwd: mountedRoot, encoding: "utf8", timeout: 30_000 },
+  );
+  expect(loaded.status, loaded.stderr).toBe(0);
 });

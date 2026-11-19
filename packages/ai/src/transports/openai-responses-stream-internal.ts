@@ -40,7 +40,7 @@ import { normalizeResponsesFailedEvent, ResponsesStreamFailure } from "./openai-
 import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
 import { normalizeOpenAIResponsesReasoningReplayItem } from "./openai-responses-replay.js";
 import { countToolCallTrailingWhitespace } from "./openai-responses-stream-errors.js";
-import { adaptResponsesStream } from "./openai-responses-stream-observer-internal.js";
+import { adaptResponsesStreamEvent } from "./openai-responses-stream-observer-internal.js";
 import {
   appendResponsesPendingTextDelta,
   createResponsesOutputTracker,
@@ -61,7 +61,7 @@ import type {
   ResponsesStreamOptions,
   ResponsesStreamOutputMessage,
 } from "./openai-responses-stream-types-internal.js";
-import { transportAbortError } from "./transport-stream-shared.js";
+import { iterateModelStream, transportAbortError } from "./transport-stream-shared.js";
 
 export type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-types-internal.js";
 
@@ -209,7 +209,7 @@ export async function processResponsesStream<TApi extends Api>(
     item: CompletedToolCall,
     outputIndex: number | undefined,
     streamingToolCall: StreamingToolCallState | undefined,
-    validated: Pick<ToolCall, "name" | "arguments">,
+    validated: Pick<ToolCall, "name" | "arguments" | "argumentsSignature">,
   ): void => {
     const identity = {
       type: item.type,
@@ -292,7 +292,7 @@ export async function processResponsesStream<TApi extends Api>(
     };
   };
 
-  const guardedStream = adaptResponsesStream(
+  const guardedStream = iterateModelStream(
     withFirstStreamEventTimeout(openaiStream, {
       provider: model.provider,
       api: model.api,
@@ -306,7 +306,8 @@ export async function processResponsesStream<TApi extends Api>(
     options?.signal,
   );
   try {
-    for await (const event of guardedStream) {
+    for await (const rawEvent of guardedStream) {
+      const event = adaptResponsesStreamEvent(rawEvent);
       notifyLlmRequestActivity(
         options?.signal,
         outputs.observeEvent(event, outputSlots),
@@ -652,12 +653,8 @@ export async function processResponsesStream<TApi extends Api>(
           ) {
             continue;
           }
-          // The output_item.done snapshot can carry stale partial arguments that
-          // disagree with the streamed buffer. Prefer the streamed buffer only
-          // when it was populated by routed argument deltas or a done event
-          // (not just the opening added snapshot), is reliable (not marked
-          // unreliable by an unrouteable delta), and parses as complete JSON;
-          // otherwise fall back to the done snapshot.
+          // Prefer reliable, complete streamed JSON over a stale done snapshot.
+          // Opening snapshots and unrouteable deltas are not authoritative.
           const streamedArguments = streamingToolCall?.block.partialJson || "";
           const parsedStreamedArguments =
             streamingToolCall?.argumentStreamReliable &&
@@ -667,11 +664,12 @@ export async function processResponsesStream<TApi extends Api>(
             streamedArguments !== completedArguments
               ? parseJsonObjectPreservingUnsafeIntegers(streamedArguments)
               : null;
-          let validated: Pick<ToolCall, "name" | "arguments">;
+          let validated: Pick<ToolCall, "name" | "arguments" | "argumentsSignature">;
           try {
             validated = resolveCompletedResponsesToolCall(item, {
               name: streamingToolCall?.providerName,
               arguments: parsedStreamedArguments ?? (completedArguments || streamedArguments),
+              rawArguments: parsedStreamedArguments ? streamedArguments : undefined,
             });
           } catch (error) {
             // Preserve the original validation code and bounded argument diagnostics.

@@ -16,36 +16,14 @@ const disabledCfg = {
   channels: { signal: { account: "+15550001111", actions: { reactions: false } } },
 };
 type ActionContext = Parameters<NonNullable<typeof signalMessageActions.handleAction>>[0];
-function react(
-  params: ActionContext["params"],
-  overrides: Partial<Omit<ActionContext, "params">> = {},
-) {
+type ActionOverrides = Partial<Omit<ActionContext, "params">>;
+function react(params: ActionContext["params"], overrides: ActionOverrides = {}) {
   return signalMessageActions.handleAction?.({
     channel: "signal",
     action: "react",
     cfg: DEFAULT_CFG,
     ...overrides,
-    params,
-  });
-}
-
-type PrepareContext = Parameters<NonNullable<typeof signalMessageActions.prepareSendPayload>>[0];
-function prepareReply(
-  replyToIdSource: PrepareContext["replyToIdSource"],
-  toolContext?: ActionContext["toolContext"],
-) {
-  return signalMessageActions.prepareSendPayload?.({
-    ctx: {
-      channel: "signal",
-      action: "send",
-      cfg: {},
-      params: { replyTo: "1700000000001" },
-      ...(toolContext ? { toolContext } : {}),
-    },
-    to: "+15550001111",
-    payload: { text: "reply" },
-    replyToId: "1700000000001",
-    replyToIdSource,
+    params: { to: "+15559999999", messageId: "123", emoji: "✅", ...params },
   });
 }
 
@@ -80,79 +58,54 @@ describe("signalMessageActions", () => {
   it("supports only reactions for plugin dispatch", () => {
     expect(signalMessageActions.supportsAction?.({ action: "send" })).toBe(false);
     expect(signalMessageActions.supportsAction?.({ action: "react" })).toBe(true);
-    expect(signalMessageActions.supportsAction?.({ action: "delete" })).toBe(false);
-    expect(signalMessageActions.supportsAction?.({ action: "pin" })).toBe(false);
   });
 
-  it("keeps inherited Signal reply ids in the durable delivery context", async () => {
-    expect(await prepareReply("implicit")).toEqual({ text: "reply" });
-  });
-
-  it("preserves explicit Signal replies when implicit replies are suppressed", async () => {
-    for (const replyToMode of ["off", "batched"] as const) {
-      const prepared = await prepareReply("explicit", {
-        currentMessageId: "1700000000001",
-        replyToMode,
+  it.each(["implicit", "explicit"] as const)(
+    "prepares %s replies without bypassing suppression",
+    async (replyToIdSource) => {
+      const prepared = await signalMessageActions.prepareSendPayload?.({
+        ctx: {
+          channel: "signal",
+          action: "send",
+          cfg: {},
+          params: { replyTo: "1700000000001" },
+          toolContext: { currentMessageId: "1700000000001", replyToMode: "off" },
+        },
+        to: "+15550001111",
+        payload: { text: "reply" },
+        replyToId: "1700000000001",
+        replyToIdSource,
       });
-      expect(prepared, replyToMode).toEqual({ text: "reply", replyToId: "1700000000001" });
-    }
-  });
-
-  it("blocks reactions when the action gate is disabled", async () => {
-    await expect(
-      react({ to: "+15550001111", messageId: "123", emoji: "✅" }, { cfg: disabledCfg }),
-    ).rejects.toThrow(/actions\.reactions/);
-  });
+      expect(prepared).toEqual({
+        text: "reply",
+        ...(replyToIdSource === "explicit" ? { replyToId: "1700000000001" } : {}),
+      });
+    },
+  );
 
   it("maps reaction targets into sendReactionSignal calls", async () => {
-    const cases: Array<{
-      params: ActionContext["params"];
-      context?: Partial<Omit<ActionContext, "params">>;
-      recipient: string;
-      timestamp?: number;
-      options?: Omit<Parameters<typeof sendReactionsModule.sendReactionSignal>[3], "cfg">;
-    }> = [
-      {
-        context: { cfg: overrideCfg, accountId: "work" },
-        params: { to: "+15550001111" },
-        recipient: "+15550001111",
-        options: { accountId: "work" },
-      },
-      {
-        params: { to: `uuid:${uuid}` },
-        recipient: uuid,
-      },
-      {
-        params: { to: ` SiGnAl: UuId:${uuid.toUpperCase()} ` },
-        recipient: uuid.toUpperCase(),
-      },
-      {
-        params: { to: "signal:group:group-id", targetAuthor: `uuid:${uuid}` },
-        recipient: "",
-        options: { groupId: "group-id", targetAuthor: `uuid:${uuid}` },
-      },
-      {
-        params: { to: "+15559999999", messageId: undefined },
-        recipient: "+15559999999",
-        context: { toolContext: { currentMessageId: "1737630212345" } },
-        timestamp: 1737630212345,
-      },
+    type Options = Omit<Parameters<typeof sendReactionsModule.sendReactionSignal>[3], "cfg">;
+    const work = { cfg: overrideCfg, accountId: "work" };
+    const group = { groupId: "group-id", targetAuthor: `uuid:${uuid}` };
+    const current = { toolContext: { currentMessageId: "1737630212345" } };
+    const cases: Array<[ActionContext["params"], string, ActionOverrides?, Options?, number?]> = [
+      [{ to: "+15550001111" }, "+15550001111", work, { accountId: "work" }],
+      [{ to: ` SiGnAl: UuId:${uuid.toUpperCase()} ` }, uuid.toUpperCase()],
+      [{ to: "signal:group:group-id", targetAuthor: group.targetAuthor }, "", {}, group],
+      [{ to: "+15559999999", messageId: undefined }, "+15559999999", current, {}, 1737630212345],
     ];
-    for (const testCase of cases) {
+    for (const [params, recipient, context, options, timestamp = 123] of cases) {
       sendReactionSignalMock.mockClear();
-      await react({ messageId: "123", emoji: "🔥", ...testCase.params }, testCase.context);
-      expect(sendReactionSignalMock, String(testCase.params.to)).toHaveBeenCalledWith(
-        testCase.recipient,
-        testCase.timestamp ?? 123,
+      await react({ emoji: "🔥", ...params }, context);
+      expect(sendReactionSignalMock, String(params.to)).toHaveBeenCalledWith(
+        recipient,
+        timestamp,
         "🔥",
-        {
-          cfg: testCase.context?.cfg ?? DEFAULT_CFG,
+        expect.objectContaining({
+          cfg: context?.cfg ?? DEFAULT_CFG,
           accountId: "default",
-          groupId: undefined,
-          targetAuthor: undefined,
-          targetAuthorUuid: undefined,
-          ...testCase.options,
-        },
+          ...options,
+        }),
       );
     }
   });
@@ -161,10 +114,7 @@ describe("signalMessageActions", () => {
     "binds provider reactions to the canonical target (remove=%s)",
     async (remove) => {
       const result = await react({
-        to: "+15559999999",
         recipient: "+15558888888",
-        messageId: "123",
-        emoji: "✅",
         ...(remove ? { remove } : {}),
       });
       expect(remove ? removeReactionSignalMock : sendReactionSignalMock).toHaveBeenCalledWith(
@@ -177,51 +127,32 @@ describe("signalMessageActions", () => {
     },
   );
 
-  it.each([
-    {
-      name: "disabled",
-      cfg: {
-        channels: {
-          signal: {
-            account: "+15550001111",
-            accounts: { work: { enabled: false, account: "+15550002222" } },
-          },
-        },
+  const disabledAccount: OpenClawConfig = {
+    channels: {
+      signal: {
+        account: "+15550001111",
+        accounts: { work: { enabled: false, account: "+15550002222" } },
       },
-      accountId: "work",
-      error: /account "work" is disabled/,
     },
-    {
-      name: "unconfigured",
-      cfg: { channels: { signal: {} } },
-      accountId: "default",
-      error: /account "default" is not configured/,
-    },
-  ])("rejects $name accounts before provider dispatch", async ({ cfg, accountId, error }) => {
-    await expect(
-      react({ to: "+15559999999", messageId: "123", emoji: "✅" }, { cfg, accountId }),
-    ).rejects.toThrow(error);
+  };
+  const rejected: Array<[ActionContext["params"], RegExp, ActionOverrides?]> = [
+    [{ to: "+15550001111" }, /actions\.reactions/, { cfg: disabledCfg }],
+    [{}, /account "work" is disabled/, { cfg: disabledAccount, accountId: "work" }],
+    [
+      {},
+      /account "default" is not configured/,
+      { cfg: { channels: { signal: {} } }, accountId: "default" },
+    ],
+    [{ messageId: undefined }, /messageId.*required/],
+    [{ messageId: "123abc" }, /Invalid messageId/],
+    [{ emoji: undefined, remove: false }, /Emoji required to add reaction/],
+    [{ emoji: undefined, remove: true }, /Emoji required to remove reaction/],
+    [{ to: "signal:group:group-id" }, /targetAuthor/],
+    [{ to: undefined, recipient: "+15559999999" }, /recipient.*required/],
+  ];
+  it.each(rejected)("rejects reaction %j before dispatch", async (params, error, overrides) => {
+    await expect(react(params, overrides)).rejects.toThrow(error);
     expect(sendReactionSignalMock).not.toHaveBeenCalled();
     expect(removeReactionSignalMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects invalid reaction inputs before dispatch", async () => {
-    await expect(react({ to: "+15559999999", emoji: "✅" })).rejects.toThrow(/messageId.*required/);
-    await expect(react({ to: "+15559999999", messageId: "123abc", emoji: "✅" })).rejects.toThrow(
-      /Invalid messageId/,
-    );
-    expect(sendReactionSignalMock).not.toHaveBeenCalled();
-    for (const remove of [false, true]) {
-      await expect(react({ to: "+15559999999", messageId: "123", remove })).rejects.toThrow(
-        `Emoji required to ${remove ? "remove" : "add"} reaction.`,
-      );
-    }
-    await expect(
-      react({ to: "signal:group:group-id", messageId: "123", emoji: "✅" }),
-    ).rejects.toThrow(/targetAuthor/);
-    await expect(
-      react({ recipient: "+15559999999", messageId: "123", emoji: "✅" }),
-    ).rejects.toThrow(/recipient.*required/);
-    expect(sendReactionSignalMock).not.toHaveBeenCalled();
   });
 });

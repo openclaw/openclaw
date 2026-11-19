@@ -1,7 +1,7 @@
 const TOP_N_LIMIT = 200;
 
 /** Stable bounded ordering; each caller owns its comparator and validated limit. */
-export function sortAndLimitBy<T extends object>(
+export function sortAndLimitBy<T>(
   entries: T[],
   limit: number | undefined,
   compare: (a: T, b: T) => number,
@@ -14,14 +14,14 @@ export function sortAndLimitBy<T extends object>(
       const entry = entries[index++]!;
       const first = selected[0];
       const beforeFirst: boolean | undefined =
-        preferFirst && first ? compare(entry, first) < 0 : undefined;
+        preferFirst && first !== undefined ? compare(entry, first) < 0 : undefined;
       const worst = selected[limit - 1];
-      if (!beforeFirst && worst && compare(entry, worst) >= 0) {
+      if (!beforeFirst && worst !== undefined && compare(entry, worst) >= 0) {
         preferFirst = false;
         continue;
       }
       // Follow ascending/descending runs without comparing both endpoints for every row.
-      preferFirst = beforeFirst ?? Boolean(first && compare(entry, first) < 0);
+      preferFirst = beforeFirst ?? (first !== undefined && compare(entry, first) < 0);
       let insertAt = 0;
       if (!preferFirst) {
         let low = 1;

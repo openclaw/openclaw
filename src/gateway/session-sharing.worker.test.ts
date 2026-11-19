@@ -17,7 +17,7 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sql
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { removeSessionMember as removeSessionMemberSync } from "../config/sessions/session-sharing-store.native.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
-import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
@@ -51,6 +51,7 @@ import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-
 import { withQualifiedGatewaySessionEntry } from "./session-utils-store.js";
 
 type PolicyConfig = ReturnType<typeof rolePolicyConfig>;
+const session = { agentId: "main", sessionKey: "agent:main:test" };
 const createdActor = (id: string) => ({ type: "human" as const, source: "profile" as const, id });
 async function authorize(
   client: GatewayClient,
@@ -69,19 +70,18 @@ async function authorize(
   expect(result.authorization).toBeDefined();
   return result.authorization!;
 }
-async function memberSession(client: GatewayClient, sessionKey: string, sessionId: string) {
-  const scope = { agentId: "main", sessionKey };
-  replaceSessionEntrySync(scope, {
-    sessionId,
+async function memberSession(client: GatewayClient) {
+  replaceSessionEntrySync(session, {
+    sessionId: "sid",
     updatedAt: 1,
     visibility: "read-only",
     createdActor: createdActor("another-profile"),
   });
-  await addSessionMember(scope, {
+  await addSessionMember(session, {
     identityId: client.authenticatedUserProfile!.profileId,
     addedBy: "another-profile",
   });
-  return scope;
+  return session;
 }
 function restrictView(
   cfg: PolicyConfig,
@@ -282,7 +282,7 @@ it("does not replay an authorization consumer after its own effect changes the r
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     let cfg = rolePolicyConfig();
     const client = roleClient("write", "consumer-owner");
-    const scope = { agentId: "main", sessionKey: "agent:main:consumer-settlement" };
+    const scope = session;
     const entry = {
       sessionId: "consumer-session",
       updatedAt: 1,
@@ -318,7 +318,7 @@ it.each([
       };
       const client = roleClient("write", "idle-rollover-owner");
       client.connect.scopes = [scopeName];
-      const scope = { agentId: "main", sessionKey: "agent:main:idle-rollover" };
+      const scope = session;
       const entry = {
         sessionId: "idle-rollover-session",
         lifecycleRevision: "before-idle-rollover",
@@ -470,7 +470,7 @@ it.each([
         }
       } finally {
         commit.mockRestore();
-        receipt?.finish("interrupted");
+        receipt?.finish("interrupted", "failed");
         await receipt?.settled?.();
         work.release();
         registration.cleanup();
@@ -486,11 +486,7 @@ it.for([false, true])(
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = rolePolicyConfig();
       const client = roleClient("view", "contended-member");
-      const scope = await memberSession(
-        client,
-        "agent:main:contended-sharing",
-        "contended-session",
-      );
+      const scope = await memberSession(client);
       const identityId = client.authenticatedUserProfile!.profileId;
       const authorization = await authorize(client, scope, () => cfg);
       if (revoked) {
@@ -523,6 +519,36 @@ it.for([false, true])(
     }),
 );
 
+it.each(["membership", "lifecycle"] as const)(
+  "keeps committing %s facts authoritative over older published sharing",
+  (change) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = rolePolicyConfig();
+      const client = roleClient("view", "transaction-member");
+      const scope = await memberSession(client);
+      const authorization = await authorize(client, scope, () => cfg);
+      using _ = { [Symbol.dispose]: () => authorization.release?.() };
+      const input = authorization.admittedInputAuthority!;
+      const effect = vi.fn();
+      await input.withCurrent((facts, assertSourceCurrent) => {
+        expect(facts.members).toContainEqual(
+          expect.objectContaining({ identityId: client.authenticatedUserProfile!.profileId }),
+        );
+        const committing = {
+          ...facts,
+          ...(change === "membership"
+            ? { members: [] }
+            : { entry: { ...facts.entry!, lifecycleRevision: "transaction-successor" } }),
+        };
+        expect(() => input.withPreparedCurrent(committing, effect, assertSourceCurrent)).toThrow(
+          change === "membership" ? "session is read-only" : "session changed",
+        );
+      });
+      authorization.assertAdmittedInputCurrent!();
+      expect(effect).not.toHaveBeenCalled();
+    }),
+);
+
 it.each([
   "worker-before-read",
   "reset-before-read",
@@ -532,31 +558,27 @@ it.each([
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = rolePolicyConfig();
     const client = roleClient("view", "worker-member");
-    const scope = await memberSession(client, "agent:main:worker-sharing", "sharing-current");
+    const scope = await memberSession(client);
     const database = openOpenClawAgentDatabase(scope);
     const authorization = await authorize(client, scope, () => cfg);
     await authorization.admittedInputAuthority!.withCurrent((facts, assertCurrent) => {
       expect(facts).toMatchObject({
-        entry: { sessionId: "sharing-current" },
+        entry: { sessionId: "sid" },
         members: [{ identityId: client.authenticatedUserProfile!.profileId }],
       });
       assertCurrent();
       authorization.assertCurrent();
     });
-    const read = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+    const read = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
     let revoked = false;
-    let inventories = 0;
     let closing: Promise<void> | undefined;
     const runExternalClose = AsyncLocalStorage.snapshot();
-    const spy = vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
+    const spy = vi.spyOn(sessionStoreLane.pool, "run").mockImplementation(async (...args) => {
       const reply = await read(...args);
       const kind =
         reply.ok && typeof reply.value === "object" && reply.value !== null && "kind" in reply.value
           ? reply.value.kind
           : undefined;
-      if (kind === "session-target-inventory") {
-        inventories += 1;
-      }
       if (boundary.endsWith("before-consume") && !revoked && kind === "session-exact-entries") {
         revoked = true;
         if (boundary === "owner-before-consume") {
@@ -587,7 +609,6 @@ it.each([
       }
       await expect(authorization.admittedInputAuthority!.withCurrent(effect)).rejects.toThrow();
       expect(effect).not.toHaveBeenCalled();
-      expect(inventories).toBe(0);
       if (boundary.endsWith("before-consume")) {
         expect(revoked).toBe(true);
       }
@@ -604,7 +625,7 @@ it.each(["membership", "routing", "policy"] as const)(
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       let cfg = rolePolicyConfig();
       const client = roleClient("view", "scoped-member");
-      const scope = await memberSession(client, "agent:main:scoped-sharing", "scoped-current");
+      const scope = await memberSession(client);
       const authorization = await authorize(client, scope, () => cfg);
       const effect = vi.fn(() => {
         authorization.assertCurrent();
@@ -623,7 +644,7 @@ it.each(["membership", "routing", "policy"] as const)(
 );
 
 it.each(["role", "agent", "sandbox", "unprepared-role"] as const)(
-  "rechecks prepared %s policy at the next worker admission",
+  "keeps admitted role facts but retains config/data fences (%s)",
   (change) =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       let cfg = rolePolicyConfig();
@@ -637,7 +658,7 @@ it.each(["role", "agent", "sandbox", "unprepared-role"] as const)(
         setUserProfileRole(client.authenticatedUserProfile!.profileId, "view");
         expect(client.preparedSessionProfile).toBeUndefined();
       }
-      const scope = await memberSession(client, "agent:main:policy-sharing", "policy-current");
+      const scope = await memberSession(client);
       const authorization = await authorize(client, scope, () => cfg);
       await authorization.withCurrent!(() => authorization.assertCurrent());
       if (change === "role" || change === "unprepared-role") {
@@ -646,8 +667,13 @@ it.each(["role", "agent", "sandbox", "unprepared-role"] as const)(
         cfg = restrictView(cfg, change === "agent" ? { agents: [] } : { sandbox: "required" });
       }
       const effect = vi.fn();
-      await expect(authorization.withCurrent!(effect)).rejects.toThrow();
-      expect(effect).not.toHaveBeenCalled();
+      if (change === "role" || change === "unprepared-role") {
+        await authorization.withCurrent!(effect);
+        expect(effect).toHaveBeenCalledOnce();
+      } else {
+        await expect(authorization.withCurrent!(effect)).rejects.toThrow();
+        expect(effect).not.toHaveBeenCalled();
+      }
       if (change === "unprepared-role") {
         expect(client.preparedSessionProfile).toBeUndefined();
       }

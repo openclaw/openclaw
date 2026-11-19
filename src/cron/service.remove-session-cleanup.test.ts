@@ -134,25 +134,12 @@ describe("CronService.remove session cleanup", () => {
     ).toBe(false);
   });
 
-  it("removes only the deleted isolated job's base session", async () => {
-    const { cron, job, sessionKey, read, write } = await setup("base-session");
+  it("removes only the base session without holding the cron lock on the lifecycle writer", async () => {
+    const { cron, job, sessionKey, read, write, scope } = await setup("contended-session");
     const runSessionKey = `${sessionKey}:run:retained-run`;
     const otherSessionKey = "agent:main:cron:other-job";
     await write(runSessionKey, "run-session");
     await write(otherSessionKey, "other-session");
-
-    await expect(cron.remove(job.id)).resolves.toEqual({ ok: true, removed: true });
-
-    expect([read(sessionKey), read(runSessionKey), read(otherSessionKey)]).toMatchObject([
-      undefined,
-      { entry: { sessionId: "run-session" } },
-      { entry: { sessionId: "other-session" } },
-    ]);
-  });
-
-  it("releases the cron lock before waiting for the session lifecycle writer", async () => {
-    const { cron, job, sessionKey, read, scope } = await setup("contended-session");
-
     const writerEntered = createDeferred();
     const releaseWriter = createDeferred();
     const heldWriter = runExclusiveSqliteSessionWrite(
@@ -173,10 +160,16 @@ describe("CronService.remove session cleanup", () => {
     } finally {
       releaseWriter.resolve();
       await heldWriter;
-      await Promise.all([removal, unrelatedAdd]);
+      await Promise.all([
+        expect(removal).resolves.toEqual({ ok: true, removed: true }),
+        unrelatedAdd,
+      ]);
     }
-
-    expect(read(sessionKey)).toBeUndefined();
+    expect([read(sessionKey), read(runSessionKey), read(otherSessionKey)]).toMatchObject([
+      undefined,
+      { entry: { sessionId: "run-session" } },
+      { entry: { sessionId: "other-session" } },
+    ]);
   });
 
   it("reports failed session cleanup after removal and preserves the session for retry", async () => {

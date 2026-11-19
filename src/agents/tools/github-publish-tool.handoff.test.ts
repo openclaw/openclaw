@@ -1,9 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import type { SessionGitHubPublicationResult } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import * as events from "../../auto-reply/reply/session-event-handoff.js";
-import { readSessionEventTargetOperatorAuthority } from "../../auto-reply/reply/session-event-target.js";
+import {
+  readSessionEventTargetOperatorAuthority,
+  readSessionEventTargetOwnerContinuation,
+} from "../../auto-reply/reply/session-event-target.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -12,14 +16,18 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareGitHubPublicationRequesterV2 } from "../../gateway/github-publication-requester.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../../gateway/server-methods/types.js";
-import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
+import * as gatewayContinuation from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
   createContext,
   createOperatorClient,
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import * as exec from "../../infra/exec-request-context.js";
-import { resetSystemEventsForTest } from "../../infra/system-events.js";
+import {
+  enqueueSystemEventWithReceipt,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../../infra/system-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
@@ -29,6 +37,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
+import { completionConfig } from "../bash-tools.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "../code-mode.js";
 import { createCodeModeHarness } from "../code-mode.test-support.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "../embedded-agent-runner/run/attempt-sessions-yield.js";
@@ -40,6 +49,7 @@ import {
   captureGatewayToolCallerAssertion,
   createAdmittedGatewayToolCallerIdentity,
   getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
   withGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
 import { createGitHubPublishTool } from "./github-publish-tool.js";
@@ -61,9 +71,31 @@ afterEach(() => {
   resetSystemEventsForTest();
 });
 
-it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
+it.for([
+  "prepared",
+  "published",
+  "published-behind-full-queue",
+  "publication-failed",
+  "failed",
+  "stop",
+  "undelivered",
+  "interrupted",
+  "reset",
+] as const)(
   "hands PR preparation to its registered owner after cleanup: %s",
   async (outcome, { signal }) => {
+    const localPublication =
+      outcome === "published" ||
+      outcome === "published-behind-full-queue" ||
+      outcome === "publication-failed";
+    const failedPublication = {
+      status: "failed",
+      requestId: "local-publication",
+      code: "github_rejected",
+      message: "Branch pushed; pull request creation failed.",
+      nextAction: "Inspect the existing branch before retrying publication.",
+      effect: { kind: "push", status: "observed", headCommit: "a".repeat(40) },
+    } satisfies SessionGitHubPublicationResult;
     await withOpenClawTestState(
       { scenario: "minimal", prepareProfileCatalog: true, env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
@@ -72,17 +104,11 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
         const runId = "pr-handoff-run";
         const scope = { agentId: "main", sessionKey };
         const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
-        const scopes: OperatorScope[] = ["operator.sessions.read", "operator.sessions.write"];
+        const scopes: OperatorScope[] = localPublication
+          ? ["operator.read", "operator.write"]
+          : ["operator.sessions.read", "operator.sessions.write"];
         const config: OpenClawConfig = {
-          agents: {
-            entries: { main: { workspace: state.workspaceDir } },
-            defaults: {
-              workspace: state.workspaceDir,
-              skipBootstrap: true,
-              model: { primary: "mock-openai/gpt-5.6-luna" },
-              models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-            },
-          },
+          agents: completionConfig(state.workspaceDir).agents,
           gateway: {
             roles: {
               default: "guest",
@@ -131,12 +157,40 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
         const resumed = createDeferredCore<string>();
         const order: string[] = [];
         const endpoint = vi.fn<GatewayRequestHandler>(async ({ params, respond }) => {
-          expect(params).toMatchObject({ sessionKey, action: "prepare_pr" });
+          expect(params).toMatchObject(
+            localPublication
+              ? { sessionKey, workspacePath: state.workspaceDir }
+              : { sessionKey, action: "prepare_pr" },
+          );
           expect(getGatewayToolCallerIdentity()?.workspacePrAdoptionSessionId).toBe(sessionId);
+          if (localPublication) {
+            expect(getGatewayToolCallerIdentity()?.workspacePublicationRunId).toBe(runId);
+            expect(getGatewayToolCallerIdentity()?.workspacePublicationPolicy).toEqual({
+              allow: ["github_publish", "read"],
+              deny: ["exec"],
+              permissionMode: "guarded",
+            });
+          }
+          if (!localPublication) {
+            const selected = resolveGatewayToolOperatorSelection();
+            expect(selected.operatorAuthority).toMatchObject({ profileId, scopes });
+            selected.assertCurrent();
+          }
           expect(getSessionControllerEntryForOperation(operation).successorBarrier).toBeDefined();
           order.push("prepare");
           if (outcome === "failed") {
             respond(false, undefined, { code: "UNAVAILABLE", message: "Saved source preserved" });
+          } else if (outcome === "publication-failed") {
+            respond(true, failedPublication);
+          } else if (localPublication) {
+            respond(true, {
+              status: "published",
+              requestId: "local-publication",
+              url: "https://github.com/example/repo/pull/1",
+              repository: "example/repo",
+              branch: "openclaw/task",
+              headCommit: "a".repeat(40),
+            });
           } else {
             respond(true, {
               status: "prepared",
@@ -150,6 +204,10 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
           }
         });
         const publish = vi.fn<GatewayRequestHandler>(async (options) => {
+          if (localPublication) {
+            await endpoint(options);
+            return;
+          }
           const admitted = await prepareGitHubPublicationRequesterV2(options, scope);
           try {
             admitted.requester.assertCurrent();
@@ -168,13 +226,15 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
           [
             ["sessions.github.action", "operator.sessions.write", "sessions", endpoint],
             ["sessions.github.publish", "operator.sessions.write", "sessions", publish],
-            ["tools.effective", "operator.read", "tools", forbidden],
+            ["tools.catalog", "operator.read", "tools", forbidden],
             ["plugins.reload", "operator.admin", "plugins", forbidden],
           ],
           () => config,
         );
         context.resolveGatewayContext = () => context;
+        let resumedContext: string | undefined;
         runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
+          resumedContext = params.currentInboundContext?.text;
           const admission = expectDefined(params.preparedRunAdmission, "resumed guest admission");
           const admittedRunContext = await admission.admit("gateway", params.runId);
           params.onExecutionPhase?.({ phase: "model_call_started" });
@@ -190,15 +250,17 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
             "resumed guest caller",
           );
           await withGatewayToolCallerIdentity(caller, async () => {
-            expect(
-              (await createGitHubPublishTool().execute("resumed-publish", {})).details,
-            ).toMatchObject({ status: "requested", requestId: "synthetic-publication" });
-            await expect(
-              callAgentToolGatewayRequest({
-                method: "tools.effective",
-                params: scope,
-              }),
-            ).rejects.toThrow("operator.read");
+            if (!localPublication) {
+              expect(
+                (await createGitHubPublishTool().execute("resumed-publish", {})).details,
+              ).toMatchObject({ status: "requested", requestId: "synthetic-publication" });
+              await expect(
+                callAgentToolGatewayRequest({
+                  method: "tools.catalog",
+                  params: scope,
+                }),
+              ).rejects.toThrow("operator.read");
+            }
             await expect(
               callAgentToolGatewayRequest({ method: "plugins.reload", params: {} }),
             ).rejects.toThrow("operator.admin");
@@ -209,6 +271,23 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
         const enqueueReal = events.enqueueSessionEventForHost;
         let resumedCaller: { identity: unknown; error?: unknown } | undefined;
         const noticed = createDeferredCore();
+        const released = createDeferredCore();
+        if (outcome === "interrupted") {
+          const capture = gatewayContinuation.captureOperatorToolGatewayContinuationContext;
+          vi.spyOn(
+            gatewayContinuation,
+            "captureOperatorToolGatewayContinuationContext",
+          ).mockImplementation((...args) =>
+            capture(...args)?.then((captured) => {
+              const release = captured.release;
+              captured.release = () => {
+                release();
+                released.resolve(undefined);
+              };
+              return captured;
+            }),
+          );
+        }
         const appendNotice = transcript.appendAssistantMessageToSessionTranscript;
         const notice = vi
           .spyOn(transcript, "appendAssistantMessageToSessionTranscript")
@@ -223,12 +302,16 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
         const enqueue = vi
           .spyOn(events, "enqueueSessionEventForHost")
           .mockImplementation((text, options) => {
-            expect(options).toMatchObject({ sessionKey, expectedTarget: { sessionId } });
+            expect(options).toMatchObject({
+              sessionKey,
+              source: "tool_handoff",
+              expectedTarget: { sessionId },
+            });
             const authority =
               options.expectedTarget &&
               readSessionEventTargetOperatorAuthority(options.expectedTarget);
-            expect(authority?.profileId).toBe(profileId);
-            expect(authority?.scopes).toEqual(scopes);
+            expect(authority).toMatchObject({ profileId, scopes });
+            expect(readSessionEventTargetOwnerContinuation(options.expectedTarget!)).toBe(false);
             expect(text.length).toBeLessThan(4096);
             expect(
               getSessionControllerEntryForOperation(operation).successorBarrier,
@@ -243,7 +326,7 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
             }
             order.push("resume");
             resumed.resolve(text);
-            if (outcome === "prepared") {
+            if (outcome === "prepared" || localPublication) {
               receipt = enqueueReal(text, options);
               return receipt;
             }
@@ -264,26 +347,42 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
                   : { ok: true as const };
               })(),
               settled: Promise.resolve({
-                status: "completed",
+                status: outcome === "interrupted" ? "failed" : "completed",
                 executionStarted: true,
                 delivered: false,
+                ...(outcome === "interrupted"
+                  ? { error: "Session event execution aborted", interruptedByRestart: true }
+                  : {}),
               }),
             };
           });
+        // A long run leaves unpolled exec completions queued for the resumed turn.
+        const passive = outcome === "published-behind-full-queue" ? 20 : 0;
+        for (let index = 0; index < passive; index++) {
+          enqueueSystemEventWithReceipt(`Exec completed (${index})`, {
+            sessionKey,
+            contextKey: `exec:${index}`,
+          });
+        }
         const exercise = async () => {
           const wrapped = withSessionControllerOwner(operation, () =>
             wrapToolWithAbortSignal(
               createGitHubPublishTool({
                 sessionId,
                 runId,
+                inheritedToolAllowlist: ["github_publish", "read"],
+                inheritedToolDenylist: ["exec"],
+                sessionPermissionPolicy: { root: state.workspaceDir, mode: "guarded" },
                 // An ordinary local Docker conversation, as the visibility rule admits.
-                sandbox: createSandboxTestContext({
-                  overrides: {
-                    sessionKey,
-                    workspaceSource: undefined,
-                    backend: { id: "docker" } as never,
-                  },
-                }),
+                sandbox: localPublication
+                  ? undefined
+                  : createSandboxTestContext({
+                      overrides: {
+                        sessionKey,
+                        workspaceSource: undefined,
+                        backend: { id: "docker" } as never,
+                      },
+                    }),
                 onYield() {
                   order.push("yield");
                   runAbort.abort(SESSIONS_YIELD_ABORT_REASON);
@@ -310,10 +409,12 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
             surface.tools.find((candidate) => candidate.name === "github_publish"),
             "direct github_publish",
           );
-          const result = await tool.execute("prepare", {
-            action: "prepare_pr",
-            pullRequestUrl: "https://github.com/example/repo/pull/1",
-          });
+          const result = await tool.execute(
+            "prepare",
+            localPublication
+              ? { workspacePath: state.workspaceDir, title: "Publish the task" }
+              : { action: "prepare_pr", pullRequestUrl: "https://github.com/example/repo/pull/1" },
+          );
           expect(result.details).toMatchObject({
             status: "started",
             async: true,
@@ -331,12 +432,18 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
             expect(enqueue).not.toHaveBeenCalled();
           } else {
             expect(await resumed.promise).toContain(
-              outcome === "failed" ? "Saved source preserved" : '"status":"prepared"',
+              outcome === "publication-failed"
+                ? JSON.stringify(failedPublication)
+                : outcome === "failed"
+                  ? "Saved source preserved"
+                  : localPublication
+                    ? '"status":"published"'
+                    : '"status":"prepared"',
             );
             expect(order).toEqual(["yield", "cleanup", "prepare", "resume"]);
             expect(enqueue).toHaveBeenCalledOnce();
             expect(resumedCaller).toEqual({ identity: undefined });
-            if (outcome === "prepared") {
+            if (outcome === "prepared" || localPublication) {
               const settled = await withinTest(
                 expectDefined(receipt, "actual event receipt").settled,
                 signal,
@@ -348,7 +455,15 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
               expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
               expect(forbidden).not.toHaveBeenCalled();
               expect(publish).toHaveBeenCalledOnce();
+              // The resumed internal turn drains passive notices like an ordinary turn.
+              expect(peekSystemEvents(sessionKey)).toEqual([]);
+              if (passive > 0) {
+                expect(resumedContext).toContain(`Exec completed (${passive - 1})`);
+              }
             }
+          }
+          if (outcome === "interrupted") {
+            await withinTest(released.promise, signal);
           }
           if (outcome === "undelivered" || outcome === "reset") {
             await noticed.promise;
@@ -387,7 +502,7 @@ it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
               isWebchatConnect: () => false,
             },
             () =>
-              withOperatorToolGatewayAuthority({ scopes }, () =>
+              gatewayContinuation.withOperatorToolGatewayAuthority({ scopes }, () =>
                 exec.withExecRequestTurn({ identity: { ...scope, sessionId, runId } }, () =>
                   // Production callers carry the turn batch receipt and the run abort signal.
                   withGatewayToolCallerIdentity(

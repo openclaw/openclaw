@@ -191,18 +191,12 @@ describe("feishu setup wizard", () => {
         accounts: { "main-bot": account },
       }),
     ).toMatchObject({ configured: true, statusLines: ["Feishu: connected as Feishu Main"] });
-    expect(probe).toHaveBeenCalledWith({
-      accountId: "main-bot",
-      enabled: true,
-      configured: true,
-      name: undefined,
-      appId: account.appId,
-      appSecret: account.appSecret,
-      encryptKey: undefined,
-      verificationToken: undefined,
-      domain: "feishu",
-      config: { enabled: true, ...account },
-    });
+    expect(probe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "main-bot",
+        ...credentials(account.appId, account.appSecret),
+      }),
+    );
   });
 
   it("localizes existing bot setup prompts and status lines", async () => {

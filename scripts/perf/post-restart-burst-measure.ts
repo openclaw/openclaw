@@ -1,4 +1,6 @@
 // Own synthetic state only. Run with node --import ./scripts/tsx.mjs.
+// --worker-census observes native worker births/tasks and RSS/CPU/allocation in per-thread
+// JSONL beside the result. Compare fresh fixtures and alternate already-built revisions.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -61,6 +63,7 @@ const { values } = parseArgs({
     "cheap-handlers": { type: "boolean", default: false },
     "transcript-reads": { type: "boolean", default: false },
     "sqlite-queues": { type: "boolean", default: false },
+    "worker-census": { type: "boolean", default: false },
   },
 });
 if (!values["state-dir"]) {
@@ -715,6 +718,7 @@ const primaryMessageIndexes = new Map<string, number>(
 const initialArrivals = new Set<number>();
 const heldResponses = new Map<number, ServerResponse>();
 const recoveryArrivals = new Set<number>();
+let allRecoveryPrimaryArrivalsMs: number | undefined;
 let crashExpected = false;
 let activePrimaryHoldsAtCrash: number;
 let recovering = false;
@@ -828,6 +832,9 @@ const mock = createServer((req, res) => {
         throw new Error(`duplicate initial primary model request ${index}`);
       }
       arrivals.add(index);
+      if (recovering && arrivals.size === runCount && allRecoveryPrimaryArrivalsMs === undefined) {
+        allRecoveryPrimaryArrivalsMs = performance.now() - restartAt;
+      }
     }
     res.writeHead(200, { "content-type": "text/event-stream" });
     if (primary && !recovering) {
@@ -917,7 +924,14 @@ async function assertPortAvailable(targetPort: number) {
 }
 function launch(name: string) {
   const log = createWriteStream(path.join(output, `${name}.log`));
+  const censusDirectory = path.join(output, `${name}-workers`);
+  if (values["worker-census"]) {
+    mkdirSync(censusDirectory);
+  }
   const args = buildGatewayBenchChildArgs(values.entry, port, [
+    ...(values["worker-census"]
+      ? ["--import", path.resolve("scripts/perf/transcript-boot-preload.mjs")]
+      : []),
     ...(values["trace-gc"] ? ["--expose-gc", "--trace-gc-nvp"] : []),
     ...(authoritySourcePreload ? ["--import", authoritySourcePreload] : []),
     ...(recovering && values["authority-counts"] ? ["--import", authorityPreload] : []),
@@ -948,6 +962,7 @@ function launch(name: string) {
     env: {
       ...env,
       ...queueClock,
+      ...(values["worker-census"] ? { OPENCLAW_BENCH_TRANSCRIPT_BOOT_DIR: censusDirectory } : {}),
       OPENCLAW_BENCH_CAPTURE_DEADLINE_MS: String(Date.now() + Math.min(durationMs, 120_000)),
     },
     detached: true,
@@ -2488,6 +2503,7 @@ async function measureRestartBurst(
     initialPrimaryArrivals: initialArrivals.size,
     activePrimaryHoldsAtCrash,
     recoveryPrimaryArrivals: recoveryArrivals.size,
+    allRecoveryPrimaryArrivalsMs,
     recoveryAuthority: values["authority-counts"]
       ? {
           ...recoveryAuthorityCounts,

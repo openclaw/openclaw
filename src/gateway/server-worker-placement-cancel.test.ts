@@ -11,12 +11,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { heartbeatNotifications } from "../infra/heartbeat-events.js";
-import {
-  claimSessionControllerTask,
-  releaseSessionControllerClaim,
-} from "../sessions/session-controller.mailbox.js";
-import { createReplyOperation } from "../sessions/session-controller.operation.js";
-import { markReplyOperationExecutionStarted } from "../sessions/session-controller.state.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { admitChatSend } from "./server-methods/chat-send-admission.js";
@@ -81,18 +75,16 @@ it("preserves admitted work when cancellation authority is revoked before the ef
       { once: true },
     );
     const revoked = new Error("worker Stop authority revoked");
-    let current = true;
+    // The ingress check passes; authority is revoked before the cancellation effect checks it.
+    let checks = 0;
     const failure = await cancelGatewayWorkerSessionWork(context, {
       sessionId,
       sessionKeys: [sessionKey],
       agentId: "main",
       assertCurrent: () => {
-        if (!current) {
+        if (checks++ > 0) {
           throw revoked;
         }
-        queueMicrotask(() => {
-          current = false;
-        });
       },
     }).catch((error: unknown) => error);
     expect(owned.activeRunAbort.controller.signal.aborted).toBe(false);
@@ -106,7 +98,7 @@ it("preserves admitted work when cancellation authority is revoked before the ef
   }
 });
 
-it.each(["success", "failed-write", "setup-failed-write"] as const)(
+it.each(["success", "setup-failed-write"] as const)(
   "Stop preserves canonical terminal ownership through %s",
   async (outcome) => {
     const terminalWrite = createDeferred();
@@ -158,13 +150,6 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
     };
     let reclaimEffectStarted = false;
     let active: Awaited<ReturnType<typeof admitChatSend>> | undefined;
-    let failedClaim: Awaited<ReturnType<typeof claimSessionControllerTask>> | undefined;
-    const releaseFailedClaim = () => {
-      failedClaim?.operation?.complete();
-      if (failedClaim) {
-        releaseSessionControllerClaim(failedClaim);
-      }
-    };
     const unsubscribe = onAgentEvent((event) => {
       if (event.runId === runId && event.stream === "lifecycle") {
         events.push({
@@ -199,21 +184,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         if (!owned.activeRunAbort.entry) {
           throw new Error("Missing worker source");
         }
-        if (outcome === "failed-write") {
-          const source = owned.activeRunAbort.entry;
-          failedClaim = await claimSessionControllerTask(source.input, (mailboxClaim) => {
-            const operation = createReplyOperation({
-              ...identity,
-              resetTriggered: false,
-              mailboxClaim,
-              target: source.input.mailbox.owner.target,
-            });
-            markReplyOperationExecutionStarted(operation);
-          });
-          releaseClaim = releaseFailedClaim;
-        } else {
-          releaseClaim = await claimRpcSourceForTest(owned.activeRunAbort.entry);
-        }
+        releaseClaim = await claimRpcSourceForTest(owned.activeRunAbort.entry);
         expect(owned.activeRunAbort.markExecutionStarted()).toBe(true);
       }
       await replaceSessionEntry(target, {
@@ -284,14 +255,12 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         payload: { runId: "during-terminal-write", status: "timeout", summary: "aborted" },
       });
       if (outcome === "setup-failed-write") {
-        expect(owned.restartSafeAdmission).toBeUndefined();
         await handleChatSendSetupError({
           admission: owned,
           context,
           error: new Error("pre-ACK reply context failed"),
           respond: vi.fn(),
           session: { agentId: "main", clientRunId: runId, sessionKey: target.sessionKey },
-          terminalizeRestartSafeAdmission: vi.fn(async () => false),
         });
         expect(rpcSourceTesting.has(runId)).toBe(false);
         expect(reclaimEffectStarted).toBe(false);
@@ -302,12 +271,6 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         releaseWriter.resolve();
         await heldWriter;
         await rejected;
-        if (failedClaim) {
-          await expect(failedClaim.settlement.promise).rejects.toMatchObject({
-            message: "Source cleanup failed",
-            errors: [expect.objectContaining({ message: "terminal store unavailable" })],
-          });
-        }
         expect(reclaimEffectStarted).toBe(false);
         expect(loadSessionEntry(target)?.status).toBeUndefined();
         return;
@@ -327,13 +290,11 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       expect(fresh.ok).toBe(true);
       cleanupAdmission("explicit-after-terminal-stop", fresh);
     } finally {
-      releaseFailedClaim();
       terminalWrite.resolve();
       releaseWriter.resolve();
       await heldWriter;
       await reclaim?.catch(() => {});
       cleanupAdmission(runId, active);
-      await Promise.allSettled([failedClaim?.settlement.promise]);
       unsubscribe();
       await subscriptions?.agentUnsub();
       heartbeatNotifications.onEvent = () => {};

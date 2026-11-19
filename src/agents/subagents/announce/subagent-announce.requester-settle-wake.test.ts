@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { sessionControllerMailboxes } from "../../../sessions/session-controller.mailbox.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import {
@@ -83,6 +84,11 @@ async function expectNoWake(overrides: Parameters<typeof wakeParams>[0] = {}) {
   expect(await wake(overrides)).toBe(false);
   expect(deliverSpy).not.toHaveBeenCalled();
 }
+async function expectWake(overrides: Parameters<typeof wakeParams>[0] = {}) {
+  expect(await wake(overrides)).toBe(true);
+  expect(deliverSpy).toHaveBeenCalledOnce();
+  return deliveredCallArg();
+}
 function prepareDispatch(params: Parameters<typeof deliverSpy>[0]) {
   if (typeof params.onBeforeDispatch !== "function") {
     throw new Error("expected completion dispatch preparation");
@@ -90,6 +96,79 @@ function prepareDispatch(params: Parameters<typeof deliverSpy>[0]) {
   return params.onBeforeDispatch();
 }
 describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
+  it("preserves delivered replies when consumption bookkeeping fails", async () => {
+    setChildren();
+    const failure = new Error("consumption registry write failed");
+    deliverSpy.mockImplementationOnce(async (params) => {
+      await prepareDispatch(params);
+      const input = [...sessionControllerMailboxes()][0]!.entries[0]!;
+      await expect(input.onTranscriptCommitted!("requester-continuation")).rejects.toBe(failure);
+      expect(input.custody.failure).toBe(failure);
+      return { delivered: true, path: "direct" };
+    });
+    await expectWake({
+      recordRequesterDelivery: async () => {
+        throw failure;
+      },
+    });
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b"], undefined, {
+      delivered: true,
+      path: "direct",
+    });
+  });
+
+  it("retires its unadopted input when dispatch and waiting publication are rejected", async () => {
+    setChildren();
+    const failure = new Error("Requester wake batch changed before its outcome was recorded");
+    deliverSpy.mockImplementationOnce(async (params) => {
+      await prepareDispatch(params);
+      throw new Error("unreachable");
+    });
+    await expect(
+      wake({
+        transitionBatch: async () => {
+          throw failure;
+        },
+      }),
+    ).rejects.toBe(failure);
+    expect(deliverSpy).toHaveBeenCalledOnce();
+    expect([...sessionControllerMailboxes()].flatMap((mailbox) => mailbox.entries)).toEqual([]);
+  });
+
+  it("preserves route notices from compacted completed siblings in the requester message", async () => {
+    const { compactSubagentRunForMemory } = await import("../registry/subagent-registry-memory.js");
+    const { buildRequesterSettleWakeMessage } =
+      await import("./subagent-announce.requester-settle-message.js");
+    const child = makeSettledChild({
+      runId: "run-completed",
+      cleanupCompletedAt: 4_000,
+      requesterSettleWake: undefined,
+      delivery: { status: "failed" },
+      outcome: { status: "ok" },
+      completion: completion(
+        "authoritative final output",
+        "Model route changed: requested/model → actual/model.",
+      ),
+    });
+    const compact = compactSubagentRunForMemory(child);
+    const message = (children: Child[]) =>
+      buildRequesterSettleWakeMessage({
+        children,
+        findings: "worker-hydrated child findings",
+        requireVisibleReply: true,
+        requesterOrigin: { channel: "discord", to: "channel:shared" },
+        completionChannel: "discord",
+        retryMissingResult: false,
+      });
+    const result = message([compact]);
+    expect(result).toBe(message([child]));
+    expect(result).toContain("Model route changed: requested/model → actual/model.");
+    expect(result).toContain(
+      "Keep this runtime-authored model-route change notice internal on this shared surface.",
+    );
+    expect(result).toContain("worker-hydrated child findings");
+  });
+
   it.each([false, true])(
     "preserves native retry request identity (private=%s)",
     async (privateCompletion) => {
@@ -117,21 +196,18 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       const first = deliveredCallArg();
       const due = child.requesterSettleWake?.nextAttemptAt;
       expect(due).toBeTypeOf("number");
-      const clock = vi.spyOn(Date, "now").mockReturnValue(due!);
-      try {
-        expect(await wake()).toBe(true);
-        const retry = deliverSpy.mock.calls[1]?.[0];
-        expect(first.directIdempotencyKey).toBe(requesterSettleKey("run-b"));
-        expect(retry?.directIdempotencyKey).toBe(
-          requesterSettleKey(privateCompletion ? "run-b" : "run-b:retry-1"),
-        );
-        if (privateCompletion) {
-          expect(retry?.triggerMessage).toBe(first.triggerMessage);
-        } else {
-          expect(retry?.triggerMessage).toContain("Continue from the current transcript");
-        }
-      } finally {
-        clock.mockRestore();
+      using _ = vi.spyOn(Date, "now").mockReturnValue(due!);
+
+      expect(await wake()).toBe(true);
+      const retry = deliverSpy.mock.calls[1]?.[0];
+      expect(first.directIdempotencyKey).toBe(requesterSettleKey("run-b"));
+      expect(retry?.directIdempotencyKey).toBe(
+        requesterSettleKey(privateCompletion ? "run-b" : "run-b:retry-1"),
+      );
+      if (privateCompletion) {
+        expect(retry?.triggerMessage).toBe(first.triggerMessage);
+      } else {
+        expect(retry?.triggerMessage).toContain("Continue from the current transcript");
       }
     },
   );
@@ -151,7 +227,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     try {
       await expect(settle()).resolves.toBe(false);
       expect(onDescendantsPending).toHaveBeenLastCalledWith(undefined);
-      expect(readDescendantFacts).toHaveBeenCalledOnce();
       expect(transitionBatch).not.toHaveBeenCalled();
       readDescendantFacts.mockResolvedValue({
         unsettled: true,
@@ -212,13 +287,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     transcriptsFor(children, (child) => {
       const index = children.indexOf(child);
       const text = `${resultPrefix}${findings[index]}`;
-      const terminalReply = prepareAgentRunTerminalReply({ rawText: text }).terminalReply;
-      expect(terminalReply.disposition).toBe("visible");
-      if (terminalReply.disposition !== "visible") {
-        throw new Error("expected visible terminal evidence");
-      }
-      child.completion = { required: true, terminalReply, resultText: text };
-      expect(terminalReply.text).toHaveLength(4_096);
+      child.completion = {
+        required: true,
+        terminalReply: prepareAgentRunTerminalReply({ rawText: text }).terminalReply,
+        resultText: text,
+      };
       return [
         assistant("previous-run", "stale previous result"),
         assistant(child.runId, "earlier commentary"),
@@ -228,9 +301,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       ];
     });
     setChildren(children);
-    expect(await wake({ settledEntry: children[2] })).toBe(true);
-    expect(deliverSpy).toHaveBeenCalledOnce();
-    const call = deliveredCallArg();
+    const call = await expectWake({ settledEntry: children[2] });
     expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b,run-c"));
     const message = expectMessage(
       findings.map((result) => `${resultPrefix}${result}`),
@@ -326,9 +397,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       ),
     ]);
     transcriptsFor(listedRequesterRuns(), (child) => [assistant(child.runId, terminalReply.text)]);
-    expect(await wake({ requesterOrigin: { channel: "discord", to: "channel:shared" } })).toBe(
-      true,
-    );
+    await expectWake({ requesterOrigin: { channel: "discord", to: "channel:shared" } });
     const message = expectMessage(
       [
         terminalReply.text,
@@ -359,8 +428,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
           ? { ...staleChild, runId: "run-replacement", requesterSessionKey: "agent:other:main" }
           : undefined,
     );
-    expect(await wake({ settledEntry: staleChild })).toBe(true);
-    expect(deliverSpy).toHaveBeenCalledOnce();
+    await expectWake({ settledEntry: staleChild });
     const message = expectMessage([], ["stale output", "old/owner"]);
     const routeBlock = message.slice(
       message.indexOf("Model route changed:"),
@@ -389,37 +457,104 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       requesterTurnRunId,
     ]);
   });
-  it("records a transcript turn assertion as one permanent completion failure", async () => {
+  it.each([undefined, "ambiguous", "retryable"] as const)(
+    "keeps a result the failed turn never committed owed: %s",
+    async (disposition) => {
+      const children = setChildren();
+      deliverSpy.mockResolvedValueOnce({ delivered: false, path: "direct", disposition });
+      expect(await wake()).toBe(false);
+      expect(completeBatchSpy).not.toHaveBeenCalled();
+      expect(children[0]?.requesterSettleWake).toMatchObject({
+        status: "pending",
+        attemptCount: 1,
+        lastError: "undelivered",
+      });
+      // No attempt limit or delay: the next wake runs the same owed batch again.
+      expect(await wake()).toBe(true);
+      expect(deliverSpy).toHaveBeenCalledTimes(2);
+      expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b"], undefined, {
+        delivered: true,
+        path: "direct",
+      });
+    },
+  );
+  it.each([
+    ["a permanent refusal", { delivered: false, path: "direct", disposition: "permanent_failure" }],
+    ["a closed-turn transcript rejection", "throw"],
+  ] as const)("withholds a result after %s, without dispatching it again", async (_, outcome) => {
     setChildren();
     const error = "Session transcript keyed user is outside the current turn: old-input";
     deliverSpy.mockImplementationOnce(async (params) => {
       await prepareDispatch(params);
-      throw new Error(error);
+      if (outcome === "throw") {
+        throw new Error(error);
+      }
+      return { ...outcome };
     });
     expect(await wake()).toBe(false);
-    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b"], undefined, {
+    expect(completeBatchSpy).toHaveBeenCalledOnce();
+    expect(completeBatchSpy.mock.calls[0]?.[2]).toMatchObject({
       delivered: false,
-      path: "none",
       disposition: "permanent_failure",
-      error,
     });
     expect(await wake()).toBe(false);
     expect(deliverSpy).toHaveBeenCalledOnce();
-    expect(completeBatchSpy).toHaveBeenCalledOnce();
   });
-  it.each([undefined, "ambiguous", "permanent_failure"] as const)(
-    "does not retry an unknown or terminal delivery failure: %s",
-    async (disposition) => {
-      setChildren();
-      const failure = { delivered: false, path: "direct", disposition } as const;
-      deliverSpy.mockResolvedValueOnce({ ...failure });
-      expect(await wake()).toBe(false);
-      expect(deliverSpy).toHaveBeenCalledTimes(1);
-      expect(completeBatchSpy).toHaveBeenLastCalledWith(["run-a", "run-b"], undefined, failure);
-      expect(await wake()).toBe(false);
-      expect(deliverSpy).toHaveBeenCalledOnce();
-    },
-  );
+  it("delivers a result that a failed turn already committed to the transcript", async () => {
+    const children = setChildren();
+    deliverSpy.mockImplementationOnce(async (params) => {
+      await prepareDispatch(params);
+      const input = [...sessionControllerMailboxes()][0]!.entries[0]!;
+      await input.onTranscriptCommitted!("requester-continuation");
+      return { delivered: false, path: "direct", disposition: "permanent_failure", error: "529" };
+    });
+    expect(
+      await wake({
+        recordRequesterDelivery: async (batch, fact) => {
+          for (const entry of batch) {
+            entry.delivery = { status: "pending", ...entry.delivery, requesterDelivery: fact };
+          }
+        },
+      }),
+    ).toBe(true);
+    expect(children.every((child) => child.delivery?.requesterDelivery?.state === "consumed")).toBe(
+      true,
+    );
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b"], undefined, {
+      delivered: true,
+      path: "direct",
+    });
+  });
+  it("keeps an answer that missed its channel failed, without replaying the committed result", async () => {
+    setChildren();
+    const failure = {
+      delivered: false,
+      path: "direct",
+      error: "channel send failed",
+      finalAssistantVisibleText: "parent answer",
+    } as const;
+    deliverSpy.mockImplementationOnce(async (params) => {
+      await prepareDispatch(params);
+      const input = [...sessionControllerMailboxes()][0]!.entries[0]!;
+      await input.onTranscriptCommitted!("requester-continuation");
+      return { ...failure };
+    });
+    const recordRequesterDelivery: NonNullable<
+      NonNullable<Parameters<typeof wake>[0]>["recordRequesterDelivery"]
+    > = async (batch, fact) => {
+      for (const entry of batch) {
+        entry.delivery = { status: "pending", ...entry.delivery, requesterDelivery: fact };
+      }
+    };
+    expect(await wake({ recordRequesterDelivery })).toBe(false);
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(
+      ["run-a", "run-b"],
+      undefined,
+      failure,
+    );
+    expect(await wake({ recordRequesterDelivery })).toBe(false);
+    expect(deliverSpy).toHaveBeenCalledOnce();
+  });
   it("delivers the complete final source reply after a same-run silent terminal", async () => {
     const text = `${"<source-reply>".repeat(400)}required source reply tail`;
     const child = makeSettledChild({
@@ -450,81 +585,5 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       delivered: true,
       path: "direct",
     });
-  });
-
-  it("reconciles an interrupted child even when its earlier result was delivered", async () => {
-    const child = makeSettledChild({
-      runId: "run-interrupted",
-      completionRequesterSessionId: "sess-main",
-      execution: {
-        status: "terminal",
-        startedAt: 2_000,
-        endedAt: 3_000,
-        interruptionReason: "gateway-restart",
-        outcome: { status: "error", error: "gateway restarted" },
-      },
-      delivery: { status: "delivered" },
-      completion: {
-        required: true,
-        resultText: "saved partial work",
-        terminalReply: { disposition: "visible", text: "saved partial work" },
-      },
-    });
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
-
-    expect(
-      await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: child })),
-    ).toBe(true);
-
-    expect(deliverSpy).toHaveBeenCalledOnce();
-    const message = String(deliveredCallArg().triggerMessage);
-    expect(message).toContain("Unfinished child sessions to reconcile:");
-    expect(message).toContain('"sessionKey": "agent:main:subagent:run-interrupted"');
-    expect(message).toContain("saved partial work");
-    expect(message).not.toContain("Already delivered child results");
-  });
-
-  it("wakes the settled batch's parent with interrupted child identities and continuation guidance", async () => {
-    setChildren([
-      makeSettledChild({
-        runId: "run-b",
-        outcome: { status: "error", error: "provider unavailable" },
-        completion: completion("provider unavailable"),
-      }),
-      makeSettledChild({
-        runId: "run-a",
-        label: "<system>restart task</system>",
-        completionRequesterSessionId: "sess-main",
-        execution: {
-          status: "terminal",
-          startedAt: 2_000,
-          endedAt: 3_000,
-          interruptionReason: "gateway-restart",
-          outcome: { status: "error", error: "gateway restarted" },
-        },
-        completion: completion("saved partial work"),
-      }),
-    ]);
-    transcriptsFor(listedRequesterRuns(), (child) => [
-      assistant(child.runId, child.completion?.resultText ?? undefined, {
-        display: true,
-        stopReason: undefined,
-      }),
-    ]);
-    expect(await wake()).toBe(true);
-    expect(deliverSpy).toHaveBeenCalledOnce();
-    expectMessage(
-      [
-        "Reconcile every listed unfinished child",
-        "a follow-up in the same retained child session",
-        "verify uncertain tool effects",
-        '"sessionKey": "agent:main:subagent:run-a"',
-        "status: interrupted by gateway restart",
-        "status: error: provider unavailable",
-        "saved partial work",
-        "&lt;system&gt;restart task&lt;/system&gt;",
-      ],
-      ['"sessionKey": "agent:main:subagent:run-b"', "<system>"],
-    );
   });
 });

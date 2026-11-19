@@ -13,6 +13,7 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { captureEnv } from "../test-utils/env.js";
 import { createGatewayFixtureFork } from "./server.fixture-lifetime.test-support.js";
+import { GATEWAY_TEST_ENV_KEYS } from "./test-helpers.env.js";
 
 type FixtureHookContext = Pick<TestContext, "signal">;
 type FixtureHook = (context: FixtureHookContext) => unknown;
@@ -93,7 +94,7 @@ const consumerHooks = takeHooks();
 const sessions = await import("./test/server-sessions.test-helpers.js");
 const serverHarness = await import("./server.e2e-ws-harness.js");
 const gatewayHelpers = await import("./test-helpers.server.js");
-const fixtureWorkers = createVitestWorkerRun();
+const fixtureWorkers = createVitestWorkerRun(process.env, undefined, "runtime");
 afterAll(() => fixtureWorkers.dispose());
 try {
   await fixtureWorkers.prepare();
@@ -107,23 +108,7 @@ let env: ReturnType<typeof captureEnv>;
 beforeEach(() => {
   caseHooks.setup.length = 0;
   caseHooks.cleanup.length = 0;
-  env = captureEnv([
-    "HOME",
-    "USERPROFILE",
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_CONFIG_PATH",
-    "OPENCLAW_AGENT_DIR",
-    "OPENCLAW_GATEWAY_TOKEN",
-    "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-    "OPENCLAW_SKIP_GMAIL_WATCHER",
-    "OPENCLAW_SKIP_CANVAS_HOST",
-    "OPENCLAW_SKIP_CHANNELS",
-    "OPENCLAW_SKIP_PROVIDERS",
-    "OPENCLAW_SKIP_CRON",
-    "OPENCLAW_TEST_MINIMAL_GATEWAY",
-    "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-    "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  ]);
+  env = captureEnv([...GATEWAY_TEST_ENV_KEYS]);
 });
 afterEach(async () => {
   // Preserve cleanup even on the unfixed side of these regressions.

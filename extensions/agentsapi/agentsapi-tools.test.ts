@@ -8,9 +8,9 @@ import type {
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { Type } from "typebox";
-import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi, type Mock } from "vitest";
 import { createAttemptParams } from "./agentsapi-attempt.test-helpers.js";
-import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
+import { buildAgentsApiToolSurface, type AgentsApiToolSurface } from "./agentsapi-tools.js";
 
 // mock-isolation: Transcript persistence is independent of Gateway file authorization.
 vi.mock("./agentsapi-transcript.js", () => ({ recordAgentsApiToolTranscript: vi.fn() }));
@@ -45,25 +45,17 @@ it("records source payloads separately from outbound message targets", async () 
     }),
   };
   await withFixtureTool(tool, async (surface) => {
-    await surface.execute({
-      type: "function_call",
-      turn_id: "fixture-turn",
-      call_id: "source",
-      name: "message",
-      arguments: { action: "send", message: "Requested source reply", final: false },
+    await execute(surface, "message", "source", {
+      action: "send",
+      message: "Requested source reply",
+      final: false,
     });
-    await surface.execute({
-      type: "function_call",
-      turn_id: "fixture-turn",
-      call_id: "outbound",
-      name: "message",
-      arguments: {
-        action: "send",
-        message: "Outbound text",
-        final: true,
-        channel: "slack",
-        target: "C123",
-      },
+    await execute(surface, "message", "outbound", {
+      action: "send",
+      message: "Outbound text",
+      final: true,
+      channel: "slack",
+      target: "C123",
     });
     expect(surface.delivery).toMatchObject({
       didSendViaMessagingTool: true,
@@ -102,15 +94,10 @@ it("serializes mixed tool output and supplies the empty-output fallback", async 
       [false, "First\n[Image result omitted from Agents API function output]\nLast"],
       [true, "Tool completed with no text output."],
     ] as const) {
-      expect(
-        await surface.execute({
-          type: "function_call",
-          turn_id: "fixture-turn",
-          call_id: `output-${empty}`,
-          name: tool.name,
-          arguments: { empty },
-        }),
-      ).toEqual({ success: true, output });
+      expect(await execute(surface, tool.name, `output-${empty}`, { empty })).toEqual({
+        success: true,
+        output,
+      });
     }
   });
 });
@@ -147,16 +134,10 @@ describe("a delivered send to a configured delivery target", () => {
       await withFixtureTool(
         tool,
         async (surface) => {
-          const result = await surface.execute({
-            type: "function_call",
-            turn_id: "send-turn",
-            call_id: "send-call",
-            name: "message",
-            arguments: {
-              action: "send",
-              message: "daily drop",
-              ...(final === undefined ? {} : { final }),
-            },
+          const result = await execute(surface, "message", "send-call", {
+            action: "send",
+            message: "daily drop",
+            ...(final === undefined ? {} : { final }),
           });
 
           expect(result.terminate).toBe(ends ? true : undefined);
@@ -182,32 +163,58 @@ async function withFixtureTool(
       config: { plugins: { allow: [] } },
       ...(messageToolFinalByDefault === undefined ? {} : { messageToolFinalByDefault }),
     });
-    const host = await createAgentHarnessHostCapabilitiesForTest({
-      attempt,
-      pluginId: "agentsapi",
-    });
-    const cleanups: Array<(reason: string) => Promise<void>> = [];
-    try {
-      const surface = await buildAgentsApiToolSurface(
+    await withSurface(attempt, new AbortController(), run, tool);
+  });
+}
+
+function execute(surface: AgentsApiToolSurface, name: string, call_id: string, args: object) {
+  return surface.execute({
+    type: "function_call",
+    turn_id: "fixture-turn",
+    call_id,
+    name,
+    arguments: args,
+  });
+}
+
+async function withSurface(
+  attempt: AgentHarnessAttemptParamsV2,
+  controller: AbortController,
+  run: (
+    surface: AgentsApiToolSurface,
+    construction: Mock<
+      NonNullable<AgentHarnessAttemptParamsV2["hostCapabilities"]["createToolSurfaceAsync"]>
+    >,
+  ) => Promise<void>,
+  tool?: AnyAgentTool,
+) {
+  const host = await createAgentHarnessHostCapabilitiesForTest({ attempt, pluginId: "agentsapi" });
+  const create = host.capabilities.createToolSurfaceAsync;
+  assert(create);
+  const construction = vi.fn(tool ? async () => host.capabilities.bindToolSurface([tool]) : create);
+  const cleanups: Array<(reason: string) => Promise<void>> = [];
+  try {
+    await run(
+      await buildAgentsApiToolSurface(
         {
           ...attempt,
-          hostCapabilities: {
-            ...host.capabilities,
-            createToolSurfaceAsync: async () => host.capabilities.bindToolSurface([tool]),
-          },
+          hostCapabilities: { ...host.capabilities, createToolSurfaceAsync: construction },
         },
-        new AbortController().signal,
+        controller.signal,
         host.capabilities.assertActive,
         (cleanup) => cleanups.push(cleanup),
-      );
-      await run(surface);
-    } finally {
-      for (const cleanup of cleanups.toReversed()) {
-        await cleanup("Tool result test complete");
-      }
-      host.close();
+      ),
+      construction,
+    );
+  } finally {
+    if (!tool) {
+      controller.abort();
     }
-  });
+    for (const cleanup of cleanups.toReversed()) {
+      await cleanup(tool ? "Tool result test complete" : "Permission test complete");
+    }
+    host.close();
+  }
 }
 
 it.each([
@@ -255,42 +262,17 @@ it.each([
       timeoutMs: 5_000,
       abortSignal: controller.signal,
     });
-    const host = await createAgentHarnessHostCapabilitiesForTest({
-      attempt,
-      pluginId: "agentsapi",
-    });
-    const create = host.capabilities.createToolSurfaceAsync;
-    assert(create);
-    const construction = vi.fn(create);
-    const params: AgentHarnessAttemptParamsV2 = {
-      ...attempt,
-      hostCapabilities: { ...host.capabilities, createToolSurfaceAsync: construction },
-    };
-    const cleanups: Array<(reason: string) => Promise<void>> = [];
-    try {
-      const surface = await buildAgentsApiToolSurface(
-        params,
-        controller.signal,
-        host.capabilities.assertActive,
-        (cleanup) => cleanups.push(cleanup),
-      );
+    await withSurface(attempt, controller, async (surface, construction) => {
       expect(surface.declarations.map((tool) => tool.name)).toContain("pdf");
-      const execute = (id: string, file: string) =>
-        surface.execute({
-          type: "function_call",
-          turn_id: "permission-turn",
-          call_id: id,
-          name: "pdf",
-          arguments: { pdf: file },
-        });
+      const read = (id: string, file: string) => execute(surface, "pdf", id, { pdf: file });
       // Plain text reaches the real file read but stops before parsing or inference.
       if (permissionMode !== "full") {
-        expect(await execute("inside", inside)).toMatchObject({
+        expect(await read("inside", inside)).toMatchObject({
           success: false,
           error: expect.stringContaining("Expected PDF but got"),
         });
       }
-      expect(await execute("outside", outside)).toMatchObject({
+      expect(await read("outside", outside)).toMatchObject({
         success: false,
         error: expect.stringContaining(
           permissionMode === "full" ? "Expected PDF but got" : "not under an allowed directory",
@@ -301,12 +283,6 @@ it.each([
           exec: { security: "deny", ask: "always" },
         });
       }
-    } finally {
-      controller.abort();
-      for (const cleanup of cleanups.toReversed()) {
-        await cleanup("Permission test complete");
-      }
-      host.close();
-    }
+    });
   });
 });

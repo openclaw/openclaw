@@ -7,23 +7,6 @@ import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 
-// Matches the identically-named symbol in src/agents/provider-request-config.ts
-// (and the sibling local copy in openai-completions.test-support.ts) via the
-// global symbol registry, without a packages/ai -> src/agents import.
-const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
-  "openclaw.modelProviderRequestTransport",
-);
-
-function attachModelProviderRequestTransport<TModel extends object>(
-  model: TModel,
-  request: { allowPrivateNetwork?: boolean },
-): TModel {
-  return {
-    ...model,
-    [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]: request,
-  };
-}
-
 // Live coverage for HTTP continuation against the *real* OpenAI Responses API.
 // A unit/mocked test can only prove openclaw's own selection logic; it cannot
 // prove the real API actually accepts and honors previous_response_id the way
@@ -120,8 +103,8 @@ describeLive("OpenAI Responses HTTP continuation (real api.openai.com)", () => {
       const proxy = new CapturingOpenAIForwardProxy();
       const baseUrl = await proxy.listen();
       try {
-        const model: Model<"openai-responses"> = attachModelProviderRequestTransport(
-          makeProviderModel("openai-responses", "openai", LIVE_MODEL_ID, {
+        const model: Model<"openai-responses"> = {
+          ...makeProviderModel("openai-responses", "openai", LIVE_MODEL_ID, {
             baseUrl,
             contextWindow: 200_000,
             // The forward proxy's baseUrl is a loopback address, not the
@@ -130,9 +113,9 @@ describeLive("OpenAI Responses HTTP continuation (real api.openai.com)", () => {
             // opt-in path a real OmniRoute deployment needs, just fronting
             // the real API instead of a scripted one.
             compat: { supportsResponsesContinuation: true },
-          }) satisfies Model<"openai-responses">,
-          { allowPrivateNetwork: true },
-        );
+          }),
+          [Symbol.for("openclaw.modelProviderRequestTransport")]: { allowPrivateNetwork: true },
+        };
         const sessionId = "live-http-continuation";
         // A structurally correct wire request (previous_response_id set,
         // input trimmed) is not proof the server actually used the omitted

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import {
   openPackageActivationJournal,
@@ -111,6 +111,12 @@ describe.skipIf(process.platform === "win32")("verified package cleanup", () => 
       const reported = vi.fn().mockImplementationOnce(() => {
         throw new Error("reporting interrupted before archival");
       });
+      // A lost repair claim stops settlement before any report, journal or file change.
+      const owner = () => assert.fail("repair claim lost");
+      await expect(
+        settlePendingPackageActivation(f.packageRoot, reported, undefined, { owner }),
+      ).rejects.toThrow("repair claim lost");
+      expect(openPackageActivationJournal(f.anchor).read().phase).toBe("prepared");
       await expect(settlePendingPackageActivation(f.packageRoot, reported)).rejects.toThrow(
         "reporting interrupted before archival",
       );

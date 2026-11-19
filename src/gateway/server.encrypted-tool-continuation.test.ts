@@ -1,17 +1,18 @@
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { afterEach, expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import {
+  createGatewayConfigPath,
+  removeGatewayTempHome,
+  resetGatewayTestState,
+  setupGatewayTempHome,
+} from "./gateway.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createTrackedProvider } from "./test-helpers.tracked-provider.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type ProviderMessage = {
   role: string;
   content?: unknown;
@@ -27,34 +28,23 @@ it(
   { timeout: 90_000 },
   async () => {
     let arrival = "before";
-    const root = tempDirs.make("openclaw-encrypted-continuation-");
-    const workspace = path.join(root, "workspace");
-    const state = path.join(root, "state");
-    const plugins = path.join(root, "plugins");
-    await Promise.all([workspace, state, plugins].map((directory) => fs.mkdir(directory)));
+    const home = await setupGatewayTempHome({ prefix: "openclaw-encrypted-continuation-" });
+    onTestFinished(async () => {
+      resetGatewayTestState();
+      try {
+        await removeGatewayTempHome(home.tempHome);
+      } finally {
+        home.envSnapshot.restore();
+      }
+    });
+    const workspace = home.workspaceDir;
+    const token = "encrypted-continuation-fixture";
     const fixture = path.join(workspace, "fixture.txt");
     const marker = "ENCRYPTED_CONTINUATION_READ_RESULT";
     const answer = "ENCRYPTED_CONTINUATION_ACCEPTED";
     const rejectedAnswer = "The incomplete read was rejected; no file was read.";
     await fs.writeFile(fixture, marker);
-    const configPath = path.join(state, "openclaw.json");
-    const env = {
-      OPENCLAW_STATE_DIR: state,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_GATEWAY_TOKEN: "encrypted-continuation-fixture",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: plugins,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    };
-    const snapshot = captureEnv(Object.keys(env));
-    for (const [key, value] of Object.entries(env)) {
-      setTestEnvValue(key, value);
-    }
+    const configPath = await createGatewayConfigPath(home.tempHome);
     const detail = {
       type: "reasoning.encrypted",
       id: "callsigned",
@@ -68,146 +58,121 @@ it(
     const abortedResponse = createDeferred();
     const requests: ProviderRequest[] = [];
     const events: unknown[] = [];
-    const provider = createServer((request, response) => {
-      let raw = "";
-      request.setEncoding("utf8");
-      request.on("data", (chunk: string) => {
-        raw += chunk;
-      });
-      request.on("end", () => {
-        const body: ProviderRequest = JSON.parse(raw);
-        requests.push(body);
-        const toolResults = body.messages.filter((message) => message.role === "tool");
-        const continuation = toolResults.length > 0;
-        const assistant = body.messages.findLast((message) => message.tool_calls?.length);
-        if (
-          continuation &&
-          !arrival.startsWith("renamed-") &&
-          !isDeepStrictEqual(assistant?.reasoning_details, details)
-        ) {
-          response.writeHead(400, { "content-type": "application/json" });
-          response.end(
-            JSON.stringify({
-              error: {
-                message: "Synthetic contract rejection: missing encrypted detail",
-                type: "invalid_request_error",
-              },
-            }),
-          );
-          return;
-        }
-        response.writeHead(200, { "content-type": "text/event-stream" });
-        const send = (delta: unknown, finishReason: string | null = null) => {
-          response.write(
-            `data: ${JSON.stringify({
-              id: `completion_${requests.length}`,
-              object: "chat.completion.chunk",
-              created: 1,
-              model: body.model,
-              choices: [{ index: 0, delta, finish_reason: finishReason }],
-            })}\n\n`,
-          );
-        };
-        if (["malformed", "missing-terminal", "abort"].includes(arrival)) {
-          if (arrival !== "abort" && requests.length > 1) {
-            send({ content: rejectedAnswer });
-            send({}, "stop");
-            response.end("data: [DONE]\n\n");
-            return;
-          }
-          send({ reasoning_details: details });
-          send({
-            tool_calls: [
-              {
-                index: 0,
-                id: "callsigned",
-                type: "function",
-                function: {
-                  name: "read",
-                  arguments:
-                    arrival === "missing-terminal" ? JSON.stringify({ path: fixture }) : '{"path":',
-                },
-              },
-            ],
-          });
-          if (arrival === "abort") {
-            response.once("close", () => abortedResponse.resolve());
-            partialResponse.resolve();
-            return;
-          }
-          if (arrival === "malformed") {
-            send({}, "tool_calls");
-            response.end("data: [DONE]\n\n");
-          } else {
-            response.end();
-          }
-          return;
-        }
-        if (continuation) {
-          send({ content: answer });
+    const incomplete = () => ["malformed", "missing-terminal", "abort"].includes(arrival);
+    const toolCall = (id: string, index = 0, args = JSON.stringify({ path: fixture })) => ({
+      index,
+      id,
+      type: "function",
+      function: { name: "read", arguments: args },
+    });
+    const provider = createTrackedProvider((raw, response) => {
+      const body: ProviderRequest = JSON.parse(raw);
+      requests.push(body);
+      const toolResults = body.messages.filter((message) => message.role === "tool");
+      const continuation = toolResults.length > 0;
+      const assistant = body.messages.findLast((message) => message.tool_calls?.length);
+      if (
+        continuation &&
+        !arrival.startsWith("renamed-") &&
+        !isDeepStrictEqual(assistant?.reasoning_details, details)
+      ) {
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: {
+              message: "Synthetic contract rejection: missing encrypted detail",
+              type: "invalid_request_error",
+            },
+          }),
+        );
+        return;
+      }
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      const send = (delta: unknown, finishReason: string | null = null) => {
+        response.write(
+          `data: ${JSON.stringify({
+            id: `completion_${requests.length}`,
+            object: "chat.completion.chunk",
+            created: 1,
+            model: body.model,
+            choices: [{ index: 0, delta, finish_reason: finishReason }],
+          })}\n\n`,
+        );
+      };
+      if (incomplete()) {
+        if (arrival !== "abort" && requests.length > 1) {
+          send({ content: rejectedAnswer });
           send({}, "stop");
-        } else if (arrival.startsWith("renamed-")) {
-          const oldDetail = { ...detail, id: "callA", data: "synthetic-old-identity" };
-          if (arrival === "renamed-unsigned") {
-            send({ reasoning_details: [oldDetail] });
-          }
-          send({
-            tool_calls: [
-              {
-                index: 0,
-                id: "callA",
-                type: "function",
-                function: { name: "read", arguments: JSON.stringify({ path: fixture }) },
-              },
-            ],
-          });
-          send({ tool_calls: [{ index: 0, id: "callB" }] });
-          if (arrival === "renamed-signed") {
-            send({ reasoning_details: details });
-            send({ reasoning_details: [oldDetail] });
-          }
-          send({}, "tool_calls");
-        } else {
-          send({ reasoning: visibleReasoning });
-          const reasoning = {
-            reasoning_details: [
-              null,
-              { type: "reasoning.encrypted", id: "callunsigned", data: "" },
-              { type: "reasoning.encrypted", id: "callunsigned", data: 7 },
-              { type: "reasoning.encrypted", id: "", data: "synthetic-empty-id" },
-              { type: "reasoning.encrypted", id: "orphan", data: "synthetic-unmatched" },
-              ...details,
-            ],
-          };
-          const calls = {
-            tool_calls: callIds.map((id, index) => ({
-              index,
-              id,
-              type: "function",
-              function: { name: "read", arguments: JSON.stringify({ path: fixture }) },
-            })),
-          };
-          if (arrival !== "same" && arrival !== "after") {
-            send(reasoning);
-          }
-          send(arrival === "same" ? { ...reasoning, ...calls } : calls);
-          if (arrival === "after") {
-            send(reasoning);
-          }
-          send({}, "tool_calls");
+          response.end("data: [DONE]\n\n");
+          return;
         }
-        response.end("data: [DONE]\n\n");
-      });
+        send({ reasoning_details: details });
+        send({
+          tool_calls: [
+            toolCall(
+              "callsigned",
+              0,
+              arrival === "missing-terminal" ? JSON.stringify({ path: fixture }) : '{"path":',
+            ),
+          ],
+        });
+        if (arrival === "abort") {
+          response.once("close", () => abortedResponse.resolve());
+          partialResponse.resolve();
+          return;
+        }
+        if (arrival === "malformed") {
+          send({}, "tool_calls");
+          response.end("data: [DONE]\n\n");
+        } else {
+          response.end();
+        }
+        return;
+      }
+      if (continuation) {
+        send({ content: answer });
+        send({}, "stop");
+      } else if (arrival.startsWith("renamed-")) {
+        const oldDetail = { ...detail, id: "callA", data: "synthetic-old-identity" };
+        if (arrival === "renamed-unsigned") {
+          send({ reasoning_details: [oldDetail] });
+        }
+        send({ tool_calls: [toolCall("callA")] });
+        send({ tool_calls: [{ index: 0, id: "callB" }] });
+        if (arrival === "renamed-signed") {
+          send({ reasoning_details: details });
+          send({ reasoning_details: [oldDetail] });
+        }
+        send({}, "tool_calls");
+      } else {
+        send({ reasoning: visibleReasoning });
+        const reasoning = {
+          reasoning_details: [
+            null,
+            { type: "reasoning.encrypted", id: "callunsigned", data: "" },
+            { type: "reasoning.encrypted", id: "callunsigned", data: 7 },
+            { type: "reasoning.encrypted", id: "", data: "synthetic-empty-id" },
+            { type: "reasoning.encrypted", id: "orphan", data: "synthetic-unmatched" },
+            ...details,
+          ],
+        };
+        const calls = {
+          tool_calls: callIds.map((id, index) => toolCall(id, index)),
+        };
+        if (arrival !== "same" && arrival !== "after") {
+          send(reasoning);
+        }
+        send(arrival === "same" ? { ...reasoning, ...calls } : calls);
+        if (arrival === "after") {
+          send(reasoning);
+        }
+        send({}, "tool_calls");
+      }
+      response.end("data: [DONE]\n\n");
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     try {
-      await new Promise<void>((resolve) => {
-        provider.listen(0, "127.0.0.1", resolve);
-      });
-      const address = provider.address();
-      if (!address || typeof address === "string") {
-        throw new Error("synthetic provider did not bind");
-      }
+      const baseUrl = await provider.listen();
       gateway = await startGatewayWithClient({
         cfg: {
           agents: {
@@ -223,7 +188,7 @@ it(
             mode: "replace",
             providers: {
               openrouter: {
-                baseUrl: `http://127.0.0.1:${address.port}/v1`,
+                baseUrl,
                 apiKey: "synthetic-fixture-key",
                 api: "openai-completions",
                 models: [
@@ -238,11 +203,11 @@ it(
             },
           },
           plugins: { slots: { memory: "none" } },
-          logging: { file: path.join(root, "gateway.log") },
-          gateway: { auth: { mode: "token", token: env.OPENCLAW_GATEWAY_TOKEN } },
+          logging: { file: path.join(home.tempHome, "gateway.log") },
+          gateway: { auth: { mode: "token", token } },
         },
         configPath,
-        token: env.OPENCLAW_GATEWAY_TOKEN,
+        token,
         onEvent: (event) => events.push(event),
       });
       for (const order of [
@@ -294,36 +259,33 @@ it(
           { runId: started.runId, timeoutMs: 60_000 },
           { timeoutMs: 65_000 },
         );
-        const history = await gateway.client.request<{ messages: HistoryMessage[] }>(
+        const { messages } = await gateway.client.request<{ messages: HistoryMessage[] }>(
           "chat.history",
-          {
-            sessionKey,
-            limit: 30,
-          },
+          { sessionKey, limit: 30 },
         );
-        if (["malformed", "missing-terminal", "abort"].includes(order)) {
+        const finalText = JSON.stringify(
+          messages.findLast(({ role }) => role === "assistant")?.content,
+        );
+        const toolResults = messages.filter(({ role }) => role === "toolResult");
+        if (incomplete()) {
           expect(requests.length).toBeGreaterThan(0);
           expect(
-            requests.flatMap(({ messages }) => messages.filter(({ role }) => role === "tool")),
+            requests.flatMap((request) => request.messages.filter(({ role }) => role === "tool")),
           ).toEqual([]);
-          expect(history.messages.filter(({ role }) => role === "toolResult")).toEqual([]);
-          expect(JSON.stringify(history.messages)).not.toContain('"type":"toolCall"');
-          expect(JSON.stringify(history.messages)).not.toContain(answer);
+          expect(toolResults).toEqual([]);
+          expect(JSON.stringify(messages)).not.toContain('"type":"toolCall"');
+          expect(JSON.stringify(messages)).not.toContain(answer);
           expect(waited.status, JSON.stringify({ order, waited, requests: requests.length })).toBe(
             order === "abort" ? "error" : "ok",
           );
           expect(
-            requests.flatMap(({ messages }) =>
-              messages.filter(({ reasoning_details }) => reasoning_details !== undefined),
+            requests.flatMap((request) =>
+              request.messages.filter(({ reasoning_details }) => reasoning_details !== undefined),
             ),
           ).toEqual([]);
           if (order !== "abort") {
             expect(requests).toHaveLength(2);
-            expect(
-              JSON.stringify(
-                history.messages.findLast(({ role }) => role === "assistant")?.content,
-              ),
-            ).toContain(rejectedAnswer);
+            expect(finalText).toContain(rejectedAnswer);
           } else {
             expect(waited.stopReason).toBe("rpc");
             expect(requests).toHaveLength(1);
@@ -348,7 +310,7 @@ it(
           `${order}: actual continuation encrypted details`,
         ).toEqual(details.length > 0 ? details : undefined);
         associationExpect(
-          history.messages.find(
+          messages.find(
             (message) => message.role === "assistant" && message.stopReason === "toolUse",
           )?.content,
           `${order}: persisted tool identity and encrypted state`,
@@ -375,21 +337,11 @@ it(
             };
           }),
         ]);
-        expect(
-          JSON.stringify(
-            history.messages.findLast((message) => message.role === "assistant")?.content,
-          ),
-        ).not.toContain(detail.data);
+        expect(finalText).not.toContain(detail.data);
         expect(waited.status).toBe("ok");
         expect(requests).toHaveLength(2);
-        expect(history.messages.filter((message) => message.role === "toolResult")).toHaveLength(
-          callIds.length,
-        );
-        expect(
-          JSON.stringify(
-            history.messages.findLast((message) => message.role === "assistant")?.content,
-          ),
-        ).toContain(answer);
+        expect(toolResults).toHaveLength(callIds.length);
+        expect(finalText).toContain(answer);
         expect(events).toContainEqual(
           expect.objectContaining({
             event: "chat",
@@ -398,18 +350,11 @@ it(
         );
       }
     } finally {
-      provider.closeAllConnections();
+      await provider.close();
       if (gateway) {
         await disconnectGatewayClient(gateway.client);
         await gateway.server.close();
       }
-      await new Promise<void>((resolve, reject) => {
-        provider.close((error) => (error ? reject(error) : resolve()));
-      });
-      snapshot.restore();
-      clearRuntimeConfigSnapshot();
-      clearConfigCache();
-      clearSessionStoreCacheForTest();
     }
   },
 );

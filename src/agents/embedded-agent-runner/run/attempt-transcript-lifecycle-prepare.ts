@@ -1,12 +1,11 @@
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
-import { prepareSessionEntryReplacementDatabase } from "../../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
-import { prepareCronRootSessionGeneration } from "../../../config/sessions/session-delivery-generation.js";
 import { assertSessionEntryCohortScope } from "../../../config/sessions/session-entry-cohort-scope.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
+import { acquireCronRootTranscriptLease } from "../../../config/sessions/transcript-lease.js";
 import type { OwnedSessionTranscriptWriteContext } from "../../../config/sessions/transcript-write-context-store.js";
 import {
   getOwnedSessionTranscriptInitialWriter,
@@ -14,7 +13,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import { captureAgentRunTerminalPersistence } from "../../../infra/agent-run-terminal-writes.js";
-import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
+import { chatRef } from "../../../sessions/chat-ref.js";
 /** Prepares the admitted writer context and teardown tracker for one attempt. */
 import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
 import { IncognitoSessionMissingError } from "../../../state/incognito-session-error.js";
@@ -43,6 +42,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
     sessionKey,
     sessionManager,
     sessionPersistence,
+    toolUsageRecorder,
     sessionTarget: originalSessionTarget,
     preparedSessionTarget: preparedTarget,
   },
@@ -62,6 +62,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
     | "sessionPersistence"
     | "sessionTarget"
     | "preparedSessionTarget"
+    | "toolUsageRecorder"
   > & { admittedRunContext?: EmbeddedRunAttemptParams["admittedRunContext"] };
   externalAbortController: {
     arm: () => void;
@@ -105,10 +106,10 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
   };
   // The stable cron root can rotate while its exact run remains stored. Retain
   // its admitted generation only for this attempt, before compaction adoption.
-  const generation = await prepareCronRootSessionGeneration(
+  const generation = await acquireCronRootTranscriptLease(
+    chatRef({ ...sessionTarget, sessionKey: sessionKey ?? sessionTarget.sessionKey }),
     {
-      ...sessionTarget,
-      sessionKey: sessionKey ?? sessionTarget.sessionKey,
+      sessionId: sessionTarget.sessionId,
       lifecycleRevision: fencedSessionTarget.expectedLifecycleRevision,
     },
     runAbortController ? (reason) => runAbortController.abort(reason) : undefined,
@@ -124,9 +125,11 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
       }
     },
   });
-  const assertAdmittedActive = admittedRunContext
-    ? resolveAdmittedRunActiveAssertion(admittedRunContext, abortSignal)
-    : undefined;
+  const assertAdmittedActive =
+    preparedTarget?.assertCurrent ??
+    (admittedRunContext
+      ? resolveAdmittedRunActiveAssertion(admittedRunContext, abortSignal)
+      : undefined);
   const { writeContext: terminalWriter } = captureAgentRunTerminalPersistence(runId);
   const assertTerminalCurrent = composeSessionSourceAssertion([
     terminalWriter?.assertCurrent,
@@ -148,7 +151,6 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
       [assertAdmittedActive, generation?.assertCurrent],
       (assertSources) => {
         abortSignal?.throwIfAborted();
-        preparedTarget?.assertCurrent();
         assertSources();
       },
     ),
@@ -224,20 +226,9 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
         const { createSessionActorFactory } =
           await import("../../../config/sessions/session-actor-durable.js");
         assertCurrent();
-        let identity = readDatabasePathIdentitySync(database.path);
-        if (identity.key.startsWith("path:")) {
-          await prepareSessionEntryReplacementDatabase(database, assertCurrent);
-          assertCurrent();
-          identity = readDatabasePathIdentitySync(database.path);
-        }
         const actor = await createSessionActorFactory(database).acquire(
           {
-            database: {
-              kind: "file",
-              physicalIdentity: identity.key.slice("file:".length),
-              birthtime: identity.birthtime,
-              nativeLocation: identity.canonicalPath,
-            },
+            database: { kind: "file" },
             sessionKey: sessionTarget.sessionKey,
           },
           lifetime,
@@ -250,6 +241,10 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
           database,
         };
       }
+    }
+    await toolUsageRecorder?.bindTranscript(ownedTranscriptWriteContext.sessionActor?.database);
+    if (ownedTranscriptWriteContext.sessionActor) {
+      ownedTranscriptWriteContext.sessionActor.toolUsageRecorder = toolUsageRecorder;
     }
     externalAbortController.arm();
     await externalAbortController.throwIfFiredAfterPrepCleanup();

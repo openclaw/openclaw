@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
-import { createChatSendGoalCommitGuard } from "../../gateway/server-methods/chat-send-work-admission.js";
+import { createChatSendGoalCommitGuard } from "../../gateway/server-methods/chat-send-goal-admission.js";
 import { loadSessionEntryAsync as loadGatewaySessionEntryAsync } from "../../gateway/session-entry-load.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
@@ -25,6 +25,7 @@ import type { SessionTranscriptTurnPersistOptions } from "./session-accessor.typ
 import { createSessionCompoundWorkerFixture as baseFixture } from "./session-compound-worker.test-support.js";
 import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import { createUserPendingInput } from "./session-pending-input.test-support.js";
 import * as transcriptReconcile from "./session-transcript-reconcile.js";
 
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -165,7 +166,7 @@ it("rolls back the turn and its pending-input custody after an idempotency confl
       expect(f.read()).toEqual(before);
       expect(f.events()).toEqual([]);
     } finally {
-      pending!.finish("interrupted");
+      pending!.finish("interrupted", "failed");
     }
   });
 });
@@ -241,7 +242,7 @@ it.each([
         expect(f.read()).toEqual(before);
         expect(f.events()).toEqual([]);
       } finally {
-        pending?.finish("interrupted");
+        pending?.finish("interrupted", "failed");
       }
     });
   },
@@ -535,23 +536,17 @@ it("preserves worker custody refusal identity so callers cannot fall back to ano
       expect(pending!.state).toBe("queued");
       expect(f.events()).toEqual([]);
     } finally {
-      pending!.finish("interrupted");
+      pending!.finish("interrupted", "failed");
     }
   });
 });
 
 it("commits a pending-input turn with zero host SQL", async () => {
   await withFixture(async (f) => {
-    const pending = await stageSessionPendingInput(f.scope, {
-      runId: "compound-turn",
-      message: {
-        role: "user",
-        content: "synthetic input",
-        timestamp: 1,
-        idempotencyKey: "compound:user",
-      },
-      assertCurrent() {},
-    });
+    const pending = await stageSessionPendingInput(
+      f.scope,
+      createUserPendingInput("compound-turn", "synthetic input", "compound:user"),
+    );
     expect(pending).toBeDefined();
     const grantStates: string[] = [];
     const observedCustody: string[] = [];
@@ -600,7 +595,7 @@ it("commits a pending-input turn with zero host SQL", async () => {
     } finally {
       sql.restore();
       stopRows();
-      pending!.finish("interrupted");
+      pending!.finish("interrupted", "failed");
     }
     expect(f.read()?.sessionId).toBe("original");
     expect(f.events()).toContainEqual(
@@ -676,16 +671,10 @@ it("evaluates the latest-assistant predicate against earlier writes in the same 
 
 it("replays an exactly consumed input after its live custody has finished", async () => {
   await withFixture(async (f) => {
-    const pending = await stageSessionPendingInput(f.scope, {
-      runId: "finished-turn",
-      message: {
-        role: "user",
-        content: "committed input",
-        timestamp: 1,
-        idempotencyKey: "finished:user",
-      },
-      assertCurrent() {},
-    });
+    const pending = await stageSessionPendingInput(
+      f.scope,
+      createUserPendingInput("finished-turn", "committed input", "finished:user"),
+    );
     expect(pending).toBeDefined();
     const append = (message: unknown) =>
       f.append({
@@ -694,7 +683,7 @@ it("replays an exactly consumed input after its live custody has finished", asyn
     try {
       await pending!.run(() => append(pending!.message));
       expect(pending!.state).toBe("consumed");
-      pending!.finish("cancelled");
+      pending!.finish("cancelled", "failed");
       const result = await withSessionPendingInputPersistence(pending!, () =>
         append(pending!.message),
       );
@@ -709,7 +698,7 @@ it("replays an exactly consumed input after its live custody has finished", asyn
         { id: pending!.inputId, message: pending!.message },
       ]);
     } finally {
-      pending!.finish("cancelled");
+      pending!.finish("cancelled", "failed");
     }
   });
 });
@@ -783,7 +772,7 @@ it("prepares a goal message with the same intent that commits with the goal", as
   });
 });
 
-it.each(["commit", "captured-root", "native-replay"])(
+it.each(["commit", "warm-worker", "captured-root", "native-replay"])(
   "keeps real first-Goal admission grants free of host session SQL (%s)",
   async (mode) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -798,6 +787,21 @@ it.each(["commit", "captured-root", "native-replay"])(
       }
       const key = "agent:main:compound-goal-guard";
       const target = await loadGatewaySessionEntryAsync(key, { agentId: "main" });
+      if (mode === "warm-worker") {
+        const warmKey = "agent:main:ordinary-turn";
+        const sessionId = "ordinary-session";
+        await appendExpectedSessionTranscriptTurn(
+          { agentId: target.agentId, storePath: target.storePath, sessionKey: warmKey, sessionId },
+          {
+            expectedSessionId: sessionId,
+            selectedSessionId: null,
+            initialSessionEntry: { sessionId, updatedAt: Date.now() },
+            sessionFile: warmKey,
+            keyFormat: "agent-qualified",
+            messages: [{ message: { role: "user", content: "ordinary turn before first Goal" } }],
+          },
+        );
+      }
       const initialSessionEntry = { sessionId: "guarded-first-goal", updatedAt: Date.now() };
       const guard = createChatSendGoalCommitGuard({
         client: null,

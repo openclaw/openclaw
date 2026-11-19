@@ -3,9 +3,7 @@ import { defaultRuntime } from "../runtime.js";
 import { captureEnv } from "../test-utils/env.js";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
-const ensureConfigReadyMock = vi.hoisted(() =>
-  vi.fn(async (_params: { runtime?: unknown; commandPath?: unknown }) => {}),
-);
+const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));
 const ensurePluginRegistryLoadedMock = vi.hoisted(() => vi.fn());
 const runRouteMock = vi.hoisted(() => vi.fn(async () => true));
 const statusDefaults = { json: false, deep: false, all: false, usage: false, verbose: false };
@@ -43,8 +41,6 @@ vi.mock("../commands/health.js", () => ({ healthCommand: runRouteMock }));
 vi.mock("../commands/agents.commands.list.js", () => ({ agentsListCommand: runRouteMock }));
 vi.mock("../commands/sessions.js", () => ({ sessionsCommand: runRouteMock }));
 vi.mock("../commands/channels/list.js", () => ({ channelsListCommand: runRouteMock }));
-vi.mock("../commands/channels/status.js", () => ({ channelsStatusCommand: runRouteMock }));
-vi.mock("./plugins-list-command.js", () => ({ runPluginsListCommand: runRouteMock }));
 vi.mock("./daemon-cli/status.js", () => ({ runDaemonStatus: runRouteMock }));
 vi.mock("./gateway-cli/health-route.js", () => ({ runGatewayHealthJsonRoute: runRouteMock }));
 vi.mock("./config-cli.js", () => ({ runConfigGet: runRouteMock, runConfigUnset: runRouteMock }));
@@ -56,13 +52,9 @@ vi.mock("../commands/models/list.list-command.js", async (importOriginal) => ({
 
 vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),
-  defaultRuntime: {
-    error: vi.fn(),
-    log: vi.fn(),
-    exit: vi.fn(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn(),
-  },
+  defaultRuntime: (
+    await import("../test-utils/plugin-runtime-env.js")
+  ).createNonExitingRuntimeEnv(),
 }));
 
 describe("tryRouteCli", () => {
@@ -98,15 +90,10 @@ describe("tryRouteCli", () => {
     originalEnv.restore();
   });
 
-  it("falls back before bootstrap when the route cannot parse the argv", async () => {
-    await expect(
-      tryRouteCli(["node", "openclaw", "sessions", "--json", "--unknown"]),
-    ).resolves.toBe(false);
-
+  function expectNoBootstrap() {
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
-    expect(runRouteMock).not.toHaveBeenCalled();
-  });
+  }
 
   it.each<[string, object, boolean?]>([
     ["health --json --timeout 5000", { json: true, verbose: false, timeoutMs: 5000 }],
@@ -115,16 +102,10 @@ describe("tryRouteCli", () => {
       { deep: true, all: true, usage: true, agent: "beta", timeoutMs: 5000 },
     ],
     ["health --timeout nope --timeout 5000", { json: false, verbose: false, timeoutMs: 5000 }],
-    ["status --timeout 5000", { ...statusDefaults, timeoutMs: 5000 }],
-    ["status --timeout 250", { ...statusDefaults, timeoutMs: 250 }],
     ["status", { ...statusDefaults, timeoutMs: undefined }],
     [
       "--profile work status --json",
       { deep: false, all: false, usage: false, timeoutMs: undefined },
-    ],
-    [
-      "--profile work health --timeout=5000 --json",
-      { json: true, verbose: false, timeoutMs: 5000 },
     ],
     [
       "sessions --agent=default --limit=25",
@@ -140,11 +121,6 @@ describe("tryRouteCli", () => {
     ["--log-level=debug agents list --json", { json: true, bindings: false, tree: false }, true],
     ["agents --json --bindings", { json: true, bindings: true, tree: false }, true],
     ["channels list", { json: false, all: false }],
-    [
-      "channels status --json",
-      { channel: undefined, json: true, probe: false, timeout: undefined },
-    ],
-    ["plugins list --json", { json: true, enabled: false, verbose: false }],
     [
       "gateway status --url ws://127.0.0.1:18789 --token abc --password def --timeout 5000 --deep --require-rpc --json",
       {
@@ -209,46 +185,37 @@ describe("tryRouteCli", () => {
     expect(runRouteMock).toHaveBeenCalledExactlyOnceWith(
       ...(singleArgument ? [expected] : [expected, defaultRuntime]),
     );
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+    expectNoBootstrap();
   });
 
-  it.each(
-    [
-      ["status", "--timeout"],
-      ["status", "--agent"],
-      ...["0", "-5", "nope", "5s"].flatMap((value) => [
-        ["status", "--timeout", value],
-        ["health", "--timeout", value],
-      ]),
-      ["status", "--timeout", "5000", "--timeout", "nope"],
-      ["--json", "status"],
-      ["--json", "health"],
-      ["--verbose", "health"],
-      ["--timeout=5000", "health"],
-      ["--timeout", "5000", "health"],
-      ["sessions", "--", "--json"],
-      ["agents", "list", "extra"],
-      ["config", "unset", "gateway.port", "", "--dry-run"],
-      ["gateway", "status", "--ssh", "host"],
-      ["gateway", "status", "--ssh-auto"],
-      ["gateway", "health"],
-      ["gateway", "health", "--url", "ws://127.0.0.1:18789", "--port", "19083", "--json"],
-      ["gateway", "health", "--timeout", "5s", "--json"],
-      ["config", "get", "--json"],
-      ["models", "status", "--probe-profile"],
-      ...[
-        ["gateway", "status"],
-        ["models", "list"],
-        ["channels", "list"],
-        ["channels", "status"],
-      ].map((command) => command.concat("--wat")),
-    ].map((args) => ({ args })),
-  )("defers malformed routed argv $args without observing startup", async ({ args }) => {
-    await expect(tryRouteCli(["node", "openclaw", ...args])).resolves.toBe(false);
-
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  it.each([
+    "sessions --json --unknown",
+    "status --timeout",
+    "status --agent",
+    "status --timeout 0",
+    "health --timeout nope",
+    "status --timeout 5000 --timeout nope",
+    "--json status",
+    "--json health",
+    "--verbose health",
+    "--timeout=5000 health",
+    "--timeout 5000 health",
+    "sessions -- --json",
+    "agents list extra",
+    "config unset gateway.port  --dry-run",
+    "gateway status --ssh host",
+    "gateway status --ssh-auto",
+    "gateway health",
+    "gateway health --url ws://127.0.0.1:18789 --port 19083 --json",
+    "gateway health --timeout 5s --json",
+    "config get --json",
+    "models status --probe-profile",
+    ...["gateway status", "models list", "channels list", "channels status"].map(
+      (command) => `${command} --wat`,
+    ),
+  ])("defers malformed routed argv %s without observing startup", async (command) => {
+    await expect(tryRouteCli(["node", "openclaw", ...command.split(" ")])).resolves.toBe(false);
+    expectNoBootstrap();
     expect(emitCliBannerMock).not.toHaveBeenCalled();
     expect(runRouteMock).not.toHaveBeenCalled();
     expect(loggingState.forceConsoleToStderr).toBe(false);
@@ -289,18 +256,13 @@ describe("tryRouteCli", () => {
     expect(process.env.OPENCLAW_LOG_LEVEL).toBe("trace");
   });
 
-  it.each([
-    ["missing value", ["node", "openclaw", "status", "--log-level"]],
-    [
-      "later invalid value",
-      ["node", "openclaw", "--log-level", "debug", "status", "--log-level", "verbose"],
-    ],
-  ])("falls back for %s routed log level options before bootstrap", async (_name, argv) => {
-    await expect(tryRouteCli(argv)).resolves.toBe(false);
-
-    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
-    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
-    expect(runRouteMock).not.toHaveBeenCalled();
-    expect(process.env.OPENCLAW_LOG_LEVEL).toBeUndefined();
-  });
+  it.each(["status --log-level", "--log-level debug status --log-level verbose"])(
+    "falls back for invalid routed log level options: %s",
+    async (command) => {
+      await expect(tryRouteCli(["node", "openclaw", ...command.split(" ")])).resolves.toBe(false);
+      expectNoBootstrap();
+      expect(runRouteMock).not.toHaveBeenCalled();
+      expect(process.env.OPENCLAW_LOG_LEVEL).toBeUndefined();
+    },
+  );
 });

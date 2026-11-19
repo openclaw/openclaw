@@ -12,7 +12,7 @@ import {
   createFollowupRun,
   createMinimalRunAgentTurnParams,
   getRawExecuteAgentTurnForTest,
-  initialFallbackAttemptOptions,
+  runFallbackCandidate,
   setupAgentRunnerExecutionTestState,
   type EmbeddedAgentParams,
   type FallbackRunnerParams,
@@ -178,12 +178,9 @@ describe("executeAgentTurn MCP App context", () => {
     followupRun.run.model = "gpt-5.4";
     const { provider, model } = followupRun.run;
     state.isCliProviderMock.mockReturnValue(true);
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run(provider, model, initialFallbackAttemptOptions(params)),
-      provider,
-      model,
-      attempts: [],
-    }));
+    state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
+      runFallbackCandidate(params, provider, model),
+    );
     const { runtime, view } = await pendingView("CLI selection");
     state.runCliAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       params.onExecutionPhase?.({ phase: "process_spawned" });

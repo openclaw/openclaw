@@ -290,6 +290,10 @@ export const validateMcpAuthLoginParams = createProtocolValidator(
   S.McpAuthLoginParamsSchema,
   Checks.isMcpAuthLoginParams,
 );
+export const validateMcpAuthLogoutParams = createProtocolValidator(
+  S.McpAuthLogoutParamsSchema,
+  Checks.isMcpAuthLogoutParams,
+);
 export const validateWizardNextParams = createProtocolValidator(
   S.WizardNextParamsSchema,
   Checks.isWizardNextParams,
@@ -341,6 +345,10 @@ export const validateCronRemoveParams = createProtocolValidator(
 export const validateCronRunParams = createProtocolValidator(
   S.CronRunParamsSchema,
   Checks.isCronRunParams,
+);
+export const validateCronBindParams = createProtocolValidator(
+  S.CronBindParamsSchema,
+  Checks.isCronBindParams,
 );
 export const validateCronRunsParams = createProtocolValidator(
   S.CronRunsParamsSchema,

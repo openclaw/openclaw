@@ -68,7 +68,9 @@ beforeEach(() => {
 });
 
 it("completes the requester row selected by exact OAuth state", async () => {
-  const result = await dispatch();
+  const result = await dispatch(
+    "/oauth/mcp/callback?code=authorization-code&state=state-1234567890&iss=https%3A%2F%2Faccounts.example.com%2Ftenant%2F",
+  );
 
   expectPage(result, 200, "You&#39;re connected.");
   expect(result.response.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
@@ -82,10 +84,22 @@ it("completes the requester row selected by exact OAuth state", async () => {
       serverUrl: SERVER_URL,
     },
     expect.objectContaining({ kind: "http", url: SERVER_URL }),
-    { code: "authorization-code", state: "state-1234567890" },
+    {
+      code: "authorization-code",
+      state: "state-1234567890",
+      iss: "https://accounts.example.com/tenant/",
+    },
     undefined,
     mocks.context,
   );
+});
+
+it("rejects ambiguous issuer parameters without consuming authorization", async () => {
+  const result = await dispatch(
+    "/oauth/mcp/callback?code=authorization-code&state=state-1234567890&iss=https%3A%2F%2Faccounts.example.com&iss=https%3A%2F%2Fother.example",
+  );
+  expectPage(result, 400, "Ask the bot to connect again.");
+  expect(mocks.complete).not.toHaveBeenCalled();
 });
 
 it("rejects unknown and replayed states with the same generic page", async () => {

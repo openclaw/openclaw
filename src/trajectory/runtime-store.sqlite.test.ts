@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi, onTestFinished } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
@@ -95,7 +95,8 @@ function admitted<T>(operation: (owner: SqliteWorkerOperationContext) => T) {
   try {
     return { owner, window: withSqliteWorkerOperationAdmission(owner, () => operation(owner)) };
   } finally {
-    admission.finish();
+    const finishing = admission.finish();
+    onTestFinished(() => finishing);
   }
 }
 
@@ -381,6 +382,85 @@ describe("SQLite trajectory runtime store", () => {
     appendEvents(events);
     expect(readRows()).toEqual([existing, ...events].map((event, seq) => ({ event, seq })));
   });
+
+  it.each(
+    ["UTF-8", "UTF-16le", "UTF-16be"].flatMap((encoding) =>
+      ["warm", "cold", "cold-under-budget"].map((window) => ({ encoding, window })),
+    ),
+  )(
+    "reads only the expired prefix when a $window $encoding window advances",
+    async ({ encoding, window }) => {
+      await seedEncoding(encoding);
+      const database = openOpenClawAgentDatabase({
+        agentId: "main",
+        path: encoding === "UTF-8" ? sqlitePath() : storePath,
+      });
+      const event = createTrajectoryEvent({ type: "rolling-window🦞" });
+      const bytes = eventBytes([event]);
+      const underBudget = window === "cold-under-budget";
+      const append = (
+        events: TrajectoryEvent[],
+        windowFacts?: { nextSeq: number; retainedBytes: number },
+      ) =>
+        appendSqliteTrajectoryRuntimeEventsWithWriter(
+          {
+            sessionId: "session-1",
+            maxRuntimeBytes: bytes * (underBudget ? 129 : 128),
+            events: events.map(serialized),
+            windowFacts,
+          },
+          database,
+          (operationLabel, write) =>
+            runOpenClawAgentWriteTransaction(
+              write,
+              { agentId: "main", path: database.path },
+              { operationLabel },
+            ),
+        ).receipt.windowFacts;
+      const initial = append(Array.from({ length: 128 }, () => event));
+      const native = requireNativeSqliteDatabase(database.db);
+      const prepare = native.prepare.bind(native);
+      let visited = 0;
+      const spy = vi.spyOn(native, "prepare").mockImplementation((sql) => {
+        const statement = prepare(sql);
+        if (sql.includes('from "trajectory_runtime_events"')) {
+          const iterate = statement.iterate.bind(statement);
+          statement.iterate = (...parameters) => {
+            const iterator: ReturnType<typeof statement.iterate> = Reflect.apply(
+              iterate,
+              statement,
+              parameters,
+            );
+            const next = iterator.next.bind(iterator);
+            iterator.next = (...args) => {
+              const row = next(...args);
+              if (!row.done) {
+                visited++;
+              }
+              return row;
+            };
+            return iterator;
+          };
+        }
+        return statement;
+      });
+      try {
+        expect(append([event], window === "warm" ? initial : undefined)).toEqual({
+          nextSeq: 129,
+          retainedBytes: bytes * (underBudget ? 129 : 128),
+        });
+      } finally {
+        spy.mockRestore();
+      }
+      expect(readRows()).toEqual(
+        Array.from({ length: underBudget ? 129 : 128 }, (_, index) => ({
+          event,
+          seq: index + (underBudget ? 0 : 1),
+        })),
+      );
+      expect(visited).toBe(encoding !== "UTF-8" && window !== "warm" ? 128 : underBudget ? 0 : 1);
+    },
+  );
 
   it.each(["0", "1969-12-31T23:59:59.000Z"])(
     "stores Date.parse-compatible trajectory timestamp %s",

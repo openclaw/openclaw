@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -19,6 +20,7 @@ const authSuccess = cliResult({ started: true, status: 0 });
 const unknownOutcome = { reason: "creation-outcome-unknown", status: "outcome-unknown" };
 const issueUrl = (id: number) => `https://github.com/openclaw/openclaw/issues/${id}`;
 const created = (id: number) => ({ status: "created", url: issueUrl(id) });
+const issue = prepareGithubIssue({ body: "sanitized report", title: "Support report" });
 
 type CliResult = Awaited<ReturnType<RunGithubCli>>;
 
@@ -34,37 +36,41 @@ function cli(...results: (CliResult | Promise<CliResult>)[]) {
   return run;
 }
 
-function prepare(body: string) {
-  return prepareGithubIssue({ body, title: `Support report ${body}` });
-}
-
 function cliOutput(stdout: string, status = 0) {
   return cliResult({ started: true, status, stdout: Buffer.from(stdout) });
 }
 
-function lookupResult(issue: ReturnType<typeof prepare>, url: string, body = issue.body) {
+function lookupResult(url: string, body = issue.body) {
   return cliOutput(JSON.stringify([{ body, title: issue.title, url }]));
 }
 
-function childFixture() {
-  return Object.assign(new EventEmitter(), {
+function childFixture(output?: string) {
+  const child = Object.assign(new EventEmitter(), {
     stdin: Object.assign(new EventEmitter(), { destroy: vi.fn(), end: vi.fn() }),
     stdout: Object.assign(new EventEmitter(), { destroy: vi.fn() }),
     kill: vi.fn(),
     unref: vi.fn(),
   });
+  child.stdin.end.mockImplementation(() =>
+    queueMicrotask(() => {
+      child.emit("spawn");
+      if (output !== undefined) {
+        child.stdout.emit("data", Buffer.from(output));
+        child.emit("close", 0);
+      }
+    }),
+  );
+  return child;
 }
 
-function availableFallbackUrl(issue: ReturnType<typeof prepareGithubIssue>): string {
-  expect(issue.browserFallback.status).toBe("available");
-  if (issue.browserFallback.status !== "available") {
-    throw new Error("expected an available browser fallback");
-  }
-  return issue.browserFallback.url;
+function fallback(reason: string) {
+  assert(issue.browserFallback.status === "available");
+  return { reason, status: "browser-fallback", url: issue.browserFallback.url };
 }
 
-function fallback(issue: ReturnType<typeof prepare>, reason: string) {
-  return { reason, status: "browser-fallback", url: availableFallbackUrl(issue) };
+function enableChildProcess() {
+  vi.stubEnv("VITEST", undefined);
+  vi.stubEnv("NODE_ENV", "production");
 }
 
 beforeEach(() => {
@@ -76,104 +82,72 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("does not expose raw process diagnostics through a transport failure", async () => {
-  const issue = prepare("private-failure");
-  const rawFailure = {
-    ...cliResult({ started: true, status: 4 }),
-    diagnostic: "gh auth login --with-token private-value",
-  };
-  const runGh = cli(rawFailure);
-
-  const result = await submitGithubIssue(issue, runGh);
-
-  expect(result).toEqual(fallback(issue, "authentication-unavailable"));
-  expect(JSON.stringify(result)).not.toContain("private-value");
+it("does not expose authentication diagnostics or start creation after denial", async () => {
+  const denied = { ...cliResult({ started: true, status: 4 }), diagnostic: "private-value" };
+  const runGh = cli(denied);
+  expect(await submitGithubIssue(issue, runGh)).toEqual(fallback("authentication-unavailable"));
+  expect(runGh).toHaveBeenCalledOnce();
 });
 
 it("returns a typed unavailable fallback while retaining the prepared body", async () => {
-  const issue = prepareGithubIssue({ body: "&=?%".repeat(5_000), title: "Sanitized report" });
+  const large = prepareGithubIssue({ body: "&=?%".repeat(5_000), title: "Sanitized report" });
   const runGh = cli(cliResult({ started: true, status: 4 }));
 
-  await expect(submitGithubIssue(issue, runGh)).resolves.toEqual({
+  await expect(submitGithubIssue(large, runGh)).resolves.toEqual({
     cause: "authentication-unavailable",
     reason: "fallback-url-too-long",
     status: "fallback-unavailable",
   });
-  expect(issue.body).toContain(`<!-- ${issue.marker} -->`);
-  expect(issue.body).toContain("&=?%");
+  expect(large.body).toContain(`<!-- ${large.marker} -->`);
+  expect(large.body).toContain("&=?%");
   expect(runGh).toHaveBeenCalledOnce();
 });
 
-it("uses the final HTTP response block for a definitive request rejection", async () => {
-  const issue = prepare("permission-denied");
-  const runGh = cli(
-    authSuccess,
-    cliOutput("HTTP/1.1 200 Connection established\r\n\r\nHTTP/2.0 403 Forbidden\r\n\r\n{}", 1),
-  );
-
-  await expect(submitGithubIssue(issue, runGh)).resolves.toEqual(
-    fallback(issue, "transport-unavailable"),
-  );
-  expect(runGh).toHaveBeenCalledTimes(2);
+it("reconciles a persisted attempt without creating another issue", async () => {
+  const runGh = cli(lookupResult(issueUrl(456)));
+  await expect(reconcileGithubIssue(issue, runGh)).resolves.toEqual(created(456));
+  expect(runGh.mock.calls[0]?.[0]).not.toContain("api");
 });
 
-it("prepares a browser fallback for a missing CLI without starting issue creation", async () => {
-  const issue = prepare("missing GitHub CLI");
-  const runGh = cli(cliResult({ errorCode: "ENOENT" }));
-
-  await expect(submitGithubIssue(issue, runGh)).resolves.toEqual(
-    fallback(issue, "cli-unavailable"),
-  );
-  expect(runGh).toHaveBeenCalledOnce();
-});
-
-it.each([false, true])("reconciles exact content (persisted attempt=%s)", async (persisted) => {
-  const issue = prepare(`reconcile-${persisted}`);
-  const runGh = cli(
-    ...(persisted ? [] : [authSuccess, cliResult({ started: true, status: 1 })]),
-    lookupResult(issue, issueUrl(456)),
-  );
-  await expect(
-    (persisted ? reconcileGithubIssue : submitGithubIssue)(issue, runGh),
-  ).resolves.toEqual(created(456));
-  if (persisted) {
-    expect(runGh).toHaveBeenCalledOnce();
-    expect(runGh.mock.calls[0]?.[1]).toEqual({ input: "" });
-    expect(runGh.mock.calls[0]?.[0][0]).toBe("issue");
-    expect(runGh.mock.calls[0]?.[0]).not.toContain("api");
-  } else {
+const rejected = "HTTP/1.1 200 Connection established\r\n\r\nHTTP/2.0 403 Forbidden\r\n\r\n{}";
+const malformedUrls = [
+  "javascript:alert(1)",
+  "https://github.com.evil.example/openclaw/openclaw/issues/123",
+  "https://github.com/openclaw/openclaw/issues/123?token=secret",
+];
+it.each([
+  ["HTTP rejection", cliOutput(rejected, 1), undefined, fallback("transport-unavailable")],
+  [
+    "lost response",
+    cliResult({ started: true, status: 1 }),
+    lookupResult(issueUrl(456)),
+    created(456),
+  ],
+  [
+    "changed content",
+    cliOutput("not-a-url"),
+    lookupResult(issueUrl(999), `${issue.body}\nchanged`),
+    unknownOutcome,
+  ],
+  ...malformedUrls.map(
+    (url) =>
+      [
+        url,
+        cliOutput(`HTTP/2.0 201 Created\r\n\r\n${url}\n`),
+        lookupResult(url),
+        unknownOutcome,
+      ] as const,
+  ),
+] as const)("settles creation safely after %s", async (_name, response, lookup, expected) => {
+  const runGh = cli(authSuccess, response, ...(lookup ? [lookup] : []));
+  await expect(submitGithubIssue(issue, runGh)).resolves.toEqual(expected);
+  expect(runGh).toHaveBeenCalledTimes(lookup ? 3 : 2);
+  if (lookup) {
     expect(runGh.mock.calls[2]?.[0]).toContain(`"${issue.marker}" in:body`);
   }
 });
 
-it.each([
-  "javascript:alert(1)",
-  "https://github.com.evil.example/openclaw/openclaw/issues/123",
-  "https://github.com/openclaw/openclaw/issues/123?token=secret",
-])("does not expose or fall back after malformed created URL %s", async (url) => {
-  const issue = prepare(url);
-  const runGh = cli(
-    authSuccess,
-    cliOutput(`HTTP/2.0 201 Created\r\n\r\n${url}\n`),
-    lookupResult(issue, url),
-  );
-
-  await expect(submitGithubIssue(issue, runGh)).resolves.toEqual(unknownOutcome);
-});
-
-it("does not reconcile a marker search candidate with different content", async () => {
-  const issue = prepare("marker-collision-negative");
-  const runGh = cli(
-    authSuccess,
-    cliOutput("HTTP/2.0 201 Created\r\n\r\nnot-a-url\n"),
-    lookupResult(issue, issueUrl(999), `${issue.body}\nchanged`),
-  );
-
-  await expect(submitGithubIssue(issue, runGh)).resolves.toEqual(unknownOutcome);
-});
-
 it("deduplicates concurrent submissions with the same marker", async () => {
-  const issue = prepare("concurrent");
   const { promise: auth, resolve: releaseAuth } = createDeferred<ReturnType<typeof cliResult>>();
   const runGh = cli(auth, cliOutput(`${issueUrl(789)}\n`));
 
@@ -189,26 +163,22 @@ it("deduplicates concurrent submissions with the same marker", async () => {
 
 it("bounds a stalled authentication preflight without exposing process diagnostics", async () => {
   vi.useFakeTimers();
-  vi.stubEnv("VITEST", undefined);
-  vi.stubEnv("NODE_ENV", "production");
+  enableChildProcess();
   const child = childFixture();
-  child.stdin.end.mockImplementation(() => queueMicrotask(() => child.emit("spawn")));
   child.kill.mockReturnValue(false);
   spawnMock.mockReturnValue(child);
-  const issue = prepare("timeout");
 
   const submission = submitGithubIssue(issue);
   await vi.advanceTimersByTimeAsync(30_000);
 
-  await expect(submission).resolves.toEqual(fallback(issue, "authentication-unavailable"));
+  await expect(submission).resolves.toEqual(fallback("authentication-unavailable"));
   expect(child.kill).toHaveBeenCalledWith("SIGKILL");
   expect(child.stdin.destroy).toHaveBeenCalledOnce();
   expect(child.stdout.destroy).toHaveBeenCalledOnce();
 });
 
 it.each([false, true])("checks child authority (retired=%s)", async (retire) => {
-  vi.stubEnv("VITEST", undefined);
-  vi.stubEnv("NODE_ENV", "production");
+  enableChildProcess();
   let current = true;
   let claimed = false;
   let authorityAtCreate: boolean | undefined;
@@ -217,19 +187,9 @@ it.each([false, true])("checks child authority (retired=%s)", async (retire) => 
       authorityAtCreate = current;
       expect(claimed).toBe(true);
     }
-    const child = childFixture();
-    child.stdin.end.mockImplementation(() =>
-      queueMicrotask(() => {
-        child.emit("spawn");
-        if (args[0] === "api") {
-          child.stdout.emit("data", Buffer.from(`${issueUrl(123)}\n`));
-        }
-        child.emit("close", 0);
-      }),
-    );
-    return child;
+    return childFixture(args[0] === "api" ? `${issueUrl(123)}\n` : "");
   });
-  const submission = submitGithubIssue(prepare(`final-child-${retire}`), undefined, {
+  const submission = submitGithubIssue(issue, undefined, {
     beforeIssueCreate: async () => {
       if (retire) {
         queueMicrotask(() => {

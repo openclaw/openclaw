@@ -1,5 +1,7 @@
 /** Assembles an agent session from the run owner's selected model and prepared resources. */
+import { markModelPayloadObserver } from "@openclaw/ai/internal/model-request-body";
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
+import { setInternalToolRepeatPolicy } from "../../../packages/agent-core/src/internal-hooks.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import type { SessionMetadataCommit } from "../../config/sessions/transcript-write-context-store.js";
 import {
@@ -7,11 +9,8 @@ import {
   withSessionMetadataPublication,
   withSessionTranscriptWriteAssertion,
 } from "../../config/sessions/transcript-write-context.js";
-import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { Model } from "../../llm/types.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
-import { applyLocalNoAuthHeaders } from "../model-auth-markers.js";
-import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import {
   Agent,
   type AgentMessage,
@@ -19,26 +18,22 @@ import {
   type AgentTool,
   type ThinkingLevel,
 } from "../runtime/index.js";
-import {
-  setInternalBeforeToolBatch,
-  type InternalBeforeToolBatchHook,
-} from "../runtime/internal-hooks.js";
 import type { AgentSessionConfig } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
 import type { ExtensionRunner } from "./extensions/index.js";
 import { convertToLlmWithBlockImages } from "./messages.js";
-import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import { sessionManagerAppendInitialMetadata } from "./session-manager-metadata.js";
-import type { SettingsManager } from "./settings-manager.js";
-import { isInstallTelemetryEnabled } from "./telemetry.js";
+import { sessionManagerReadTranscriptBranch } from "./session-manager-view-types.js";
+import { createSessionStreamFn } from "./session-stream.js";
 
 export interface CreateAgentSessionOptions extends Omit<
   AgentSessionConfig,
   "agent" | "cwd" | "extensionRunnerRef" | "allowedToolNames"
 > {
-  beforeToolBatch?: InternalBeforeToolBatchHook;
+  /** Host repeat-guard policy from `tools.loopDetection`; omitted means enabled. */
+  toolRepeatPolicy?: Parameters<typeof setInternalToolRepeatPolicy>[1];
   /** Execution directory; defaults to the prepared session's directory. */
   cwd?: string;
 
@@ -114,82 +109,6 @@ function createSessionPrepareNextTurnWithContext(
   };
 }
 
-function getAttributionHeaders(
-  model: Model,
-  settingsManager: SettingsManager,
-): Record<string, string> | undefined {
-  // SDK-backed session streams do not all consult the attribution policy, so forward its
-  // documented header set as caller headers. Hidden (spec-only) attribution stays with the
-  // transports that verify it. Like the transport-side policy, this ignores install telemetry.
-  const { attributionHeaders, allowsHiddenAttribution } = resolveProviderRequestPolicy({
-    provider: model.provider,
-    api: model.api,
-    baseUrl: model.baseUrl,
-  });
-  if (attributionHeaders && !allowsHiddenAttribution) {
-    return attributionHeaders;
-  }
-
-  if (!isInstallTelemetryEnabled(settingsManager)) {
-    return undefined;
-  }
-
-  const baseUrl = model.baseUrl ?? "";
-
-  if (
-    model.provider === "cloudflare-workers-ai" ||
-    model.provider === "cloudflare-ai-gateway" ||
-    baseUrl.includes("api.cloudflare.com") ||
-    baseUrl.includes("gateway.ai.cloudflare.com")
-  ) {
-    return {
-      "User-Agent": "openclaw",
-    };
-  }
-
-  return undefined;
-}
-
-function createSessionStreamFn(
-  modelRegistry: CreateAgentSessionOptions["modelRegistry"],
-  settingsManager: SettingsManager,
-  thinkingExplicit: boolean | undefined,
-): NonNullable<AgentOptions["streamFn"]> {
-  const modelRegistryRuntime = getModelRegistryRuntime(modelRegistry);
-  const streamFn: NonNullable<AgentOptions["streamFn"]> = async (
-    modelResult,
-    context,
-    optionsLocal,
-  ) => {
-    const auth = await modelRegistry.getApiKeyAndHeaders(modelResult);
-    if (!auth.ok) {
-      throw new Error(auth.error);
-    }
-    // Isolated session streams bypass the process-default stream facade.
-    await import("../ai-transport-runtime-host.js");
-    optionsLocal?.signal?.throwIfAborted();
-    const providerRetrySettings = settingsManager.getProviderRetrySettings();
-    const attributionHeaders = getAttributionHeaders(modelResult, settingsManager);
-    const providerOptions = {
-      ...optionsLocal,
-      openclawThinkingExplicit: thinkingExplicit,
-      apiKey: auth.apiKey,
-      timeoutMs: optionsLocal?.timeoutMs ?? providerRetrySettings.timeoutMs,
-      maxRetryDelayMs: optionsLocal?.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
-      headers: applyLocalNoAuthHeaders(
-        modelResult.api,
-        auth.apiKey,
-        attributionHeaders || auth.headers || optionsLocal?.headers
-          ? { ...attributionHeaders, ...auth.headers, ...optionsLocal?.headers }
-          : undefined,
-      ),
-    };
-    return modelRegistryRuntime.llmRuntime.streamSimple(modelResult, context, providerOptions);
-  };
-  bindStreamLlmRuntime(streamFn, modelRegistryRuntime.llmRuntime);
-  return streamFn;
-}
-
 export async function createAgentSession(
   options: CreateAgentSessionOptions,
 ): Promise<{ session: AgentSession }> {
@@ -211,9 +130,9 @@ export async function createAgentSession(
   const existingSession = await sessionManager[sessionManagerReadInitialContext]();
   assertInitialSessionCurrent();
   const hasExistingSession = existingSession.messages.length > 0;
-  const hasThinkingEntry = sessionManager
-    .getBranch()
-    .some((entry) => entry.type === "thinking_level_change");
+  const hasThinkingEntry = sessionManager[sessionManagerReadTranscriptBranch]().some(
+    (entry) => entry.type === "thinking_level_change",
+  );
 
   const model = options.model;
   const thinkingLevel = clampThinkingLevel(model, options.thinkingLevel) as ThinkingLevel;
@@ -235,15 +154,19 @@ export async function createAgentSession(
     convertToLlm: (messages) =>
       convertToLlmWithBlockImages(messages, settingsManager.getBlockImages()),
     streamFn: createSessionStreamFn(modelRegistry, settingsManager, options.thinkingExplicit),
-    onPayload: async (payload) => {
-      const runner = extensionRunnerRef.current;
-      if (!runner?.hasHandlers("before_provider_request")) {
-        return payload;
-      }
-      return await runWithSessionWriteSettlement(
-        async () => await runner.emitBeforeProviderRequest(payload),
-      );
-    },
+    onPayload: markModelPayloadObserver(
+      async (payload: unknown) => {
+        const runner = extensionRunnerRef.current;
+        if (!runner?.hasHandlers("before_provider_request")) {
+          return payload;
+        }
+        return await runWithSessionWriteSettlement(
+          async () => await runner.emitBeforeProviderRequest(payload),
+        );
+      },
+      undefined,
+      () => !extensionRunnerRef.current?.hasHandlers("before_provider_request"),
+    ),
     onResponse: async (response) => {
       const runner = extensionRunnerRef.current;
       if (!runner?.hasHandlers("after_provider_response")) {
@@ -274,7 +197,9 @@ export async function createAgentSession(
     thinkingBudgets: settingsManager.getThinkingBudgets(),
     maxRetryDelayMs: settingsManager.getProviderRetrySettings().maxRetryDelayMs,
   });
-  setInternalBeforeToolBatch(agent, options.beforeToolBatch);
+  if (options.toolRepeatPolicy) {
+    setInternalToolRepeatPolicy(agent, options.toolRepeatPolicy);
+  }
 
   let metadataCommit: SessionMetadataCommit | undefined;
   const initializeMetadata = () => {

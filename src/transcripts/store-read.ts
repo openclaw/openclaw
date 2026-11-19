@@ -20,6 +20,7 @@ import {
   jsonOrderedTextArray,
   jsonRemoveKey,
 } from "../infra/database-engine/json-values.js";
+import { engineStringPosition } from "../infra/database-engine/scalar.js";
 import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
@@ -353,9 +354,13 @@ function readTranscriptPage<Entry>(
   if (options.query) {
     const search = options.query;
     query = query.where((eb) => {
-      const matches = (field: Expression<unknown>): Expression<SqlBool> =>
+      const matches = (field: Expression<string | null>): Expression<SqlBool> =>
         eb(
-          eb.fn<number>("instr", [eb.fn("lower", [field]), eb.fn("lower", [eb.val(search)])]),
+          engineStringPosition(
+            database,
+            eb.fn<string | null>("lower", [field]),
+            eb.fn<string>("lower", [eb.val(search)]),
+          ),
           ">",
           0,
         );
@@ -556,10 +561,11 @@ function readTranscriptUtterancePage(
     const search = options.query;
     query = query.where((eb) =>
       eb(
-        eb.fn<number>("instr", [
-          eb.fn("lower", [eb.ref("text")]),
-          eb.fn("lower", [eb.val(search)]),
-        ]),
+        engineStringPosition(
+          database,
+          eb.fn<string>("lower", [eb.ref("text")]),
+          eb.fn<string>("lower", [eb.val(search)]),
+        ),
         ">",
         0,
       ),

@@ -237,28 +237,24 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         this.ctx.callbacks.onTalkEvent?.({ type: "session.closed" });
       }
     } finally {
-      this.releaseResources();
+      this.socketListeners.abort();
+      this.clearSetupTimeout();
+      this.pendingTranscripts.user = { text: "", byteCount: 0 };
+      this.pendingTranscripts.assistant = { text: "", byteCount: 0 };
+      this.input.stop();
+      this.toolOwner.release();
+      this.inputPump.stop();
+      this.outputQueue.close();
+      void this.inputContext?.close();
+      this.inputContext = null;
+      this.ws?.close();
+      this.ws = null;
+      // Release capture and native resources before notifying presentation callbacks.
+      this.camera.release();
+      const inputMeter = this.inputMeter;
+      this.inputMeter = null;
+      inputMeter?.stop();
     }
-  }
-
-  private releaseResources(): void {
-    this.socketListeners.abort();
-    this.clearSetupTimeout();
-    this.pendingTranscripts.user = { text: "", byteCount: 0 };
-    this.pendingTranscripts.assistant = { text: "", byteCount: 0 };
-    this.input.stop();
-    this.toolOwner.release();
-    this.inputPump.stop();
-    this.outputQueue.close();
-    void this.inputContext?.close();
-    this.inputContext = null;
-    this.ws?.close();
-    this.ws = null;
-    // Release capture and native resources before notifying presentation callbacks.
-    this.camera.release();
-    const inputMeter = this.inputMeter;
-    this.inputMeter = null;
-    inputMeter?.stop();
   }
 
   private clearSetupTimeout(): void {
@@ -429,7 +425,19 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
             this.outputQueue.stop();
           }
         },
-        speakControlResult: (message) => this.sendControlSpeechMessage(message),
+        speakControlResult: (message) => {
+          this.outputQueue.stop();
+          this.send(
+            this.gemini31LiveModel
+              ? { realtimeInput: { text: message } }
+              : {
+                  clientContent: {
+                    turns: [{ role: "user", parts: [{ text: message }] }],
+                    turnComplete: true,
+                  },
+                },
+          );
+        },
       });
     }
     return !this.closed;
@@ -548,19 +556,5 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       globalThis.clearTimeout(this.videoFrameTimer);
       this.videoFrameTimer = null;
     }
-  }
-
-  private sendControlSpeechMessage(message: string): void {
-    this.outputQueue.stop();
-    this.send(
-      this.gemini31LiveModel
-        ? { realtimeInput: { text: message } }
-        : {
-            clientContent: {
-              turns: [{ role: "user", parts: [{ text: message }] }],
-              turnComplete: true,
-            },
-          },
-    );
   }
 }

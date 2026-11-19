@@ -1,3 +1,4 @@
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { togglePinnedSession } from "../../app/bootstrap-navigation-preferences.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -6,10 +7,7 @@ import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
 import { moveSessionFromMenu } from "../../components/session-placement-action.ts";
 import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import {
-  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-  sessionPullRequestsForGateway,
-} from "../../lib/session-pull-requests.ts";
+import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { requestSessionInvolvement } from "../../lib/sessions/session-requests.ts";
 import { sessionAgentId, sessionPathAgentId } from "./agent-scope.ts";
@@ -179,9 +177,19 @@ export function createSessionsPageMenu(host: {
             void host.rename(row);
             break;
           case "set-color":
-            return mutations.patchSession(row.key, { color: action.color });
           case "set-icon":
-            return mutations.patchSession(row.key, { icon: action.icon });
+          case "reset-appearance":
+            return mutations.patchSession(
+              row.key,
+              action.kind === "set-color"
+                ? { color: action.color }
+                : action.kind === "set-icon"
+                  ? { icon: action.icon }
+                  : { icon: null, color: null },
+              undefined,
+              row.sessionId,
+              { sessionScope: true },
+            );
           case "set-communication":
             return mutations.patchSession(
               row.key,
@@ -189,8 +197,6 @@ export function createSessionsPageMenu(host: {
               undefined,
               row.sessionId,
             );
-          case "reset-appearance":
-            return mutations.patchSession(row.key, { icon: null, color: null });
           case "move-session": {
             const scope = host.captureScope();
             if (!scope) {

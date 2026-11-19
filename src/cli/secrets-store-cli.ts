@@ -1,9 +1,11 @@
 import type { Command } from "commander";
 import type { SecretsStoreMutationResult } from "../../packages/gateway-protocol/src/schema/secrets.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isRedactedSecretValue } from "../config/redact-sentinel.js";
 import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { Utf8InputError } from "../infra/utf8-input.js";
 import { defaultRuntime } from "../runtime.js";
 import { isSensitiveEnvName } from "../secrets/secret-env-name.js";
 import type { SecretStoreValidationError } from "../secrets/store/secret-store.js";
@@ -71,6 +73,9 @@ function mapStoreError(error: unknown): SecretStoreCliFailure {
   if (error instanceof SecretStoreCliFailure) {
     return error;
   }
+  if (error instanceof Utf8InputError) {
+    return new SecretStoreCliFailure(2, error.message);
+  }
   const validation = error as Partial<SecretStoreValidationError>;
   if (
     validation?.name === "SecretStoreValidationError" &&
@@ -94,7 +99,7 @@ async function runStoreAction<T>(
   const result = await runSecretsCommand(
     json,
     action,
-    (error) => defaultRuntime.error(danger(formatErrorMessage(error))),
+    (error) => defaultRuntime.error(danger(terminalText`${formatErrorMessage(error)}`)),
     (error) => {
       const failure = mapStoreError(error);
       return { error: failure, exitCode: failure.exitCode };
@@ -188,7 +193,7 @@ export function registerSecretStoreCli(secrets: Command): void {
               entry.kind === "secret"
                 ? `; allowed hosts: ${(entry.allowedHosts ?? []).join(", ") || "none"}`
                 : "";
-            defaultRuntime.log(`${entry.name} [${entry.kind}]${value}${hosts}`);
+            defaultRuntime.log(terminalText`${entry.name} [${entry.kind}]${value}${hosts}`);
           }
         },
       ),
@@ -253,7 +258,7 @@ export function registerSecretStoreCli(secrets: Command): void {
           existingEntry?.kind === "secret";
         if (policyOnly) {
           if (options.dryRun) {
-            defaultRuntime.log(`Would update allowed hosts for ${name}.`);
+            defaultRuntime.log(terminalText`Would update allowed hosts for ${name}.`);
             return;
           }
           await mutateStore(
@@ -273,8 +278,8 @@ export function registerSecretStoreCli(secrets: Command): void {
           );
           defaultRuntime.log(
             allowedHosts.length > 0
-              ? `Allowed ${name} for ${allowedHosts.join(", ")}.`
-              : `Cleared allowed hosts for ${name}.`,
+              ? terminalText`Allowed ${name} for ${allowedHosts.join(", ")}.`
+              : terminalText`Cleared allowed hosts for ${name}.`,
           );
           return;
         }
@@ -287,13 +292,17 @@ export function registerSecretStoreCli(secrets: Command): void {
         if (isRedactedSecretValue(value)) {
           const current = await storeModule.readSecretStoreValue({ scope, name });
           if (current.ok && !isRedactedSecretValue(current.value)) {
-            defaultRuntime.log(`Skipped redacted value for ${name}; existing entry unchanged.`);
+            defaultRuntime.log(
+              terminalText`Skipped redacted value for ${name}; existing entry unchanged.`,
+            );
             return;
           }
         }
         storeModule.assertSecretStoreValue(value, kind, name);
         if (options.dryRun) {
-          defaultRuntime.log(`Would ${kind === "secret" ? "write" : "set"} ${name} (${kind}).`);
+          defaultRuntime.log(
+            terminalText`Would ${kind === "secret" ? "write" : "set"} ${name} (${kind}).`,
+          );
           return;
         }
         const input = {
@@ -318,7 +327,7 @@ export function registerSecretStoreCli(secrets: Command): void {
             }),
           }),
         );
-        defaultRuntime.log(`Stored ${name} (${result.kind ?? kind}).`);
+        defaultRuntime.log(terminalText`Stored ${name} (${result.kind ?? kind}).`);
       }),
     );
 
@@ -362,7 +371,7 @@ export function registerSecretStoreCli(secrets: Command): void {
           if (options.plain) {
             defaultRuntime.writeStdout(result.value);
           } else {
-            defaultRuntime.log(`${name}=${result.value}`);
+            defaultRuntime.log(terminalText`${name}=${result.value}`);
           }
         },
       ),
@@ -450,7 +459,7 @@ export function registerSecretStoreCli(secrets: Command): void {
             const current = await storeModule.readSecretStoreValue({ scope, name: entry.name });
             if (current.ok && !isRedactedSecretValue(current.value)) {
               defaultRuntime.log(
-                `Skipped redacted value for ${entry.name}; existing entry unchanged.`,
+                terminalText`Skipped redacted value for ${entry.name}; existing entry unchanged.`,
               );
               continue;
             }

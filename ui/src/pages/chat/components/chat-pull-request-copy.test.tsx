@@ -3,16 +3,14 @@ import { Show, createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../../../src/shared/deferred.ts";
 import * as toast from "../../../lib/toast.ts";
+import { restoreMocksAndGlobals } from "../../../test-helpers/mock-cleanup.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { PullRequestActions } from "./chat-pull-request-actions.tsx";
 import { ChatPullRequestMobileDetail } from "./chat-pull-request-mobile.tsx";
 import { pullRequest } from "./chat-pull-requests.test-support.ts";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
+afterEach(() => restoreMocksAndGlobals());
 
 it.each(["desktop", "mobile"] as const)(
   "%s copy retains its control through failure and retry, then retires on URL replacement and unmount",

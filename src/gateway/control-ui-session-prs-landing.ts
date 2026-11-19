@@ -13,12 +13,13 @@ import { canReadGitFilesystemRefs } from "../infra/git-worker-context.js";
 /** Only ordinary file-backed refs bypass Git; unusual discovery/layouts retain its semantics. */
 export function readCheckoutHead(
   root: string,
+  preparedHead?: ReturnType<typeof readGitHead>,
 ): { sha: string; branch?: string | null; refsBase: string } | null {
   if (!canReadGitFilesystemRefs()) {
     return null;
   }
   try {
-    const head = readGitHead(root, { maxDepth: 1 });
+    const head = preparedHead ?? readGitHead(root, { maxDepth: 1 });
     if (
       !head?.value ||
       !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(head.value) ||

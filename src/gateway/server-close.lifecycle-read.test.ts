@@ -28,8 +28,8 @@ it("joins accepted lifecycle preparation after the close prelude aborts its sche
       .spyOn(sessionReader, "loadGatewaySessionEntryReadOnlyInWorker")
       .mockImplementation(async (params) => {
         const result = await load(params);
-        // Hold the accepted persistence read after the handler's recovery read.
-        if (params.key === target.sessionKey && ++reads === 2) {
+        // Hold the lifecycle owner's accepted persistence read.
+        if (params.key === target.sessionKey && ++reads === 1) {
           await race.block();
         }
         return result;

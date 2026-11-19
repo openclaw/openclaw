@@ -1,13 +1,11 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import {
   resolveExplicitSessionStorePathForScope,
   resolveSessionStorePathCore,
 } from "../../config/sessions/paths.js";
+import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  getSessionControllerSourceIdentity,
-  isLiveSessionControllerSource,
-} from "../../sessions/session-controller.identity.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   bindSessionControllerSource,
@@ -16,10 +14,7 @@ import {
   retireSessionControllerInput,
   type SessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
-import {
-  isAgentInputRecoveryPending,
-  waitForAgentInputRecovery,
-} from "../../state/agent-input-recovery-context.js";
+import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { TurnAdoptionLifecycle } from "../get-reply-options.types.js";
 import type { MsgContext } from "../templating.js";
@@ -82,77 +77,37 @@ export async function prepareReplySourceInput(
   options: InternalGetReplyOptions | undefined,
 ): Promise<{ options: InternalGetReplyOptions; input?: SessionControllerInput; created: boolean }> {
   const prepared = { ...options };
-  const sessionKey = ctx.SessionKey?.trim() || ctx.CommandTargetSessionKey?.trim();
-  const commandTarget = resolveCommandTurnTargetSessionKey(ctx);
-  const commandAgentId = commandTarget
-    ? resolveSessionAgentId({
-        sessionKey: commandTarget,
-        config: cfg,
-        fallbackAgentId: ctx.AgentId,
-      })
-    : undefined;
+  const sourceSessionKey = ctx.SessionKey?.trim() || ctx.CommandTargetSessionKey?.trim();
   const existing = readReplySourceInput(prepared);
   if (existing) {
-    const identity = getSessionControllerSourceIdentity(existing);
     const signal = existing.claim?.operation?.abortSignal ?? existing.abortSignal;
     prepared.abortSignal =
       prepared.abortSignal && prepared.abortSignal !== signal
         ? AbortSignal.any([prepared.abortSignal, signal])
         : signal;
-    const requestedAgentId = resolveSessionAgentId({
-      sessionKey,
-      config: cfg,
-      fallbackAgentId: ctx.AgentId,
-    });
-    if (
-      isAgentInputRecoveryPending(requestedAgentId) ||
-      (identity.agentId && isAgentInputRecoveryPending(identity.agentId)) ||
-      (commandAgentId && isAgentInputRecoveryPending(commandAgentId))
-    ) {
-      const matchesSession = [sessionKey, commandTarget].some(
-        (key) => key !== undefined && existing.mailbox.owner.aliases.has(key),
-      );
-      const agentId = resolveSessionAgentId({
-        sessionKey: identity.sessionKey,
-        config: cfg,
-        fallbackAgentId: ctx.AgentId,
-      });
-      const storePath =
-        resolveExplicitSessionStorePathForScope({ agentId, sessionKey: identity.sessionKey }) ??
-        resolveSessionStorePathCore(cfg.session?.store, { agentId });
-      if (
-        !isLiveSessionControllerSource(existing) ||
-        !matchesSession ||
-        identity.agentId !== agentId ||
-        existing.target?.storeScope !== storePath
-      ) {
-        throw new Error("Reply source no longer owns the requested session");
-      }
-      existing.sourceAdapter?.authority?.assertCurrent();
-    }
-    // A live recovery source cannot lend its exemption to another agent's backlog.
-    if (commandAgentId && commandAgentId !== identity.agentId) {
-      const recovery = waitForAgentInputRecovery(commandAgentId, {
-        signal: prepared.abortSignal,
-      });
-      if (recovery) {
-        await recovery;
-        prepared.abortSignal.throwIfAborted();
-        if (!isLiveSessionControllerSource(existing)) {
-          throw new Error("Reply source no longer owns the requested session");
-        }
-        existing.sourceAdapter?.authority?.assertCurrent();
-        options?.operatorAuthority?.assertCurrent();
-      }
-    }
     return { options: bindReplySourceInput(prepared, existing), input: existing, created: false };
   }
-  if (!sessionKey) {
+  if (!sourceSessionKey) {
     return { options: prepared, created: false };
   }
-  const agentId = resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId });
+  const agentId = resolveSessionAgentId({
+    sessionKey: sourceSessionKey,
+    config: cfg,
+    fallbackAgentId: ctx.AgentId,
+  });
+  // Reserve the persisted identity used by initialization, not its transport spelling.
+  const sessionKey = canonicalizeMainSessionAlias({
+    cfg,
+    agentId,
+    sessionKey: resolveSessionKey(
+      cfg.session?.scope ?? "per-sender",
+      { ...ctx, SessionKey: sourceSessionKey },
+      cfg.session?.mainKey,
+      agentId,
+    ),
+  });
   const storePath =
-    resolveExplicitSessionStorePathForScope({ agentId, sessionKey }) ??
+    resolveExplicitSessionStorePathForScope({ agentId, sessionKey: sourceSessionKey }) ??
     resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const policy = resolveQueueSettingsCore({ cfg, channel: ctx.Provider ?? ctx.Surface });
   // Ambient events may not preempt a user turn. Full directive
@@ -168,15 +123,13 @@ export async function prepareReplySourceInput(
     // Dispatch owns the skipped outcome for input cancelled before admission.
     return { options: { ...prepared, abortSignal: signal }, created: false };
   }
-  const recoveryAgentIds =
-    commandAgentId && commandAgentId !== agentId ? [agentId, commandAgentId] : [agentId];
-  for (const pendingAgentId of recoveryAgentIds) {
-    const recovery = waitForAgentInputRecovery(pendingAgentId, { signal });
-    if (recovery) {
-      await recovery;
-    }
-  }
   signal?.throwIfAborted();
+  // A fresh FIFO reservation would block the recovery input it is waiting for.
+  const preparation = waitForAgentInputAdmission(agentId, { cfg, sessionKey, signal });
+  if (preparation) {
+    await preparation;
+    signal?.throwIfAborted();
+  }
   options?.operatorAuthority?.assertCurrent();
   const input = reserveSessionControllerSource(sessionKey, {
     sourceTurnId: readChannelSourceTurnId(ctx),
@@ -185,6 +138,7 @@ export async function prepareReplySourceInput(
     target: captureSessionTarget({
       storeScope: storePath,
       sessionKey,
+      aliases: [sourceSessionKey],
       agentId,
       incarnation: options?.expectedExistingSessionId,
     }),

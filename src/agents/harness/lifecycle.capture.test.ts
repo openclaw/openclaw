@@ -2,7 +2,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
-import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
+import {
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+} from "../../infra/diagnostic-events.js";
 import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import {
   runAgentHarnessLifecycleAttempt,
@@ -16,7 +19,6 @@ import {
   createFinalAssistant,
   createFinalizationParams,
   createLifecycleHarness,
-  flushDiagnosticEvents,
 } from "./lifecycle.test-support.js";
 
 describe("AgentHarness lifecycle content capture", () => {
@@ -35,7 +37,7 @@ describe("AgentHarness lifecycle content capture", () => {
       await runAgentHarnessLifecycleFinalization(harness, params, async () => ({
         assistant: createFinalAssistant(),
       }));
-      await flushDiagnosticEvents();
+      await waitForDiagnosticEventsDrained();
     } finally {
       diagnostics.unsubscribe();
       clearRuntimeConfigSnapshot();
@@ -71,7 +73,7 @@ describe("AgentHarness lifecycle content capture", () => {
                 }),
               ),
         );
-        await flushDiagnosticEvents();
+        await waitForDiagnosticEventsDrained();
       } finally {
         diagnostics.unsubscribe();
         clearRuntimeConfigSnapshot();
@@ -108,7 +110,7 @@ describe("AgentHarness lifecycle content capture", () => {
           ],
         },
       }));
-      await flushDiagnosticEvents();
+      await waitForDiagnosticEventsDrained();
     } finally {
       diagnostics.unsubscribe();
       clearRuntimeConfigSnapshot();
@@ -138,7 +140,7 @@ describe("AgentHarness lifecycle content capture", () => {
     const diagnostics = captureDiagnosticEvents();
     try {
       await runAgentHarnessLifecycleAttempt(harness, createAttemptParams());
-      await flushDiagnosticEvents();
+      await waitForDiagnosticEventsDrained();
     } finally {
       diagnostics.unsubscribe();
       clearRuntimeConfigSnapshot();
@@ -165,7 +167,7 @@ describe("AgentHarness lifecycle content capture", () => {
     const diagnostics = captureDiagnosticEvents();
     try {
       await runAgentHarnessLifecycleAttempt(harness, createAttemptParams());
-      await flushDiagnosticEvents();
+      await waitForDiagnosticEventsDrained();
     } finally {
       diagnostics.unsubscribe();
       clearRuntimeConfigSnapshot();
@@ -187,7 +189,7 @@ describe("AgentHarness lifecycle content capture", () => {
     const diagnostics = captureDiagnosticEvents();
     try {
       await runAgentHarnessLifecycleAttempt(harness, createAttemptParams());
-      await flushDiagnosticEvents();
+      await waitForDiagnosticEventsDrained();
     } finally {
       diagnostics.unsubscribe();
       clearRuntimeConfigSnapshot();
@@ -215,7 +217,7 @@ describe("AgentHarness lifecycle content capture", () => {
     const diagnostics = captureDiagnosticEvents();
     try {
       await runAgentHarnessLifecycleAttempt(harness, params);
-      await flushDiagnosticEvents();
+      await waitForDiagnosticEventsDrained();
     } finally {
       diagnostics.unsubscribe();
     }

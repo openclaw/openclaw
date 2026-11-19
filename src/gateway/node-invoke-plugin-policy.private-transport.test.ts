@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
 import type { PluginNodeInvokePrivateTransport } from "./node-invoke-plugin-policy.js";
 import {
   createContext,
@@ -11,7 +10,6 @@ import {
   createPolicyApprovalFixture,
   createRuntimeClient,
   DEMO_COMMAND,
-  DEMO_PARAMS,
   invokeDemoPolicy,
   nodeCommandsConfig,
   setDangerousDemoCommandRegistry,
@@ -47,7 +45,7 @@ describe("private node policy transport", () => {
     );
     const { manager, invoke } = fixture;
     await fixture.run(async () => {
-      const handle = vi.fn(async (policyContext: OpenClawPluginNodeInvokePolicyContext) => {
+      const registration = createDemoPolicy(async (policyContext) => {
         expect(policyContext.risk).toEqual({ level: "high", family: "fixture_mutation" });
         const decision = await policyContext.approvals?.request({
           title: "Private desktop action",
@@ -58,13 +56,7 @@ describe("private node policy transport", () => {
         }
         return await policyContext.invokeNode();
       });
-      const registration = createDemoPolicy(handle);
-      registration.policy.classifyRisk = vi.fn<
-        NonNullable<typeof registration.policy.classifyRisk>
-      >(({ command, params }) => {
-        expect({ command, params }).toEqual({ command: DEMO_COMMAND, params: DEMO_PARAMS });
-        return { level: "high", family: "fixture_mutation" };
-      });
+      registration.policy.classifyRisk = () => ({ level: "high", family: "fixture_mutation" });
       setDangerousDemoCommandRegistry([registration]);
       const privateTransport = createPrivateTransport();
       const onNodeCommandDispatched = vi.fn();
@@ -77,8 +69,6 @@ describe("private node policy transport", () => {
       expect(privateTransport.invoke).not.toHaveBeenCalled();
       expect(await manager.resolve(approval.id, "allow-once")).toBe(true);
       await expect(result).resolves.toMatchObject({ ok: true, payload: { completed: true } });
-      expect(registration.policy.classifyRisk).toHaveBeenCalledOnce();
-      expect(handle).toHaveBeenCalledOnce();
       expect(privateTransport.invoke).toHaveBeenCalledOnce();
       expect(privateTransport.invoke.mock.calls[0]?.[0]).not.toHaveProperty("deadlineAtMs");
       expect(onNodeCommandDispatched).toHaveBeenCalledOnce();

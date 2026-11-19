@@ -68,12 +68,11 @@ export function installFreshUpdateFixture() {
       version: "2026.9.3",
     });
     vi.stubEnv("HOME", home);
-    vi.stubEnv("OPENCLAW_PROFILE", undefined);
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, "profile"));
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(home, "profile", "openclaw.json"));
-    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
-    vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", undefined);
-    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", undefined);
+    for (const key of ["PROFILE", "UPDATE_RUN_ID", "UPDATE_RUN_HANDOFF", "UPDATE_POST_CORE"]) {
+      vi.stubEnv(`OPENCLAW_${key}`, undefined);
+    }
     fixture.databasePath = resolveOpenClawStateSqlitePath(process.env);
     const executorRoot = path.join(home, "executor");
     fs.mkdirSync(executorRoot);

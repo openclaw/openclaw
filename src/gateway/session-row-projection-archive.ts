@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import * as records from "./session-row-projection-record.js";
@@ -67,10 +66,7 @@ export function createSessionRowProjectionArchive(params: {
           params.context(),
           params.referenced,
         );
-        if (
-          isDeepStrictEqual(current.parents, lineage.parents) &&
-          isDeepStrictEqual(current.entry, lineage.entry)
-        ) {
+        if (current.parents === lineage.parents && current.entry === lineage.entry) {
           continue;
         }
         // Cold children retain metadata/indices; both parents must drop stale child links.

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { expectCalls, loadedConfig } from "./config-suite.test-support.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,

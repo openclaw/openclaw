@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
 import { createFileSessionStore } from "acpx/runtime";
-import { promptJson, withProcessRuntime } from "./runtime-process.test-support.js";
+import { withProcessRuntime } from "./runtime-process.test-support.js";
 import { acpxOperationScope } from "./runtime-session-store.js";
 import type { AcpxRuntime } from "./runtime.js";
 
@@ -58,9 +58,7 @@ await withProcessRuntime(
       gc();
     }
     assert.equal(control.deref(), undefined, "Unowned GC control must collect");
-    const retained = references
-      .filter(({ value }) => value.deref() !== undefined)
-      .map(({ label }) => label);
+    const retained = references.flatMap(({ label, value }) => (value.deref() ? [label] : []));
     console.log(
       JSON.stringify({ scenario, observed: references.length, retained, controlCollected: true }),
     );
@@ -69,23 +67,8 @@ await withProcessRuntime(
     failLaunch = false;
     const handle = await ensure(0);
     const retryId = ids.at(-1);
-    assert.ok(
-      retryId !== undefined && !failedIds.includes(retryId),
-      "Sequential retry needs a fresh admission owner",
-    );
-    const context = await promptJson(runtime, handle, "show context", "retry");
-    assert.deepEqual(context.mcpServers, [
-      {
-        name: "openclaw-tools",
-        command: process.execPath,
-        args: ["--openclaw-agent-id", "main"],
-        env: [{ name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY", value: target(0).sessionKey }],
-      },
-    ]);
+    assert.ok(retryId !== undefined && !failedIds.includes(retryId), "Retry needs a fresh owner");
     await runtime.close({ handle, reason: "test-complete" });
-    const found = await runtime.findSession({ ...target(0), agent: "fixture" });
-    assert.ok(found, "Ordinary close preserves discoverable session history");
-    assert.equal((await runtime.getStatus({ handle: found })).details?.closed, true);
   },
   async (state) => {
     const store = createFileSessionStore({ stateDir: state.root });

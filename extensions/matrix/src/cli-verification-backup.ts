@@ -79,7 +79,6 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
           },
           shouldFail: (result) => !result.success,
           errorPrefix: "Backup reset failed",
-          onJsonError: (message) => ({ success: false, error: message }),
         });
       },
     );
@@ -130,7 +129,6 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
           },
           shouldFail: (result) => !result.success,
           errorPrefix: "Backup restore failed",
-          onJsonError: (message) => ({ success: false, error: message }),
         });
       },
     );
@@ -192,7 +190,6 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
         },
         shouldFail: (result) => !result.success,
         errorPrefix: "Verification bootstrap failed",
-        onJsonError: (message) => ({ success: false, error: message }),
       });
     },
   );
@@ -251,7 +248,6 @@ export function registerMatrixVerificationBackupCommands(verify: Command): void 
           },
           shouldFail: (result) => !result.success,
           errorPrefix: "Verification failed",
-          onJsonError: (message) => ({ success: false, error: message }),
         });
       },
     );

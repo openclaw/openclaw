@@ -1,4 +1,3 @@
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -7,6 +6,7 @@ import { promisify } from "node:util";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { createCodexNativeTestState } from "../app-server/native-app-server.test-support.js";
 import { isJsonObject, type JsonObject } from "../app-server/protocol.js";
 
@@ -29,9 +29,17 @@ const liveProvider = LIVE
 
 export type NativeFixture = Awaited<ReturnType<typeof createNativeFixture>>;
 export type Cleanup = () => Promise<void>;
-type NativePhase = "probe" | "action" | "side" | "hold" | "overload" | "summary" | "health";
+type NativePhase =
+  | "probe"
+  | "action"
+  | "action-reasoning"
+  | "side"
+  | "hold"
+  | "overload"
+  | "summary"
+  | "health"
+  | "patch";
 
-const sseHeaders = { "Content-Type": "text/event-stream" };
 function event(type: string, fields: JsonObject) {
   return `event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`;
 }
@@ -63,8 +71,8 @@ async function createNativeFixture(
   const respond = async (request: http.IncomingMessage, response: http.ServerResponse) => {
     try {
       const body = (await buffer(request)).toString("utf8");
+      // A 426 selects HTTP immediately instead of retrying this SSE-only fixture.
       if (request.url === "/v1/responses" && request.method === "GET") {
-        // Codex selects HTTP immediately on 426 instead of retrying this SSE-only fixture.
         response.writeHead(426).end();
         return;
       }
@@ -88,33 +96,13 @@ async function createNativeFixture(
         response.writeHead(400).end();
         return;
       }
-      if (phase === "hold") {
-        response.writeHead(200, sseHeaders);
-        response.write(
-          event("response.created", { response: { id: `response-${requests.length}` } }),
-        );
-        return;
-      }
-      if (phase === "overload") {
-        // A capacity failure before any output: the provider fails the response.
-        const id = `response-${requests.length}`;
-        response.writeHead(200, sseHeaders);
-        response.end(
-          event("response.created", { response: { id } }) +
-            event("response.failed", {
-              response: {
-                id,
-                status: "failed",
-                error: { code: "server_is_overloaded", message: "Synthetic provider overload." },
-              },
-            }),
-        );
-        return;
-      }
-      if (phase === "action" || phase === "side") {
+      const actionPhase = phase === "action" || phase === "action-reasoning" || phase === "side";
+      if (actionPhase) {
         actionRequests += 1;
       }
-      if (live && liveProvider) {
+      const send = (output: string) =>
+        response.writeHead(200, { "Content-Type": "text/event-stream" }).end(output);
+      if (live && liveProvider && phase !== "hold" && phase !== "overload") {
         const settledAction =
           phase === "action" &&
           Array.isArray(parsed.input) &&
@@ -151,14 +139,20 @@ async function createNativeFixture(
             throw new Error(`Live OpenAI request failed with HTTP ${upstream.status}`);
           }
           livePhases.push(phase);
-          response.writeHead(200, sseHeaders);
-          response.end(await upstream.text());
+          send(await upstream.text());
           return;
         }
       }
       let item: JsonObject | undefined;
-      if (!live) {
-        if (actionRequests === 1 && (phase === "action" || phase === "side")) {
+      if (!live && phase !== "hold" && phase !== "overload") {
+        if (phase === "patch" && requests.length === 1) {
+          item = {
+            type: "custom_tool_call",
+            call_id: "denied-patch",
+            name: "apply_patch",
+            input: `*** Begin Patch\n*** Update File: ${marker}\n@@\n-completed-once\n+repeated-action\n*** End Patch`,
+          };
+        } else if (actionRequests === 1 && actionPhase) {
           item = {
             type: "function_call",
             call_id: "completed-action",
@@ -169,6 +163,12 @@ async function createNativeFixture(
               login: false,
               max_output_tokens: 1000,
             }),
+          };
+        } else if (phase === "action-reasoning") {
+          item = {
+            type: "reasoning",
+            id: "terminal-reasoning",
+            summary: [{ type: "summary_text", text: "The command completed once." }],
           };
         } else if (phase !== "action") {
           const output = phase === "summary" || phase === "side" ? SUMMARY : "Ready.";
@@ -181,12 +181,24 @@ async function createNativeFixture(
         }
       }
       const id = `response-${requests.length}`;
-      response.writeHead(200, sseHeaders);
-      response.end(
-        event("response.created", { response: { id } }) +
+      const created = event("response.created", { response: { id } });
+      if (phase === "hold") {
+        response.writeHead(200, { "Content-Type": "text/event-stream" }).write(created);
+        return;
+      }
+      const terminal: JsonObject =
+        phase === "overload"
+          ? {
+              id,
+              status: "failed",
+              error: { code: "server_is_overloaded", message: "Synthetic provider overload." },
+            }
+          : { id, usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } };
+      send(
+        created +
           (item ? event("response.output_item.done", { item }) : "") +
-          event("response.completed", {
-            response: { id, usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } },
+          event(phase === "overload" ? "response.failed" : "response.completed", {
+            response: terminal,
           }),
       );
     } catch (error) {
@@ -202,12 +214,7 @@ async function createNativeFixture(
     server.closeAllConnections();
     await promisify(server.close.bind(server))();
   });
-  await once(server.listen(0, "127.0.0.1"), "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Loopback provider has no TCP address");
-  }
-  const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+  const baseUrl = `http://127.0.0.1:${await listenOnLoopback(server)}/v1`;
   const authProfileStore: AuthProfileStore = {
     version: 1,
     profiles: {

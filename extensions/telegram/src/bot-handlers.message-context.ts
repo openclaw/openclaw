@@ -167,6 +167,7 @@ export function createTelegramMessageSessionRuntime({
       ...params,
       cfg: params.runtimeCfg,
       route,
+      bindingMode,
       dmThreadId,
     });
     const storePath = resolveStorePath(params.runtimeCfg.session?.store, {
@@ -326,6 +327,9 @@ export function createTelegramMessageContextRuntime({
       : undefined;
   };
 
+  const getCachedMessage = (chatId: number | string, messageId: string) =>
+    messageCache.get({ accountId, chatId, messageId });
+
   const buildReplyChainForMessage = (msg: Message) =>
     buildTelegramReplyChain({ cache: messageCache, accountId, chatId: msg.chat.id, msg });
 
@@ -353,26 +357,6 @@ export function createTelegramMessageContextRuntime({
       ...(media.contentType ? { mediaType: media.contentType } : {}),
     };
   };
-
-  const toPromptContextMessage = (
-    node: TelegramCachedMessageNode,
-    ctx: TelegramContext,
-    isReplyTarget: boolean | undefined,
-    media?: TelegramMediaRef,
-  ) => ({
-    message_id: node.messageId,
-    thread_id: node.threadId,
-    sender: resolvePromptSender(node, ctx),
-    sender_id: node.senderId,
-    sender_username: node.senderUsername,
-    timestamp_ms: node.timestamp,
-    body: node.body,
-    media_type: media?.contentType ?? media?.kind ?? node.mediaType,
-    media_path: media?.path,
-    media_ref: media?.path ? undefined : node.mediaRef,
-    reply_to_id: node.replyToId,
-    is_reply_target: isReplyTarget === true ? true : undefined,
-  });
 
   const buildPromptContextForMessage = async (
     ctx: TelegramContext,
@@ -475,15 +459,26 @@ export function createTelegramMessageContextRuntime({
     }
     const cacheEntries = Array.from(conversationContextById.values())
       .toSorted((left, right) => Number(left.node.messageId) - Number(right.node.messageId))
-      .map((entry) => ({
-        node: entry.node,
-        message: toPromptContextMessage(
-          entry.node,
-          ctx,
-          entry.isReplyTarget,
-          entry.node.messageId ? mediaByMessageId?.get(entry.node.messageId) : undefined,
-        ),
-      }));
+      .map(({ node, isReplyTarget }) => {
+        const media = node.messageId ? mediaByMessageId?.get(node.messageId) : undefined;
+        return {
+          node,
+          message: {
+            message_id: node.messageId,
+            thread_id: node.threadId,
+            sender: resolvePromptSender(node, ctx),
+            sender_id: node.senderId,
+            sender_username: node.senderUsername,
+            timestamp_ms: node.timestamp,
+            body: node.body,
+            media_type: media?.contentType ?? media?.kind ?? node.mediaType,
+            media_path: media?.path,
+            media_ref: media?.path ? undefined : node.mediaRef,
+            reply_to_id: node.replyToId,
+            is_reply_target: isReplyTarget === true ? true : undefined,
+          },
+        };
+      });
     const completeProjectionIds = resolveCompleteTelegramPromptContextProjectionIds(
       cacheEntries.map((entry) => entry.node.promptContextProjectionMarker),
     );
@@ -512,6 +507,7 @@ export function createTelegramMessageContextRuntime({
     recordMessageResolvedMedia,
     recordReplyMessageResolvedMedia,
     resolveCachedMessageThreadSpec,
+    getCachedMessage,
     buildReplyChainForMessage,
     toReplyChainEntry,
     buildPromptContextForMessage,

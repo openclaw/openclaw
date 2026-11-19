@@ -1,18 +1,8 @@
-import type {
-  AssistantMessage,
-  AssistantMessageEvent,
-  Context,
-  Model,
-  ToolCall,
-} from "openclaw/plugin-sdk/llm";
+import type { AssistantMessageEvent, Context, Model, ToolCall } from "openclaw/plugin-sdk/llm";
 import { expect, it } from "vitest";
-import {
-  applyPluginTextReplacements,
-  mergePluginTextTransforms,
-  wrapStreamFnTextTransforms,
-} from "./plugin-text-transforms.js";
+import { mergePluginTextTransforms, wrapStreamFnTextTransforms } from "./plugin-text-transforms.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { createQueuedAssistantStream } from "./test-helpers/assistant-event-stream.test-support.js";
-import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 const model = {
   api: "openai-responses",
@@ -20,162 +10,117 @@ const model = {
   id: "test-model",
 } as Model<"openai-responses">;
 
-function makeAssistantMessage(content: string | ToolCall): AssistantMessage {
-  return {
-    role: "assistant",
+function makeAssistantMessage(content: string | ToolCall) {
+  return makeAgentAssistantMessage({
     content: typeof content === "string" ? [{ type: "text", text: content }] : [content],
     stopReason: typeof content === "string" ? "stop" : "toolUse",
-    api: "openai-responses",
     provider: "test",
-    model: "test-model",
-    usage: { ...createZeroUsageFixture(), input: 1, output: 1, totalTokens: 2 },
-    timestamp: 0,
-  };
+  });
+}
+function toolCall(name: string, args: ToolCall["arguments"]): ToolCall {
+  return { type: "toolCall", id: name, name, arguments: args };
 }
 
-function transformFixture(
+async function runTransform(
   transforms: Omit<Parameters<typeof wrapStreamFnTextTransforms>[0], "streamFn">,
-  ...events: AssistantMessageEvent[]
+  context: Context,
+  sourceEvents: AssistantMessageEvent[],
 ) {
   let input: Context | undefined;
-  const wrapped = wrapStreamFnTextTransforms({
+  const stream = await wrapStreamFnTextTransforms({
     ...transforms,
-    streamFn: (_model, context) => {
-      input = context;
-      return createQueuedAssistantStream((push) => {
-        for (const event of events) {
-          push(event);
-        }
-      });
+    streamFn: (_model, prepared) => {
+      input = prepared;
+      return createQueuedAssistantStream((push) => sourceEvents.forEach(push));
     },
-  });
-  return {
-    getInput: () => input,
-    run: (context: Context) => Promise.resolve(wrapped(model, context)),
-  };
-}
-
-async function collectEvents(stream: AsyncIterable<AssistantMessageEvent>) {
+  })(model, context);
   const events = [];
   for await (const event of stream) {
     events.push(event);
   }
-  return events;
+  return { input, events, result: await stream.result() };
 }
 
-it("merges registered transform groups in order", () => {
-  const merged = mergePluginTextTransforms(
-    { input: [{ from: /red basket/g, to: "blue basket" }] },
-    { output: [{ from: /blue basket/g, to: "red basket" }] },
-    {
-      input: [
-        { from: /paper ticket/g, to: "digital ticket" },
-        { from: "digital ticket", to: "counter receipt" },
+it.each([undefined, false])(
+  "transforms transport text with system prompt option %s",
+  async (transformSystemPrompt) => {
+    const { input, events, result } = await runTransform(
+      {
+        ...mergePluginTextTransforms(
+          { input: [{ from: /red basket/g, to: "paper ticket" }] },
+          {
+            input: [{ from: "paper ticket", to: "blue basket" }],
+            output: [
+              { from: /blue basket/g, to: "red basket" },
+              { from: /right shelf/g, to: "left shelf" },
+            ],
+          },
+        ),
+        transformSystemPrompt,
+      },
+      {
+        systemPrompt: "Use red basket",
+        messages: [
+          { role: "user", content: "Use red basket" },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Use red basket" },
+              { type: "image", url: "data:image/png;base64,abc" },
+            ],
+          },
+        ],
+      } as Context,
+      [
+        {
+          type: "text_delta",
+          contentIndex: 0,
+          delta: "blue basket on the right shelf",
+          partial: makeAssistantMessage("blue basket on the right shelf"),
+        },
+        {
+          type: "done",
+          reason: "stop",
+          message: makeAssistantMessage("final blue basket on the right shelf"),
+        },
       ],
-    },
-  );
+    );
 
-  expect(merged).toStrictEqual({
-    input: [
-      { from: /red basket/g, to: "blue basket" },
-      { from: /paper ticket/g, to: "digital ticket" },
-      { from: "digital ticket", to: "counter receipt" },
-    ],
-    output: [{ from: /blue basket/g, to: "red basket" }],
-  });
-  expect(applyPluginTextReplacements("red basket paper ticket", merged?.input)).toBe(
-    "blue basket counter receipt",
-  );
-});
-
-it("rewrites system prompt and message text content before transport", async () => {
-  const fixture = transformFixture({
-    input: [
-      { from: /orchid mailbox/g, to: "pine mailbox" },
-      { from: /red basket/g, to: "blue basket" },
-    ],
-  });
-  await fixture.run({
-    systemPrompt: "Use orchid mailbox inside north tower",
-    messages: [
+    expect(input?.systemPrompt).toBe(
+      transformSystemPrompt === false ? "Use red basket" : "Use blue basket",
+    );
+    expect(input?.messages).toEqual([
+      { role: "user", content: "Use blue basket" },
       {
         role: "user",
         content: [
-          { type: "text", text: "Please use the red basket" },
+          { type: "text", text: "Use blue basket" },
           { type: "image", url: "data:image/png;base64,abc" },
         ],
       },
-    ],
-  } as Context);
-
-  expect(fixture.getInput()?.systemPrompt).toBe("Use pine mailbox inside north tower");
-  expect(fixture.getInput()?.messages[0]?.content).toEqual([
-    { type: "text", text: "Please use the blue basket" },
-    { type: "image", url: "data:image/png;base64,abc" },
-  ]);
-});
-
-it("wraps stream functions with inbound and outbound replacements", async () => {
-  const fixture = transformFixture(
-    {
-      input: [{ from: /red basket/g, to: "blue basket" }],
-      output: [
-        { from: /blue basket/g, to: "red basket" },
-        { from: /right shelf/g, to: "left shelf" },
-      ],
-      transformSystemPrompt: false,
-    },
-    {
-      type: "text_delta",
-      contentIndex: 0,
-      delta: "blue basket on the right shelf",
-      partial: makeAssistantMessage("blue basket on the right shelf"),
-    },
-    {
-      type: "done",
-      reason: "stop",
-      message: makeAssistantMessage("final blue basket on the right shelf"),
-    },
-  );
-  const stream = await fixture.run({
-    systemPrompt: "Keep red basket untouched here",
-    messages: [{ role: "user", content: "Use red basket" }],
-  } as Context);
-  const events = await collectEvents(stream);
-  const result = await stream.result();
-
-  expect(fixture.getInput()?.systemPrompt).toBe("Keep red basket untouched here");
-  expect(fixture.getInput()?.messages).toEqual([{ role: "user", content: "Use blue basket" }]);
-  expect(events[0]).toMatchObject({ type: "text_delta", delta: "red basket on the left shelf" });
-  expect(result.content).toEqual([{ type: "text", text: "final red basket on the left shelf" }]);
-});
+    ]);
+    expect(events[0]).toMatchObject({ type: "text_delta", delta: "red basket on the left shelf" });
+    expect(result.content).toEqual([{ type: "text", text: "final red basket on the left shelf" }]);
+  },
+);
 
 it("applies output replacements to structured tool-call arguments", async () => {
-  const partialToolCall: ToolCall = {
-    type: "toolCall",
-    id: "call-1",
-    name: "search",
-    arguments: {
-      query: "[MASKED]",
-      nested: { note: "ask [MASKED] again" },
-      entries: ["[MASKED]", 7],
-    },
-  };
-  const finalToolCall: ToolCall = {
-    type: "toolCall",
-    id: "call-2",
-    name: "send_msg",
-    arguments: { text: "[MASKED]" },
-  };
+  const partialToolCall = toolCall("search", {
+    query: "[MASKED]",
+    nested: { note: "ask [MASKED] again" },
+    entries: ["[MASKED]", 7],
+  });
+  const finalToolCall = toolCall("send_msg", { text: "[MASKED]" });
   const partial = makeAssistantMessage(partialToolCall);
-  const fixture = transformFixture(
+  const { events, result } = await runTransform(
     { output: [{ from: /\[MASKED\]/g, to: "John" }] },
-    { type: "toolcall_delta", contentIndex: 0, delta: '{"query":"[MASKED]"}', partial },
-    { type: "toolcall_end", contentIndex: 0, toolCall: partialToolCall, partial },
-    { type: "done", reason: "toolUse", message: makeAssistantMessage(finalToolCall) },
+    { messages: [] },
+    [
+      { type: "toolcall_delta", contentIndex: 0, delta: '{"query":"[MASKED]"}', partial },
+      { type: "toolcall_end", contentIndex: 0, toolCall: partialToolCall, partial },
+      { type: "done", reason: "toolUse", message: makeAssistantMessage(finalToolCall) },
+    ],
   );
-  const stream = await fixture.run({ messages: [] });
-  const events = await collectEvents(stream);
   const deltaEvent = events.find((event) => event.type === "toolcall_delta");
   const expectedTool = {
     name: "search",
@@ -193,7 +138,6 @@ it("applies output replacements to structured tool-call arguments", async () => 
   expect(endEvent?.toolCall?.name).toBe(expectedTool.name);
   expect(endEvent?.toolCall?.arguments).toEqual(expectedTool.arguments);
 
-  const result = await stream.result();
   expect(result.content[0]).toMatchObject({
     name: "send_msg",
     arguments: { text: "John" },

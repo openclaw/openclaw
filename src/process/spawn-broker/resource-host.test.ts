@@ -39,10 +39,7 @@ function fixture() {
     return lease;
   };
   const closeRequest = () => {
-    const close = transmit.mock.calls
-      .map(([request]) => request)
-      .find((request) => request.type === "resource-close");
-    expect(close).toBeDefined();
+    const close = transmit.mock.calls.find(([request]) => request.type === "resource-close")?.[0];
     if (!close || close.type !== "resource-close") {
       throw new Error("Expected the actual resource close request");
     }
@@ -170,15 +167,12 @@ it("notifies every captured resource and retains callback failures in order", ()
   capture(1);
   capture(2);
   const failure = new Error("transport lost");
-  const callbackFailure = new Error("first callback failed");
-  const secondCallbackFailure = new Error("second callback failed");
-  callbacks.failed
-    .mockImplementationOnce(() => {
-      throw callbackFailure;
-    })
-    .mockImplementationOnce(() => {
-      throw secondCallbackFailure;
+  const failures = [new Error("first callback failed"), new Error("second callback failed")];
+  for (const callbackError of failures) {
+    callbacks.failed.mockImplementationOnce(() => {
+      throw callbackError;
     });
+  }
   try {
     claims.fail(failure);
     expect.unreachable("callback failures must be reported");
@@ -188,9 +182,8 @@ it("notifies every captured resource and retains callback failures in order", ()
       throw error;
     }
     expect(error.message).toBe("Native resource failure callback failed");
-    expect(error.errors).toHaveLength(2);
-    expect(error.errors[0]).toBe(callbackFailure);
-    expect(error.errors[1]).toBe(secondCallbackFailure);
+    expect(error.errors).toHaveLength(failures.length);
+    failures.forEach((callbackError, index) => expect(error.errors[index]).toBe(callbackError));
   }
   expect(callbacks.failed.mock.calls).toEqual([[failure], [failure]]);
   expect(claims.hasOpenClaims).toBe(true);

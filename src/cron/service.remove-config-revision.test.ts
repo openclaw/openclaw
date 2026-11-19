@@ -18,7 +18,7 @@ it("preserves a job edited after its removal revision was reviewed", async () =>
   const store = await makeStorePath();
   const job: CronJob = {
     id: "claw-schedule",
-    name: "Claw schedule",
+    name: "Template schedule",
     enabled: true,
     createdAtMs: 1,
     updatedAtMs: 1,

@@ -1,6 +1,8 @@
 import { isMainThread } from "node:worker_threads";
+import { sql } from "kysely";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import { chunkItems } from "../utils/chunk-items.js";
+import { engineIndexHint } from "./database-engine/index-hint.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -13,15 +15,28 @@ import {
   usageCostPartitionKey,
   type UsageCostPartition,
 } from "./session-cost-usage-partitions.js";
+import { USAGE_COST_QUARTER_SCOPE } from "./session-cost-usage-quarters.js";
 import { USAGE_COST_ROLLUP_SCOPE } from "./session-cost-usage-rollup-codec.js";
 import type { EngineConnection } from "./sql-connection.js";
 
 type CacheDatabase = Pick<DB, "cache_entries">;
+// Quarter rows share partition keys and lifetime; every partition deletion removes both.
+const PARTITION_SCOPES = [USAGE_COST_PARTITION_SCOPE, USAGE_COST_QUARTER_SCOPE];
 
 function assertUsagePartitionWorker(): void {
   if (isMainThread) {
     throw new Error("Usage partitions require the owning database worker");
   }
+}
+
+function indexedUsageCacheEntries(db: EngineConnection) {
+  // Keep range probes indexed even when statistics still describe a one-row cache.
+  return (
+    /* kysely-allow-raw: SQLite's table index hint follows the alias; PostgreSQL omits it. */
+    sql<DB["cache_entries"]>`"cache_entries"`.as<"cache_entries">(
+      sql`"cache_entries" ${engineIndexHint(db, "sqlite_autoindex_cache_entries_1")}`,
+    )
+  );
 }
 
 export function deleteSessionCostUsagePartitionsInDatabase(
@@ -34,24 +49,16 @@ export function deleteSessionCostUsagePartitionsInDatabase(
 ): void {
   assertUsagePartitionWorker();
   const kysely = getNodeSqliteKysely<CacheDatabase>(db);
-  for (const replacements of chunkItems(
-    params.filter((row) => row.replacePartitions),
-    100,
-  )) {
+  const entries = indexedUsageCacheEntries(db);
+  // Combining ranges lets stale small-table statistics turn a refresh into a full scan.
+  for (const row of params.filter((param) => param.replacePartitions)) {
     executeSqliteQuerySync(
       db,
-      kysely.deleteFrom("cache_entries").where((eb) =>
-        eb.or(
-          replacements.map((row) =>
-            // Keep scope in each arm so SQLite seeks each composite-key range.
-            eb.and([
-              eb("scope", "=", USAGE_COST_PARTITION_SCOPE),
-              eb("key", ">=", usageCostPartitionKey(row.rollupId, "")),
-              eb("key", "<=", usageCostPartitionKey(row.rollupId, "\uffff")),
-            ]),
-          ),
-        ),
-      ),
+      kysely
+        .deleteFrom(entries)
+        .where("scope", "in", PARTITION_SCOPES)
+        .where("key", ">=", usageCostPartitionKey(row.rollupId, ""))
+        .where("key", "<=", usageCostPartitionKey(row.rollupId, "\uffff")),
     );
   }
   const removedKeys = params.flatMap((row) =>
@@ -59,13 +66,10 @@ export function deleteSessionCostUsagePartitionsInDatabase(
       ? []
       : (row.removedDates ?? []).map((date) => usageCostPartitionKey(row.rollupId, date)),
   );
-  for (const keys of chunkItems(removedKeys, 100)) {
+  for (const key of removedKeys) {
     executeSqliteQuerySync(
       db,
-      kysely
-        .deleteFrom("cache_entries")
-        .where("scope", "=", USAGE_COST_PARTITION_SCOPE)
-        .where("key", "in", keys),
+      kysely.deleteFrom(entries).where("scope", "in", PARTITION_SCOPES).where("key", "=", key),
     );
   }
 }
@@ -86,26 +90,23 @@ export function readSessionCostUsagePartitionsInDatabase(
   const kysely = getNodeSqliteKysely<CacheDatabase>(db);
   for (const paths of chunkItems([...new Set(filePaths)], 100)) {
     throwIfCancelled?.();
-    const query = kysely
-      .selectFrom("cache_entries")
-      .select("key")
-      .select((eb) => [
-        boundedUsageCacheColumn("value_json", budget).as("value_json"),
-        boundedUsageCacheColumn("blob", budget).as("blob"),
-        eb.fn<number>("octet_length", ["value_json"]).as("header_bytes"),
-        eb.fn<number>("length", ["blob"]).as("body_bytes"),
-      ])
-      .where((eb) =>
-        eb.or(
-          paths.map((filePath) =>
-            eb.and([
-              eb("scope", "=", USAGE_COST_PARTITION_SCOPE),
-              eb("key", ">=", usageCostPartitionKey(filePath, start)),
-              eb("key", "<=", usageCostPartitionKey(filePath, end)),
-            ]),
-          ),
-        ),
+    const query = paths
+      .map((filePath) =>
+        kysely
+          .selectFrom(indexedUsageCacheEntries(db))
+          .select("key")
+          .select((eb) => [
+            boundedUsageCacheColumn("value_json", budget).as("value_json"),
+            boundedUsageCacheColumn("blob", budget).as("blob"),
+            eb.fn<number>("octet_length", ["value_json"]).as("header_bytes"),
+            eb.fn<number>("length", ["blob"]).as("body_bytes"),
+          ])
+          .where("scope", "=", USAGE_COST_PARTITION_SCOPE)
+          .where("key", ">=", usageCostPartitionKey(filePath, start))
+          .where("key", "<=", usageCostPartitionKey(filePath, end)),
       )
+      // Separate ranges retain indexed access; merging their rows preserves budget order.
+      .reduce((ranges, next) => ranges.unionAll(next))
       .orderBy("key", "asc");
     for (const row of iterateSqliteQuerySync(db, query)) {
       throwIfCancelled?.();
@@ -207,7 +208,7 @@ export function pruneSessionCostUsagePartitionsInDatabase(
         db,
         kysely
           .deleteFrom("cache_entries")
-          .where("scope", "=", USAGE_COST_PARTITION_SCOPE)
+          .where("scope", "in", PARTITION_SCOPES)
           .where("key", ">=", usageCostPartitionKey(row.key, ""))
           .where("key", "<=", usageCostPartitionKey(row.key, "\uffff")),
       );

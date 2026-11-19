@@ -119,14 +119,9 @@ export function applyResolvedToolPromptFinalizer(params: {
   });
 }
 
-function sameToolNames(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((name, index) => name === right[index]);
-}
-
 /**
- * Applies a prompt-hook tool cap to the already-built turn surface. Filtering
- * the concrete host baseline makes the hook an intersection with every host
- * policy while allowing a later prompt build to apply a different cap.
+ * Applies a prompt-hook execution cap without changing the provider definitions.
+ * The concrete host baseline still bounds both direct and catalog execution.
  */
 export function applyPromptBuildToolsAllow<
   TEffectiveTool extends NamedTool,
@@ -142,6 +137,9 @@ export function applyPromptBuildToolsAllow<
   catalogRef?: ToolSearchCatalogRef;
   codeModeControlsEnabled: boolean;
   forceToolNames?: readonly string[];
+  diagnosticIdentity?: Parameters<
+    typeof createAgentHarnessPromptToolPolicy
+  >[0]["diagnosticIdentity"];
 }) {
   const policyInput = {
     toolsAllow: params.toolsAllow,
@@ -154,6 +152,7 @@ export function applyPromptBuildToolsAllow<
     return definition ? [getToolDefinitionSource(definition) ?? definition] : [];
   });
   const promptPolicy = createAgentHarnessPromptToolPolicy({
+    diagnosticIdentity: params.diagnosticIdentity,
     tools: registeredTools,
     catalogRef: params.catalogRef,
     catalogEntries: params.baseline.catalogEntries,
@@ -166,23 +165,13 @@ export function applyPromptBuildToolsAllow<
       .tools.filter((tool) => callableNames.has(normalizeToolPolicyName(tool.name)));
   const allowedUncompactedTools = filterTools(params.uncompactedEffectiveTools);
   const allowedTools = filterTools(params.tools);
-  const allowedActiveNames = new Set(
-    promptPolicy.tools.map((tool) => normalizeToolPolicyName(tool.name)),
-  );
-
-  const activeToolNames = params.baseline.activeToolNames.filter((name) =>
-    allowedActiveNames.has(normalizeToolPolicyName(name)),
-  );
-  if (!sameToolNames(params.session.getActiveToolNames(), activeToolNames)) {
-    params.session.setActiveToolsByName(activeToolNames);
-  }
+  const activeToolNames = [...params.baseline.activeToolNames];
+  params.session.setActiveToolsByName(activeToolNames, promptPolicy.callableToolNames);
 
   return {
     activeToolNames,
     callableToolNames: promptPolicy.callableToolNames,
-    effectiveTools: params.effectiveTools.filter((tool) =>
-      allowedActiveNames.has(normalizeToolPolicyName(tool.name)),
-    ),
+    effectiveTools: params.effectiveTools,
     uncompactedEffectiveTools: allowedUncompactedTools,
     tools: allowedTools,
   };

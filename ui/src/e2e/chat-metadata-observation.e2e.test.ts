@@ -8,6 +8,7 @@ import {
   type MockGatewayControls,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI metadata observation" });
@@ -100,7 +101,7 @@ const countsAfter = (
   "models.list": before["models.list"] + catalog,
 });
 suite.define(() => {
-  it.each(["config.changed", "chat.metadata.changed"])(
+  it.each(["chat.metadata.changed"])(
     "refreshes only the presented retained pane on %s and catches up on activation",
     async (event) => {
       await withPage(async ({ page }) => {
@@ -117,7 +118,7 @@ suite.define(() => {
         await draft.fill("Retain this draft");
         const before = await requestCounts(gateway);
         await gateway.setMethodResponse("models.list", { models: [freshModel] });
-        await gateway.emitGatewayEvent(event, {});
+        await gateway.emitGatewayEvent(event, { modelCatalogChanged: true });
         await expectCatalog(visible, freshModel.name);
         const after = await requestCounts(gateway);
         expect(after).toEqual(countsAfter(before, 1, 1));
@@ -174,15 +175,7 @@ suite.define(() => {
           sessionKey: "global",
           sessionScope: "global",
           methodResponses: {
-            "agents.list": {
-              agents: [
-                { id: "main", name: "Main" },
-                { id: "work", name: "Work" },
-              ],
-              defaultId: "main",
-              mainKey: "main",
-              scope: "global",
-            },
+            "agents.list": agentRoster({ main: "Main", work: "Work" }, "main", "global"),
             "agent.identity.get": {
               cases: ["main", "work"].map((agentId) => ({
                 match: { agentId },

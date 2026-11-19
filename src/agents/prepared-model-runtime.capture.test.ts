@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { Model } from "../llm/types.js";
 import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
-import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { resolveModelAsync } from "./embedded-agent-runner/model.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   bindPreparedModelRuntimeAuth,
   getPreparedModelRuntimeAuthStore,
@@ -15,7 +16,7 @@ import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.type
 import { AuthStorage } from "./sessions/auth-storage.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
 
-function fixture() {
+function fixture(inference?: ModelCatalogEntry["inference"]) {
   const config = {};
   const metadataSnapshot = createPluginMetadataSnapshot({
     config,
@@ -34,17 +35,28 @@ function fixture() {
     cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
   };
   let models = new Map<string, readonly Model[]>([[model.provider, [model]]]);
-  let catalog: ModelCatalogSnapshot = { entries: [model], routeVariants: [] };
+  let catalog: ModelCatalogSnapshot = {
+    entries: [inference ? { ...model, inference } : model],
+    routeVariants: [],
+  };
   const template = ModelRegistry.create(AuthStorage.inMemory(), "unused:models.json", {
     config,
     modelsJsonContents: null,
     includePluginCatalogs: false,
     pluginMetadataSnapshot: metadataSnapshot,
   });
-  const createStores = vi.fn((publishedModels?: ReadonlyMap<string, readonly Model[]>) => {
-    const authStorage = AuthStorage.inMemory();
-    return { authStorage, modelRegistry: template.fork(authStorage, publishedModels) };
-  });
+  const createStores = vi.fn(
+    (
+      publishedModels?: ReadonlyMap<string, readonly Model[]>,
+      selectedModel?: { provider: string; modelId: string },
+    ) => {
+      const authStorage = AuthStorage.inMemory();
+      return {
+        authStorage,
+        modelRegistry: template.fork(authStorage, publishedModels, selectedModel),
+      };
+    },
+  );
   const source: PreparedModelRuntimeSnapshot = {
     ...createEmptyPreparedModelRuntimeFixture({
       agentDir: "unused:agent",
@@ -71,13 +83,88 @@ function fixture() {
 }
 
 describe("captured model catalog generations", () => {
+  it("retains withdrawn chat support when a run adds prompt-project facts", async () => {
+    const f = fixture();
+    f.replaceCatalog({
+      entries: [{ ...f.model, inference: { chat: false } }],
+      routeVariants: [],
+    });
+    const snapshot = { ...f.capture(), activeProjectKeys: ["synthetic-project"] };
+    await expect(
+      resolveModelAsync("synthetic", "first", snapshot.agentDir, snapshot.config, {
+        ...snapshot.createStores(),
+        preparedModelRuntime: snapshot,
+        skipAgentDiscovery: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "model_chat_unsupported",
+      message: "This model doesn't support chat; pick another model.",
+    });
+  });
+
+  it("resolves newly granted API chat from the admitted catalog without changing older admissions", async () => {
+    const f = fixture({ chat: false });
+    const denied = f.capture();
+    f.replaceCatalog({
+      entries: [{ ...f.model, inference: { chat: true } }],
+      routeVariants: [],
+    });
+    const granted = f.capture();
+    const resolve = (snapshot: PreparedModelRuntimeSnapshot) =>
+      resolveModelAsync("synthetic", "first", snapshot.agentDir, snapshot.config, {
+        ...snapshot.createStores(),
+        preparedModelRuntime: snapshot,
+        skipAgentDiscovery: true,
+      });
+
+    await expect(resolve(denied)).rejects.toMatchObject({
+      reason: "format",
+      code: "model_chat_unsupported",
+      message: "This model doesn't support chat; pick another model.",
+    });
+    expect(await resolve(granted)).toMatchObject({
+      model: { provider: "synthetic", id: "first", api: "openai-responses" },
+    });
+    await expect(resolve(denied)).rejects.toMatchObject({
+      reason: "format",
+      code: "model_chat_unsupported",
+      message: "This model doesn't support chat; pick another model.",
+    });
+  });
+
+  it.each([
+    {
+      name: "another endpoint",
+      route: { baseUrl: "https://other.invalid", inference: { chat: true } },
+    },
+    { name: "another API", route: { api: "openai-completions", inference: { chat: true } } },
+    { name: "missing inference metadata", route: {} },
+  ] satisfies { name: string; route: Partial<ModelCatalogEntry> }[])(
+    "does not replace typed-only support with $name",
+    async ({ route }) => {
+      const f = fixture({ chat: false });
+      f.replaceCatalog({ entries: [{ ...f.model, ...route }], routeVariants: [] });
+      const snapshot = f.capture();
+      const result = resolveModelAsync("synthetic", "first", snapshot.agentDir, snapshot.config, {
+        ...snapshot.createStores(),
+        preparedModelRuntime: snapshot,
+        skipAgentDiscovery: true,
+      });
+      await expect(result).rejects.toMatchObject({
+        code: "model_chat_unsupported",
+        reason: "format",
+      });
+    },
+  );
+
   it("materializes only requested runtime stores while isolating each run", () => {
     const f = fixture();
     const first = f.capture();
     const second = f.capture();
     expect(f.createStores).not.toHaveBeenCalled();
-    const a = first.createStores();
-    const b = second.createStores();
+    const selection = { provider: "synthetic", modelId: "first" };
+    const a = first.createStores(undefined, selection);
+    const b = second.createStores(undefined, selection);
     const selected = a.modelRegistry.find("synthetic", "first")!;
     selected.cost.input = 999;
     selected.input.push("image");
@@ -105,8 +192,15 @@ describe("captured model catalog generations", () => {
     const emptyCatalog = { entries: [], routeVariants: [] };
     f.replaceCatalog(emptyCatalog);
     const empty = f.capture();
-    expect(first.createStores().modelRegistry.find("synthetic", "first")).toBeDefined();
-    const secondRegistry = second.createStores().modelRegistry;
+    expect(
+      first
+        .createStores(undefined, { provider: "synthetic", modelId: "first" })
+        .modelRegistry.find("synthetic", "first"),
+    ).toBeDefined();
+    const secondRegistry = second.createStores(undefined, {
+      provider: "synthetic",
+      modelId: "second",
+    }).modelRegistry;
     expect(secondRegistry.find("synthetic", "first")).toBeUndefined();
     expect(secondRegistry.find("synthetic", "second")).toBeDefined();
     expect(empty.createStores().modelRegistry.getAll()).toEqual([]);

@@ -1,4 +1,5 @@
 import { action, createOptimistic, For, Show } from "solid-js";
+import { projectUpdateRunHistory } from "../../../../src/infra/update-run-history-projection.ts";
 import { isAcknowledgedAbandonedUpdateRun } from "../../../../src/infra/update-run-record.ts";
 import {
   classifyUpdateOutcome,
@@ -33,10 +34,14 @@ export function RecordedAttempt(
     return presentReport(view, pending);
   };
   const run = () => props.update.updateRun;
+  const serving = () =>
+    props.connected ? { version: props.gatewayVersion, buildId: props.gatewayBuildId } : undefined;
   const failed = () => {
     const currentRun = run();
     return currentRun
-      ? !isAcknowledgedAbandonedUpdateRun(currentRun) && isReportableUpdateRun(currentRun)
+      ? !projectUpdateRunHistory(currentRun, serving()) &&
+          !isAcknowledgedAbandonedUpdateRun(currentRun) &&
+          isReportableUpdateRun(currentRun)
       : !props.update.recordedUpdateAttempt ||
           classifyUpdateOutcome(props.update.recordedUpdateAttempt) !== "noop";
   };
@@ -66,18 +71,19 @@ export function RecordedAttempt(
           }
         >
           <div class="settings-row settings-row--stacked">
-            <UpdateRunView run={run()} connected={props.connected} />
+            <UpdateRunView run={run()} connected={props.connected} serving={serving()} />
           </div>
         </Show>
         <Show when={failed() || props.update.updateStatusBanner?.source === "read"}>
           <SettingsRow
             title={t("updates.page.recoveryActions")}
+            stackedOnNarrow
             control={
-              <div class="updates-status-control">
+              <div class="updates-status-control updates-recovery-actions">
                 <button
                   class="btn btn--sm"
                   type="button"
-                  title={props.canCheckStatus ? "" : t("updates.adminRequired")}
+                  title={props.canCheckStatus ? "" : t("updates.adminRequiredTooltip")}
                   disabled={
                     !props.canCheckStatus ||
                     props.updateBusy ||
@@ -92,7 +98,7 @@ export function RecordedAttempt(
                   <button
                     class="btn btn--sm"
                     type="button"
-                    title={props.canDiagnose ? "" : t("updates.adminRequired")}
+                    title={props.canDiagnose ? "" : t("updates.adminRequiredTooltip")}
                     disabled={
                       reporting() ||
                       !props.canDiagnose ||
@@ -111,7 +117,7 @@ export function RecordedAttempt(
                   <button
                     class="btn btn--sm primary"
                     type="button"
-                    title={canRetry() ? "" : t("updates.adminRequired")}
+                    title={canRetry() ? "" : t("updates.adminRequiredTooltip")}
                     disabled={!canRetry()}
                     onClick={() => void props.onUpdateNow()}
                   >

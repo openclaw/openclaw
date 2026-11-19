@@ -1,5 +1,8 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/plugin-entry";
 import type { CodexCommandDeps } from "./command-handler-deps.js";
+
+const loadCommandDispatch = createLazyRuntimeModule(() => import("./command-dispatch.js"));
 
 export type CodexCommandOptions = {
   pluginConfig?: unknown;
@@ -30,7 +33,7 @@ export function createCodexCommand(options: CodexCommandOptions): OpenClawPlugin
     requireAuth: true,
     handler: async (ctx) => {
       const commandContext = { ...ctx, gatewayClientScopes: ctx.gatewayClientScopes?.slice() };
-      const { handleCodexCommand } = await import("./command-dispatch.js");
+      const { handleCodexCommand } = await loadCommandDispatch();
       return handleCodexCommand(commandContext, options);
     },
   };

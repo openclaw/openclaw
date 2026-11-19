@@ -17,13 +17,16 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createCurrentOpenClawAgentDatabaseFixtures } from "../state/openclaw-agent-db.test-support.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import type { AgentCredentialMap } from "./agent-auth-credentials.js";
 import * as ambientAuth from "./agent-auth-discovery.js";
+import * as modelDiscovery from "./agent-model-discovery.js";
 import { resolveAuthProfileDatabaseOwnerId } from "./auth-profiles/sqlite.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import { resetModelsJsonReadyCacheForTest } from "./models-config-state.test-support.js";
-import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
+import { planOpenClawModelsJsonSourceWithInput } from "./models-config.core.js";
+import { ensureOpenClawModelsJson } from "./models-config.js";
 import * as modelsPlan from "./models-config.plan.js";
 import * as implicitCatalog from "./models-config.providers.implicit.js";
 import * as catalogAuth from "./plugin-model-catalog-auth.js";
@@ -32,7 +35,6 @@ import {
   encodePluginModelCatalogRelativePath,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
 } from "./plugin-model-catalog.js";
-import * as agentFacts from "./prepared-model-runtime.agent-facts.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
 import { prepareModelCatalogPublication } from "./prepared-model-runtime.catalog-publication.js";
 import {
@@ -172,6 +174,25 @@ function persistedFixture() {
 }
 
 describe("prepared catalog source composition", () => {
+  it("leaves acquired provider inventory to its live owner while preserving authored and static rows", async () => {
+    const { facts, generation } = persistedFixture();
+    const registries: PreparedConfiguredModelRegistries = new Map();
+    const cold = await prepareBatch({ facts, generation }, { registries });
+    expect(
+      cold.catalogs.get(facts.input)!.templateModelRegistry.find(providerId, "persisted-only"),
+    ).toBeDefined();
+
+    const owned = await prepareBatch(
+      { facts, generation },
+      { registries, ownedCatalogProviders: new Map([[facts.input, [providerId]]]) },
+    );
+    const registry = owned.catalogs.get(facts.input)!.templateModelRegistry;
+    expect(registry.find(providerId, "persisted-only")).toBeUndefined();
+    expect(registry.getAll().map(({ id }) => id)).toEqual(
+      expect.arrayContaining(["authored-only", "configured-only", "curated-only"]),
+    );
+  });
+
   it.each([true, false])(
     "admits persisted-only models only with current credentials (%s)",
     async (authenticated) => {
@@ -180,11 +201,16 @@ describe("prepared catalog source composition", () => {
       bindPluginMetadataSnapshotCache(generation.pluginMetadataSnapshot, cache);
       facts.input = { ...facts.input, config: {} };
       facts.providerIds = [];
-      facts.credentials = authenticated
+      const credentials: AgentCredentialMap = authenticated
         ? { [providerId]: { type: "api_key", key: "synthetic-key" } }
         : {};
-      facts.templateAuthStorage = AuthStorage.inMemory(facts.credentials);
-      vi.spyOn(agentFacts, "prepareAgentFacts").mockResolvedValue(facts);
+      facts.credentials = credentials;
+      facts.templateAuthStorage = AuthStorage.inMemory(credentials);
+      vi.spyOn(modelDiscovery, "discoverAuthStorageFacts").mockResolvedValue({
+        store: facts.authStore,
+        credentials,
+        authStorage: facts.templateAuthStorage,
+      });
       vi.spyOn(ambientAuth, "prepareAmbientAgentCredentialsForDiscovery").mockResolvedValue({});
       vi.spyOn(inboundRegistry, "prepareWorkspacePluginRegistries").mockResolvedValue({
         inboundPluginRegistry: undefined,
@@ -269,7 +295,7 @@ describe("prepared catalog source composition", () => {
         ensureOpenClawModelsJson(facts.input.config, facts.input.agentDir, options),
       ).resolves.toEqual({});
       await expect(
-        planOpenClawModelsJsonSource(facts.input.config, facts.input.agentDir, options),
+        planOpenClawModelsJsonSourceWithInput(facts.input.config, facts.input.agentDir, options),
       ).resolves.toMatchObject({ modelsJsonContents, pluginCatalogs: catalogs });
       sql.expectIdle();
     } finally {
@@ -441,6 +467,7 @@ describe("prepared catalog source composition", () => {
         catalogFacts,
         {
           initialAuth: { authStore: facts.authStore, authModes: {}, providerAuthLabels: new Map() },
+          readUsage: (store) => store,
           isCurrent: () => true,
           withRefreshStatus: (catalog) => catalog,
           readFullModelCatalog: () => undefined,

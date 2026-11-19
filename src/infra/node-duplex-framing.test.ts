@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import { createNodeDuplexEndpoint } from "./node-duplex-framing.js";
 
 const FRAGMENT_BYTES = 8 * 1024;
@@ -451,9 +451,7 @@ describe("node duplex message framing", () => {
     endpoint.receive(dataFrame({ message: 1 }));
 
     finishListeners[0]?.();
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextEventLoopTurn();
     expect(drained).toBe(false);
 
     finishListeners[1]?.();

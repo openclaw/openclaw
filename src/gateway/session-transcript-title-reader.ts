@@ -27,7 +27,7 @@ export async function readSessionTitleFieldsFromTranscriptAsync(
   const memory = captureSessionActorTranscriptRead(scope);
   if (memory) {
     return memory.missing
-      ? { ...EMPTY_SESSION_TITLE_FIELDS }
+      ? EMPTY_SESSION_TITLE_FIELDS
       : (
           await memory.read("session.history.title", {
             includeInterSession: opts?.includeInterSession,
@@ -62,7 +62,7 @@ export async function readSessionTitleFieldsFromTranscriptAsync(
   } catch (error) {
     if (isSessionTranscriptProjectionUnavailableError(error)) {
       startSessionTranscriptIndexReconcile({ ...options, preferredSessionId: resolved.sessionId });
-      return { ...EMPTY_SESSION_TITLE_FIELDS };
+      return EMPTY_SESSION_TITLE_FIELDS;
     }
     throw error;
   }

@@ -1,4 +1,3 @@
-import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { expect, vi } from "vitest";
 import { buildUsageOverview } from "../../../../src/shared/usage-overview.js";
 import type { UsageOverviewOptions } from "../../../../src/shared/usage-types.js";
@@ -7,12 +6,14 @@ import type { SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { page as usageRoute } from "./route.tsx";
 import type { UsageRouteData, UsageSessionEntry } from "./types.ts";
 import { createUsagePage } from "./usage-page-state.ts";
+import { openUsageFilter } from "./view-render.test-support.ts";
 import { buildAggregatesFromSessions, usageTotals } from "./view.test-support.ts";
 
 export type TestUsagePage = Awaited<ReturnType<typeof createPage>>;
@@ -71,11 +72,14 @@ export async function settleUsagePage(page: TestUsagePage) {
 }
 
 export async function queryUsagePage(page: TestUsagePage, query: string) {
-  const input = page.querySelector<HTMLInputElement>(".usage-query-input")!;
+  const { trigger } = openUsageFilter(page);
+  const input = page.querySelector<HTMLInputElement>(".usage-filter-menu__query input")!;
   input.value = query;
   input.dispatchEvent(new Event("input", { bubbles: true }));
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   await settleUsagePage(page);
+  trigger.click();
+  await page.updateComplete;
 }
 
 export function changeUsageControl(control: HTMLInputElement | HTMLSelectElement, value: string) {
@@ -379,14 +383,7 @@ export function cacheSnapshot(status: "fresh" | "partial" | "stale" | "refreshin
 }
 
 export async function preloadUsage(page: TestUsagePage): Promise<void> {
-  const options = {
-    signal: new AbortController().signal,
-    shouldRun: () => true,
-    revalidating: false,
-    location: { pathname: "/usage", search: "", hash: "" },
-    deps: "",
-    cause: "navigation",
-  } satisfies RouteLoaderOptions;
+  const options = createRouteLoaderOptions({ pathname: "/usage", search: "", hash: "" });
   page.routeData = (await usageRoute.loader!(page.context, options)) as UsageRouteData;
   await page.updateComplete;
 }

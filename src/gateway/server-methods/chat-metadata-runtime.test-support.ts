@@ -171,42 +171,35 @@ export function createChatMetadataHarness(
   let config = initialConfig;
   let owner = createChatMetadataOwner(config, "first");
   let skillsVersion = 1;
-  const pluginRegistryVersion = 1;
   let authStore: AuthProfileStore | undefined = { version: 1, profiles: {} };
   let authStoreRevision = 1;
   const invalidProjections = new WeakSet<object>();
-  const getPreparedAuthStore = vi.spyOn(auth, "getPreparedRuntimeAuthProfileStoreSnapshot");
-  getPreparedAuthStore.mockImplementation(() => authStore);
-  onTestFinished(() => getPreparedAuthStore.mockRestore());
-  const getSkillsVersion = vi.spyOn(skills, "getSkillsSnapshotVersion");
-  getSkillsVersion.mockImplementation(() => skillsVersion);
-  onTestFinished(() => getSkillsVersion.mockRestore());
-  const getPluginRegistryVersion = vi.spyOn(pluginRuntime, "getActivePluginRegistryVersion");
-  getPluginRegistryVersion.mockClear();
-  onTestFinished(() => getPluginRegistryVersion.mockRestore());
   const deps = {
+    getPreparedAuthStore: vi
+      .spyOn(auth, "getPreparedRuntimeAuthProfileStoreSnapshot")
+      .mockImplementation(() => authStore),
+    getSkillsVersion: vi
+      .spyOn(skills, "getSkillsSnapshotVersion")
+      .mockImplementation(() => skillsVersion),
+    getPluginRegistryVersion: vi.spyOn(pluginRuntime, "getActivePluginRegistryVersion").mockClear(),
     getPreparedOwner: vi
       .spyOn(catalogRuntime, "getPublishedPreparedModelCatalogOwnerSnapshot")
       .mockImplementation(() => owner),
     getAuthStoreRevision: vi
       .spyOn(authRevisionRuntime, "getRuntimeAuthProfileStoreMetadataRevision")
       .mockImplementation(() => authStoreRevision),
-    buildCommands: vi
-      .spyOn(commands, "buildCommandsListResult")
-      .mockImplementation(
-        async (_params: Parameters<typeof commands.buildCommandsListResult>[0]) => ({
-          commands: [
-            {
-              ...chatMetadataCommandFields,
-              name: `command-${skillsVersion}-${pluginRegistryVersion}`,
-            },
-          ],
-        }),
-      ),
+    getAuthCatalogRevision: vi
+      .spyOn(authRevisionRuntime, "getRuntimeAuthProfileStoreCatalogRevision")
+      .mockImplementation(() => authStoreRevision),
+    buildCommands: vi.spyOn(commands, "buildCommandsListResult").mockImplementation(async () => ({
+      commands: [{ ...chatMetadataCommandFields, name: `command-${skillsVersion}-1` }],
+    })),
   };
-  onTestFinished(() => deps.getPreparedOwner.mockRestore());
-  onTestFinished(() => deps.getAuthStoreRevision.mockRestore());
-  onTestFinished(() => deps.buildCommands.mockRestore());
+  onTestFinished(() => {
+    for (const spy of Object.values(deps)) {
+      spy.mockRestore();
+    }
+  });
   const buildProjection = vi.fn(async ({ facts }: { facts: ChatMetadataProjectionFacts }) => ({
     modelCatalog: facts.modelCatalog.entries,
     models: facts.modelCatalog.entries,
@@ -254,9 +247,6 @@ export function createChatMetadataHarness(
   });
   return {
     ...deps,
-    getPreparedAuthStore,
-    getSkillsVersion,
-    getPluginRegistryVersion,
     buildProjection,
     readProjection,
     invalidProjections,

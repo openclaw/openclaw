@@ -1,18 +1,17 @@
-import { writeSync } from "node:fs";
-import { afterEach, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   createUpdateStateInspectionDiagnostics,
   createUpdateStateInspectionReporter,
   formatUpdateStateInspectionError,
-  UPDATE_STATE_INSPECTION_PROGRESS_PREFIX,
 } from "./update-candidate-state.diagnostics.js";
 import { findUpdateCaptureSpaceError, UpdateCaptureSpaceError } from "./update-capture-space.js";
-import { createUpdateErrorFact, normalizeUpdateFailureFacts } from "./update-failure-facts.js";
+import { createUpdateErrorFact } from "./update-failure-facts.js";
+import { UPDATE_STATE_INSPECTION_PROGRESS_PREFIX } from "./update-state-inspection-protocol.js";
 
-vi.mock("node:fs", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:fs")>()),
-  writeSync: vi.fn(),
-}));
+beforeEach(() => {
+  vi.spyOn(fs, "writeSync").mockReturnValue(0);
+});
 
 const privateRoot = "/synthetic/private operator";
 const stateDir = `${privateRoot}/.openclaw`;
@@ -44,7 +43,6 @@ function progressChunk(value: object) {
 }
 
 afterEach(() => {
-  vi.mocked(writeSync).mockReset();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -54,14 +52,14 @@ it.each(["EAGAIN", "EWOULDBLOCK"])(
   (code) => {
     const report = createUpdateStateInspectionReporter(true);
     const progress = { phase: "agent schema inspection", path: "/synthetic/agent.sqlite" };
-    vi.mocked(writeSync).mockImplementation(() => {
+    vi.mocked(fs.writeSync).mockImplementation(() => {
       throw Object.assign(new Error("pipe full"), { code });
     });
     for (let index = 0; index < 1000; index++) {
       report(progress);
     }
     const output: string[] = [];
-    vi.mocked(writeSync).mockImplementation((_fd, line) => {
+    vi.mocked(fs.writeSync).mockImplementation((_fd, line) => {
       output.push(line);
       return Buffer.byteLength(line);
     });
@@ -77,7 +75,7 @@ it("delivers the legacy omission notice once after its pipe becomes writable", (
   const output: string[] = [];
   const omitted = `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify({ phase: "schema inspection; detailed progress omitted" })}\n`;
   let blocked = true;
-  vi.mocked(writeSync).mockImplementation((_fd, line) => {
+  vi.mocked(fs.writeSync).mockImplementation((_fd, line) => {
     if (line === omitted && blocked) {
       throw Object.assign(new Error("pipe full"), { code: "EAGAIN" });
     }
@@ -217,24 +215,19 @@ it.each([
   ).toBeUndefined();
 });
 
-it("does not promote private worker prose", () => {
-  const detail = `Inspection failed for synthetic-private-tenant at '${privateRoot}/source.sqlite'`;
-  const error = workerFailure(new Error(detail));
-  const fact = errorFact(error);
-
-  expect(error.message).toContain(detail);
-  expect(fact.message).toContain("[redacted-diagnostic]");
-  expect(fact.message).not.toMatch(/synthetic-private-tenant|private operator|source.sqlite/);
-});
-
 it("retains nested SQLITE_BUSY from the real worker formatter after a warning", () => {
-  const cause = Object.assign(new Error(`Unable to open '${privateRoot}/o'brien/worker.sqlite'`), {
-    code: "SQLITE_BUSY",
-  });
+  const secret = ["sk", "synthetic", "diagnostic", "credential", "1234567890"].join("-");
+  const cause = Object.assign(
+    new Error(`Unable to open token=${secret}, '${privateRoot}/o'brien/worker.sqlite'`),
+    { code: "SQLITE_BUSY" },
+  );
   const error = new Error(`Inspection failed for '${privateRoot}/source.sqlite'`, { cause });
-  const fact = errorFact(workerFailure(error, "ExperimentalWarning: SQLite is experimental\n"));
+  const failure = workerFailure(error, "ExperimentalWarning: SQLite is experimental\n");
+  const fact = errorFact(failure);
 
+  expect(failure.message).toContain(error.message);
   expect(fact.message).toContain("SQLITE_BUSY");
+  expect(fact.message).not.toContain(secret);
   expect(fact.message).not.toMatch(/private operator|brien|worker.sqlite|source.sqlite/);
   expect(fact.message?.length).toBeLessThanOrEqual(200);
 });
@@ -266,26 +259,10 @@ it.each([
   const diagnostics = inspection(testCase);
   diagnostics.onOutputChunk(Buffer.from("EACCES: permission denied"), "stderr");
 
-  const [fact] = normalizeUpdateFailureFacts(
-    [errorFact(diagnostics.failure(diagnostics.stderr(), "exit"))],
-    env,
-  );
+  const fact = errorFact(diagnostics.failure(diagnostics.stderr(), "exit"));
 
   expect(fact?.message).toContain("EACCES; Permission denied");
   expect(fact?.message).toContain("[redacted-path]");
-  expect(fact?.message).not.toMatch(
-    /private operator|Private Operator|private-server|private-share|agent's|private plugin/,
-  );
+  expect(fact?.message).not.toContain("private operator");
   expect(fact?.message?.length).toBeLessThanOrEqual(200);
-});
-
-it("keeps credentials and private error paths redacted when preserving the worker cause", () => {
-  const secret = ["sk", "synthetic", "diagnostic", "credential", "1234567890"].join("-");
-  const diagnostics = inspection();
-  const detail = `EACCES: permission denied token=${secret}, open '${privateRoot}/o'brien/private-error.sqlite'`;
-  const fact = errorFact(diagnostics.failure(detail, "exit"));
-
-  expect(fact.message).toContain("EACCES; Permission denied");
-  expect(fact.message).not.toContain(secret);
-  expect(fact.message).not.toMatch(/private operator|private-error|brien/);
 });

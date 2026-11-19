@@ -19,8 +19,10 @@ import {
 } from "../../model-extra-params.js";
 import { resolveProviderRequestCapabilities } from "../../provider-attribution.js";
 import { getModelProviderRequestRouteFacts } from "../../provider-request-config.js";
-import type { PreparedAgentRuntimeAuthAttempt } from "../../runtime-plan/prepare-auth.js";
-import type { AgentRuntimeAuthPlan } from "../../runtime-plan/types.js";
+import type {
+  PreparedAgentRuntimeAuthAttempt,
+  AgentRuntimeAuthPlan,
+} from "../../runtime-plan/types.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { resolveEmbeddedRuntimeModelPolicy } from "./setup.js";
 

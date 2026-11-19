@@ -20,6 +20,18 @@ vi.mock("node:child_process", async (importOriginal) => {
 useLocalOverrideTestState();
 afterEach(() => vi.restoreAllMocks());
 
+async function prepareOverride(base: string, canonicalize = false) {
+  const requestedRoot = path.join(base, "package");
+  await writePackageRoot(requestedRoot, "1.0.0");
+  const packageRoot = canonicalize ? await fs.realpath(requestedRoot) : requestedRoot;
+  const indexPath = path.join(packageRoot, "dist/index.js");
+  await fs.writeFile(indexPath, "operator override\n");
+  const plan = await captureLocalPackageOverrides({ packageRoot });
+  expect(plan).not.toBeNull();
+  await writePackageRoot(packageRoot, "2.0.0");
+  return { packageRoot, indexPath, plan };
+}
+
 // Intercept real OS publication only in disposable children, never the installed dependency.
 function publicationFaultPreload(root: string, marker: string, scenario: string): string {
   const nativeUrl = new URL("native.js", import.meta.resolve("@openclaw/fs-safe/root")).href;
@@ -67,14 +79,7 @@ it.each([
   ["published-sync", "sync failure", "export {};\n"],
 ])("preserves newer bytes or restores the original after %s", (scenario, markerText, contents) =>
   withTestDir({ prefix: "openclaw-override-publication-" }, async (base) => {
-    const requestedRoot = path.join(base, "package");
-    await writePackageRoot(requestedRoot, "1.0.0");
-    const packageRoot = await fs.realpath(requestedRoot);
-    const indexPath = path.join(packageRoot, "dist/index.js");
-    await fs.writeFile(indexPath, "operator override\n");
-    const plan = await captureLocalPackageOverrides({ packageRoot });
-    expect(plan).not.toBeNull();
-    await writePackageRoot(packageRoot, "2.0.0");
+    const { packageRoot, indexPath, plan } = await prepareOverride(base, true);
     const marker = path.join(base, "injected");
     const preload = `data:text/javascript,${encodeURIComponent(publicationFaultPreload(packageRoot, marker, scenario))}`;
     const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -104,13 +109,7 @@ it.each([
 
 it("publishes with the worker and dependencies captured before its runtime tree moves", () =>
   withTestDir({ prefix: "openclaw-override-retained-runtime-" }, async (base) => {
-    const packageRoot = path.join(base, "package");
-    await writePackageRoot(packageRoot, "1.0.0");
-    const indexPath = path.join(packageRoot, "dist/index.js");
-    await fs.writeFile(indexPath, "operator override\n");
-    const plan = await captureLocalPackageOverrides({ packageRoot });
-    await writePackageRoot(packageRoot, "2.0.0");
-
+    const { packageRoot, indexPath, plan } = await prepareOverride(base);
     const requestedRuntimeRoot = path.join(base, "runtime");
     await fs.mkdir(requestedRuntimeRoot);
     const runtimeRoot = await fs.realpath(requestedRuntimeRoot);
@@ -128,12 +127,7 @@ it("publishes with the worker and dependencies captured before its runtime tree 
     });
     await fs.rename(runtimeRoot, retainedRoot);
 
-    const result = await applyLocalPackageOverrides({
-      packageRoot,
-      plan,
-      reapply: true,
-      runtime,
-    });
+    const result = await applyLocalPackageOverrides({ packageRoot, plan, reapply: true, runtime });
     expect(result).toMatchObject({ status: "applied", applied: 1 });
     await expect(fs.readFile(indexPath, "utf8")).resolves.toBe("operator override\n");
   }));

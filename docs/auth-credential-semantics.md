@@ -13,6 +13,26 @@ These semantics keep selection-time and runtime auth behavior aligned. They are 
 - `openclaw models status --probe`
 - `openclaw doctor` auth checks (`doctor-auth`)
 
+## Account status in Models
+
+In **Settings → Models**, OAuth access-token expiry is separate from sign-in
+health. **Access token expires in…** or **Access token expired** describes the
+short-lived token, not necessarily the saved sign-in. The page does not infer
+refresh support from OAuth alone. **Ready** requires a ready catalog result;
+without that evidence, an account reporting only access-token expiry remains
+**Credentials configured**.
+
+A missing OAuth credential shows **Sign in again**. A refresh marker whose outcome
+is not distinguished by the status response shows **Sign-in unavailable**, not a
+claim that another login is required. A provider authentication rejection shows
+**Credentials rejected** and takes precedence over expiry information. The card-wide
+result does not identify the rejected credential, so it does not prescribe OAuth
+sign-in or change recovery advice for an unrelated saved account. Static token
+expiry keeps its warning. Externally managed credentials remain identified as
+such, rather than being declared healthy just because another tool manages them.
+Provider-reported quota exhaustion and temporary rate-limit errors remain usage
+or connection results, not sign-out instructions.
+
 <a id="stable-probe-reason-codes" />
 
 ## Stable check reason codes
@@ -23,7 +43,8 @@ Check results carry a `status` bucket (`ok`, `auth`, `rate_limit`, `billing`, `t
 | ------------------------ | ---------------------------------------------------------------------------- |
 | `excluded_by_auth_order` | Profile omitted from the explicit auth order for its provider.               |
 | `missing_credential`     | No inline credential or SecretRef is configured.                             |
-| `expired`                | Token `expires` is in the past.                                              |
+| `expired`                | Token `expires` is in the past, or an OAuth refresh is still in progress.    |
+| `refresh_failed`         | An OAuth refresh failed terminally; only a fresh sign-in recovers.           |
 | `invalid_expires`        | `expires` is not a valid positive Unix ms timestamp.                         |
 | `unresolved_ref`         | Configured SecretRef could not be resolved.                                  |
 | `ineligible_profile`     | Profile is incompatible with provider config (includes malformed key input). |
@@ -72,7 +93,7 @@ enter normal rotation, resolve through an explicit profile pin, or be copied to
 another agent. Only the owning setup operation can test the selected credential.
 After one successful tool-free turn, setup asks whether to activate it. Declining
 or failing the test keeps the saved credential inactive and preserves the current
-connection. Model Setup offers the same saved sign-in for a fresh test without
+connection. Models offers the same saved sign-in for a fresh test without
 another login. If applying a replacement fails, recovery restores its inactive
 state before rebuilding the previous connection. Gateway activation waits for
 config application; a required restart keeps the replacement inactive until setup
@@ -84,7 +105,7 @@ remove saved inactive replacements or restore the state from before setup.
 
 Noninteractive setup saves replacement credentials and prints a
 `openclaw models auth activate <profileId> --agent <id>` command to test and activate
-the saved sign-in. Model Setup offers the same operation. Interactive setup defaults
+the saved sign-in. Models offers the same operation. Interactive setup defaults
 to activation after a successful test. Reusing an existing credential
 and first-run noninteractive setup retain their existing behavior.
 
@@ -106,6 +127,12 @@ Cold agent opens validate integrity asynchronously and recheck ownership before
 writing.
 OAuth upserts recheck the current local or inherited credential after admission,
 before applying the existing generation-replacement rules.
+
+Cooldown, blocked, and disabled windows update the current availability view
+without replacing prepared plugin generations. Selection reads the committed
+windows immediately; bursts of availability changes coalesce metadata notifications
+without announcing a model catalog change. Credential, profile membership, order,
+and ownership changes still invalidate the prepared runtime before its next use.
 
 Runtime auth-store updates keep their read, merge, encode, and commit in the
 existing SQLite worker. Update callbacks execute at most once against the
@@ -259,6 +286,11 @@ shared credential belongs to the same account. If that identity cannot be
 verified, the peer remains terminally fenced instead of inheriting another
 account.
 
+Concurrent requests serialize first-use authorization capture when their local
+or shared credential stores overlap. Each request retains its own live authority;
+closing one does not close another. Credential replacement, revocation, pending
+writes, and uncertain settlement still refuse stale authorization.
+
 Catalog discovery fences and settles historical peers through the same
 request-owned native writer as the refreshing credential. Each peer update
 retains its captured database file identity and compares the credential inside
@@ -282,6 +314,21 @@ failures remain fail-closed. Where an owner already retains a rotated result for
 storage retry, it retries that storage operation, not the old token exchange.
 External tool homes retain their own refresh authority; this contract does not
 transfer their credentials into OpenClaw ownership.
+
+## Long-running custom transport requests
+
+The embedded run auth owner can supply a versioned, optional `requestAuth`
+capability to provider `createStreamFn` factories. A participating transport
+resolves it before each physical request, including private continuations, so a
+captured attempt bearer cannot hide canonical renewal or rotation. Resolution
+locks the original profile and account instead of trying another identity. Run
+closure, auth selection changes, automation revocation and cancellation refuse
+credentials, including after awaited preparation. Existing native OAuth owners
+still own refresh grants and independent durable settlement.
+
+Legacy hosts and entrypoints without this capability retain captured-key
+behavior; ordinary just-in-time refresh between separate runs does not imply
+renewal within one attempt. See [custom transport request credentials](/plugins/sdk-provider-plugins#per-request-credentials-in-custom-transports).
 
 ## Plugin SDK OAuth validation
 
@@ -376,8 +423,9 @@ deleting a database marker is not evidence that the old grant is safe to retry.
 When an uncertain-outcome error asks for sign-in, obtain a new grant through the
 existing credential owner:
 
-- System or agent model profiles: run `openclaw models auth login --provider <id>`
-  for the affected agent/profile. Personal model accounts reconnect from
+- System or agent model profiles: select **Sign in again** on the account in the
+  Control UI **Models** page (shown for `refresh_failed`), or run
+  `openclaw models auth login --provider <id>` for the affected agent/profile. Personal model accounts reconnect from
   **Settings → Profile → Connected accounts**, not the system auth store.
 - Shared MCP OAuth: run `openclaw mcp logout <name>`, then
   `openclaw mcp login <name>`. Per-requester MCP users use their own sign-in flow.

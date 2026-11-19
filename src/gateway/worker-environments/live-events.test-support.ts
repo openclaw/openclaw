@@ -23,12 +23,10 @@ export const LOCAL = { agentId: "main", sessionId: SID, sessionKey: KEY };
 function connectionIdentity(n?: number): Identity {
   const suffix = n === undefined ? "worker-live" : `farm-${n}`;
   const environmentId = n === undefined ? "environment-live" : `environment-${suffix}`;
-  const sessionId = n === undefined ? SID : `session-${suffix}`;
-  const runId = n === undefined ? RUN : `run-${suffix}`;
   const turnClaim: NonNullable<Identity["turnClaim"]> = {
-    sessionId,
+    sessionId: `session-${suffix}`,
     claimId: `claim-${suffix}`,
-    runId,
+    runId: `run-${suffix}`,
     placementGeneration: 4,
     owner: { kind: "worker", environmentId, ownerEpoch: EPOCH },
   };

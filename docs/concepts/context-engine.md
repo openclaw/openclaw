@@ -135,6 +135,8 @@ OpenClaw calls two optional subagent lifecycle hooks:
 
 The `assemble` method can return a `systemPromptAddition` string. OpenClaw prepends this to the system prompt for the run. This lets engines inject dynamic recall guidance, retrieval instructions, or context-aware hints without requiring static workspace files.
 
+Generic CLI backends such as `claude-cli` call `assemble()` after `bootstrap()` on every agent turn and send the `systemPromptAddition` with that turn's input (for `claude-cli`, as turn context beside OpenClaw's runtime facts). The CLI system prompt stays byte-identical across turns, so a per-turn addition does not invalidate the CLI's prompt cache or restart a warm CLI process.
+
 ## The legacy engine
 
 The built-in `legacy` engine preserves OpenClaw's original behavior:
@@ -381,9 +383,9 @@ inspection, and subagent lifecycle hooks. A queued subagent spawn keeps its
 instance until dispatch succeeds or preparation is rolled back; returning a
 queued acceptance does not end that lifetime. Timed-out compaction keeps its
 instance until the underlying plugin work settles.
-Gateway shutdown releases queued instances without rolling back their preparation,
-so persisted queued work can resume after restart. Explicit cancellation still
-rolls back the preparation.
+Gateway shutdown cancels queued child execution and releases its process-local
+instances. It does not adopt queued child tasks after restart. Preparation cleanup
+remains with its lifecycle owner; explicit cancellation rolls back preparation.
 
 Foreground engine disposal shares the agent cleanup deadline: 10 seconds by
 default, adjustable with `OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS`. A stalled cleanup
@@ -437,8 +439,9 @@ info: {
 ```
 
 Native Codex and OpenClaw embedded agent runs satisfy `assemble-before-prompt`.
-Generic CLI backends do not, so engines that require it are rejected before the
-CLI process starts.
+Generic CLI backends do not: the CLI's native session owns its history, so they
+use only `systemPromptAddition` and ignore the assembled messages. Engines that
+require the capability are rejected before the CLI process starts.
 
 ### Failure isolation
 

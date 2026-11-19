@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { RuntimeId } from "./runtime-id.js";
-import type { RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
+import type { RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.types.js";
 import { extractQaContentText } from "./runtime-transcript.js";
 
 type JsonlReplayResult = {
@@ -13,13 +13,6 @@ type JsonlReplayResult = {
     drift: Array<RuntimeParityResult["drift"]>;
     firstDriftAtTurn?: number;
   }>;
-};
-
-type JsonlReplayMarkdownReport = {
-  generatedAt: string;
-  providerMode: "mock-openai" | "live-frontier";
-  runtimePair: ["openclaw", "codex"];
-  transcripts: JsonlReplayResult["transcripts"];
 };
 
 function extractTextContent(content: unknown): string {
@@ -125,7 +118,12 @@ export async function runJsonlReplay(directory: string): Promise<JsonlReplayResu
   return { transcripts };
 }
 
-export function renderJsonlReplayMarkdownReport(report: JsonlReplayMarkdownReport): string {
+export function renderJsonlReplayMarkdownReport(report: {
+  generatedAt: string;
+  providerMode: "mock-openai" | "live-frontier";
+  runtimePair: ["openclaw", "codex"];
+  transcripts: JsonlReplayResult["transcripts"];
+}): string {
   const totalTurns = report.transcripts.reduce((sum, entry) => sum + entry.userTurnCount, 0);
   const driftedTranscripts = report.transcripts.filter(
     (entry) => entry.firstDriftAtTurn !== undefined,

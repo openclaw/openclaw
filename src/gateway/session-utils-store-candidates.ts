@@ -1,17 +1,17 @@
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
+import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { SessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { isPerAgentSessionStoreConfig } from "../config/sessions/session-store-config.js";
 import { assertSessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
 import type { SessionStoreTarget } from "../config/sessions/targets-collision.js";
-import { isConfiguredSessionStoreAgentId } from "../config/sessions/targets-configured-agents.js";
-import { createExistingAgentSessionStoreTargetResolver } from "../config/sessions/targets-discovery.native.js";
 import {
+  isConfiguredSessionStoreAgentId,
   listConfiguredSessionStoreAgentIds,
-  resolveSessionStoreCompatibilityAgentId,
-  type ExistingAgentSessionStoreTargetResolver,
-} from "../config/sessions/targets.js";
+} from "../config/sessions/targets-configured-agents.js";
+import { createExistingAgentSessionStoreTargetResolver } from "../config/sessions/targets-discovery.native.js";
+import type { ExistingAgentSessionStoreTargetResolver } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";

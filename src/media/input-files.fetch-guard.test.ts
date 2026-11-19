@@ -1,5 +1,6 @@
 // Input file fetch guard tests cover network fetch limits for media inputs.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeStallingStream } from "../infra/http-body.test-support.js";
 
 const fetchWithSsrFGuardMock = vi.fn();
 const convertHeicToJpegMock = vi.fn();
@@ -385,13 +386,8 @@ describe("guarded input file URL fetches", () => {
     ],
   ] as const)("%s", async (_name, createChunk, createResponseInit, expectedError) => {
     let canceled = false;
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(createChunk());
-      },
-      cancel() {
-        canceled = true;
-      },
+    const stream = makeStallingStream([createChunk()], () => {
+      canceled = true;
     });
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValueOnce({

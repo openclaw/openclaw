@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { formatPortDiagnostics } from "../infra/ports-format.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
-import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
+import { cleanStaleGatewayProcesses } from "../infra/restart-stale-pids.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { parseLaunchctlJob } from "./launchctl-job.js";
 import { isCurrentProcessInsideLaunchdService } from "./launchd-current-service.js";
 import {
   execLaunchctl,
@@ -15,7 +16,6 @@ import {
   bootstrapLaunchAgentOrThrow,
   isLaunchctlAlreadyLoaded,
   isUnsupportedGuiDomain,
-  parseLaunchctlJob,
   probeLaunchAgentState,
   readLaunchAgentRuntime,
   resolveLaunchAgentGatewayContext,
@@ -64,25 +64,11 @@ function readLaunchAgentPidForCleanupSync(serviceTarget: string): number {
   return pid;
 }
 
-type LaunchAgentBootstrapRepairResult =
-  | { ok: true; status: "repaired" | "already-loaded" }
-  | {
-      ok: false;
-      status: "bootstrap-failed" | "kickstart-failed";
-      detail?: string;
-    }
-  | {
-      ok: false;
-      status: "system-launchdaemon-conflict" | "system-launchdaemon-unverifiable";
-      detail: string;
-    }
-  | { ok: false; status: "gui-session-unavailable"; detail: string; domain: string };
-
 export async function repairLaunchAgentBootstrap(args: {
   deadline?: GatewayServiceControlArgs["deadline"];
   env?: Record<string, string | undefined>;
   warn?: (message: string) => void;
-}): Promise<LaunchAgentBootstrapRepairResult> {
+}) {
   const env = args.env ?? (process.env as Record<string, string | undefined>);
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(env);
@@ -95,11 +81,11 @@ export async function repairLaunchAgentBootstrap(args: {
       throw error;
     }
     return {
-      ok: false,
+      ok: false as const,
       status:
         error.ownership.status === "unverifiable"
-          ? "system-launchdaemon-unverifiable"
-          : "system-launchdaemon-conflict",
+          ? ("system-launchdaemon-unverifiable" as const)
+          : ("system-launchdaemon-conflict" as const),
       detail: error.message,
     };
   }
@@ -116,7 +102,7 @@ export async function repairLaunchAgentBootstrap(args: {
       deadline: args.deadline,
     });
     if (bootstrap === "bootstrapped") {
-      return { ok: true, status: "repaired" };
+      return { ok: true as const, status: "repaired" as const };
     }
   } catch (error) {
     if (hasCommandProcessCleanupError(error)) {
@@ -138,7 +124,7 @@ export async function repairLaunchAgentBootstrap(args: {
     }
     const detail = (boot.stderr || boot.stdout).trim();
     if (isUnsupportedGuiDomain(detail)) {
-      return { ok: false, status: "gui-session-unavailable", detail, domain };
+      return { ok: false as const, status: "gui-session-unavailable" as const, detail, domain };
     }
     if (
       boot.termination !== "exit" ||
@@ -149,7 +135,11 @@ export async function repairLaunchAgentBootstrap(args: {
         stdout: boot.stdout,
       })
     ) {
-      return { ok: false, status: "bootstrap-failed", detail: detail || undefined };
+      return {
+        ok: false as const,
+        status: "bootstrap-failed" as const,
+        detail: detail || undefined,
+      };
     }
   }
 
@@ -157,18 +147,18 @@ export async function repairLaunchAgentBootstrap(args: {
   // kickstarting a healthy running service causes unnecessary session disconnects.
   const runtime = await readLaunchAgentRuntime(env, { timeoutMs: args.deadline?.remainingMs() });
   if (runtime.status === "running") {
-    return { ok: true, status: "already-loaded" };
+    return { ok: true as const, status: "already-loaded" as const };
   }
 
   const kick = await execLaunchctl(["kickstart", serviceTarget], args.deadline);
   if (kick.code !== 0) {
     return {
-      ok: false,
-      status: "kickstart-failed",
+      ok: false as const,
+      status: "kickstart-failed" as const,
       detail: (kick.stderr || kick.stdout).trim() || undefined,
     };
   }
-  return { ok: true, status: "already-loaded" };
+  return { ok: true as const, status: "already-loaded" as const };
 }
 type LaunchAgentRestoreResult = { loaded: true } | { loaded: false; detail: string };
 
@@ -362,50 +352,62 @@ export async function restartLaunchAgent(
   const { serviceEnv, label, plistPath, serviceTarget, reportMutation } = activation;
 
   const detached = await isCurrentProcessInsideLaunchdService(label);
-  if (!detached) {
-    const {
-      env: cleanupEnv,
-      port: cleanupPort,
-      probeHosts,
-    } = await resolveLaunchAgentGatewayContext(serviceEnv);
-    if (cleanupPort !== null) {
-      assertGatewayServiceUpdateCurrent();
-      cleanStaleGatewayProcessesSync(cleanupPort, {
+  try {
+    if (!detached) {
+      const {
         env: cleanupEnv,
-        assertCurrent: assertGatewayServiceUpdateCurrent,
-        // Resolve after lsof captures its listener snapshot. A KeepAlive respawn
-        // during enumeration must be protected before candidate filtering/signals.
-        resolveProtectedPid: () => {
-          const pid = readLaunchAgentPidForCleanupSync(serviceTarget);
-          assertGatewayServiceUpdateCurrent();
-          return pid;
-        },
-      });
-      const diagnostics = await inspectPortUsage(cleanupPort, {
+        port: cleanupPort,
         probeHosts,
-      }).catch(() => null);
-      if (diagnostics?.status === "busy") {
-        const runtime = await readLaunchAgentRuntime(serviceEnv, {
-          timeoutMs: params.deadline?.remainingMs(),
+      } = await resolveLaunchAgentGatewayContext(serviceEnv);
+      if (cleanupPort !== null) {
+        assertGatewayServiceUpdateCurrent();
+        await cleanStaleGatewayProcesses(cleanupPort, {
+          env: cleanupEnv,
+          assertCurrent: () => {
+            assertGatewayServiceUpdateCurrent();
+            assertCurrent?.();
+          },
+          // Resolve after lsof captures its listener snapshot. A KeepAlive respawn
+          // during enumeration must be protected before candidate filtering/signals.
+          resolveProtectedPid: () => {
+            const pid = readLaunchAgentPidForCleanupSync(serviceTarget);
+            assertGatewayServiceUpdateCurrent();
+            return pid;
+          },
         });
-        const managedPid = runtime.pid;
-        // Only the current supervised PID may keep the port busy before a
-        // disruptive restart. Re-read after cleanup to close over a concurrent
-        // launchd respawn rather than trusting the protected pre-cleanup PID.
-        const ownedByLaunchAgent =
-          managedPid !== undefined &&
-          diagnostics.listeners.length > 0 &&
-          diagnostics.listeners.every((listener) => listener.pid === managedPid);
-        if (!ownedByLaunchAgent) {
-          throw new Error(
-            [
-              `gateway port ${cleanupPort} is busy but is not verifiably owned by LaunchAgent ${label}`,
-              ...formatPortDiagnostics(diagnostics),
-            ].join("\n"),
-          );
+        const diagnostics = await inspectPortUsage(cleanupPort, {
+          probeHosts,
+        }).catch(() => null);
+        if (diagnostics?.status === "busy") {
+          const runtime = await readLaunchAgentRuntime(serviceEnv, {
+            timeoutMs: params.deadline?.remainingMs(),
+          });
+          const managedPid = runtime.pid;
+          // Only the current supervised PID may keep the port busy before a
+          // disruptive restart. Re-read after cleanup to close over a concurrent
+          // launchd respawn rather than trusting the protected pre-cleanup PID.
+          const ownedByLaunchAgent =
+            managedPid !== undefined &&
+            diagnostics.listeners.length > 0 &&
+            diagnostics.listeners.every((listener) => listener.pid === managedPid);
+          if (!ownedByLaunchAgent) {
+            throw new Error(
+              [
+                `gateway port ${cleanupPort} is busy but is not verifiably owned by LaunchAgent ${label}`,
+                ...formatPortDiagnostics(diagnostics),
+              ].join("\n"),
+            );
+          }
         }
       }
     }
+  } catch (error) {
+    // Doctor owns this stop. Keep its job registered even when an unrelated
+    // listener prevents restart; never adopt or signal that listener as recovery.
+    if (preserveDefinition) {
+      await activation.rethrow(error);
+    }
+    throw error;
   }
   // Preservation permits native activation only, including detached handoffs.
   const plistReloadNeeded =

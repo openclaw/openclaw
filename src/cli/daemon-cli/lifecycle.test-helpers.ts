@@ -21,7 +21,10 @@ export function createGatewayProcessExpectations(
 
 type CoreRestartParams = Parameters<typeof import("./lifecycle-core.js").runServiceRestart>[0];
 type RestartPostCheckContext = Parameters<NonNullable<CoreRestartParams["postRestartCheck"]>>[0];
-export type RestartParams = Pick<CoreRestartParams, "opts" | "beforeServiceMutation"> & {
+export type RestartParams = Pick<
+  CoreRestartParams,
+  "opts" | "beforeServiceMutation" | "readDriftContext"
+> & {
   repairLoadedService?: (ctx: {
     json: boolean;
     stdout: NodeJS.WritableStream;

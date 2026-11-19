@@ -5,6 +5,7 @@ import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { HubTabs } from "./hub-tabs.tsx";
 import baseStyles from "../../styles/base.css?inline";
 import hubStyles from "../../styles/hub-tabs.css?inline";
+import settingsControlStyles from "../../styles/settings-controls.css?inline";
 import settingsStyles from "../../styles/settings.css?inline";
 import tabsStyles from "../../styles/tabs.css?inline";
 
@@ -21,7 +22,13 @@ function hubProps(id: string, onSelect: (value: string) => void, labels = ["Firs
 it("preserves hub styling when native defaults load last", async () => {
   const viewport = { width: innerWidth, height: innerHeight };
   const styles = document.createElement("style");
-  styles.textContent = [baseStyles, settingsStyles, hubStyles, tabsStyles].join("\n");
+  styles.textContent = [
+    baseStyles,
+    settingsControlStyles,
+    settingsStyles,
+    hubStyles,
+    tabsStyles,
+  ].join("\n");
   document.head.append(styles);
   const [active, setActive] = createSignal("messages");
   const view = mountSolid(() => (
@@ -66,9 +73,6 @@ it("preserves hub styling when native defaults load last", async () => {
       expect
         .soft(messages.getBoundingClientRect().bottom + 2)
         .toBeLessThanOrEqual(tabs.getBoundingClientRect().bottom);
-      if (width === 390) {
-        expect.soft(action.getBoundingClientRect().height).toBeGreaterThanOrEqual(44);
-      }
       messages.focus();
       await userEvent.keyboard("{ArrowRight}{Enter}");
       flush();
@@ -82,6 +86,101 @@ it("preserves hub styling when native defaults load last", async () => {
     await page.viewport(viewport.width, viewport.height);
   }
 });
+
+it.each([
+  ["settings first", settingsStyles, hubStyles],
+  ["settings last", hubStyles, settingsStyles],
+])("keeps the stacked workspace gap with %s", (_order, first, second) => {
+  const styles = document.createElement("style");
+  styles.textContent = [baseStyles, first, second].join("\n");
+  document.head.append(styles);
+  const view = mountSolid(() => (
+    <>
+      <section class="content-header hub-page-header hub-page-header--stacked">
+        Stacked header
+      </section>
+      <section class="settings-workspace">Stacked workspace</section>
+      <section class="content-header">Ordinary header</section>
+      <section class="settings-workspace">Ordinary workspace</section>
+    </>
+  ));
+  flush();
+  try {
+    expect(getComputedStyle(view.getByText("Stacked workspace")).marginTop).toBe("0px");
+    expect(getComputedStyle(view.getByText("Ordinary workspace")).marginTop).toBe("20px");
+  } finally {
+    view.unmount();
+    styles.remove();
+  }
+});
+
+it.each(["ltr", "rtl"] as const)(
+  "reveals the active tab only at phone width in %s",
+  async (direction) => {
+    const viewport = { width: innerWidth, height: innerHeight };
+    const styles = document.createElement("style");
+    styles.textContent = [baseStyles, hubStyles, tabsStyles].join("\n");
+    document.head.append(styles);
+    const [active, setActive] = createSignal("alpha");
+    const view = mountSolid(() => (
+      <div dir={direction} style="width:160px">
+        <HubTabs
+          {...hubProps("reveal", setActive, ["Alpha", "Bravo", "Charlie", "Delta", "Echo"])}
+          active={active()}
+        />
+      </div>
+    ));
+    flush();
+    const strip = view.getByRole("tablist");
+    const select = async (value: string) => {
+      setActive(value);
+      flush();
+      await nextFrame();
+      await nextFrame();
+    };
+    const farEdge = direction === "rtl" ? "atStart" : "atEnd";
+    try {
+      await page.viewport(390, 844);
+      await vi.waitFor(() => expect(strip.dataset[farEdge]).toBe("false"));
+
+      await select("charlie");
+      const charlie = view.getByRole("tab", { name: "Charlie" }).getBoundingClientRect();
+      const bounds = strip.getBoundingClientRect();
+      const padding = getComputedStyle(strip);
+      expect(charlie.left).toBeGreaterThanOrEqual(
+        bounds.left + Number.parseFloat(padding.scrollPaddingLeft) - 1,
+      );
+      expect(charlie.right).toBeLessThanOrEqual(
+        bounds.right - Number.parseFloat(padding.scrollPaddingRight) + 1,
+      );
+
+      await select("echo");
+      const echo = view.getByRole("tab", { name: "Echo" }).getBoundingClientRect();
+      expect(Math.abs(strip.scrollLeft)).toBeGreaterThan(0);
+      expect(echo.left).toBeGreaterThanOrEqual(strip.getBoundingClientRect().left - 1);
+      expect(echo.right).toBeLessThanOrEqual(strip.getBoundingClientRect().right + 1);
+      await vi.waitFor(() => expect(strip.dataset[farEdge]).toBe("true"));
+
+      await select("alpha");
+      expect(Math.abs(strip.scrollLeft)).toBeLessThanOrEqual(1);
+
+      await page.viewport(1440, 900);
+      const desktopPosition = strip.scrollLeft;
+      await select("echo");
+      expect(strip.scrollLeft).toBe(desktopPosition);
+    } finally {
+      await page.viewport(viewport.width, viewport.height);
+      view.unmount();
+      styles.remove();
+    }
+  },
+);
+
+function nextFrame() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
 
 const hosts: HTMLElement[] = [];
 

@@ -275,6 +275,14 @@ describe("resolvePluginVersionDriftTargets for ClawHub installs", () => {
     const selectedId = expectDefined(selection.pluginIds[0], "selected install owner");
     const record = expectDefined(installRecords[selectedId], "selected install record");
     expect(
+      resolvePluginUpdateSelection({
+        installs: { whatsapp: record },
+        rawIds: ["whatsapp-alias"],
+        installOwnerByPluginId: new Map([["whatsapp-alias", "whatsapp"]]),
+        rejectedPluginIds: new Map([["whatsapp-alias", "fixture ownership rejection"]]),
+      }),
+    ).toEqual({ pluginIds: [], error: "fixture ownership rejection" });
+    expect(
       resolveClawHubUpdateSpecs({
         record,
         officialSpec: entry.clawhubOfficialSpec,
