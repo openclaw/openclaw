@@ -60,10 +60,11 @@ function outputTrimmed(before: string, after: string): boolean {
     const response = part.functionResponse?.response;
     const full = original.parts?.[index]?.functionResponse?.response?.output;
     const output = response?.output;
-    // The kept text around the notice must be the original's head and tail.
+    // The kept text around the notice must be the original's head and tail. The notice itself
+    // can be cut short at the end of the output.
     const notice =
       typeof output === "string"
-        ? /\s*\[\.\.\. \d+ more characters truncated[^\]]*\]\s*/.exec(output)
+        ? /\s*\[\.\.\. \d+ more characters truncated(?:[^\]]*\]\s*|[^\]]*$)/.exec(output)
         : null;
     if (
       response &&
