@@ -46,54 +46,91 @@ function HandoffSessionList(props: {
   );
 }
 
-function Chevron(props: { open: boolean }) {
+function elapsedText(elapsed: number) {
+  return formatDurationCompact(Math.max(1_000, elapsed), { includeSeconds: true }) ?? "";
+}
+
+export function ChatContinuationDelay(props: { elapsed?: number }) {
   return (
-    <span class="chat-tool-row__chevron">
-      <Icon name={props.open ? "chevronDown" : "chevronRight"} />
-    </span>
+    <Show when={props.elapsed}>
+      {(elapsed) => (
+        <span class="chat-tool-row__detail">
+          {" "}
+          <span aria-hidden="true">·</span>{" "}
+          {t("chat.continuationDelay", { duration: elapsedText(elapsed()) })}
+        </span>
+      )}
+    </Show>
+  );
+}
+
+export function ChatContinuationActivity(props: {
+  source: ProjectedContinuationSource;
+  elapsed: number;
+}) {
+  return (
+    <div class="chat-tool-msg-collapse">
+      <div class="chat-tool-msg-summary chat-continuation-activity" data-source={props.source}>
+        <span class="chat-tool-msg-summary__icon" aria-hidden="true">
+          <Icon
+            name={
+              props.source === "exec" ? "terminal" : props.source === "subagent" ? "bot" : "history"
+            }
+          />
+        </span>
+        <span class="chat-tool-row__title">{t(`chat.continuationSource.${props.source}`)}</span>
+        <ChatContinuationDelay elapsed={props.elapsed} />
+      </div>
+    </div>
   );
 }
 
 /**
- * Where a resumed handoff picks up again: how long it waited, what woke it, and
- * the children it waited on, closed until asked for.
+ * An explicit handoff keeps its wait time and access-scoped child list.
  */
 export function ChatHandoffResume(props: {
   handoff: HandoffDisplay & { resumedAt: number };
   sessions: readonly ChatHandoffSession[];
   links?: HandoffSessionLinks;
-  source?: ProjectedContinuationSource;
 }) {
   const id = createUniqueId();
   const [open, setOpen] = createSignal(false);
-  const label = () => {
-    const resumed = t("chat.handoffResumed", {
-      duration:
-        formatDurationCompact(Math.max(1_000, props.handoff.resumedAt - props.handoff.yieldedAt), {
-          includeSeconds: true,
-        }) ?? "",
+  const label = () =>
+    t("chat.handoffResumed", {
+      duration: elapsedText(props.handoff.resumedAt - props.handoff.yieldedAt),
     });
-    return props.source ? `${resumed} · ${t(`chat.continuationSource.${props.source}`)}` : resumed;
-  };
   const count = () =>
     props.sessions.length === 1
       ? t("chat.handoffSessionsOne")
       : t("chat.handoffSessions", { count: String(props.sessions.length) });
   return (
-    <div class="chat-handoff-resume">
+    <div class="chat-handoff-resume chat-tool-msg-collapse">
       <Show
         when={props.sessions.length > 0}
-        fallback={<div class="chat-handoff-resume__rule">{label()}</div>}
+        fallback={
+          <div class="chat-handoff-resume__rule chat-tool-msg-summary">
+            <span class="chat-tool-msg-summary__icon" aria-hidden="true">
+              <Icon name="bot" />
+            </span>
+            <span class="chat-tool-row__title">{label()}</span>
+          </div>
+        }
       >
         <button
           type="button"
-          class="chat-handoff-resume__rule"
+          class="chat-handoff-resume__rule chat-inline-disclosure chat-tool-msg-summary"
           aria-expanded={open() ? "true" : "false"}
           aria-controls={id}
           onClick={() => setOpen(!open())}
         >
-          <span>{label()}</span> <span aria-hidden="true">·</span> <span>{count()}</span>
-          <Chevron open={open()} />
+          <span class="chat-tool-msg-summary__icon" aria-hidden="true">
+            <Icon name="bot" />
+          </span>
+          <span class="chat-tool-row__title">{label()}</span> <span aria-hidden="true">·</span>{" "}
+          <span>{count()}</span>
+          <span class="chat-inline-disclosure__chevron" aria-hidden="true">
+            <Icon name="chevronDown" />
+          </span>
         </button>
         <Show when={open()}>
           <HandoffSessionList id={id} sessions={props.sessions} links={props.links} />
