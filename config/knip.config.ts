@@ -582,8 +582,9 @@ const repositoryScriptEntries = [
   "security/opengrep/compile-rules.mjs!",
   // create-blobster/SKILL.md invokes this CLI bridge to render validated Blobster designs.
   "skills/create-blobster/scripts/cli.mjs!",
-  // create-template/SKILL.md invokes this CLI bridge for skills and plugin inventory.
+  // create-template/SKILL.md runs inventory.mjs, which calls this CLI bridge for plugin and automation lookups.
   "skills/create-template/scripts/cli.mjs!",
+  "skills/create-template/scripts/inventory.mjs!",
   "skills/meme-maker/scripts/meme.mjs!",
 ] as const;
 
