@@ -1,19 +1,35 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, assert, expect, it } from "vitest";
+import { threadId } from "node:worker_threads";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createOpenClawCodingToolsAsync } from "../agents/agent-tools.js";
 import { createAdmittedHostCapabilityTestFixture } from "../agents/harness/host-capability.test-support.js";
-import { resolveOpenClawPluginToolsForOptions } from "../agents/openclaw-plugin-tools.js";
+import {
+  resolveOpenClawPluginToolsForOptions,
+  resolveOpenClawPluginToolsForOptionsAsync,
+} from "../agents/openclaw-plugin-tools.js";
 import { createOpenClawToolsAsync } from "../agents/openclaw-tools.js";
 import { runWithAgentWorkspaceReadiness } from "../agents/workspace-readiness.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  installDatabaseProcessRole,
+  withEngineStoreAdmission,
+} from "../infra/database-engine/admission-scope.js";
+import {
+  mixedAgentConnection,
+  useMixedAgentPair,
+} from "../infra/database-engine/mixed-agent.conformance.test-support.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { resolvePluginMetadataSnapshotAsync } from "./plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationRegistryScope } from "./runtime/generation-state.js";
@@ -22,7 +38,12 @@ import { acquirePluginToolInspectionRegistry } from "./tools.js";
 import { readToolTestEvents } from "./tools.test-support.js";
 import { resolveRuntimeWebSearchProviders } from "./web-search-providers.runtime.js";
 
+// A test Worker would bypass the Gateway's PostgreSQL main-thread restriction.
+expect(threadId).toBe(0);
+installDatabaseProcessRole("gateway");
+
 afterEach(() => {
+  clearCurrentPluginMetadataSnapshot();
   clearPluginMetadataLifecycleCaches();
   resetPluginRuntimeStateForTest();
 });
@@ -412,3 +433,72 @@ it.each(["a-first", "z-second"])(
     });
   },
 );
+
+for (const engine of ["sqlite", "postgres"] as const) {
+  describe.skipIf(engine === "postgres" && !mixedAgentConnection)(
+    `${engine} cold plugin tools`,
+    () => {
+      for (const workspaceReady of [false, true]) {
+        describe(`workspace readiness=${workspaceReady}`, () => {
+          const fixture = useMixedAgentPair(engine, "sqlite");
+          it("loads and invokes cold tools", async () => {
+            vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+            // Boot admission creates the shared store. Turn-time reads must use its worker.
+            withEngineStoreAdmission(() => openOpenClawStateDatabase());
+            const events = path.join(fixture.root, "events.jsonl");
+            const workspaceDir = path.join(fixture.root, "workspace");
+            fs.mkdirSync(workspaceDir);
+            const pluginDir = writeToolPlugin({
+              root: path.join(fixture.root, "cold"),
+              id: "cold",
+              events,
+            });
+            const config: OpenClawConfig = { plugins: pluginConfig([pluginDir], ["cold"]) };
+            const sessionKey = `agent:main:tools-${workspaceReady}`;
+            const resolve = () =>
+              resolveOpenClawPluginToolsForOptionsAsync({
+                options: {
+                  config,
+                  workspaceDir,
+                  requesterAgentIdOverride: "main",
+                  agentSessionKey: sessionKey,
+                  pluginToolAllowlist: ["cold_tool"],
+                },
+              });
+            await using cache = createPluginCache();
+            await withPluginCache(cache, async () => {
+              // Startup prepares metadata without loading these tool registrations.
+              const metadata = await resolvePluginMetadataSnapshotAsync({
+                config,
+                env: process.env,
+                workspaceDir,
+              });
+              setGatewayPluginMetadataSnapshot(metadata, {
+                config,
+                env: process.env,
+                workspaceDir,
+              });
+              const tools = await (workspaceReady
+                ? runWithAgentWorkspaceReadiness(
+                    {
+                      sessionKey,
+                      isReady: () => true,
+                      assertCurrent() {},
+                      waitUntilReady: async () => {},
+                    },
+                    resolve,
+                  )
+                : resolve());
+              expect(tools.map((tool) => tool.name)).toEqual(["cold_tool"]);
+              expect((await tools[0]!.execute("call", {})).details).toEqual({
+                agentId: "main",
+                workspaceDir,
+              });
+              expect(readEvents(events, "execute")).toHaveLength(1);
+            });
+          });
+        });
+      }
+    },
+  );
+}

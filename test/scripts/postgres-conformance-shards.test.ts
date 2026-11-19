@@ -25,6 +25,7 @@ const estimate = createPostgresConformanceEstimator(timings, () => 1);
 describe("PostgreSQL conformance cost model", () => {
   it.each([
     ["src/new-owner/deleted.postgres.test.ts", true],
+    ["src/plugins/tools.inspection.test.ts", true],
     ["extensions/new-plugin/deleted.postgres.test.ts", true],
     ["extensions/new-plugin/ordinary.test.ts", false],
     ["src/infra/database-engine/deleted.test.ts", true],

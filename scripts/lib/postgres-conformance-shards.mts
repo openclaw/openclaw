@@ -5,6 +5,7 @@ export const PG16_GATEWAY_SMOKE_RESERVATION_SECONDS = 150;
 const DATABASE_ENGINE_TARGET = "src/infra/database-engine";
 // These directory and non-suffix suites also require the PostgreSQL runner.
 const additionalPostgresConformanceTargets = [
+  "src/plugins/tools.inspection.test.ts",
   "extensions/clickclack/src/discussions/service-open.agent-storage.test.ts",
   "extensions/workboard",
   "extensions/logbook/src/postgres-store.test.ts",
