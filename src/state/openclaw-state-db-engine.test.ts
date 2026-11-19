@@ -18,6 +18,7 @@ vi.mock("./postgres-schema.generated/agent-runtime.js", async (importOriginal) =
   const actual =
     await importOriginal<typeof import("./postgres-schema.generated/agent-runtime.js")>();
   return {
+    ...actual,
     agentPostgresRuntime: {
       get sql() {
         postgresSqlReads.count++;
