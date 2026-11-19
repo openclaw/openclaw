@@ -62,6 +62,73 @@ it("reserves the whole plan before any job exists and settles its keyed slots in
   expect(card.request).toHaveBeenCalledTimes(1);
 });
 
+it("makes a newly confirmed row actionable while the exact read and its sibling are still pending", async () => {
+  const check = Promise.withResolvers<CronJob>();
+  const pending = { status: "pending", slotId: "a", name: "Hint" } as const;
+  const sibling = { status: "pending", slotId: "b", name: "Unfinished" } as const;
+  const job = createCronJob("a", "Saved title", { enabled: false });
+  const changed = { ...job, enabled: true, configRevision: "after-write" };
+  const card = mountPlan([pending, sibling], (method) =>
+    method === "cron.update" ? changed : check.promise,
+  );
+  const saved = {
+    ...pending,
+    status: "created",
+    jobId: job.id,
+    definition: {
+      id: job.id,
+      name: job.name,
+      enabled: false,
+      configRevision: "config-revision-1",
+      schedule: { kind: "cron", expr: "0 * * * *" },
+    },
+  } as const;
+  card.setPlan({ planId: "plan", rows: [saved, sibling] });
+  flush();
+  const toggle = card.getByRole<HTMLInputElement>("switch", { name: "Resume: Saved title" });
+  expect(toggle.disabled).toBe(false);
+  expect(
+    card.container.querySelectorAll(".chat-created-automations__switch-placeholder"),
+  ).toHaveLength(1);
+  toggle.click();
+  await waitForSolid(() =>
+    expect(card.request).toHaveBeenCalledWith("cron.update", {
+      id: "a",
+      expectedConfigRevision: job.configRevision,
+      patch: { enabled: true },
+    }),
+  );
+  check.resolve(changed);
+  await waitForSolid(() => expect(toggle.checked).toBe(true));
+});
+
+it.each([true, false])(
+  "does not treat a shared receipt as read permission or as current on reload (history=%s)",
+  async (history) => {
+    const pending = { slotId: "a", name: "Hint", status: "pending" } as const;
+    const saved = {
+      ...pending,
+      status: "created",
+      jobId: "a",
+      definition: { id: "a", name: "Former title", enabled: true, configRevision: "old" },
+    } as const;
+    const check = Promise.withResolvers<CronJob>();
+    const card = mountPlan(
+      [history ? saved : pending],
+      () => check.promise,
+      history ? ["operator.admin"] : ["operator.read"],
+    );
+    if (!history) {
+      card.setPlan({ planId: "plan", rows: [saved] });
+    }
+    flush();
+    expect(card.queryByRole("switch")).toBeNull();
+    expect(card.queryByRole("link")).toBeNull();
+    check.reject(new Error("Not found or inaccessible"));
+    await waitForSolid(() => expect(card.getByRole("status").textContent).toContain("unavailable"));
+  },
+);
+
 it("hydrates a standalone row, reconciles its independent switch, and opens that job's settings", async () => {
   let job = createCronJob("job/1", "Morning digest", {
     enabled: false,
@@ -169,6 +236,11 @@ it("keeps the confirmed switch state while its reconciliation read is in flight"
     ]),
   );
   const input = card.getByRole<HTMLInputElement>("switch", { name: "Pause: Morning digest" });
+  expect(input.checked).toBe(true);
+  expect(input.disabled).toBe(true);
+  handler.mockReturnValueOnce(reconcile.promise);
+  card.invalidate();
+  await waitForSolid(() => expect(card.request).toHaveBeenCalledTimes(4));
   expect(input.checked).toBe(true);
   expect(input.disabled).toBe(true);
   reconcile.resolve(resumed);

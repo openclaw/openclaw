@@ -40,6 +40,13 @@ const outcomes: TemplateInstallOutcome[] = [
     kind: "automation-created",
     declarationId: "morning",
     schedulerJobId: "job-morning",
+    definition: {
+      id: "job-morning",
+      name: "Saved title",
+      enabled: false,
+      configRevision: "r1",
+      schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+    },
     name: "Morning review",
     enabled: false,
   },
@@ -103,7 +110,7 @@ it.each(outcomes)("publishes only one installer-authored outcome: $kind", async 
               planId: "template:scout",
               slotId: "morning",
               ...(outcome.kind === "automation-created"
-                ? { status: "created", jobId: "job-morning" }
+                ? { status: "created", jobId: "job-morning", definition: outcome.definition }
                 : { status: "failed" }),
             };
       const projected = {

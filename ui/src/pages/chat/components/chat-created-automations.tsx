@@ -1,4 +1,5 @@
-import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show, untrack } from "solid-js";
+import type { AutomationSavedDefinition } from "../../../../../src/shared/automation-saved-definition.js";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Switch } from "../../../components/solid/switch.tsx";
@@ -85,16 +86,17 @@ function SlotStatus(props: {
 }
 
 /** Only a confirmed job ID mounts a scheduler observer; a plan name is never a write target. */
-function LiveAutomation(props: { id: string; name: string }) {
+function LiveAutomation(props: { id: string; name: string; initial?: AutomationSavedDefinition }) {
   const app = useOptionalApplication();
   const [state, publish] = createSignal<CronJobObservation>({
     loading: Boolean(app),
     writable: false,
   });
+  const initial = untrack(() => props.initial);
   let watch: ReturnType<typeof watchCronJobDefinition> | undefined;
   onSettled(() => {
     if (app) {
-      const observer = watchCronJobDefinition(app.gateway, props.id, publish);
+      const observer = watchCronJobDefinition(app.gateway, props.id, publish, initial);
       watch = observer;
       return () => observer.dispose();
     }
@@ -164,6 +166,7 @@ function LiveAutomation(props: { id: string; name: string }) {
 }
 
 function AutomationRow(props: { row: AutomationCreationRow; single: boolean }) {
+  const beganPending = untrack(() => props.row.status === "pending");
   const jobId = () => {
     const row = props.row;
     return row.status === "created" ? row.jobId : undefined;
@@ -181,7 +184,15 @@ function AutomationRow(props: { row: AutomationCreationRow; single: boolean }) {
           />
         }
       >
-        {(id) => <LiveAutomation id={id} name={props.row.name} />}
+        {(id) => (
+          <LiveAutomation
+            id={id}
+            name={props.row.name}
+            initial={
+              beganPending && props.row.status === "created" ? props.row.definition : undefined
+            }
+          />
+        )}
       </Show>
     </li>
   );

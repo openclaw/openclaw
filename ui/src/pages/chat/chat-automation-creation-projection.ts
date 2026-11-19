@@ -7,6 +7,7 @@ import {
 } from "../../../../src/shared/automation-creation.js";
 import {
   AutomationCreationCardBlock,
+  isLiveAutomationInjection,
   type AutomationCreationRow,
 } from "../../lib/chat/automation-creation-card.ts";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
@@ -39,7 +40,13 @@ export function projectAutomationCreationCards(
   const outcomes = new Map<string, Map<string, AutomationCreationResult>>();
   const consumed = new Set<unknown>();
   const terminal = new Set<string>();
-  const add = (scope: string, source: unknown, event: AutomationCreationEvent, runId?: string) => {
+  const add = (
+    scope: string,
+    source: unknown,
+    event: AutomationCreationEvent,
+    fresh: boolean,
+    runId?: string,
+  ) => {
     const key = "automation-creation:" + JSON.stringify([scope, event.planId]);
     // A newly loaded page can contain the missing declaration for a retained result.
     // Register both ends with the transcript's existing prepend collision guard.
@@ -58,14 +65,23 @@ export function projectAutomationCreationCards(
       outcomes.set(key, slots);
     }
     // A retried add may succeed after a failure; a later duplicate/error cannot undo a persisted ID.
-    if (slots.get(event.slotId)?.status !== "created") {
-      slots.set(event.slotId, event);
+    const previous = slots.get(event.slotId);
+    const outcome =
+      !fresh && event.status === "created" ? { ...event, definition: undefined } : event;
+    if (
+      previous?.status !== "created" ||
+      (outcome.status === "created" &&
+        previous.jobId === outcome.jobId &&
+        !previous.definition &&
+        outcome.definition)
+    ) {
+      slots.set(event.slotId, outcome);
     }
   };
   for (const m of history) {
     const event = installerEvent(m);
     if (event) {
-      add("installer", m, event);
+      add("installer", m, event, isLiveAutomationInjection(m));
       consumed.add(m);
     }
   }
@@ -73,7 +89,13 @@ export function projectAutomationCreationCards(
     live.length ? [...history, ...live] : history,
     (event, source, runId) => {
       if (runId) {
-        add("run:" + runId, source, event, runId);
+        add(
+          "run:" + runId,
+          source,
+          event,
+          asOptionalRecord(source)?.["__openclawToolStreamLive"] === true,
+          runId,
+        );
       }
     },
   );
@@ -92,7 +114,12 @@ export function projectAutomationCreationCards(
       const result = outcomes.get(key)?.get(slot.slotId);
       if (result?.status === "created" && !saved.has(result.jobId)) {
         saved.add(result.jobId);
-        return { ...slot, status: "created", jobId: result.jobId };
+        return {
+          ...slot,
+          status: "created",
+          jobId: result.jobId,
+          ...(result.definition ? { definition: result.definition } : {}),
+        };
       }
       return { ...slot, status: result || (runId && terminal.has(runId)) ? "failed" : "pending" };
     });

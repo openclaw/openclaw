@@ -103,7 +103,7 @@ export function createTemplateCronGateway(
       }
     },
     enable: async (id, expectedConfigRevision, commitGuard) => {
-      await cron.updateWithPrecondition(
+      return await cron.updateWithPrecondition(
         id,
         { enabled: true },
         (job) => {

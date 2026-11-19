@@ -11,6 +11,10 @@ import type { CronServiceContract } from "../cron/service-contract.js";
 import { applyDefaultCronToolsAllow } from "../cron/tools-allow.js";
 import type { CronJob, CronStoredJob } from "../cron/types.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
+import {
+  readAutomationSavedDefinition,
+  type AutomationSavedDefinition,
+} from "../shared/automation-saved-definition.js";
 import type { TemplateInstallOutcome } from "../shared/template-install-notice.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { TEMPLATE_CRON_REF_SCHEMA_VERSION, type PersistedTemplateCronRef } from "./cron-records.js";
@@ -41,7 +45,7 @@ export type TemplateCronGateway = {
     jobId: string,
     expectedConfigRevision: string,
     commitGuard: () => void,
-  ) => Promise<void>;
+  ) => Promise<CronJob | void>;
 };
 
 export class TemplateCronInstallError extends Error {
@@ -298,6 +302,7 @@ export async function installTemplateCronJobsStateless(
       }
       const schedulerJobId = randomUUID();
       let confirmed: boolean;
+      let definition: AutomationSavedDefinition | undefined;
       try {
         await options.prepareEffect?.();
         assertCurrent();
@@ -309,6 +314,13 @@ export async function installTemplateCronJobsStateless(
           },
         });
         confirmed = added?.id === schedulerJobId && !("created" in added && !added.created);
+        if (confirmed) {
+          const saved = "job" in added ? added.job : added;
+          definition = readAutomationSavedDefinition(
+            { ...saved, configRevision: resolveCronJobConfigRevision(saved) },
+            schedulerJobId,
+          );
+        }
       } catch (error) {
         // A lost acknowledgement may follow a commit. A declaration key, even
         // with identical settings and owner, cannot identify this attempt.
@@ -326,6 +338,7 @@ export async function installTemplateCronJobsStateless(
           );
         }
         confirmed = true;
+        definition = readAutomationSavedDefinition(live, schedulerJobId);
       }
       if (!confirmed) {
         throw new TemplateCronInstallError(
@@ -340,6 +353,7 @@ export async function installTemplateCronJobsStateless(
       const job = ref.job;
       created = {
         kind: "automation-created",
+        ...(definition ? { definition } : {}),
         declarationId: action.id,
         schedulerJobId,
         name: "automation" in job ? job.automation.name : (job.name ?? job.id),
@@ -371,7 +385,14 @@ export async function installTemplateCronJobsStateless(
           }
           await options.prepareEffect?.();
           assertCurrent();
-          await options.gateway.enable(schedulerJobId, revision, assertCurrent);
+          delete created.definition;
+          const enabledJob = await options.gateway.enable(schedulerJobId, revision, assertCurrent);
+          if (enabledJob) {
+            created.definition = readAutomationSavedDefinition(
+              { ...enabledJob, configRevision: resolveCronJobConfigRevision(enabledJob) },
+              schedulerJobId,
+            );
+          }
           created.enabled = true;
           ref = { ...ref, job: { automation: action.automation } };
           refs[refs.length - 1] = { ...ref, status: "complete", schedulerJobId };

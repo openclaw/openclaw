@@ -1,3 +1,4 @@
+import type { AutomationSavedDefinition } from "../../../../src/shared/automation-saved-definition.js";
 import type { CronJob } from "../../api/types.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { formatUiError } from "../format-error.ts";
@@ -6,8 +7,12 @@ import { canManageCronJob } from "./human-owner.ts";
 import { getCronInventory, isCronInventoryInvalidation } from "./inventory-connection.ts";
 import { patchCronJobDefinition } from "./job-definition.ts";
 
+type CardJob = Pick<
+  CronJob,
+  "id" | "name" | "enabled" | "ownerProfileId" | "configRevision" | "displayName"
+> & { schedule?: CronJob["schedule"] };
 export type CronJobObservation = {
-  job?: CronJob;
+  job?: CardJob;
   loading: boolean;
   writable: boolean;
   saving?: boolean;
@@ -20,11 +25,13 @@ export function watchCronJobDefinition(
   gateway: ApplicationGateway,
   id: string,
   publish: (state: CronJobObservation) => void,
+  initial?: AutomationSavedDefinition,
 ) {
   let state: CronJobObservation = { loading: true, writable: false };
   let generation = 0;
   let reader: AbortController | undefined;
   let active = true;
+  let awaitingWriteReconciliation = false;
   const clientForRead = () =>
     canCallGatewayMethod(gateway.snapshot, "cron.get", "operator.read", {
       requireAdvertisement: false,
@@ -34,13 +41,19 @@ export function watchCronJobDefinition(
   let client = clientForRead();
   let hello = gateway.snapshot.hello;
   let user = gateway.snapshot.selfUser?.id;
-  const writable = (job?: CronJob) =>
-    Boolean(job?.configRevision && canManageCronJob(gateway, job));
+  const writable = (job?: CardJob) =>
+    Boolean(
+      job?.configRevision &&
+      canManageCronJob(gateway, job) &&
+      canCallGatewayMethod(gateway.snapshot, "cron.update", "operator.cron", {
+        requireAdvertisement: false,
+      }),
+    );
   function update(next: CronJobObservation) {
     state = next;
     publish(next);
   }
-  async function read() {
+  async function read(debounced = false) {
     reader?.abort();
     const source = client;
     if (!source) {
@@ -49,18 +62,28 @@ export function watchCronJobDefinition(
     }
     const request = new AbortController();
     reader = request;
-    update({ ...state, loading: true, writable: false });
+    update({
+      ...state,
+      loading: true,
+      writable: !awaitingWriteReconciliation && writable(state.job),
+    });
     try {
       // The connection owner coalesces bursts of definition/visibility invalidations.
-      const debounce = getCronInventory(source).debounce;
+      const debounce = debounced && getCronInventory(source).debounce;
       if (debounce) {
         await debounce.promise;
         request.signal.throwIfAborted();
       }
       const job = await source.request<CronJob>("cron.get", { id }, { signal: request.signal });
-      if (!request.signal.aborted && job.id === id) {
-        update({ job, loading: false, writable: writable(job), error: state.error });
+      if (request.signal.aborted) {
+        return;
       }
+      if (job?.id !== id) {
+        update({ loading: false, writable: false, retryable: true });
+        return;
+      }
+      awaitingWriteReconciliation = false;
+      update({ job, loading: false, writable: writable(job), error: state.error });
     } catch {
       if (!request.signal.aborted) {
         // Removed and inaccessible jobs intentionally have the same Gateway read contract.
@@ -73,13 +96,14 @@ export function watchCronJobDefinition(
     const snapshot = gateway.snapshot;
     if (client !== next || hello !== snapshot.hello || user !== snapshot.selfUser?.id) {
       generation++;
+      awaitingWriteReconciliation = false;
       client = next;
       hello = snapshot.hello;
       user = snapshot.selfUser?.id;
       state = { loading: true, writable: false };
       void read();
     } else if (
-      !state.loading &&
+      !awaitingWriteReconciliation &&
       state.saving === undefined &&
       state.writable !== writable(state.job)
     ) {
@@ -92,9 +116,14 @@ export function watchCronJobDefinition(
       state.saving === undefined &&
       isCronInventoryInvalidation(event, gateway.snapshot)
     ) {
-      void read();
+      void read(true);
     }
   });
+  // Only a mounted pending -> confirmed transition supplies a seed. On history load,
+  // reconnect or a viewer without manage authority, read the exact job before display.
+  if (client && initial?.id === id && writable(initial)) {
+    state = { job: initial, loading: true, writable: true };
+  }
   void read();
   return {
     retry: read,
@@ -111,6 +140,8 @@ export function watchCronJobDefinition(
         return false;
       }
       const scope = generation;
+      awaitingWriteReconciliation = true;
+      reader?.abort();
       update({ job, loading: false, writable: false, saving: enabled });
       const reconcile = (outcome: { job: CronJob } | { error: string }) => {
         if (active && generation === scope) {

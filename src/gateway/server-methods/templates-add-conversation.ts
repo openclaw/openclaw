@@ -30,6 +30,7 @@ function installReceipt(event: TemplateInstallEvent): {
           slotId: event.declarationId,
           status: "created",
           jobId: event.schedulerJobId,
+          ...(event.definition ? { definition: event.definition } : {}),
         },
         key: `automation:${event.declarationId}:created:${event.schedulerJobId}`,
       };

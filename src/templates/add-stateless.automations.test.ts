@@ -331,6 +331,12 @@ it.each([false, true])(
               name: "daily",
               enabled: ready,
               schedulerJobId: expect.any(String),
+              definition: expect.objectContaining({
+                name: "daily",
+                enabled: ready,
+                configRevision: expect.any(String),
+                schedule: expect.objectContaining({ kind: "cron", expr: "0 9 * * *" }),
+              }),
             }),
           ]),
         );
@@ -557,9 +563,11 @@ it.each([
   },
 );
 
-it.each([true, false])(
-  "settles every declared slot without claiming a converged or rolled-back job (retained=%s)",
-  async (retained) => {
+it.each(["retained", "rollback", "native conflict"])(
+  "settles every declared slot without claiming a converged or rolled-back job (%s)",
+  async (mode) => {
+    const retained = mode !== "rollback";
+    const collision = mode === "native conflict";
     await withOpenClawTestState({ label: "template-install-settlement" }, async (fixture) => {
       const ids = ["created", "existing", "unattempted"];
       const source = await portableSource(fixture, {
@@ -588,9 +596,24 @@ it.each([true, false])(
       });
       const gateway = createTemplateCronAdapter(cron);
       const events: TemplateInstallEvent[] = [];
+      let existingId: string | undefined;
       let adds = 0;
       let firstJobId: string | undefined;
       try {
+        if (collision) {
+          // A real paused scheduler record in the disposable store, not a schema alteration.
+          existingId = (
+            await cron.add({
+              name: "Existing fixture",
+              enabled: false,
+              declarationKey: `template:${plan.agent.finalId}:existing`,
+              sessionTarget: "main",
+              wakeMode: "next-heartbeat",
+              schedule: { kind: "every", everyMs: 60000 },
+              payload: { kind: "systemEvent", text: "Fixture" },
+            })
+          ).id;
+        }
         const result = await applyTemplateAddPlanStateless(plan, {
           config,
           consentPlanIntegrity: plan.planIntegrity,
@@ -611,8 +634,15 @@ it.each([true, false])(
                 slots: ids.map((slotId) => ({ slotId, name: "Same label" })),
               });
               if (++adds === 1) {
-                firstJobId = (await gateway.add(input, options)).id;
+                const added = await gateway.add(input, options);
+                firstJobId = added.id;
+                if (collision) {
+                  return added;
+                }
                 throw new Error("Lost acknowledgement after scheduler commit");
+              }
+              if (collision) {
+                return gateway.add(input, options);
               }
               // The second add confirms convergence, not a job owned by this attempt.
               const job = (await cron.readJob(firstJobId!))!;
@@ -622,9 +652,13 @@ it.each([true, false])(
         });
         expect(adds).toBe(2);
         expect(result.status).toBe("partial");
-        expect((await cron.list({ includeDisabled: true })).map((job) => job.id)).toEqual(
-          retained ? [firstJobId] : [],
+        const actualIds = (await cron.list({ includeDisabled: true })).map((job) => job.id);
+        expect(new Set(actualIds)).toEqual(
+          new Set([...(existingId ? [existingId] : []), ...(retained ? [firstJobId] : [])]),
         );
+        if (collision) {
+          expect(result.error?.message).toContain("declaration already exists");
+        }
         expect(events).toHaveLength(4);
         const bySlot = events.flatMap((event) =>
           "declarationId" in event

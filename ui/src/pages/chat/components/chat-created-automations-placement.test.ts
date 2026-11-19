@@ -9,6 +9,8 @@ import { AutomationCreationCardBlock } from "../../../lib/chat/automation-creati
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
+import { createState } from "../chat-gateway.test-support.ts";
+import { handleChatGatewayEvent } from "../chat-gateway.ts";
 import { buildItems, makeMessage } from "../chat-thread.test-support.ts";
 import { render } from "../test-helpers/chat-transcript-native.tsx";
 import { threadFixture } from "./chat-transcript-fixture.test-support.tsx";
@@ -123,6 +125,32 @@ function liveTool(id: string, action: string, args: object, details: unknown, is
     ],
   };
 }
+it("seeds only a live, confirmed receipt; incremental history cannot revive stale controls", () => {
+  const definition = {
+    id: created.jobId,
+    name: "Saved label",
+    enabled: false,
+    configRevision: "v1",
+  };
+  const result = { ...created, definition };
+  const persisted = injected(plan, result);
+  expect(cards(persisted)[0]?.rows[1]).not.toHaveProperty("definition");
+  const state = createState({ sessionKey, chatMessages: [] });
+  for (const [index, message] of persisted.entries()) {
+    handleChatGatewayEvent(state, {
+      state: "final",
+      sessionKey,
+      seq: 0,
+      runId: "inject-receipt-" + index,
+      message,
+    });
+  }
+  expect(cards(state.chatMessages)[0]?.rows[1]).toMatchObject({ definition });
+  const declared = liveTool("plan", "plan", { names: plan.slots.map((s) => s.name) }, plan);
+  const saved = liveTool("added", "add", { position: 2 }, { automationCreation: result });
+  expect(cards([], [declared, saved])[0]?.rows[1]).toMatchObject({ definition });
+});
+
 it("keeps a standalone plan in each originating turn even when provider call IDs repeat", () => {
   const slots = plan.slots.slice(0, 1);
   const messages = ["turn-a", "turn-b"].flatMap((runId, i) => [

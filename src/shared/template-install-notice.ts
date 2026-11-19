@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AutomationCreationSlot } from "./automation-creation.js";
+import type { AutomationSavedDefinition } from "./automation-saved-definition.js";
 
 /** Installer facts, not recommendations or model-authored assistant content. */
 export type TemplatePluginInstallNotice = {
@@ -41,6 +42,7 @@ export type TemplateInstallOutcome =
       kind: "automation-created";
       declarationId: string;
       schedulerJobId: string;
+      definition?: AutomationSavedDefinition;
       name: string;
       enabled: boolean;
     }
