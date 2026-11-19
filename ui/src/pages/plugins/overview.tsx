@@ -7,8 +7,8 @@ import {
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
-import { Tooltip } from "../../components/solid/tooltip.tsx";
 import { askBrandLabel } from "../../components/theme-brand-label.ts";
+import "../../components/tooltip.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatDateMs } from "../../lib/format.ts";
 import type {
@@ -56,7 +56,11 @@ function renderPluginSecurityAudit(status: string, auditUrl: string | null | und
         </h2>
         {/* Outside the audit link, whose page preview replaces any hint nested in it,
             and outside the heading, whose uppercase type the hint would inherit. */}
-        <Tooltip content={t("pluginsPage.detailSecurityInfo")} describe={false} openOnClick>
+        <openclaw-tooltip
+          prop:content={t("pluginsPage.detailSecurityInfo")}
+          prop:describe={false}
+          open-on-click
+        >
           <button
             type="button"
             class="oc-icon-button oc-icon-button--28"
@@ -64,7 +68,7 @@ function renderPluginSecurityAudit(status: string, auditUrl: string | null | und
           >
             <Icon name="info" />
           </button>
-        </Tooltip>
+        </openclaw-tooltip>
       </div>
       <a
         class="plugin-catalog-detail__security-score"

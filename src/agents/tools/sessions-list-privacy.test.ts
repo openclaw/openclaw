@@ -325,9 +325,13 @@ test.each([
         const invoke = () => list(cfg, args, options);
         const pending = embedded ? invoke() : asReader(invoke);
         if (change === "role") {
-          const started = await pending;
-          expect(started.details).toMatchObject({ count: 2 });
-          expect(JSON.stringify(started)).toContain(bufferedText);
+          const admitted = await pending;
+          expect(admitted.details).toMatchObject({
+            count: 2,
+            sessions: [{ key: first.sessionKey }, { key: second.sessionKey }],
+          });
+          expect(JSON.stringify(admitted)).toContain(bufferedText);
+          expect(changed).toBe(true);
         }
         const result =
           change === "role"
