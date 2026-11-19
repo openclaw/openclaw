@@ -1,5 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { userInfo } from "node:os";
 import path from "node:path";
@@ -10,6 +18,7 @@ import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
 import * as managedChild from "../../scripts/lib/managed-child-process.mts";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -29,6 +38,9 @@ import {
   testRunnerFixtureEnv,
 } from "./prepared-script-wrapper.test-support.js";
 import { fixtureReadyBeforeSettlement } from "./run-process.test-support.js";
+import { createScriptTestHarness } from "./test-helpers.js";
+
+const harness = createScriptTestHarness();
 
 const installedModulesDir = path.dirname(
   path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
@@ -414,22 +426,28 @@ process.exitCode = child.status ?? 1;
     });
   });
 
-  it("runs scripts/verify-docker-attestations.mjs through its guarded CLI", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["scripts/verify-docker-attestations.mjs", "--help"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        timeout: 30_000,
-      },
-    );
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain(
-      "Usage: node scripts/verify-docker-attestations.mjs",
-    );
-  });
+  it.each(["physical", "symlinked", "preserved symlink"] as const)(
+    "runs the attestation CLI from a %s path",
+    (mode) => {
+      const root = harness.createTempDir("openclaw-direct-run-");
+      const linkedCheckout = path.join(root, "linked checkout");
+      symlinkSync(process.cwd(), linkedCheckout, process.platform === "win32" ? "junction" : "dir");
+      const entry = path.resolve(
+        mode === "physical" ? process.cwd() : linkedCheckout,
+        "scripts/verify-docker-attestations.mjs",
+      );
+      const result = spawnSync(
+        resolveTestNodeExecPath(),
+        [...(mode === "preserved symlink" ? ["--preserve-symlinks-main"] : []), entry, "--help"],
+        { encoding: "utf8", env: testRunnerFixtureEnv(), timeout: 30_000 },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+      expect(`${result.stdout}${result.stderr}`).toContain(
+        "Usage: node scripts/verify-docker-attestations.mjs",
+      );
+    },
+  );
 
   it("runs the checked-out Crabbox wrapper through its managed child", async () => {
     await withShimFixture("scripts/crabbox-wrapper.mjs", async ({ fixtureRoot, runNode }) => {
