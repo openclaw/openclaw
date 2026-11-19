@@ -54,6 +54,7 @@ it(
         providerId: "mock-openai",
         modelId,
         reasoning: false,
+        toolProfile: "minimal",
       });
       const defaults = expectDefined(config.agents?.defaults, "provider fixture agent defaults");
       defaults.workspace = process.cwd();
@@ -139,7 +140,9 @@ it(
             prompt: [{ type: "text", text: `Reply once (deliver=${deliver}).` }],
             _meta: { deliver },
           }),
-          new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 30_000)),
+          new Promise<"timeout">((resolve) => {
+            setTimeout(() => resolve("timeout"), 30_000);
+          }),
         ]);
         expect({ deliver, result, text: chunks.join("") }).toEqual({
           deliver,

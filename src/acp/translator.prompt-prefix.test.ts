@@ -21,7 +21,7 @@ function fixture(provenanceMode?: "meta+receipt") {
     sessionKey,
     cwd: path.join(os.homedir(), "openclaw-test"),
   });
-  const request = vi.fn(async (method: string) => {
+  const request = vi.fn(async (method: string, _params?: unknown) => {
     if (method === "chat.send") {
       throw new Error("stop-after-send");
     }

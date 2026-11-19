@@ -309,7 +309,9 @@ export class AcpTranslatorPromptStream {
       if (deliver) {
         // Runs that deliver to an external channel are hidden from operator
         // broadcasts; the Gateway streams them only to session message
-        // subscribers. Subscribing per prompt also covers Gateway reconnects.
+        // subscribers. Subscribing per prompt re-subscribes the next prompt
+        // after a Gateway reconnect; a run in flight across a reconnect still
+        // settles through disconnect recovery but loses its live text.
         await this.gateway.request("sessions.messages.subscribe", {
           key: session.sessionKey,
           subscriptionId: `acp:${session.sessionId}`,
