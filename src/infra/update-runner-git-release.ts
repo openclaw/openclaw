@@ -276,8 +276,8 @@ export async function updateGitRelease(params: {
     });
   }
   if (serving !== slot && !opts.deferReleaseActivation) {
-    // The 2026.11.5 link goes; its Gateway sees its installation replaced and restarts
-    // through the launcher, which now starts the link above.
+    // The old link under lib/node_modules goes; its Gateway sees its installation replaced
+    // and restarts through the launcher, which now starts the link above.
     await fs.rm(serving, { force: true });
   }
   const collected = await collectGitReleases({

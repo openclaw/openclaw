@@ -58,9 +58,10 @@ export function gitReleaseSlot(prefix: string): string {
 }
 
 /**
- * The link that serves now. 2026.11.5 kept the link and its releases at `lib/node_modules/openclaw`,
- * where Node refuses to strip the types of a release's plugin sources (#201874). That link serves
- * until the next update rebuilds the serving release outside it.
+ * The link that serves now. Main builds from #199706 until this fix (which report version
+ * 2026.11.5) kept the link and its releases at `lib/node_modules/openclaw`, where Node refuses to
+ * strip the types of a release's plugin sources (#201874). That link serves until the next update
+ * rebuilds the serving release outside it.
  */
 export function servingGitReleaseSlot(prefix: string): string {
   const slot = gitReleaseSlot(prefix);

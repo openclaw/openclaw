@@ -243,10 +243,10 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     expect(target.conversionTargets).toEqual([serving]);
   });
 
-  it("moves a 2026.11.5 install out of node_modules on its next update (#201874)", async () => {
+  it("moves a release under node_modules out of it on its next update (#201874)", async () => {
     const { dir, checkout, serving } = await checkoutWithTwoCommits();
     const prefix = path.join(dir, "state", "git-install");
-    // 2026.11.5 kept the link and its releases under lib/node_modules.
+    // Main builds since #199706 kept the link and its releases under lib/node_modules.
     const legacy = path.join(prefix, "lib", "node_modules", "openclaw");
     const legacyRelease = path.join(
       prefix,
