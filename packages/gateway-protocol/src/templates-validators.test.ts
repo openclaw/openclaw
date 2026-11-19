@@ -59,10 +59,15 @@ describe("Templates Gateway contract", () => {
   });
 
   it("allows the public catalog and exact publisher Add coordinates", () => {
-    search.accepts({}, { query: "workflow", limit: 30 }, { overview: true, limit: 8 });
-    search.rejects({ sourceRoot: "/private/template" });
+    search.accepts(
+      {},
+      { query: "workflow", limit: 20, cursor: "opaque-next" },
+      { overview: true, limit: 8 },
+    );
+    search.rejects({ sourceRoot: "/private/template" }, { cursor: "" });
     searchResult.accepts(
-      { entries: [catalogEntry] },
+      { entries: [catalogEntry], nextCursor: "opaque-next" },
+      { entries: [], nextCursor: null },
       {
         entries: [],
         overview: {

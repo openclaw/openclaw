@@ -9,7 +9,6 @@ import { ClawHubRequestError } from "../../infra/clawhub-client.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   ClawHubSourceError,
-  listClawHubTemplates,
   readClawHubTemplateDetail,
   readClawHubTemplatePreview,
   readClawHubTemplatesOverview,
@@ -54,18 +53,9 @@ export const templatesHandlers: GatewayRequestHandlers = {
         respond(true, { entries: [], ...(overview ? { overview } : {}) });
         return;
       }
-      const entries = params.query?.trim()
-        ? await searchClawHubTemplates({
-            query: params.query,
-            ...(params.category ? { category: params.category } : {}),
-            ...(params.limit ? { limit: params.limit } : {}),
-          })
-        : await listClawHubTemplates({
-            ...(params.category ? { category: params.category } : {}),
-            ...(params.featured ? { featured: true } : {}),
-          });
+      const page = await searchClawHubTemplates(params);
       assertTemplatesLabsEnabled(context.getRuntimeConfig());
-      respond(true, { entries: entries.slice(0, params.limit ?? entries.length) });
+      respond(true, page);
     },
     mapClawHubError,
   ),

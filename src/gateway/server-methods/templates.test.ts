@@ -9,13 +9,13 @@ import { coreGatewayHandlers } from "./core-handlers.js";
 import { templatesHandlers } from "./templates.js";
 import type { RespondFn } from "./types.js";
 
-const listClawHubTemplates = vi.hoisted(() => vi.fn());
+const searchClawHubTemplates = vi.hoisted(() => vi.fn());
 const readClawHubTemplatesOverview = vi.hoisted(() => vi.fn());
 const readClawHubTemplateDetail = vi.hoisted(() => vi.fn());
 const readClawHubTemplatePreview = vi.hoisted(() => vi.fn());
 vi.mock("../../templates/clawhub-source.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../templates/clawhub-source.js")>()),
-  listClawHubTemplates,
+  searchClawHubTemplates,
   readClawHubTemplatesOverview,
   readClawHubTemplateDetail,
   readClawHubTemplatePreview,
@@ -50,7 +50,7 @@ describe("ClawHub Template catalog Gateway methods", () => {
 
   it("rejects discovery with Labs off", async () => {
     expectError(await catalogRequest("templates.catalog.search", {}, () => ({})), "FORBIDDEN");
-    expect(listClawHubTemplates).not.toHaveBeenCalled();
+    expect(searchClawHubTemplates).not.toHaveBeenCalled();
   });
 
   it.each([true, false])(
@@ -64,7 +64,7 @@ describe("ClawHub Template catalog Gateway methods", () => {
         entries: [],
         ...(complete ? { overview } : {}),
       });
-      expect(listClawHubTemplates).not.toHaveBeenCalled();
+      expect(searchClawHubTemplates).not.toHaveBeenCalled();
       const source = createDeferredCore<unknown>();
       readClawHubTemplatesOverview.mockReturnValue(source.promise);
       let labsEnabled = true;
@@ -78,7 +78,13 @@ describe("ClawHub Template catalog Gateway methods", () => {
   );
 
   it.each([
-    ["templates.catalog.search", listClawHubTemplates, {}, "entries", [entry]],
+    [
+      "templates.catalog.search",
+      searchClawHubTemplates,
+      { cursor: "page1", limit: 20 },
+      undefined,
+      { entries: [entry], nextCursor: "page2" },
+    ],
     ["templates.catalog.detail", readClawHubTemplateDetail, release, "detail", release],
     ["templates.catalog.detail", readClawHubTemplateDetail, entry, "detail", release],
     ["templates.catalog.preview", readClawHubTemplatePreview, previewParams, "preview", preview],
@@ -90,7 +96,9 @@ describe("ClawHub Template catalog Gateway methods", () => {
         allowed: true,
       });
       sourceMock.mockResolvedValue(result);
-      expect((await catalogRequest(method, params))[0]?.[1]).toEqual({ [field]: result });
+      expect((await catalogRequest(method, params))[0]?.[1]).toEqual(
+        field ? { [field]: result } : result,
+      );
       expect(sourceMock).toHaveBeenCalledWith(params);
       const source = createDeferredCore<unknown>();
       sourceMock.mockReturnValue(source.promise);
@@ -109,7 +117,7 @@ describe("ClawHub Template catalog Gateway methods", () => {
     ["templates.catalog.preview", { ...release, kind: "unknown", name: "AGENTS.md" }],
   ])("rejects malformed %s before catalog I/O", async (method, params) => {
     expectError(await catalogRequest(method, params), "INVALID_REQUEST");
-    expect(listClawHubTemplates).not.toHaveBeenCalled();
+    expect(searchClawHubTemplates).not.toHaveBeenCalled();
     expect(readClawHubTemplateDetail).not.toHaveBeenCalled();
     expect(readClawHubTemplatePreview).not.toHaveBeenCalled();
   });
