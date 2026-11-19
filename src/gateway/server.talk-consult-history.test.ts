@@ -105,7 +105,6 @@ let publicationErrors: unknown[] = [];
 let requestExecution: Awaited<ReturnType<typeof observeGatewayRunExecution>>;
 let lifecycleWrites: ReturnType<typeof createPreparedLifecycleWriteTracker>;
 let lifecyclePersistence: MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>;
-let expectedRevokedWriters: Map<string, () => boolean>;
 let reportParityFailure: (() => void) | undefined;
 
 beforeAll(async () => {
@@ -118,26 +117,12 @@ beforeEach(async () => {
   reportParityFailure = undefined;
   requestExecution = await observeGatewayRunExecution();
   lifecycleWrites = createPreparedLifecycleWriteTracker();
-  expectedRevokedWriters = new Map();
   const prepareLifecycle = lifecycleState.prepareGatewaySessionLifecycleEvent;
   lifecyclePersistence = vi
     .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
     .mockImplementation((params) => {
       const persist = prepareLifecycle(params);
-      return lifecycleWrites.track(async () => {
-        try {
-          await persist();
-        } catch (error) {
-          const isCurrent = params.event.runId
-            ? expectedRevokedWriters.get(params.event.runId)
-            : undefined;
-          if (!isCurrent || isCurrent()) {
-            throw error;
-          }
-          expect(error).toBeInstanceOf(Error);
-          expect(error).toHaveProperty("message", "Terminal write owner changed before commit");
-        }
-      });
+      return lifecycleWrites.track(persist);
     });
   agentId = "main";
   sessionKey = canonicalKey = "agent:main:main";
@@ -778,7 +763,7 @@ it("preserves the original operator source through chat-backed capability adapta
 
 // The isolated native cell uses Linux executables; protocol/policy siblings remain portable.
 it.runIf(process.platform === "linux").each([false, true])(
-  "keeps host-authenticated node approval cancellation (public callback: %s)",
+  "keeps admitted node approvals through device revocation and honors Stop (public callback: %s)",
   async (publicOnly) => {
     const { runTalkNodePermissionParity } =
       await import("./server.talk-permission-parity.test-support.js");
@@ -788,7 +773,6 @@ it.runIf(process.platform === "linux").each([false, true])(
       setFailureReporter: (report) => {
         reportParityFailure = report;
       },
-      expectRevokedWriter: (runId, isCurrent) => expectedRevokedWriters.set(runId, isCurrent),
     });
   },
 );
