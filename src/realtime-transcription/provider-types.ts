@@ -14,6 +14,8 @@ export type RealtimeTranscriptionProviderResolveConfigContext = {
 export type RealtimeTranscriptionProviderConfiguredContext = {
   cfg?: OpenClawConfig;
   providerConfig: RealtimeTranscriptionProviderConfig;
+  /** Count fallback credentials only for an explicitly named provider, never automatic selection. */
+  selectedExplicitly?: boolean;
 };
 
 /** Callback hooks emitted by realtime transcription sessions. */

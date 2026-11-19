@@ -271,7 +271,11 @@ export async function resolveConfiguredRealtimeTranscriptionProvider(params: {
     if (
       await configuredOrFalseAsync(() =>
         provider.isConfiguredAsync
-          ? provider.isConfiguredAsync({ cfg: params.config, providerConfig })
+          ? provider.isConfiguredAsync({
+              cfg: params.config,
+              providerConfig,
+              selectedExplicitly: normalizedConfigured !== undefined,
+            })
           : (provider.isConfigured?.({ cfg: params.config, providerConfig }) ?? false),
       )
     ) {
