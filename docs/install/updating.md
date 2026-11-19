@@ -1849,10 +1849,10 @@ Its schema inspection reads each agent and local store's schema version directly
 milliseconds and without a copy, even while the serving Gateway writes. The shared
 state database keeps its consistent online-backup read.
 
-The new Gateway can apply supported SQLite migrations at startup. PostgreSQL
-schema migrations require Doctor with writers stopped. Before starting the
-Gateway directly on a release that needs a PostgreSQL schema migration, stop the
-Gateway and embedded writers and run the target release's `openclaw doctor --fix`.
+The new Gateway can apply supported SQLite migrations at startup. For PostgreSQL
+shared-state and agent schema upgrades, use Doctor with writers stopped. Before
+starting the Gateway directly on a release that needs one of these migrations,
+stop the Gateway and embedded writers and run the target release's `openclaw doctor --fix`.
 See [PostgreSQL updates and schema migrations](/gateway/postgresql#updates-and-schema-migrations).
 
 A Git checkout that runs from releases keeps each release at
