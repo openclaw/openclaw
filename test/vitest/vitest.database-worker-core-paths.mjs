@@ -684,6 +684,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/model-fallback.shared-rate-limit.integration.test.ts",
   "src/agents/embedded-agent-runner/run.shared-integration.test.ts",
   "src/auto-reply/dispatch.block-streaming-recovery.test.ts",
+  "src/auto-reply/dispatch.steered-run-outcome.test.ts",
+  "src/auto-reply/dispatch.steered-run-outcome.failure.test.ts",
   "src/auto-reply/reply/agent-runner-direct-runtime-config.test.ts",
   "src/auto-reply/reply/agent-runner-recovery-read.test.ts",
   "src/auto-reply/reply/agent-runner-execute.context-read.test.ts",

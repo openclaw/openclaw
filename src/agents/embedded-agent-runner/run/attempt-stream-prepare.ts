@@ -28,6 +28,7 @@ import {
   createAgentRunSupersededAbortError,
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
+import { registerSteeredRunOutcomeObserver } from "../../sessions/steer-run-outcome-registry.js";
 import { log } from "../logger.js";
 import { readPreparedProviderRequest } from "../provider-prompt-state.js";
 import {
@@ -522,7 +523,7 @@ function prepareStream(
       if (options?.steeringMode) {
         activeSession.agent.steeringMode = options.steeringMode;
       }
-      return await steerActiveSessionWithOptionalDeliveryWait(
+      const result = await steerActiveSessionWithOptionalDeliveryWait(
         activeSession,
         text,
         options,
@@ -533,6 +534,12 @@ function prepareStream(
         supportsUserReplyPromotion ? () => recordUserReply(options) : undefined,
         admission.closedSignal,
       );
+      // Resolution without a throw means this run accepted the steered input;
+      // the source's terminal outcome now settles with this run's classification.
+      if (options?.onAgentRunTerminalOutcome) {
+        registerSteeredRunOutcomeObserver(attempt.runId, options.onAgentRunTerminalOutcome);
+      }
+      return result;
     } finally {
       activeQueueAdmissions--;
     }

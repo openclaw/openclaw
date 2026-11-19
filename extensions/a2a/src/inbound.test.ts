@@ -157,29 +157,15 @@ describe("A2A channel inbound dispatch", () => {
     },
   );
 
-  it("settles a steered task when the consuming run completes", async () => {
+  it("leaves a steered task working until the consuming run's delivered outcome", async () => {
     registerChannel();
     fixture.dispatch.mockImplementation(async (turn) => dispatched(turn, "steer"));
     await fixture.run();
-    // The consuming run settles long after the steered dispatch returns.
-    const turn = fixture.dispatch.mock.calls[0]![0];
-    turn.replyOptions?.onAgentRunTerminalOutcome?.("completed");
-    await fixture.store.wait(fixture.task, 0);
-    expect(fixture.task.status).toMatchObject({ state: "TASK_STATE_COMPLETED" });
-    expect(fixture.task.artifacts).toEqual([]);
-  });
-
-  it("settles a steered task when the consuming run fails", async () => {
-    registerChannel();
-    fixture.dispatch.mockImplementation(async (turn) => dispatched(turn, "steer"));
-    await fixture.run();
-    const turn = fixture.dispatch.mock.calls[0]![0];
-    turn.replyOptions?.onAgentRunTerminalOutcome?.("failed");
-    await fixture.store.wait(fixture.task, 0);
-    expect(fixture.task.status).toMatchObject({
-      state: "TASK_STATE_FAILED",
-      message: { parts: [{ text: "Agent run failed" }] },
-    });
+    // The steered dispatch resolves before the consuming run settles; the task
+    // must not complete on the dispatch result alone. The consuming run's
+    // settlement delivers the terminal outcome through the steering contract,
+    // covered end-to-end by src/auto-reply/dispatch.steered-run-outcome.test.ts.
+    expect(fixture.task.status.state).toBe("TASK_STATE_WORKING");
     expect(fixture.task.artifacts).toEqual([]);
   });
 

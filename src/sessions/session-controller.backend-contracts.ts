@@ -63,6 +63,12 @@ export type ReplyBackendQueueMessageOptions = {
   onQueueAccepted?: (accepted: boolean) => void;
   /** Releases per-input custody after commit, cancellation, or terminal rejection. */
   onQueueSettled?: () => void;
+  /**
+   * Reports the consuming run's terminal classification to this steered source.
+   * Accepted steers transfer it to the consuming run, which delivers it next to
+   * its own terminal observer; rejected steers must never call it.
+   */
+  onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Prepared channel turn to merge only at transcript persistence. */

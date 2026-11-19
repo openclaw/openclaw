@@ -1,4 +1,5 @@
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import { settleSteeredRunOutcomeObservers } from "../../agents/sessions/steer-run-outcome-registry.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
@@ -44,7 +45,16 @@ async function recordAgentTurnExecutionOutcome(
       resolveReplyOperationRunState(params.opts)?.replyCompletion?.outcome === "pending"
     )
   ) {
-    params.opts?.onAgentRunTerminalOutcome?.(executionStatus === "ok" ? "completed" : "failed");
+    const terminalOutcome: "completed" | "failed" =
+      executionStatus === "ok" ? "completed" : "failed";
+    params.opts?.onAgentRunTerminalOutcome?.(terminalOutcome);
+    // Steered sources adopted into this run settle with the consuming run's
+    // classification, next to the run's own terminal observer. The runId is
+    // guaranteed on execution opts; delivery-owned degradations after this
+    // point reclassify only the run's primary observer, not steered custody.
+    if (params.opts?.runId) {
+      settleSteeredRunOutcomeObservers(params.opts.runId, terminalOutcome);
+    }
   }
   const sourceReplyDeliveryMode =
     params.followupRun.run.sourceReplyDeliveryMode ?? params.opts?.sourceReplyDeliveryMode;

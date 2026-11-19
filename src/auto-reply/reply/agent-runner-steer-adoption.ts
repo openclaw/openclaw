@@ -396,6 +396,12 @@ export async function runActiveReplySteer(
       queueIdentity: resolveAcceptedSteerRunId(params),
       abortSignal: resolveFollowupAbortSignal(followupRun),
       onQueueAccepted: parked.accepted,
+      // Accepted steering transfers terminal custody to the consuming run: its
+      // settlement must deliver this source's terminal outcome before the
+      // source's own custody settles below.
+      ...(followupRun.runObservers?.onAgentRunTerminalOutcome
+        ? { onAgentRunTerminalOutcome: followupRun.runObservers.onAgentRunTerminalOutcome }
+        : {}),
       ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
       ...(followupRun.run.sourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: followupRun.run.sourceReplyDeliveryMode }
