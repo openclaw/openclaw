@@ -508,7 +508,7 @@ it("admits queued foreground writes before the next archive page reclaim pass", 
         const write = writeAdmission.runOpenClawAgentWorkerWrite;
         vi.spyOn(writeAdmission, "runOpenClawAgentWorkerWrite").mockImplementation(
           <T>(...args: Parameters<typeof write<T>>) => {
-            if (args[2]?.operationLabel === "session.history.free-pages") {
+            if (args[4] === "background") {
               const run = args[1];
               args[1] = () => {
                 order.push("reclaim");
@@ -516,7 +516,7 @@ it("admits queued foreground writes before the next archive page reclaim pass", 
               };
             }
             const result = write(...args);
-            if (args[2]?.operationLabel === "session.history.free-pages") {
+            if (args[4] === "background") {
               requested.resolve();
             }
             return result;
