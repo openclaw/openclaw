@@ -712,6 +712,13 @@ An already-running batch finishes before priority work starts. Background scope
 drain still owns the complete backfill, and a failed or cancelled refresh rejects
 its pending exact reads instead of returning stale totals.
 
+Usage aggregation, compression, and changed-month selection happen before writer
+admission. Publication deletes replaced partitions by individual session ranges
+and removed months by exact keys, using SQLite's existing primary-key index.
+These deletions share the transaction with their checkpoints and quarter summaries.
+Combining many ranges or keys can make stale small-cache statistics select a
+full-cache scan while holding the writer.
+
 ## Transactions and query shape
 
 Personal account mutations, approval operations, auth authorization enrollment,
@@ -923,8 +930,8 @@ transaction and checkpoint and timestamp comparisons. A row and its partitions
 remain atomic; a later failed batch leaves earlier batches committed. Restart
 or the next refresh rediscovers remaining obsolete rows, making partial cleanup
 safe to retry without retaining the whole inventory on the host.
-Targeted refreshes do not prune other keys. Selected month deletion uses bounded
-key batches within the rollup write transaction. Transcript statistics use
+Targeted refreshes do not prune other keys. Selected month deletion uses individual
+indexed keys within the rollup write transaction. Transcript statistics use
 the existing batched read directly, without registering per-session write scopes
 for a stats cache. Large inventories would otherwise repeatedly transfer a growing
 scope map while churning the bounded cache. The transcript statistics
