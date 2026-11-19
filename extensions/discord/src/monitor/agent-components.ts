@@ -1,4 +1,5 @@
 import { ComponentType } from "discord-api-types/v10";
+import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import {
@@ -147,6 +148,7 @@ async function handleDiscordComponentEvent(params: {
         : undefined;
   const eventText =
     commandFallback ||
+    agentControlText(pluginCallbackData) ||
     (await loadComponentsRuntime()).formatDiscordComponentEventText({
       kind: consumed.kind === "select" ? "select" : "button",
       label: consumed.label,

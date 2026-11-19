@@ -161,7 +161,6 @@ export function canonicalizeTelegramPresentationPayload(
   const telegramData = payload.channelData?.telegram as
     | (Record<string, unknown> & {
         buttons?: Parameters<typeof resolveTelegramInlineButtons>[0]["buttons"];
-        typedCallbackOwner?: unknown;
       })
     | undefined;
   if (!normalizedPresentation) {
@@ -183,8 +182,6 @@ export function canonicalizeTelegramPresentationPayload(
     allowWebAppButtons: options?.allowWebAppButtons === true,
     supportsDisabled: richTables,
     questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
-    // Set by prepareSendPayload, so it persists with queued deliveries.
-    ...(telegramData?.typedCallbackOwner === "agent" ? { typedCallbackOwner: "agent" } : {}),
   };
   const existingButtons = resolveTelegramInlineButtons(
     {

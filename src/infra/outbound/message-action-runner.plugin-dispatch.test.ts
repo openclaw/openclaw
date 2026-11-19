@@ -511,7 +511,9 @@ describe("runMessageAction plugin dispatch", () => {
     });
     if (valid) {
       const result = await pending;
-      expect(result.payload).toEqual(expect.objectContaining({ ok: true, presentation }));
+      // Message-action callbacks reach the channel marked as the conversation agent's.
+      const stamped = { blocks: [{ type: "buttons", buttons: [{ label: "A", value: ":a" }] }] };
+      expect(result.payload).toEqual(expect.objectContaining({ ok: true, presentation: stamped }));
     } else {
       await expect(pending).rejects.toThrow(/--presentation must be valid JSON/);
       expect(handleAction).not.toHaveBeenCalled();

@@ -21,6 +21,7 @@ import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/t
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import { stampAgentControls } from "../../interactive/agent-control.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { hasPollCreationParams } from "../../poll-params.js";
@@ -553,6 +554,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
   if (action === "broadcast") {
     return handleBroadcastAction({ ...input, agentId: resolvedAgentId }, params);
   }
+  params = stampAgentControls(params);
   if (action === "send" && hasPollCreationParams(params)) {
     throw new Error('Poll fields require action "poll"; use action "poll" instead of "send".');
   }
