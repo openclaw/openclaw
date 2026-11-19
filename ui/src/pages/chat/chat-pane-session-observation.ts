@@ -1,4 +1,3 @@
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -24,7 +23,10 @@ import {
 import { commitCurrentChatHistorySnapshot } from "./chat-history-snapshot.ts";
 import { resolveChatPaneParentSession } from "./chat-pane-header-identity.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
-import { applySelectedSessionProjection } from "./chat-pane-state.ts";
+import {
+  applySelectedSessionProjection,
+  createSessionObservationRefresh,
+} from "./chat-pane-state.ts";
 import { holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
@@ -39,59 +41,6 @@ import {
 } from "./run-lifecycle.ts";
 import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
-function createSessionObservationRefresh(
-  sessions: Pick<SessionCapability, "describe" | "canonicalListRevision">,
-  target: { key: string; agentId: string },
-  client: GatewayBrowserClient,
-  current: () => boolean,
-  observation: () => SessionRowObservation | null,
-  retryAfterList = false,
-) {
-  let reading: Promise<void> | null = null;
-  let pending = false;
-  let failedListRevision: number | undefined;
-  const refresh = () => {
-    if (!current()) {
-      return;
-    }
-    pending = true;
-    const selected = observation();
-    if (reading || !selected?.isCurrent()) {
-      return;
-    }
-    pending = false;
-    failedListRevision = undefined;
-    const reconcile = selected.captureReconcile();
-    reading = sessions
-      .describe(target, { client })
-      .then(({ session }) => {
-        if (current()) {
-          reconcile(session ?? undefined);
-        }
-      })
-      .catch(() => {
-        failedListRevision = sessions.canonicalListRevision;
-      })
-      .finally(() => {
-        reading = null;
-        if (pending) {
-          refresh();
-        }
-      });
-  };
-  return {
-    refresh,
-    retryFailedRead: () => {
-      if (
-        failedListRevision !== undefined &&
-        (!retryAfterList || sessions.canonicalListRevision > failedListRevision)
-      ) {
-        refresh();
-      }
-    },
-  };
-}
-
 function applyObservedChatSessionRow(
   state: ChatPageHost,
   row: GatewaySessionRow | null,
@@ -100,10 +49,8 @@ function applyObservedChatSessionRow(
 ): void {
   const selectedAgentId = resolveChatAgentId(state);
   if (!row) {
-    // Retire a known incarnation, not a never-observed session's replacement creation.
-    if (observedSessionId !== null) {
-      retireSessionMutations();
-    }
+    // The row owner retired this target even if a list already projected its successor.
+    retireSessionMutations();
     const result = state.sessionsResult;
     if (!result || state.sessionsResultAgentId !== selectedAgentId) {
       return;
@@ -679,14 +626,29 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       const observation = binding.observation;
       const pendingAbort = state.pendingAbort;
       if (
-        (this.presented && observation.row?.hasMessages === undefined) ||
-        (pendingAbort &&
-          !observation.hasObserved &&
-          uiConversationMatches(state, pendingAbort.sessionKey, key, agentId, pendingAbort.agentId))
+        pendingAbort &&
+        !observation.hasObserved &&
+        uiConversationMatches(state, pendingAbort.sessionKey, key, agentId, pendingAbort.agentId)
       ) {
-        // Mobile has no foreground roster read. Resolve history presence for the selected
-        // pane without waiting for history; a parked pane's queued Stop still needs ownership.
+        // A parked pane skips resource discovery, but its queued Stop needs current ownership.
         refreshRunner.refresh();
+      } else if (
+        this.presented &&
+        !observation.hasObserved &&
+        parseAgentSessionKey(key) &&
+        !isUiSelectedGlobalSessionKey(state, key)
+      ) {
+        // Mobile may have no roster yet. Discover only concrete targets, and never let this
+        // optional read clear a row or replace facts accepted by history or another reader.
+        const reconcile = observation.captureReconcile();
+        void sessions.describe({ key }, { client: scope.client }).then(
+          ({ session }) => {
+            if (session && ownsPane() && !observation.hasObserved) {
+              reconcile(session);
+            }
+          },
+          () => {},
+        );
       }
       const transcriptSessionId = state.currentSessionId ?? retainedTranscriptSessionId;
       if (
