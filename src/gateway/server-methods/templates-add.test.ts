@@ -20,6 +20,7 @@ const listMcp = vi.hoisted(() => vi.fn());
 const readPolicySync = vi.hoisted(() => vi.fn());
 const readPolicy = vi.hoisted(() => vi.fn());
 const validateDelivery = vi.hoisted(() => vi.fn());
+const captureCreator = vi.hoisted(() => vi.fn());
 const reloadPlugin = vi.hoisted(() => vi.fn());
 const deleteAgent = vi.hoisted(() => vi.fn());
 const captureCreator = vi.hoisted(() => vi.fn());
@@ -56,6 +57,11 @@ vi.mock("../../plugins/management-mutations.js", async (importOriginal) => ({
 vi.mock("./agents-config-mutations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agents-config-mutations.js")>()),
   deleteAgentConfigEntry: deleteAgent,
+}));
+
+vi.mock("./cron-input-validation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./cron-input-validation.js")>()),
+  captureCronCreatorSession: captureCreator,
 }));
 
 const agentId = "workflow-operator";
