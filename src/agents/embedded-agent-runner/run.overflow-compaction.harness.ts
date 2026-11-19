@@ -1,6 +1,4 @@
-/**
- * Test harness mocks for embedded-run overflow compaction coverage.
- */
+/** Test harness mocks for embedded-run overflow compaction coverage. */
 
 import { matchesContextOverflowMessage } from "@openclaw/ai/internal/shared";
 import { type Mock, vi } from "vitest";
@@ -27,6 +25,7 @@ import type { FailoverReason } from "../failover/signal.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../harness/registry.js";
 import type { AgentHarnessAttemptParams } from "../harness/types.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
+import type { ModelCatalogSnapshot } from "../model-catalog.types.js";
 import { preparedModelRuntimeConfigsMatch } from "../prepared-model-runtime.owner.js";
 import type {
   PreparedModelRuntimeInput,
@@ -109,9 +108,7 @@ type MockResolvedModel = {
 const emptyPluginMetadataSnapshot = createPluginMetadataSnapshotFixture();
 
 type MockAgentDiscoveryStores = {
-  authStorage: {
-    setRuntimeApiKey: ReturnType<typeof vi.fn>;
-  };
+  authStorage: { setRuntimeApiKey: ReturnType<typeof vi.fn> };
   modelRegistry: Record<string, never>;
 };
 
@@ -181,6 +178,11 @@ export const mockedAcquireAgentRunPreparedModelRuntime = vi.fn(
         ? { ...pluginRegistry, agentHarnesses: [...pluginRegistry.agentHarnesses] }
         : undefined,
       metadataSnapshot,
+      modelCatalog: {
+        entries: [],
+        routeVariants: [],
+        providerOutcomes: [],
+      } satisfies ModelCatalogSnapshot,
       createStores: () => ({ authStorage: {}, modelRegistry: {} }),
     };
     return {
@@ -199,12 +201,7 @@ export const mockedAcquireAgentRunPreparedModelRuntime = vi.fn(
 const mockedRunPostCompactionSideEffects = vi.fn(async () => {});
 const mockedSleepWithAbort = vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined);
 function createMockAgentDiscoveryStores(): MockAgentDiscoveryStores {
-  return {
-    authStorage: {
-      setRuntimeApiKey: vi.fn(),
-    },
-    modelRegistry: {},
-  };
+  return { authStorage: { setRuntimeApiKey: vi.fn() }, modelRegistry: {} };
 }
 
 const mockedCreateEmptyAgentDiscoveryStores = vi.fn(createMockAgentDiscoveryStores);

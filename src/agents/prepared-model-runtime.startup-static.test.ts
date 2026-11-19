@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createMockSubsystemLogger } from "../../test/helpers/mock-subsystem-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -264,7 +265,7 @@ vi.mock("./embedded-agent-runner/model.static-catalog.js", async (importOriginal
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ warn: vi.fn() }),
+  createSubsystemLogger: createMockSubsystemLogger,
 }));
 
 const { getPreparedModelRuntimeSnapshot, refreshPreparedModelRuntimeSnapshots } =
