@@ -573,12 +573,21 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   });
 
   it.each([
-    ["is gone", (install: HalfSwitchedInstall) => path.resolve(install.serving, "../../..")],
-    ["lost its Git metadata", (install: HalfSwitchedInstall) => path.join(install.serving, ".git")],
-  ])("changes nothing and refuses when the fallback %s", async (_label, removed) => {
+    ["is gone", "serving", "../../..", false],
+    ["lost its Git metadata", "serving", ".git", false],
+    // Only the checkout's build reporting its commit shows that the fallback serves.
+    ["has no evidence that it serves", "checkout", "dist", false],
+    // A lease is taken before the Gateway is ready, so a boot that died proves nothing.
+    ["is incomplete and only took a lease", "checkout", "dist", true],
+  ] as const)("changes nothing and refuses when the fallback %s", async (_l, root, gone, lease) => {
     const install = await halfSwitchedInstall();
     const trial = await fs.readFile(install.trialFile, "utf8");
-    await fs.rm(removed(install), { recursive: true });
+    const release = path.resolve(install.serving, "../../..");
+    await fs.rm(path.resolve(install[root], gone), { recursive: true });
+    if (lease) {
+      target.broken.push(install.serving);
+      await fs.mkdir(path.join(release, "../.leases", path.basename(release)), { recursive: true });
+    }
 
     const result = await install.update(install.commits["3.0.0"]!);
 
@@ -587,7 +596,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
       reason: "git-release-fallback-unavailable",
       recovery: { serviceRestartSafe: false },
     });
-    expect(target.builds).toBe(0);
+    expect(target.builds + target.conversionTargets.length).toBe(0);
     expect(await fs.realpath(install.slot)).toBe(install.unserved);
     expect(await fs.readFile(install.trialFile, "utf8")).toBe(trial);
     expect(result.steps.at(-1)?.stderrTail).toContain("openclaw triage");
@@ -613,16 +622,6 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
       }
     },
   );
-
-  it("does not repair a trial whose fallback has no evidence that it served", async () => {
-    const install = await halfSwitchedInstall();
-    await fs.rm(path.join(install.checkout, "dist"), { recursive: true });
-
-    const result = await install.update(install.commits["3.0.0"]!);
-
-    expect(result.steps.some((entry) => entry.name === "git-release-placement")).toBe(false);
-    await expect(fs.access(install.unserved)).resolves.toBeUndefined();
-  });
 
   it("puts the link back on the serving release when that release is the target", async () => {
     const install = await halfSwitchedInstall();

@@ -170,11 +170,15 @@ export type GitReleasePlacement = {
     selected: boolean;
   };
   /**
-   * The trial's fallback (link text) is missing or its build does not verify. `commit` is
-   * what the fallback was built from, which is what serves: a release rebuilt from it is a
-   * safe fallback. Without it there is none.
+   * The trial's fallback (link text) is missing, has no evidence that its commit serves, or
+   * its build does not verify. `commit` is set only when the commit serves: a release
+   * rebuilt from it is a safe fallback. Without it there is none, and nothing is repaired.
    */
-  unsafeFallback?: { previous: string; reason: "missing" | "unverified"; commit?: string };
+  unsafeFallback?: {
+    previous: string;
+    reason: "missing" | "unverified" | "unproven";
+    commit?: string;
+  };
 };
 
 /** A release worktree's checked-out commit, read from its Git metadata without running Git. */
@@ -188,29 +192,21 @@ async function readReleaseHead(root: string): Promise<string | null> {
 }
 
 /**
- * Evidence that a fallback served: a Gateway took a release lease on it (the lease
- * directory outlives the lease), or it is the first release, built from the commit the
- * checkout's own build serves. A publisher before this change recorded whatever the link
- * named, which can be a release that never started.
+ * The only evidence on disk that a fallback's commit is what the Gateway serves: the
+ * checkout's own build reports that commit, as it does for the first release of a
+ * conversion while the service still runs the checkout. Nothing on disk records that a
+ * release's trial passed (settling deletes the record), and a release lease is taken
+ * before the Gateway is ready, so neither counts. A publisher before this change recorded
+ * whatever the link named, which can be a release that never started.
  */
-async function servedBefore(prefix: string, root: string): Promise<boolean> {
-  const leases = path.join(prefix, PACKAGE_RELEASES_DIR, ".leases", gitReleaseId(root));
-  if (
-    await fs.stat(leases).then(
-      () => true,
-      () => false,
-    )
-  ) {
-    return true;
-  }
+async function isCheckoutServingCommit(root: string, commit: string): Promise<boolean> {
   const dotGit = await fs.readFile(path.join(root, ".git"), "utf8").catch(() => "");
   const gitDir = /^gitdir: (.+)$/mu.exec(dotGit)?.[1]?.trim();
   const commonDir = gitDir
     ? (await fs.readFile(path.resolve(root, gitDir, "commondir"), "utf8").catch(() => "")).trim()
     : "";
   const checkout = commonDir ? path.dirname(path.resolve(root, gitDir!, commonDir)) : null;
-  const head = await readReleaseHead(root);
-  return Boolean(checkout && head && (await readBuiltRuntimeCommit(checkout)) === head);
+  return Boolean(checkout && (await readBuiltRuntimeCommit(checkout)) === commit);
 }
 
 /** Present and intact: its runtime artifacts verify against the commit it was built from. */
@@ -286,23 +282,21 @@ export async function readGitReleasePlacement(
     return current;
   }
   const unserved = { root: slot.releaseRoot, selected: true };
-  if (previous && (await verifiesAsGitRelease(previous))) {
-    // Without evidence that it served, the record is left as it is, as before this change.
-    return (await servedBefore(slot.prefix, previous))
-      ? { serving: previous, fallback: previous, unserved }
-      : current;
-  }
   const commit = previous ? await readReleaseHead(previous) : null;
-  // Without its commit the old fallback cannot even be read as a Git release.
-  const known = commit ? previous! : slot.releaseRoot;
+  // A fallback is used, or its commit rebuilt, only on evidence that the commit serves.
+  const served = Boolean(previous && commit && (await isCheckoutServingCommit(previous, commit)));
+  if (served && (await verifiesAsGitRelease(previous!))) {
+    return { serving: previous!, fallback: previous!, unserved };
+  }
+  const known = served ? previous! : slot.releaseRoot;
   return {
     serving: known,
     fallback: known,
     unserved,
     unsafeFallback: {
       previous: trial.previous,
-      reason: previous ? "unverified" : "missing",
-      ...(commit ? { commit } : {}),
+      reason: !previous ? "missing" : served ? "unverified" : "unproven",
+      ...(served ? { commit: commit! } : {}),
     },
   };
 }

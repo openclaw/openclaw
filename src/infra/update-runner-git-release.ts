@@ -295,16 +295,17 @@ export async function updateGitRelease(params: {
   };
   if (deferredLeftover) {
     await reportPlacement(
-      `Release ${gitReleaseId(deferredLeftover.root)} was placed by an earlier update and never started. With --no-restart this update leaves it and the link as they are; the next update that restarts the Gateway repairs them.`,
+      `Release ${gitReleaseId(deferredLeftover.root)} was placed by an earlier update and never started. With --no-restart this update does not repair it; the link and trial are handled as an earlier updater would.`,
       false,
     );
   }
-  // No safe fallback: the trial's fallback is gone or incomplete. A release rebuilt from
-  // the commit it was built from, which is what serves, becomes the fallback. Without one,
-  // nothing is switched: restarting would start the placed release with nothing to back out to.
+  // No safe fallback: the trial's fallback is gone, unproven or incomplete. Only when its
+  // commit is shown to serve does a release rebuilt from that commit become the fallback.
+  // Otherwise nothing is switched: restarting would start the placed release with nothing
+  // to back out to.
   if (placement?.unsafeFallback && unserved) {
     const { previous, reason, commit } = placement.unsafeFallback;
-    const lost = `Release ${gitReleaseId(unserved.root)} on the release link never passed its trial, and its fallback ${gitReleaseId(path.resolve(path.dirname(slot), previous))} ${reason === "missing" ? "no longer exists" : "does not verify as a complete build"}.`;
+    const lost = `Release ${gitReleaseId(unserved.root)} on the release link never passed its trial, and its fallback ${gitReleaseId(path.resolve(path.dirname(slot), previous))} ${reason === "missing" ? "no longer exists" : reason === "unproven" ? "has no record that it is the build the Gateway serves" : "does not verify as a complete build"}.`;
     // An earlier attempt's rebuild of the same commit is reused, so retries keep one copy.
     const earlier = commit
       ? await findVerifiedGitRelease({
