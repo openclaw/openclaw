@@ -15,7 +15,7 @@ who contributed, with links to the source changes.
 
 <CardGroup cols={2}>
   <Card title="v2026.11.5" href="/releases/2026.11.5">
-    OpenClaw v2026.11.5 lets you edit scheduled checks in Automations, browse files alongside a chat, and run your agent’s chats through Requesty.
+    OpenClaw v2026.11.5 lets you edit heartbeat checks in Automations, browse files alongside a chat, and run your agent’s chats through Requesty.
   </Card>
   <Card title="v2026.11.4" href="/releases/2026.11.4">
     Fixes for updates, conversations, data recovery and privacy.
