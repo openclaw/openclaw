@@ -105,7 +105,9 @@ process.exitCode = status;`;
               owner = child;
               child.stdout!.on("data", (chunk) => {
                 output += String(chunk);
-                if (output.includes("stopping\n")) stopping.resolve();
+                if (output.includes("stopping\n")) {
+                  stopping.resolve();
+                }
               });
             },
           }),
@@ -128,12 +130,12 @@ process.exitCode = status;`;
           await fixture.verifyCleanup(async () => {
             // Only this test's recorded processes can outlive a failing assertion.
             if (owner?.pid) {
-              await killPidIfAlive(owner.pid);
+              killPidIfAlive(owner.pid);
               await waitForDead(owner.pid, AbortSignal.timeout(5_000));
             }
             if (fs.existsSync(ready)) {
               const pid = Number(fs.readFileSync(ready, "utf8"));
-              await killPidIfAlive(pid);
+              killPidIfAlive(pid);
               await waitForDead(pid, AbortSignal.timeout(5_000));
             }
             await completion;
@@ -184,7 +186,7 @@ fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid));`;
         await fixture.verifyCleanup(async () => {
           if (fs.existsSync(ready)) {
             const pid = Number(fs.readFileSync(ready, "utf8"));
-            await killPidIfAlive(pid);
+            killPidIfAlive(pid);
             await waitForDead(pid, AbortSignal.timeout(5_000));
           }
           await completion;

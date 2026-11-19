@@ -1,12 +1,14 @@
-import { chromium } from "playwright";
+import type { chromium } from "playwright";
 import { beforeEach, expect, it, vi } from "vitest";
 import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
 import { failManagedCleanup } from "../../scripts/lib/managed-cleanup-handoff.mts";
 import { launchWarmReloadBrowser } from "../../scripts/perf/warm-reload-browser.ts";
 
+const launch = vi.hoisted(() => vi.fn<typeof chromium.launch>());
+
 vi.mock("playwright", async (importOriginal) => ({
   ...(await importOriginal<typeof import("playwright")>()),
-  chromium: { launch: vi.fn() },
+  chromium: { launch },
 }));
 vi.mock("../../scripts/lib/managed-cleanup-handoff.mts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/lib/managed-cleanup-handoff.mts")>()),
@@ -21,9 +23,11 @@ it.each(["joined", "unjoined"] as const)(
     const launchFailure = new Error("browser command-line inspection failed");
     const closeFailure = new Error("browser connection lost during close");
     const close = vi.fn(async () => {
-      if (cleanup === "unjoined") throw closeFailure;
+      if (cleanup === "unjoined") {
+        throw closeFailure;
+      }
     });
-    vi.mocked(chromium.launch).mockResolvedValue({
+    launch.mockResolvedValue({
       close,
       newBrowserCDPSession: async () => {
         throw launchFailure;
