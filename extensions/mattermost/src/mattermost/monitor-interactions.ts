@@ -1,3 +1,4 @@
+import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { parseMattermostQuestionContext } from "../normalize.js";
 import {
@@ -166,7 +167,9 @@ export function registerMattermostInteractions(params: {
           return;
         }
         const { channelDisplay, kind } = eventPlan;
-        const bodyText = `[Button click: user @${button.userName} selected "${button.actionName}"]`;
+        const bodyText =
+          agentControlText(button.callbackData) ??
+          `[Button click: user @${button.userName} selected "${button.actionName}"]`;
         const ctxPayload = eventPlan.finalizeContext({
           Body: bodyText,
           BodyForAgent: bodyText,
