@@ -789,12 +789,14 @@ reads scan transiently and retain no full-history navigation cache. Payload-size
 projections remain in SQL, and the bounded reader's limits and output are unchanged.
 
 Cold input preparation uses the turn planner instead of fetching a full actor
-replica first. The planner carries its recovery expectation into the input
-command; prepared, explicit, and warm replica expectations remain fixed across
-version retries. Transcript input and restart recovery still
-commit atomically under the existing writer FIFO, source checks, final host
-COMMIT authorization, and receipt settlement. Schemas, durability, and update
-behavior are unchanged.
+replica first. Actor-bound transcript input refreshes implicitly prepared
+lifecycle expectations from an available actor snapshot inside the writer FIFO,
+including preceding-run settlement. Explicit lifecycle expectations remain fixed;
+when no snapshot is available, the planner supplies the expectation. Session identity,
+selected lifecycle revision, source checks, final host COMMIT authorization, and
+receipt settlement remain unchanged. Restart input staging retains its separately
+captured lifecycle expectation and commits custody atomically. Schemas, durability,
+and update behavior are unchanged.
 
 Pending-input staging selects its lifecycle expectation inside the same writer
 FIFO. A current published entry supplies those fields without a preliminary full
