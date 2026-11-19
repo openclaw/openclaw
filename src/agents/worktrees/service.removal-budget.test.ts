@@ -355,7 +355,7 @@ it.each([
         ? before.length - 11
         : damage === "index-limited"
           ? before.length - 3
-          : 1;
+          : 2; // The dominant history pack stays outside the small-pack batch.
     const missing = await git(repo, "rev-list", "--objects", "--all", "--missing=print");
     expect(missing).toContain("?");
     await git(repo, "remote", "set-url", "origin", path.join(root, "unavailable.git"));
