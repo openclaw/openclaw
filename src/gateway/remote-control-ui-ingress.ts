@@ -24,7 +24,7 @@ import { ensureCanonicalGatewayOwnerProfile } from "../state/user-profile-writes
 import { gatewayIngressPrincipalAuthError, gatewayPersonPrincipalAuthError } from "./auth.js";
 import { validateRemoteControlUiFrameAncestors } from "./control-ui-csp.js";
 import { filterRemoteControlUiPluginReadCookies } from "./control-ui-plugin-auth-cookie.js";
-import { openclawIdTunnelRolePolicy } from "./openclaw-id/tunnel-principal.js";
+import { openclawIdSubjectRolePolicy } from "./openclaw-id/tunnel-principal.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
@@ -271,14 +271,14 @@ export function createGatewayControlUiIngressFactory(params: {
         const initial = initialIdentity.profile;
         const emailBindingIds = prepared.emailBindingIds;
         const readRole = (current: typeof initial) =>
-          admission
-            ? openclawIdTunnelRolePolicy(admission.principal)
-            : resolveOperatorRolePolicyForAssignment(
-                profileId,
-                current.assignedRole,
-                host.getRuntimeConfig(),
-                current.githubLogin ?? null,
-              );
+          openclawIdSubjectRolePolicy(admission?.principal, () =>
+            resolveOperatorRolePolicyForAssignment(
+              profileId,
+              current.assignedRole,
+              host.getRuntimeConfig(),
+              current.githubLogin ?? null,
+            ),
+          );
         const role = principal.kind !== "owner" ? structuredClone(readRole(initial)) : undefined;
         const access =
           principal.kind !== "owner"

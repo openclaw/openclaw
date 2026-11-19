@@ -128,7 +128,7 @@ function mockIdMemberIosDevice() {
   });
   const profile: UserProfileIdentity = {
     profileId: "member-profile",
-    role: "admin",
+    role: "member",
     aliases: new Set(["member-profile", "member-profile-alias"]),
   };
   mocks.profiles.mockResolvedValue({

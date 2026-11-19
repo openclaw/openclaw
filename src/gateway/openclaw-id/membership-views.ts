@@ -44,6 +44,7 @@ export async function describeMemberDevices(member: MemberRecord) {
 export async function readMemberView(
   current: StoredClaw | undefined,
   principal: OpenClawIdTunnelPrincipal | undefined,
+  readProfiles: OpenClawIdMemberProfiles["read"],
 ) {
   if (!current?.authority || principal?.kind !== "member") {
     return undefined;
@@ -55,7 +56,9 @@ export async function readMemberView(
     seq: current.authority.seq,
     binding_seq: current.binding!.body.binding_seq,
     account_id: principal.accountId,
-    role: member.role,
+    role:
+      (await readProfiles([principal.accountId]))[principal.accountId]?.effectiveRole ??
+      "unassigned",
     root_fp: await fingerprint(current.authority.anchor.root_pub),
     hostname: current.hostname,
     recovery_kit: member.recovery_kit ?? null,
@@ -91,7 +94,7 @@ export async function readOwnerView(
         account_id,
         display_name: profiles[account_id]?.displayName ?? null,
         email: profiles[account_id]?.email ?? null,
-        role: member.role,
+        role: profiles[account_id]?.effectiveRole ?? "unassigned",
         recovery_kit: member.recovery_kit ?? null,
         peer_keys: member.peer_keys,
         devices: await describeMemberDevices(member),

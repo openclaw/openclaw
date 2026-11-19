@@ -19,10 +19,7 @@ import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { onUserProfilesChanged, readUserProfileVersion } from "../state/user-profile-events.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import type { UserProfileAccessFacts } from "../state/user-profiles.types.js";
-import {
-  openclawIdTunnelRolePolicy,
-  type OpenClawIdTunnelPrincipal,
-} from "./openclaw-id/tunnel-principal.js";
+import type { OpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
 import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.types.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
@@ -92,14 +89,8 @@ type GatewayOperatorAccessSource = {
 
 export function hasGatewayOperatorAccessPolicies(
   config: OpenClawConfig,
-  source: GatewayOperatorAccessSource = {},
+  _source: GatewayOperatorAccessSource = {},
 ): boolean {
-  if (source.openclawIdPrincipal?.kind === "member") {
-    return (
-      Boolean(openclawIdTunnelRolePolicy(source.openclawIdPrincipal)?.accessPolicyPlugin) ||
-      currentAccessPolicies().length > 0
-    );
-  }
   return (
     usesGitHubRoleAssignments(config, null) ||
     currentAccessPolicies().length > 0 ||
@@ -113,12 +104,11 @@ export function hasGatewayOperatorAccessPolicies(
 function usesGitHubRoleAssignments(
   config: OpenClawConfig,
   assignedRole: string | null,
-  source: GatewayOperatorAccessSource = {},
+  _source: GatewayOperatorAccessSource = {},
 ): boolean {
   const roles = config.gateway?.roles;
   return Boolean(
     roles &&
-    source.openclawIdPrincipal?.kind !== "member" &&
     isNamedOperatorRoleEnforcementEnabled(config) &&
     Object.keys(roles.assignments?.byGithubLogin ?? {}).length > 0 &&
     (!assignedRole || !Object.hasOwn(roles.definitions, assignedRole)),
@@ -130,20 +120,12 @@ function resolveAccessPolicyRole(
   assignedRole: string | null,
   config: OpenClawConfig,
   githubLogin: string | null,
-  source: GatewayOperatorAccessSource,
+  _source: GatewayOperatorAccessSource,
 ) {
-  const principal = source.openclawIdPrincipal;
-  return principal?.kind === "member"
-    ? { assignedRole: principal.role, policy: openclawIdTunnelRolePolicy(principal) }
-    : {
-        assignedRole,
-        policy: resolveOperatorRolePolicyForAssignment(
-          profileId,
-          assignedRole,
-          config,
-          githubLogin,
-        ),
-      };
+  return {
+    assignedRole,
+    policy: resolveOperatorRolePolicyForAssignment(profileId, assignedRole, config, githubLogin),
+  };
 }
 
 function pluginProfile(

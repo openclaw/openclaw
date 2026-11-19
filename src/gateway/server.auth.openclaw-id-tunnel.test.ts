@@ -38,6 +38,7 @@ import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
+import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { useAuthIdentityFixture } from "./server.auth.identity-fixture.test-support.js";
 import { BROWSER_ORIGIN, CONTROL_UI_CLIENT, openWs } from "./server.auth.test-helpers.js";
 import {
@@ -150,6 +151,15 @@ afterAll(async () => {
 
 beforeEach(async () => {
   failNextBindingWrite = false;
+  // The simulated admission owner grants the same canonical assignments as real invitation approval.
+  for (const principal of Object.values(PRINCIPALS)) {
+    if (principal.kind === "member") {
+      const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({
+        accountId: principal.accountId,
+      });
+      await profileWrites.setCanonicalUserProfileRole(profile.id, principal.role);
+    }
+  }
   const pairing = await listDevicePairing();
   for (const pending of pairing.pending) {
     await rejectDevicePairing(pending.requestId);
@@ -279,7 +289,7 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     }
   });
 
-  test("a downgrade during profile preparation prevents the pending operator connection", async () => {
+  test("a profile downgrade during preparation applies the current role ceiling", async () => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const ensure = profileWrites.ensureCanonicalUserProfileForOpenClawIdIdentity;
@@ -295,14 +305,17 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     const pending = connectTunnel(OPERATOR_KEY);
     try {
       await entered.promise;
-      PRINCIPALS[OPERATOR_KEY] = {
-        kind: "member",
-        peerKey: OPERATOR_KEY,
+      const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({
         accountId: "acct_op",
-        role: "viewer",
-      };
+      });
+      await profileWrites.setCanonicalUserProfileRole(profile.id, "viewer", {
+        onCommitted: (id) => invalidateOperatorRolePolicy(id, { roleOnly: true }),
+      });
       release.resolve();
-      await expect(pending).rejects.toThrow("closed 4001: gateway auth changed");
+      const connected = await pending;
+      connected.ws.close();
+      expect(connected.res.ok).toBe(true);
+      expect(grantedScopes(connected.res)).toEqual(["operator.sessions.read"]);
     } finally {
       release.resolve();
       PRINCIPALS[OPERATOR_KEY] = original;
@@ -310,7 +323,7 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     }
   });
 
-  test("a connected operator cannot use even a read request after its membership role changes", async () => {
+  test("a display-only membership label cannot override a connected profile grant", async () => {
     const original = expectDefined(PRINCIPALS[OPERATOR_KEY], "operator principal");
     const { ws, res } = await connectTunnel(OPERATOR_KEY);
     try {
@@ -322,7 +335,7 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
         accountId: "acct_op",
         role: "viewer",
       };
-      await expect(rpcReq(ws, "health", {})).rejects.toThrow(/closed 4001.*membership changed/);
+      expect((await rpcReq(ws, "health", {})).ok).toBe(true);
     } finally {
       PRINCIPALS[OPERATOR_KEY] = original;
       ws.close();
@@ -572,7 +585,9 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     const { ws, res } = await connectTunnel(peerKey, { token: TOKEN });
     try {
       expect(res.ok).toBe(false);
-      expect(res.error?.message).toMatch(/no longer has access to this claw/);
+      expect(res.error?.message).toMatch(
+        _reason === "removed" ? /no longer has access to this claw/ : /access-record-inactive/,
+      );
     } finally {
       ws.close();
     }

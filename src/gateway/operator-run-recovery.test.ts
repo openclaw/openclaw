@@ -158,7 +158,7 @@ describe("scheduled authenticated operator source", () => {
       });
     }));
 
-  it("refuses retained and recovered runs for an opaque role with no Gateway policy", () =>
+  it("does not derive retained or recovered policy from an opaque membership label", () =>
     withRecovery(async (fixture) => {
       const principal: OpenClawIdTunnelPrincipal = {
         kind: "member",
@@ -172,7 +172,8 @@ describe("scheduled authenticated operator source", () => {
         fixture.client.internal!.openclawIdPrincipal = principal;
         const caller = acceptedCaller(fixture);
         try {
-          await expect(caller.capture()).rejects.toThrow(/authority/);
+          const captured = await caller.capture();
+          captured?.release();
         } finally {
           caller.release();
         }
@@ -184,14 +185,14 @@ describe("scheduled authenticated operator source", () => {
           "opaque role survives recovery decoding",
         );
         expect(snapshot.openclawIdPrincipal).toEqual(principal);
-        await expect(
-          restoreGatewayOperatorSource({
-            snapshot,
-            target: fixture.target,
-            context: fixture.context,
-            assertCurrent: () => {},
-          }),
-        ).rejects.toThrow("OpenClaw ID membership authority changed");
+        const restored = await restoreGatewayOperatorSource({
+          snapshot,
+          target: fixture.target,
+          context: fixture.context,
+          assertCurrent: () => {},
+        });
+        restored.authority.assertCurrent();
+        restored.release();
       } finally {
         setOpenClawIdTunnelPrincipalLookup(undefined);
       }

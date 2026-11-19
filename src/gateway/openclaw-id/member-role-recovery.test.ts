@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "../agent-turn/principal.js";
@@ -15,6 +16,7 @@ it.each(["edited", "deleted"])(
   async (change) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
       const profile = ensureProfileForEmail("member-role@example.test");
+      setUserProfileRole(profile.id, "operator");
       const principal = {
         kind: "member" as const,
         peerKey: `iroh:${"ab".repeat(32)}`,
@@ -66,9 +68,10 @@ it.each(["edited", "deleted"])(
           setRuntimeConfigSnapshot(next);
           publishOperatorRoleConfigChange(fixture.context);
           expect(retained.authority.signal?.aborted).toBe(false);
-          expect(restored.authority.signal?.aborted).toBe(true);
+          expect(restored.authority.signal?.aborted).toBe(false);
           expect(retained.authority.assertCurrent).not.toThrow();
-          expect(restored.authority.assertCurrent).toThrow();
+          expect(restored.authority.assertCurrent).not.toThrow();
+          expect(restored.authority.reauthorize).toThrow();
           await expect(fixture.restore()).rejects.toThrow();
           fixture.setConfig(config);
           setRuntimeConfigSnapshot(config);

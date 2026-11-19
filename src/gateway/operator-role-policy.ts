@@ -176,14 +176,10 @@ export function resolveOperatorRolePolicyForAssignment(
   githubLogin: string | null,
 ): GatewayOperatorRoleDefinition | undefined {
   const roles = cfg.gateway?.roles;
-  if (
-    !roles ||
-    !isNamedOperatorRoleEnforcementEnabled(cfg) ||
-    profileId === GATEWAY_OWNER_PROFILE_ID
-  ) {
+  if (!isNamedOperatorRoleEnforcementEnabled(cfg) || profileId === GATEWAY_OWNER_PROFILE_ID) {
     return undefined;
   }
-  if (!profileId) {
+  if (!profileId || !roles) {
     return deniedOperatorRole;
   }
   const selection = resolveOperatorRoleSelection(profileId, assignedRole, cfg, githubLogin);
@@ -209,7 +205,7 @@ export function resolveOperatorRolePolicyForAssignment(
   );
 }
 
-/** Resolve the membership sandbox requirement first; human attribution preserves named-role restrictions. */
+/** Resolve sandbox requirements through the creator's profile; owner devices keep owner authority. */
 export function resolveCreatorSandbox(
   cfg: OpenClawConfig,
   creation:
@@ -224,7 +220,9 @@ export function resolveCreatorSandbox(
     if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
       throw new OpenClawIdPrincipalChangedError();
     }
-    return openclawIdTunnelRolePolicy(principal)?.sandbox === "required" ? "required" : undefined;
+  }
+  if (principal?.kind === "owner") {
+    return undefined;
   }
   const actor = creation?.actor;
   return actor?.type === "human" &&
@@ -254,14 +252,15 @@ export function resolveOperatorRolePolicy(
   cfg: OpenClawConfig,
 ): GatewayOperatorRoleDefinition | undefined {
   const actor = resolveGatewayOperatorRoleActor(client);
-  // An OpenClaw ID member's membership role caps its connection, independently of named roles.
   const principal = client?.internal?.openclawIdPrincipal;
   if (principal) {
     if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
       throw new Error("OpenClaw ID membership authority changed");
     }
     client?.internal?.operatorRunAuthority?.assertCurrent();
-    return openclawIdTunnelRolePolicy(principal);
+    if (principal.kind !== "member") {
+      return openclawIdTunnelRolePolicy(principal);
+    }
   }
   if (actor?.kind === "system") {
     return undefined;
@@ -313,21 +312,6 @@ export function resolveOperatorRolePolicy(
     );
   }
   return resolveOperatorRolePolicyForProfile(actor?.profileId, cfg);
-}
-
-/** Administrator members use membership, while other callers keep their profile policy. */
-export function resolveAdministratorMemberRolePolicy(
-  client: GatewayClient | null | undefined,
-  cfg: OpenClawConfig,
-): GatewayOperatorRoleDefinition | undefined {
-  const principal =
-    client?.internal?.openclawIdPrincipal ??
-    client?.internal?.operatorRunAuthority?.openclawIdPrincipal;
-  if (!client || principal?.kind !== "member" || !client.connect.scopes?.includes(ADMIN_SCOPE)) {
-    return undefined;
-  }
-  const policy = resolveOperatorRolePolicy(client, cfg);
-  return policy?.scopes.includes(ADMIN_SCOPE) ? policy : deniedOperatorRole;
 }
 
 /** A retained caller cannot keep grants removed by the current named role. */
@@ -401,7 +385,6 @@ export function authorizeGatewaySessionCreation(
     return undefined;
   }
   const profileId = actor?.kind === "operator" ? actor.profileId : params.profileId;
-  // Retain membership restrictions independently of the linked profile's named role.
   const role = params.authority
     ? params.authority.rolePolicy
     : prepared

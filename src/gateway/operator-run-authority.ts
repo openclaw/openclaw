@@ -555,6 +555,17 @@ export async function captureGatewayOperatorRunAuthority(input: {
         subscriptions.push(() => sourceSignal.removeEventListener("abort", onAbort));
       }
     }
+    subscriptions.push(
+      onOperatorRolePolicyChanged((change) => {
+        if (
+          change.kind === "assignment" &&
+          change.profileId === profileId &&
+          !(change.roleOnly && openclawIdPrincipal?.kind === "owner")
+        ) {
+          revoke(new Error("Your operator role changed; reconnect before continuing."));
+        }
+      }),
+    );
     assertCurrent();
     assertAdmissionCurrent();
     preparedProfile = await prepareUserProfileIdentity(profileId);

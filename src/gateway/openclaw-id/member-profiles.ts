@@ -1,9 +1,19 @@
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { linkCanonicalOpenClawIdUserProfile } from "../../state/user-profile-openclaw-id.js";
+import {
+  invalidateOperatorRolePolicy,
+  resolveOperatorRoleSelection,
+} from "../operator-role-policy.js";
 // Member display belongs to the Gateway's canonical profile owner, not expiring invitations.
 import type { StoredClaw } from "./claw-store.js";
 
 /** Display-only facts; none of these fields grant access or create an email alias. */
-type MemberProfileDisplay = { id: string; displayName: string | null; email: string | null };
+type MemberProfileDisplay = {
+  id: string;
+  displayName: string | null;
+  email: string | null;
+  effectiveRole?: string;
+};
 
 /** The existing profile owner, injectable alongside the claw store in isolated authority tests. */
 export type OpenClawIdMemberProfiles = {
@@ -12,6 +22,7 @@ export type OpenClawIdMemberProfiles = {
     name?: string | null;
     email?: string | null;
   }) => Promise<unknown>;
+  setRole: (accountId: string, role: string, onlyIfUnassigned: boolean) => Promise<void>;
   read: (accountIds: readonly string[]) => Promise<Record<string, MemberProfileDisplay>>;
   inviteProfiles: () => Promise<Array<{ id: string; displayName: string | null }>>;
   link: (
@@ -36,9 +47,50 @@ export const canonicalMemberProfiles: OpenClawIdMemberProfiles = {
       await import("../../state/user-profile-openclaw-id.js");
     return ensureCanonicalUserProfileForOpenClawIdIdentity(input);
   },
+  async setRole(accountId, role, onlyIfUnassigned) {
+    const { ensureCanonicalUserProfileForOpenClawIdIdentity, setCanonicalUserProfileRole } =
+      await import("../../state/user-profile-writes.js");
+    const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({ accountId });
+    const { prepareUserProfileRoleAuthority } =
+      await import("../../state/user-channel-identity-operations.js");
+    const target = await prepareUserProfileRoleAuthority(profile.id);
+    if (!target) {
+      throw new Error("Member profile is unavailable; retry the role assignment.");
+    }
+    if (!onlyIfUnassigned || !target.role) {
+      await setCanonicalUserProfileRole(profile.id, role, {
+        assertCurrent: () => {
+          if (!target.isCurrent()) {
+            throw new Error("Member profile changed; retry the role assignment.");
+          }
+        },
+        onCommitted: (id) => invalidateOperatorRolePolicy(id, { roleOnly: true }),
+      });
+    }
+  },
   async read(accountIds) {
     const { readOpenClawIdUserProfiles } = await import("../../state/user-profile-openclaw-id.js");
-    return readOpenClawIdUserProfiles(accountIds);
+    const profiles = await readOpenClawIdUserProfiles(accountIds);
+    const { prepareUserProfileRoleAuthority } =
+      await import("../../state/user-channel-identity-operations.js");
+    const config = getRuntimeConfigSnapshot() ?? {};
+    return Object.fromEntries(
+      await Promise.all(
+        Object.entries(profiles).map(async ([id, profile]) => {
+          const authority = await prepareUserProfileRoleAuthority(profile.id);
+          const selection = resolveOperatorRoleSelection(
+            profile.id,
+            authority?.role ?? null,
+            config,
+            authority?.githubLogin ?? null,
+          );
+          return [
+            id,
+            { ...profile, effectiveRole: selection.effectiveRole ?? authority?.role ?? undefined },
+          ];
+        }),
+      ),
+    );
   },
 };
 
@@ -54,6 +106,8 @@ export async function retainMemberProfiles(
     record?.member_approved_at && Object.hasOwn(record.member_approved_at, id)
       ? record.member_approved_at[id]
       : undefined;
+  const rolesInitialized = next.member_profile_roles ?? {};
+  const needsRoles = accountIds.some((id) => !rolesInitialized[id]);
   const reports = Object.entries(next.invite_reports ?? {});
   const hasInvite = (id: string) =>
     Object.hasOwn(next.authority?.invites ?? {}, id) ||
@@ -64,10 +118,11 @@ export async function retainMemberProfiles(
       (entry.resolution === "approved" &&
         (entry.email !== null ||
           entry.display_name !== null ||
-          (entry.existingProfile && previous?.invite_reports?.[id]?.resolution !== "approved"))),
+          previous?.invite_reports?.[id]?.resolution !== "approved")),
   );
   if (
     !needsReports &&
+    !needsRoles &&
     accountIds.length === Object.keys(next.member_approved_at ?? {}).length &&
     accountIds.every((id) => approval(next, id) !== undefined)
   ) {
@@ -129,6 +184,19 @@ export async function retainMemberProfiles(
         ...(report?.email ? { email: report.email } : {}),
       });
     }
+    const freshApproval =
+      approved && previous?.invite_reports?.[approved[0]]?.resolution !== "approved";
+    if (!rolesInitialized[accountId] || freshApproval) {
+      // Upgrade imports the label once, preserving explicit profile assignments. New
+      // admission and owner-signed role changes assign the requested profile role.
+      await profiles.setRole(
+        accountId,
+        members[accountId]!.role,
+        !freshApproval &&
+          existingMember &&
+          previous?.authority?.members[accountId]?.role === members[accountId]!.role,
+      );
+    }
     // Old direct additions have no recorded approval time; do not invent one during migration.
     const createdAt = Object.hasOwn(previous?.authority?.members ?? {}, accountId)
       ? null
@@ -146,6 +214,7 @@ export async function retainMemberProfiles(
   return {
     ...next,
     member_approved_at: Object.fromEntries(approvedAt),
+    member_profile_roles: Object.fromEntries(accountIds.map((id) => [id, true])),
     ...(next.invite_reports ? { invite_reports: inviteReports } : {}),
   };
 }

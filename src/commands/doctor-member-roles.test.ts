@@ -147,7 +147,7 @@ const clawStore = () =>
 it("reads member roles from a monolithic claw record", async ({ state }) => {
   state.applyEnv();
   await clawStore().register("current", claw({ alice: "retired" }));
-  expect(await readDoctorMemberRoles()).toEqual(new Map([["alice", "retired"]]));
+  expect(await readDoctorMemberRoles(cfg())).toEqual(new Map([["alice", "retired"]]));
 });
 
 it("reports incomplete local membership instead of passing silently", async ({ state }) => {
@@ -189,7 +189,7 @@ for (const key of ["members", "members:1"]) {
     for (const value of [null, [], 42, "not a member collection"]) {
       await writeStoredClaw(claw({ alice: "undefined-role" }));
       await clawStore().register(key, value);
-      await expect(readDoctorMemberRoles()).rejects.toThrow(
+      await expect(readDoctorMemberRoles(cfg())).rejects.toThrow(
         "OpenClaw ID claw storage has an invalid member collection",
       );
       expect(await detect(cfg())).toEqual([
@@ -304,17 +304,12 @@ it("does not warn for unused required roles or an unprobed non-container backend
   expect(spawnCommand).not.toHaveBeenCalled();
 });
 
-it("warns about stored assignments only when the named default is absent", async ({ state }) => {
+it("keeps explicit assignments active without a default", async ({ state }) => {
   state.applyEnv();
   const profile = ensureProfileForEmail("alice@example.test");
   setUserProfileRole(profile.id, "viewer");
   await closeOpenClawStateDatabaseAsync();
-  expect(await detect(cfg(false))).toEqual([
-    expect.objectContaining({
-      requirement: "assignments-inactive",
-      message: expect.stringMatching(/enforcement is off.*assignments have no effect/),
-    }),
-  ]);
+  expect(await detect(cfg(false))).toEqual([]);
   const config = cfg(false);
   config.gateway!.roles!.default = "viewer";
   expect(await detect(config)).toEqual([]);

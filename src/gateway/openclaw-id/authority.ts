@@ -428,7 +428,10 @@ export function createOpenClawIdAuthority(
           }
           return { ok: false, code: result.code, detail: result.detail };
         }
-        assertMemberRoleDefined(input);
+        const roleChange = assertMemberRoleDefined(input);
+        if (roleChange && result.status === "applied") {
+          await profiles.setRole(roleChange.account_id, roleChange.role, false);
+        }
         const resolved = resolvedInvite(input);
         await commit({
           ...current,
@@ -661,7 +664,7 @@ export function createOpenClawIdAuthority(
     /** Only this member account's devices, without owner, invite or other-account details. */
     async memberView(peerKey: string) {
       const current = await load();
-      const view = await readMemberView(current, currentPeer(peerKey));
+      const view = await readMemberView(current, currentPeer(peerKey), profiles.read);
       return record === current ? view : undefined;
     },
 

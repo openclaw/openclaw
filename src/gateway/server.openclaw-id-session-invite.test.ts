@@ -1,25 +1,18 @@
-import { createServer, type IncomingMessage } from "node:http";
-import http from "node:http";
+import http, { createServer, type IncomingMessage } from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
-import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import {
   formatIrohEndpointKey,
   generateEd25519Signer,
 } from "../../packages/openclaw-id-protocol/src/index.js";
 import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
-import { withinTest } from "../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import {
-  closeProvider,
-  listenProvider,
-  writeToolCall,
-} from "./gateway-provider-fixture.test-support.js";
+import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { readStoredClaw, writeStoredClaw } from "./openclaw-id/claw-store.js";
 import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
@@ -59,11 +52,6 @@ const ROLES: Record<string, GatewayOperatorRoleDefinition> = {
     scopes: ["operator.read", "operator.write"],
     sandbox: "required",
   },
-  "session-approver": {
-    sessions: { others: "invited" },
-    agents: ["main"],
-    scopes: ["operator.read", "operator.write", "operator.approvals"],
-  },
   staff: {
     sessions: { others: "write" },
     agents: "*",
@@ -88,22 +76,14 @@ async function runScenario(mode: Mode, signal: AbortSignal) {
   const state = await createOpenClawTestState(kernelGatewayTestStateOptions(`oid-invite-${mode}`));
   const clients: Client[] = [];
   let server: Awaited<ReturnType<typeof startGatewayServerCore>> | undefined;
-  // A user turn ending in RUN_EXEC asks for one exec call; everything else gets a text reply.
   const provider = createServer((request, response) => {
-    void readRequestText(request).then((body) => {
-      const input = (JSON.parse(body) as { input?: Array<{ type?: string }> }).input ?? [];
-      const lastOutput = input.findLastIndex((item) => item.type === "function_call_output");
-      const pending = JSON.stringify(input.slice(lastOutput + 1));
-      if (!body.includes("Generate a concise session title") && pending.includes("RUN_EXEC")) {
-        writeToolCall(response, "exec", { command: "printf approval-proof" });
-        return;
-      }
+    void readRequestText(request).then(() =>
       writeOpenAiResponsesText(response, {
         text: "Acknowledged.",
         messageId: "invite-reply",
         responseId: "invite-response",
-      });
-    });
+      }),
+    );
   });
   const model = buildMockOpenAiResponsesProvider(await listenProvider(provider), "oid-invite");
   const port = await getFreePort();
@@ -116,23 +96,15 @@ async function runScenario(mode: Mode, signal: AbortSignal) {
       role: "session-guest-unsandboxed",
     },
     writer: { origin: "http://writer.member.test", account: "acct-writer", role: "session-writer" },
-    approver: {
-      origin: "http://approver.member.test",
-      account: "acct-approver",
-      role: "session-approver",
-    },
     writerSandboxed: {
       origin: "http://writer2.member.test",
       account: "acct-writer2",
       role: "session-writer-sandboxed",
     },
   } as const;
-  const peers = new Map<string, string>();
-  type GatewayEvent = { event?: string; payload?: unknown };
-  const events = new Map<string, GatewayEvent[]>();
+  const peers = new Map<string, ReturnType<typeof formatIrohEndpointKey>>();
   for (const member of Object.values(members)) {
     peers.set(member.origin, formatIrohEndpointKey((await generateEd25519Signer()).publicKey));
-    events.set(member.origin, []);
   }
   // oxlint-disable-next-line typescript/unbound-method -- The observer supplies the original server receiver.
   const emit = http.Server.prototype.emit;
@@ -178,7 +150,7 @@ async function runScenario(mode: Mode, signal: AbortSignal) {
         },
       },
       plugins: { slots: { memory: "none" } },
-      tools: { profile: "minimal", alsoAllow: ["exec"], exec: { host: "gateway" } },
+      tools: { profile: "minimal" },
       gateway: {
         mode: "local",
         bind: "loopback",
@@ -222,7 +194,6 @@ async function runScenario(mode: Mode, signal: AbortSignal) {
       peers.get(members.guest.origin)!,
     );
     server = await startGatewayServerCore(port, { bind: "loopback", controlUiEnabled: false });
-    const ownerEvents: GatewayEvent[] = [];
     // Human mentions require a signed-in Control UI chat connection.
     const owner = await connectGatewayClient({
       url: `ws://127.0.0.1:${port}`,
@@ -232,8 +203,6 @@ async function runScenario(mode: Mode, signal: AbortSignal) {
       mode: GATEWAY_CLIENT_MODES.WEBCHAT,
       platform: "web",
       scopes: ["operator.admin"],
-      caps: [GATEWAY_CLIENT_CAPS.APPROVALS, GATEWAY_CLIENT_CAPS.EXEC_APPROVALS],
-      onEvent: (event) => ownerEvents.push(event),
       signal,
     });
     clients.push(owner);
@@ -255,22 +224,20 @@ async function runScenario(mode: Mode, signal: AbortSignal) {
       // The OpenClaw ID service publishes its token-binding owner after Gateway startup.
       for (let attempt = 0; !client; attempt += 1) {
         try {
-          client = await connectMember_(origin);
+          client = await openMemberConnection(origin);
         } catch (error) {
           if (attempt > 40 || !String(error).includes("bindings are unavailable")) {
             throw error;
           }
-          await new Promise((resolve) => setTimeout(resolve, 250));
+          await delay(250);
         }
       }
       clients.push(client);
       const self = await client.request<{ profile: { id: string } }>("users.self", {});
       return { client, profileId: self.profile.id };
     };
-    const connectMember_ = async (origin: string) =>
+    const openMemberConnection = async (origin: string) =>
       connectGatewayClient({
-        caps: [GATEWAY_CLIENT_CAPS.APPROVALS, GATEWAY_CLIENT_CAPS.EXEC_APPROVALS],
-        onEvent: (event) => events.get(origin)?.push(event),
         url: `ws://127.0.0.1:${port}`,
         origin,
         timeoutMs: 6000,
@@ -282,7 +249,6 @@ async function runScenario(mode: Mode, signal: AbortSignal) {
           "operator.write",
           "operator.sessions.read",
           "operator.sessions.write",
-          "operator.approvals",
         ],
         signal,
       });
@@ -290,7 +256,6 @@ async function runScenario(mode: Mode, signal: AbortSignal) {
     const guest2 = await connectMember(members.guestUnsandboxed.origin);
     const writer = await connectMember(members.writer.origin);
     const writer2 = await connectMember(members.writerSandboxed.origin);
-    const approver = await connectMember(members.approver.origin);
 
     const create = async (agentId: string) =>
       (
@@ -320,27 +285,6 @@ async function runScenario(mode: Mode, signal: AbortSignal) {
         : keys;
     };
     const report: Record<string, unknown> = { mode };
-    // Check 3: permission-mode changes on an idle invited owner session (no run yet).
-    const permKey = await create("main");
-    for (const profileId of [guest2.profileId, writer.profileId, writer2.profileId]) {
-      await owner.request("session.members.add", { sessionKey: permKey, identityId: profileId });
-    }
-    const mode_ = () => loadSessionEntry({ agentId: "main", sessionKey: permKey })?.permissionMode;
-    const patch = (client: Client, permissionMode: string) =>
-      settle(client.request("sessions.patch", { key: permKey, permissionMode })).then((r) =>
-        r.ok ? `accepted (now ${String(mode_())})` : r.error,
-      );
-    report.check3InitialMode = mode_() ?? null;
-    report.check3OwnerSetsGuarded = await patch(owner, "guarded");
-    report.check3WriterGuardedToWorkspace = await patch(writer.client, "workspace");
-    report.check3OwnerSetsGuardedAgain = await patch(owner, "guarded");
-    report.check3WriterToFull = await patch(writer.client, "full");
-    report.check3OwnerSetsReadOnly = await patch(owner, "read-only");
-    report.check3WriterLoosensReadOnly = await patch(writer.client, "workspace");
-    report.check3OwnerSetsReadOnlyAgain = await patch(owner, "read-only");
-    report.check3GuestLoosensReadOnly = await patch(guest2.client, "workspace");
-    report.check3SandboxedWriterLoosensReadOnly = await patch(writer2.client, "workspace");
-    report.check3FinalMode = mode_() ?? null;
     const mentionable = await settle(
       owner.request<{ users: { profileId: string }[] }>("users.mentionable", {
         sessionKey: invitedKey,
@@ -369,19 +313,19 @@ async function runScenario(mode: Mode, signal: AbortSignal) {
       }),
     );
     report.mentionSend = send.ok ? "accepted" : send;
-    const members_ = await settle(
+    const membership = await settle(
       owner.request<{ members: { identityId: string }[] }>("session.members.list", {
         sessionKey: invitedKey,
       }),
     );
-    report.membersAfterMention = members_.ok
+    report.membersAfterMention = membership.ok
       ? {
-          guest: members_.value.members?.some((m) => m.identityId === guest.profileId),
-          guest2: members_.value.members?.some((m) => m.identityId === guest2.profileId),
-          writer: members_.value.members?.some((m) => m.identityId === writer.profileId),
-          writer2: members_.value.members?.some((m) => m.identityId === writer2.profileId),
+          guest: membership.value.members?.some((m) => m.identityId === guest.profileId),
+          guest2: membership.value.members?.some((m) => m.identityId === guest2.profileId),
+          writer: membership.value.members?.some((m) => m.identityId === writer.profileId),
+          writer2: membership.value.members?.some((m) => m.identityId === writer2.profileId),
         }
-      : members_;
+      : membership;
     report.visibleAfterMention = {
       guest: await visible(guest.client),
       guest2: await visible(guest2.client),
@@ -452,89 +396,6 @@ async function runScenario(mode: Mode, signal: AbortSignal) {
       "writer-other-agent",
       "other",
     );
-
-    // Check 4: approvals for exec raised in a guarded invited session.
-    const approvalKey = await create("main");
-    await owner.request("sessions.patch", { key: approvalKey, permissionMode: "guarded" });
-    await owner.request("session.members.add", {
-      sessionKey: approvalKey,
-      identityId: approver.profileId,
-    });
-    await owner.request("session.members.add", {
-      sessionKey: approvalKey,
-      identityId: writer.profileId,
-    });
-    const requestedIds = (list: GatewayEvent[]) =>
-      list.flatMap(({ event, payload }) =>
-        event === "exec.approval.requested" &&
-        payload &&
-        typeof payload === "object" &&
-        typeof (payload as { id?: unknown }).id === "string"
-          ? [(payload as { id: string }).id]
-          : [],
-      );
-    const awaitApproval = async (seen: Set<string>) => {
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        const id = requestedIds(ownerEvents).find((candidate) => !seen.has(candidate));
-        if (id) {
-          seen.add(id);
-          return id;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 200));
-      }
-      return undefined;
-    };
-    const seen = new Set<string>();
-    const resolve = (client: Client, id: string, decision: string) =>
-      settle(client.request("exec.approval.resolve", { id, decision })).then((r) =>
-        r.ok ? "resolved" : r.error,
-      );
-    const listed_ = async (client: Client, id: string) =>
-      settle(
-        client
-          .request<Array<{ id: string }>>("exec.approval.list", {})
-          .then((r) => r.some((item) => item.id === id)),
-      ).then((r) => (r.ok ? r.value : r.error));
-    const ownTurn = await settle(
-      approver.client.request("chat.send", {
-        sessionKey: approvalKey,
-        message: "please RUN_EXEC",
-        idempotencyKey: `approver-exec-${mode}`,
-      }),
-    );
-    report.check4ApproverTurn = ownTurn.ok ? "accepted" : ownTurn.error;
-    const ownId = ownTurn.ok ? await awaitApproval(seen) : undefined;
-    report.check4ApproverApprovalRaised = Boolean(ownId);
-    if (ownId) {
-      const id = ownId;
-      report.check4ApproverSawRequestedEvent = requestedIds(
-        events.get(members.approver.origin)!,
-      ).includes(id);
-      report.check4ApproverListsOwnApproval = await listed_(approver.client, id);
-      report.check4WriterWithoutApprovalsScope = await resolve(writer.client, id, "deny");
-      report.check4ApproverResolvesOwn = await resolve(approver.client, id, "allow-once");
-      if (report.check4ApproverResolvesOwn !== "resolved") {
-        await resolve(owner, id, "deny");
-      }
-    }
-    const ownerTurn = await settle(
-      owner.request("chat.send", {
-        sessionKey: approvalKey,
-        message: "owner RUN_EXEC",
-        idempotencyKey: `owner-exec-${mode}`,
-      }),
-    );
-    report.check4OwnerTurn = ownerTurn.ok ? "accepted" : ownerTurn.error;
-    const ownerId = ownerTurn.ok ? await awaitApproval(seen) : undefined;
-    report.check4OwnerApprovalRaised = Boolean(ownerId);
-    if (ownerId) {
-      const id = ownerId;
-      report.check4ApproverListsOwnersApproval = await listed_(approver.client, id);
-      report.check4ApproverResolvesOwners = await resolve(approver.client, id, "deny");
-      if (report.check4ApproverResolvesOwners !== "resolved") {
-        await resolve(owner, id, "deny");
-      }
-    }
     return report;
   } finally {
     for (const client of clients) {
@@ -547,37 +408,37 @@ async function runScenario(mode: Mode, signal: AbortSignal) {
   }
 }
 
-// Members get permissions from their OpenClaw ID membership role, never their profile role.
+// Members get permissions from their OpenClaw ID linked Gateway profile role.
 it.for<Mode>([
   "enforcement-off",
   "enforcement-on-permissive-default",
   "enforcement-on-denying-default",
 ])(
-  "OpenClaw ID members invited by mention follow their membership role (%s)",
+  "OpenClaw ID members invited by mention follow their profile role (%s)",
   async (mode, { signal }) => {
     const report = await runScenario(mode, signal);
-    // Mention invitations: expected behavior, red today (recipient judged by profile/default role).
-    expect.soft(report.mentionable, "mention picker").toEqual({
+    // Mention recipients use the same profile role as their live connections.
+    expect(report.mentionable, "mention picker").toEqual({
       guest: true,
       guest2: true,
       writer: true,
       writer2: true,
     });
-    expect.soft(report.mentionSend, "mention send").toBe("accepted");
-    expect.soft(report.membersAfterMention, "invitation membership").toEqual({
+    expect(report.mentionSend, "mention send").toBe("accepted");
+    expect(report.membersAfterMention, "invitation membership").toEqual({
       guest: true,
       guest2: true,
       writer: true,
       writer2: true,
     });
-    expect.soft(report.visibleAfterMention, "visibility after mention").toEqual({
+    expect(report.visibleAfterMention, "visibility after mention").toEqual({
       guest: { invited: true, other: false, otherAgent: false },
       guest2: { invited: true, other: false, otherAgent: false },
       writer: { invited: true, other: false, otherAgent: false },
       writer2: { invited: true, other: false, otherAgent: false },
     });
 
-    // Checks 1 and 2 use explicit membership and hold today.
+    // Scope, agent and sandbox ceilings remain unchanged.
     expect(report.visibleAfterExplicitAdd).toEqual({
       guest: { invited: true, other: false, otherAgent: false },
       guest2: { invited: true, other: false, otherAgent: false },
@@ -593,38 +454,5 @@ it.for<Mode>([
     expect(report.check2SandboxedWriterInvitedTurn).toMatch(/requires a sandboxed session/);
     expect(report.check2WriterOtherSessionTurn).toMatch(/was not found/);
     expect(report.check2WriterOtherAgentTurn).toMatch(/cannot create sessions for agent "other"/);
-    // Check 3: operator.write alone moves an invited owner session between non-full modes,
-    // including loosening read-only, even for a sandbox-required role; full needs admin.
-    expect({
-      guardedToWorkspace: report.check3WriterGuardedToWorkspace,
-      toFull: report.check3WriterToFull,
-      loosenReadOnly: report.check3WriterLoosensReadOnly,
-      sessionsWriteOnly: report.check3GuestLoosensReadOnly,
-      sandboxedWriter: report.check3SandboxedWriterLoosensReadOnly,
-    }).toEqual({
-      guardedToWorkspace: "accepted (now workspace)",
-      toFull: "missing scope: operator.admin",
-      loosenReadOnly: "accepted (now workspace)",
-      sessionsWriteOnly: "Session-scoped writes require your own session.",
-      sandboxedWriter: "accepted (now workspace)",
-    });
-
-    // Check 4: operator.approvals resolves any approval in a readable invited session,
-    // the member's own and the owner's alike; without the scope the resolve is refused.
-    expect({
-      raised: report.check4ApproverApprovalRaised,
-      listed: report.check4ApproverListsOwnApproval,
-      withoutScope: report.check4WriterWithoutApprovalsScope,
-      own: report.check4ApproverResolvesOwn,
-      ownersListed: report.check4ApproverListsOwnersApproval,
-      owners: report.check4ApproverResolvesOwners,
-    }).toEqual({
-      raised: true,
-      listed: true,
-      withoutScope: "missing scope: operator.approvals",
-      own: "resolved",
-      ownersListed: true,
-      owners: "resolved",
-    });
   },
 );

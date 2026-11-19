@@ -99,7 +99,7 @@ it("summarizes session access, required sandbox and administrator access without
   }
 });
 
-it("commits a started role change after deletion and blocks the member's next admission", async () => {
+it("commits a started profile role change after deletion and reports its undefined label", async () => {
   const base = memoryStore();
   const reached = createDeferredCore();
   const resume = createDeferredCore();
@@ -141,7 +141,7 @@ it("commits a started role change after deletion and blocks the member's next ad
     expect(claw.authority.current()?.authority?.members.member?.role).toBe("viewer");
     expect((await base.read())?.authority?.members.member?.role).toBe("viewer");
     expect(effects.closeConnections).toHaveBeenCalledWith([`conn-${peer.slice(5, 9)}`]);
-    expect(await resolveOpenClawIdTunnelPrincipal(peer)).toBeUndefined();
+    expect(await resolveOpenClawIdTunnelPrincipal(peer)).toMatchObject({ kind: "member" });
     expect((await service.linkStatus()).members).toMatchObject([
       { accountId: "member", role: "viewer", roleDefined: false },
     ]);

@@ -79,9 +79,7 @@ function failedHttpProfileAuthentication(error?: unknown): HttpUserProfileAuthRe
   };
 }
 
-// An OpenClaw ID tunnel device is capped by its membership role on every HTTP
-// surface, and its request keeps authority only while that membership is
-// unchanged: a removal or role change fails every later authority check.
+// HTTP requests retain membership admission independently of their profile role.
 function withOpenClawIdPrincipal(
   profile: AuthenticatedHttpUserProfile,
   principal: OpenClawIdTunnelPrincipal,

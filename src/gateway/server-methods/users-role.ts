@@ -3,6 +3,7 @@ import {
   type UsersListParams,
   type UsersSetRoleParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import { readUserProfileSnapshot } from "../../state/user-profile-list.js";
 import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
 import { listProfiles } from "../../state/user-profiles.js";
@@ -25,27 +26,19 @@ export async function handleUsersSetRole(
   const { profileId, role } = params;
   const roleAssignmentError = () =>
     resolveUserRoleAssignmentError(() => context.getRuntimeConfig(), role);
-  const isMemberProfile =
-    role !== null
-      ? await context.openclawIdService?.prepareMemberProfileCheck(profileId)
-      : undefined;
-  const memberRoleMessage = "This member's role is managed on the Access page.";
-  if (isMemberProfile?.()) {
-    respondError(respond, ErrorCodes.INVALID_REQUEST, memberRoleMessage);
-    return;
-  }
   const assignmentError = roleAssignmentError();
   if (assignmentError) {
     respondError(respond, ErrorCodes.INVALID_REQUEST, assignmentError);
     return;
   }
   const assertCurrent = await prepareUserProfileAdministration(options);
+  const target = await prepareUserProfileRoleAuthority(profileId);
   holdGatewayPolicyResponse(respond);
   const profile = await setCanonicalUserProfileRole(profileId, role, {
     assertCurrent: () => {
       assertCurrent();
-      if (isMemberProfile?.()) {
-        throw new Error(memberRoleMessage);
+      if (target && !target.isCurrent()) {
+        throw new Error("Target profile changed; retry the role assignment.");
       }
       const error = roleAssignmentError();
       if (error) {

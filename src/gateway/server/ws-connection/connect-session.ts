@@ -286,7 +286,7 @@ export async function attachAuthenticatedGatewayConnect(
           identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
           upgradeReq: context.handler.upgradeReq,
         });
-  // OpenClaw ID members are capped by their membership role, whatever the device requested.
+  // Only nodes have a transport ceiling; identified people share the profile policy.
   const openclawIdRolePolicy =
     role === "operator" ? openclawIdTunnelRolePolicy(openclawIdPrincipal) : undefined;
   const rolePolicy = remoteIngressPrincipal
@@ -405,7 +405,7 @@ export async function attachAuthenticatedGatewayConnect(
     ...(context.handler.ingressAttribution.kind === "openclaw-id-tunnel"
       ? { openclawIdPeerKey: context.handler.ingressAttribution.peerKey }
       : {}),
-    ...(openclawIdPrincipal ? { openclawIdPrincipal, openclawIdRolePolicy } : {}),
+    ...(openclawIdPrincipal ? { openclawIdPrincipal } : {}),
     ...(authenticatedOperator ? { authenticatedOperator: true as const } : {}),
     ...(authenticatedControlUi ? { authenticatedControlUi: true as const } : {}),
     ...(controlUiAdmin ? { controlUiAdmin: true as const } : {}),

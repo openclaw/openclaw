@@ -43,7 +43,7 @@ export async function readOwnerLinkStatus(params: {
         const profile = profiles[accountId];
         return {
           accountId,
-          role: member.role,
+          role: profile?.effectiveRole ?? "unassigned",
           recoveryKit: Boolean(member.recovery_kit),
           peerKeys: member.peer_keys,
           email: profile?.email ?? null,

@@ -34,6 +34,7 @@ import {
 } from "./device-revocation.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
+  onOpenClawIdTunnelPrincipalsChanged,
   openclawIdSubjectRolePolicy,
   prepareOpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
@@ -42,6 +43,7 @@ import {
   resumeGatewayOperatorAccessGrant,
 } from "./operator-access-policy.js";
 import {
+  onOperatorRolePolicyChanged,
   readOperatorRoleConfigRevision,
   resolveOperatorRolePolicyForAssignment,
 } from "./operator-role-policy.js";
@@ -336,6 +338,24 @@ async function restoreGatewayOperatorSnapshot(params: {
     await prepared.revalidate();
     const admittedConfig = assertRecoveryCurrent();
     const reauthorizePolicy = assertPolicy;
+    const recheckPolicy = () => {
+      try {
+        reauthorizePolicy();
+      } catch (error) {
+        if (!isOperatorAuthorityUnavailable(error)) {
+          revoke(error);
+        }
+      }
+    };
+    subscriptions.push(onOpenClawIdTunnelPrincipalsChanged(recheckPolicy));
+    subscriptions.push(
+      onOperatorRolePolicyChanged((change) => {
+        if (change.kind !== "assignment" || change.profileId !== snapshot.profileId) {
+          return;
+        }
+        recheckPolicy();
+      }),
+    );
     const capturedModelPolicy = structuredClone(resolveRole(admittedConfig)?.modelPolicy);
     admitted = true;
     assertPolicy = () => {

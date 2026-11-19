@@ -1,7 +1,3 @@
-// Design probe: OpenClaw ID members whose authority comes from their Gateway profile role.
-// Test-only shims (see `shim` below): users.setRole's member guard is bypassed, and a
-// member's effective role policy is read from its linked profile's role instead of
-// its membership role. Everything else is the production Gateway.
 import http, { createServer, type IncomingMessage } from "node:http";
 import { expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
@@ -14,9 +10,7 @@ import { readRequestText } from "../../test/helpers/gateway-integration-fixtures
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
-import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import { linkCanonicalOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -32,68 +26,10 @@ import { readStoredClaw, writeStoredClaw } from "./openclaw-id/claw-store.js";
 import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
 import { setOpenClawIdOwnerAccountResolver } from "./openclaw-id/owner-account.js";
-import type { OpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
 import { startGatewayServerCore } from "./server-start.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import { kernelGatewayTestStateOptions } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
-
-const shim = vi.hoisted(() => ({
-  /** accountId -> linked Gateway profile, registered once the profile has a role. */
-  profiles: new Map<string, string>(),
-}));
-
-const DENIED: GatewayOperatorRoleDefinition = {
-  scopes: [],
-  agents: [],
-  sessions: { others: "none" },
-};
-
-function profileRolePolicy(
-  principal: OpenClawIdTunnelPrincipal | undefined,
-): GatewayOperatorRoleDefinition | undefined {
-  if (principal?.kind !== "member") {
-    return undefined;
-  }
-  const profileId = shim.profiles.get(principal.accountId);
-  if (!profileId) {
-    return undefined;
-  }
-  const role = captureResidentUserProfileAccess(profileId).assertCurrent()?.role ?? null;
-  const definitions = getRuntimeConfigSnapshot()?.gateway?.roles?.definitions ?? {};
-  // Proposed semantics: no profile role means no authority.
-  return role && Object.hasOwn(definitions, role) ? definitions[role] : DENIED;
-}
-
-// Shim 1: the member's policy is its profile role (membership role is only a label).
-vi.mock("./openclaw-id/tunnel-principal.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./openclaw-id/tunnel-principal.js")>();
-  const memberPolicy = (principal: OpenClawIdTunnelPrincipal | undefined) =>
-    profileRolePolicy(principal) ?? actual.openclawIdTunnelRolePolicy(principal);
-  return {
-    ...actual,
-    openclawIdTunnelRolePolicy: memberPolicy,
-    openclawIdSubjectRolePolicy: (
-      principal: OpenClawIdTunnelPrincipal | undefined,
-      resolveProfileRole: () => GatewayOperatorRoleDefinition | undefined,
-    ) =>
-      principal?.kind === "owner" ? undefined : (memberPolicy(principal) ?? resolveProfileRole()),
-  };
-});
-
-// Shim 2: users.setRole no longer refuses OpenClaw ID member profiles.
-vi.mock("./openclaw-id/connection-identity.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./openclaw-id/connection-identity.js")>();
-  return {
-    ...actual,
-    createOpenClawIdConnectionAccess: (
-      params: Parameters<typeof actual.createOpenClawIdConnectionAccess>[0],
-    ) => ({
-      ...actual.createOpenClawIdConnectionAccess(params),
-      prepareMemberProfileCheck: async () => () => false,
-    }),
-  };
-});
 
 type Client = Awaited<ReturnType<typeof connectGatewayClient>>;
 type CutOff =
@@ -105,7 +41,7 @@ type CutOff =
 type Hold = { marker: string; aborted: boolean; release: () => void };
 
 const ROLES: Record<string, GatewayOperatorRoleDefinition> = {
-  // Membership label only; before a profile role exists it caps the first connection.
+  // Admission assigns this role before the first connection.
   "member-label": {
     sessions: { others: "none" },
     agents: "*",
@@ -147,7 +83,6 @@ async function until(check: () => boolean, timeoutMs = 20_000) {
 }
 
 async function runScenario(cutOff: CutOff, signal: AbortSignal) {
-  shim.profiles.clear();
   const state = await createOpenClawTestState({
     ...kernelGatewayTestStateOptions(`oid-suspend-${cutOff}`),
     env: {
@@ -231,7 +166,7 @@ async function runScenario(cutOff: CutOff, signal: AbortSignal) {
     admin: { origin: "http://admin.test", account: "acct-admin" },
   } as const;
   const ownerDeviceOrigin = "http://owner-device.test";
-  const peers = new Map<string, string>();
+  const peers = new Map<string, ReturnType<typeof formatIrohEndpointKey>>();
   for (const person of Object.values(people)) {
     peers.set(person.origin, formatIrohEndpointKey((await generateEd25519Signer()).publicKey));
   }
@@ -283,8 +218,7 @@ async function runScenario(cutOff: CutOff, signal: AbortSignal) {
         bind: "loopback",
         auth: { mode: "token", token },
         openclawId: { enabled: true },
-        // Profile-role assignment needs named-role enforcement (a default role).
-        roles: { default: "reader", definitions: ROLES },
+        roles: { definitions: ROLES },
         controlUi: {
           allowedOrigins: [
             `http://127.0.0.1:${port}`,
@@ -363,8 +297,6 @@ async function runScenario(cutOff: CutOff, signal: AbortSignal) {
     const adminProfile = firstAdmin.profileId!;
     await owner.request("users.setRole", { profileId: memberProfile, role: "worker" });
     await owner.request("users.setRole", { profileId: adminProfile, role: "administrator" });
-    shim.profiles.set(people.member.account, memberProfile);
-    shim.profiles.set(people.admin.account, adminProfile);
     const report: Record<string, unknown> = { cutOff };
     report.setupFirstConnectionClosedByOwnerSetRole = await until(
       () => firstMember.closeCode() !== undefined,
@@ -430,10 +362,6 @@ async function runScenario(cutOff: CutOff, signal: AbortSignal) {
     });
     const ownerDevice = await connect(ownerDeviceOrigin);
     report.ownerDeviceProfileIsPerson = ownerDevice.profileId === person.id;
-    if (cutOff === "today-owner-sets-null") {
-      // Today: the member's authority is its membership role, not the profile role.
-      shim.profiles.delete(people.member.account);
-    }
     const cutAt = Date.now();
     if (cutOff === "control") {
       report.cut = "none";
@@ -441,11 +369,7 @@ async function runScenario(cutOff: CutOff, signal: AbortSignal) {
       report.cut = await settle(
         admin.client.request("users.setRole", { profileId: memberProfile, role: null }),
       );
-    } else if (
-      cutOff === "owner-sets-reader" ||
-      cutOff === "owner-sets-null" ||
-      cutOff === "today-owner-sets-null"
-    ) {
+    } else if (cutOff === "owner-sets-reader" || cutOff === "owner-sets-null") {
       report.cut = await settle(
         owner.request("users.setRole", {
           profileId: memberProfile,
@@ -531,14 +455,13 @@ async function runScenario(cutOff: CutOff, signal: AbortSignal) {
 
 it.for<CutOff>([
   "control",
-  "today-owner-sets-null",
   "admin-sets-null",
   "owner-sets-reader",
   "owner-sets-null",
   "openclaw-id-remove",
 ])("cuts off an OpenClaw ID member's work (%s)", async (cutOff, { signal }) => {
   const report = await runScenario(cutOff, signal);
-  // The shim makes the profile role the member's authority before any cut-off.
+  // Assignment changes apply to tunnel connections and every retained source.
   expect(report.profileRoleApplies).toMatchObject({
     member: ["operator.approvals", "operator.read", "operator.write"],
     memberProfileId: true,
@@ -552,7 +475,9 @@ it.for<CutOff>([
   });
   const cut = cutOff !== "control";
   // A: tunnel connection closed, in-flight run revoked.
-  expect(report.memberConnectionClosed).toBe(cut ? 4001 : "still open");
+  expect(report.memberConnectionClosed).toBe(
+    cutOff === "openclaw-id-remove" ? 1008 : cut ? 4001 : "still open",
+  );
   expect(report.inFlightTurnAborted).toBe(cut);
   // B1-B3: queued/steered input, subagent child and the member's automation.
   expect(report.queuedFollowupRanAfterCut).toBe(!cut);
@@ -572,12 +497,9 @@ it.for<CutOff>([
   // B5: reconnect.
   const reconnect = {
     control: { connected: true, scopes: ["operator.read", "operator.write", "operator.approvals"] },
-    // Today the membership role re-admits the member at its full membership scopes.
-    "today-owner-sets-null": { connected: true, scopes: ["operator.read", "operator.write"] },
-    // Proposed "no role = refused" is not enforced: the socket connects with no scopes.
-    "admin-sets-null": { connected: true, scopes: [] },
+    "admin-sets-null": { connected: false, error: expect.stringMatching(/Gateway access/) },
     "owner-sets-reader": { connected: true, scopes: ["operator.read"] },
-    "owner-sets-null": { connected: true, scopes: [] },
+    "owner-sets-null": { connected: false, error: expect.stringMatching(/Gateway access/) },
     "openclaw-id-remove": {
       connected: false,
       error: expect.stringMatching(/no longer has access to this claw/),
