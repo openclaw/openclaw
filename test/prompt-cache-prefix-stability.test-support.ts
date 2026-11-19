@@ -17,6 +17,7 @@ import {
   latestInput as lastMessage,
   readWireRequest,
   toolNames,
+  withoutTools,
   writeReply,
   type FakeReply as Reply,
   type FakeTransport as Api,
@@ -497,12 +498,11 @@ export function usePrefixStabilityJourney() {
           await settle();
           await client.request("cron.remove", { id: first.id });
           await send(CRON_FIRST, "OWNER turn after a scheduled first turn");
-          const cronTools = toolNames(cronFirstRequests[0]!.tools);
-          const ownerTools = toolNames(cronFirstRequests.at(-1)!.tools);
-          const known = (name: string) => !CRON_FIRST_GROWTH.tools.includes(name);
-          expect(ownerTools.filter(known), `owner turn tools: ${ownerTools.join(",")}`).toEqual(
-            cronTools.filter(known),
+          // Whole declarations in order; only the known growth may differ.
+          const [cronTools, ownerTools] = [cronFirstRequests[0]!, cronFirstRequests.at(-1)!].map(
+            (request) => withoutTools(request, CRON_FIRST_GROWTH.tools).tools,
           );
+          expect(ownerTools, toolNames(cronFirstRequests.at(-1)!.tools).join(",")).toBe(cronTools);
         }
         // An unrelated chat on a small window: its tool results fill the window inside one run,
         // and the pressure check before the next request acts.
