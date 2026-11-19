@@ -131,22 +131,24 @@ export async function settleGitReleaseTrial(runningRoot: string | null): Promise
 }
 
 export type GitReleasePlacement = {
-  /** What serves: the link's release while a process runs from it, else `fallback`. */
+  /** What serves: the link's release, unless it is a never-started placed release. */
   serving: string;
   /** The release that last served and passed its trial: the next trial's fallback. */
   fallback: string;
-  /** A release an earlier update placed whose trial never passed. */
+  /**
+   * A release an earlier update placed that never started: the launcher counted no start
+   * and no process holds it. A started trial stays under the launcher's control, which
+   * owns its state rollback, so it is never reported here.
+   */
   unserved?: {
     root: string;
     /** The link names it (the update failed after the switch), rather than a deferred trial. */
     selected: boolean;
-    /** The launcher started it or a process holds it, so it may have served: never removed here. */
-    mayHaveServed: boolean;
   };
   /**
-   * The trial's fallback (link text) is missing or its build does not verify, and nothing
-   * runs from the link's release. `commit` is what the fallback was built from, which is
-   * what serves: a release rebuilt from it is a safe fallback. Without it there is none.
+   * The trial's fallback (link text) is missing or its build does not verify. `commit` is
+   * what the fallback was built from, which is what serves: a release rebuilt from it is a
+   * safe fallback. Without it there is none.
    */
   unsafeFallback?: { previous: string; reason: "missing" | "unverified"; commit?: string };
 };
@@ -162,7 +164,7 @@ async function readReleaseHead(root: string): Promise<string | null> {
 }
 
 /** Present and intact: its runtime artifacts verify against the commit it was built from. */
-async function verifiesAsFallback(root: string): Promise<boolean> {
+export async function verifiesAsGitRelease(root: string): Promise<boolean> {
   return (await verifyGitUpdateRecovery({ root, sha: await readReleaseHead(root) }))
     .serviceRestartSafe;
 }
@@ -186,36 +188,34 @@ export async function readGitReleasePlacement(
     readPackageReleaseLeases(slot.prefix, gitReleaseId(root)).live > 0;
   if (trial?.pending && trial.previous === slot.target) {
     const root = await resolve(trial.target);
-    return root && root !== slot.releaseRoot
-      ? { ...current, unserved: { root, selected: false, mayHaveServed: leased(root) } }
+    return root && root !== slot.releaseRoot && !leased(root)
+      ? { ...current, unserved: { root, selected: false } }
       : current;
   }
-  if (!trial || trial.pending || trial.target !== slot.target) {
+  // The launcher counts every start of the release the link names on trial.
+  if (
+    !trial ||
+    trial.pending ||
+    trial.target !== slot.target ||
+    trial.attempts !== 0 ||
+    leased(slot.releaseRoot)
+  ) {
     return current;
   }
   const previous = await resolve(trial.previous);
   if (previous === slot.releaseRoot) {
     return current;
   }
-  const running = leased(slot.releaseRoot);
-  // The launcher counts every start of the release the link names on trial.
-  const unserved = {
-    root: slot.releaseRoot,
-    selected: true,
-    mayHaveServed: running || trial.attempts !== 0,
-  };
-  const intact = previous ? await verifiesAsFallback(previous) : false;
-  // A process runs from the link's release: that serves, and is the fallback if nothing better.
-  if (running) {
-    return { serving: slot.releaseRoot, fallback: intact ? previous! : slot.releaseRoot, unserved };
-  }
-  if (previous && intact) {
+  const unserved = { root: slot.releaseRoot, selected: true };
+  if (previous && (await verifiesAsGitRelease(previous))) {
     return { serving: previous, fallback: previous, unserved };
   }
   const commit = previous ? await readReleaseHead(previous) : null;
+  // Without its commit the old fallback cannot even be read as a Git release.
+  const known = commit ? previous! : slot.releaseRoot;
   return {
-    serving: previous ?? slot.releaseRoot,
-    fallback: previous ?? slot.releaseRoot,
+    serving: known,
+    fallback: known,
     unserved,
     unsafeFallback: {
       previous: trial.previous,
@@ -226,19 +226,22 @@ export async function readGitReleasePlacement(
 }
 
 /**
- * Put the link back on the fallback and remove the placed release if it never started:
- * the launcher never counted a start and no process holds it. Anything else is left to
- * `collectGitReleases`. A failed switch throws; a failed removal keeps the files.
+ * Put the link on the fallback and remove the placed release, which never started. A
+ * reread right before the switch must still find it never started and on its trial;
+ * otherwise the launcher or a ready Gateway has taken over and nothing is touched. A
+ * failed switch throws; a failed removal keeps the files for `collectGitReleases`.
  */
 export async function supersedeUnservedGitRelease(params: {
   prefix: string;
   placement: GitReleasePlacement;
   prune: () => Promise<unknown>;
-}): Promise<{ removed: boolean; error?: unknown }> {
+}): Promise<{ superseded: boolean; removed: boolean; error?: unknown }> {
   const placed = params.placement.unserved?.root;
-  // Reread right before the switch removes the trial, which is the only record of a start.
   const before = readPackageReleaseSlotSync(gitReleaseSlot(params.prefix));
   const fresh = before ? (await readGitReleasePlacement(before)).unserved : undefined;
+  if (!placed || fresh?.root !== placed) {
+    return { superseded: false, removed: false };
+  }
   // Also clears a deferred trial, so no start selects the release being removed.
   await publishGitRelease({
     prefix: params.prefix,
@@ -246,15 +249,16 @@ export async function supersedeUnservedGitRelease(params: {
     trial: false,
   });
   const after = readPackageReleaseSlotSync(gitReleaseSlot(params.prefix));
-  if (!placed || !after || fresh?.root !== placed || fresh.mayHaveServed) {
-    return { removed: false };
-  }
-  const releasesDir = path.join(after.prefix, PACKAGE_RELEASES_DIR);
   const id = gitReleaseId(placed);
   // Recheck at removal: a process may have started it since the placement was read.
-  if (after.releaseRoot === placed || readPackageReleaseLeases(after.prefix, id).live > 0) {
-    return { removed: false };
+  if (
+    !after ||
+    after.releaseRoot === placed ||
+    readPackageReleaseLeases(after.prefix, id).live > 0
+  ) {
+    return { superseded: true, removed: false };
   }
+  const releasesDir = path.join(after.prefix, PACKAGE_RELEASES_DIR);
   try {
     // Out of the release namespace first, so a partial removal is never a release.
     const doomed = path.join(releasesDir, `.collecting-${id}-${randomBytes(4).toString("hex")}`);
@@ -262,9 +266,9 @@ export async function supersedeUnservedGitRelease(params: {
     await fs.rm(doomed, { recursive: true, force: true });
     await fs.rm(packageReleaseLeaseDir(releasesDir, id), { recursive: true, force: true });
     await params.prune();
-    return { removed: true };
+    return { superseded: true, removed: true };
   } catch (error) {
-    return { removed: false, error };
+    return { superseded: true, removed: false, error };
   }
 }
 

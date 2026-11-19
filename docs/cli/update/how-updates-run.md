@@ -1581,29 +1581,38 @@ The trial ends once the Gateway on the new release is ready.
 
 The link alone does not show what serves. An update can fail after the link switched
 but before any Gateway started the new release. That leaves the link on a release that
-never served, with its trial still armed. The next plain `openclaw update` builds on the
+never started, with its trial still armed. The next plain `openclaw update` builds on the
 trial's previous release, the one that last served:
 
-- If the target is the release the link already names, the update reuses it and finishes
-  its activation: it restarts the Gateway into it, verifies it, and ends the trial.
-- If the target is newer, the link goes back to the serving release, the new release goes
-  on trial with the serving release as its fallback, and the superseded release is
-  removed. A release the launcher already started, or that a process still holds, is
-  kept for the normal release collection instead.
+- If the target is the release the link already names, and that release's build still
+  verifies, the update reuses it instead of rebuilding. It still admits the target and
+  runs the normal candidate checks on it, and checks the match only after local commits
+  are replayed. It then restarts the Gateway into the release, verifies it, and ends the
+  trial.
+- If the target is newer, the link goes back to the serving release. The new release
+  goes on trial with the serving release as its fallback, and the superseded release is
+  removed.
 - If the serving release is the target, the link goes back to it and the update reports
   that the installation is current.
 
-A trial's fallback is therefore always a release that served, and the serving release is
-never removed while it is a fallback. A fallback must also be present and its build must
-verify against the commit it was built from. If the trial's fallback is incomplete, the
-update first rebuilds that commit, which is what serves, as a new release and uses it as
-the fallback. If the fallback is gone, the commit that serves is not known. The update
-then changes nothing and fails with `git-release-fallback-unavailable`, and the Gateway
-keeps serving. Do not restart it into the release link; run `openclaw triage` so an
-agent can rebuild a fallback from the serving commit, then run `openclaw update` again. The update result includes a
-`git-release-placement` note that names both releases and says what the update did. This
-runs in the installed updater, the checkout's own build. An updater built before this
-change still treats the link's release as the serving one.
+Only a release the launcher never started and no process holds counts as never started.
+A trial that started stays under the launcher, which owns its state rollback. If the
+release starts, or its trial ends, while the update builds, the update leaves the link
+and trial alone.
+
+A fallback must be present, and its build must verify against the commit it was built
+from. If the trial's fallback is incomplete, the update rebuilds that commit, which is
+what serves, as a new release. It switches to the rebuilt release only at the normal
+switch point, after the target passed its checks. If the fallback is gone or no longer
+readable as a Git release, the commit that serves is not known. The update then changes
+nothing and fails with `git-release-fallback-unavailable`, and the Gateway keeps
+serving. Do not restart it into the release link. Run `openclaw triage` so an agent can
+rebuild a fallback from the serving commit, then run `openclaw update` again.
+
+The update result includes a `git-release-placement` note that names the releases
+involved and says what the update did. This runs in the installed updater, the
+checkout's own build. An updater built before this change still treats the link's
+release as the serving one.
 
 ## Plugin sync details
 

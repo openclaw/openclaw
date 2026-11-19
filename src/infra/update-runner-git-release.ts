@@ -8,6 +8,7 @@ import {
   gitReleaseId,
   publishGitRelease,
   readGitReleasePlacement,
+  verifiesAsGitRelease,
   supersedeUnservedGitRelease,
 } from "./git-release.js";
 import { readPackageVersion } from "./package-json.js";
@@ -64,7 +65,7 @@ export async function updateGitRelease(params: {
   const selected = readPackageReleaseSlotSync(slot);
   const converting = !selected;
   let placement = selected ? await readGitReleasePlacement(selected) : null;
-  let unserved = placement?.unserved;
+  const unserved = placement?.unserved;
   let stepIndex = 0;
   const forRunner =
     (deadline: number | undefined) =>
@@ -154,6 +155,7 @@ export async function updateGitRelease(params: {
   // replay and before any install or build.
   let placedSha = "";
   let placedTree: string | null = null;
+  let rebuiltFallback = false;
 
   // Node refuses to strip types under node_modules, and the build runs .mts
   // scripts, so a release is built beside its final path and moved into place.
@@ -207,6 +209,8 @@ export async function updateGitRelease(params: {
     if (built.status === "placed") {
       // The match can stop the preflight before it owns the new release's directory.
       await fs.rm(dirs.releasePrefix, { recursive: true, force: true });
+      // The reused release passes the same candidate checks as a fresh build.
+      steps.push(...((await opts.validateCandidate(unserved!.root)) ?? []));
       return {
         status: "ok" as const,
         candidateSha: placedSha,
@@ -258,7 +262,7 @@ export async function updateGitRelease(params: {
         kind: "recoverable-maintenance",
         message:
           unserved && context
-            ? `Release ${placed} was placed by an earlier update and has not passed its trial${placement!.serving === unserved.root ? "; a process still runs from it" : ""}. Release ${fallback} last passed a trial and stays the fallback. ${message}`
+            ? `Release ${placed} was placed by an earlier update and never started. Release ${fallback} is the fallback. ${message}`
             : message,
       },
     };
@@ -272,11 +276,13 @@ export async function updateGitRelease(params: {
     }
     const superseded = await supersedeUnservedGitRelease({ prefix, placement, prune });
     await reportPlacement(
-      superseded.removed
-        ? "It never started, so this update removed it."
-        : superseded.error
-          ? `Removing it failed; release collection retries later: ${formatErrorMessage(superseded.error)}`
-          : "It may have started, so release collection keeps it for now.",
+      !superseded.superseded
+        ? "It started or ended its trial during this update, so the link and trial stay with the launcher."
+        : superseded.removed
+          ? "This update removed it."
+          : superseded.error
+            ? `Removing it failed; release collection retries later: ${formatErrorMessage(superseded.error)}`
+            : "A process started from it during this update, so release collection keeps it for now.",
     );
   };
   // No safe fallback: the trial's fallback is gone or incomplete. A release rebuilt from
@@ -324,17 +330,16 @@ export async function updateGitRelease(params: {
       };
     }
     await reportPlacement(
-      `${lost} This update rebuilt the commit it was built from (${commit!.slice(0, 12)}) as release ${gitReleaseId(rebuilt.releaseRoot)}, which is now the fallback.`,
+      `${lost} This update rebuilt the commit it was built from (${commit!.slice(0, 12)}) as release ${gitReleaseId(rebuilt.releaseRoot)}, which becomes the fallback when the update switches.`,
       false,
     );
+    // Selected only at the normal switch, after the target passed its checks.
     placement = { ...placement, fallback: rebuilt.releaseRoot };
-    await supersedeUnserved();
-    const reread = readPackageReleaseSlotSync(slot);
-    placement = reread ? await readGitReleasePlacement(reread) : placement;
-    unserved = placement.unserved;
+    rebuiltFallback = true;
   }
+  // F: only a placed release whose build verifies is reused.
   placedSha =
-    unserved && unserved.root !== placement?.serving
+    unserved && (await verifiesAsGitRelease(unserved.root))
       ? (await git(unserved.root, "rev-parse", "HEAD")).stdout.trim()
       : "";
   placedTree = placedSha ? await treeOf(placedSha) : null;
@@ -384,7 +389,16 @@ export async function updateGitRelease(params: {
           timeoutMs,
           beforeGitMutation: opts.inspectGitTarget,
         });
-        if (placedTree && (await treeOf(revision)) === placedTree) {
+        // Only the call after checkout and local replay sees the tree that would be built.
+        const checkedOut = placedTree
+          ? (
+              await runCommand(["git", "-C", release.worktreeDir, "rev-parse", "HEAD"], {
+                cwd: gitRoot,
+                timeoutMs,
+              })
+            ).stdout.trim()
+          : "";
+        if (placedTree && checkedOut === revision && (await treeOf(revision)) === placedTree) {
           throw new PlacedReleaseMatch();
         }
       },
@@ -395,7 +409,7 @@ export async function updateGitRelease(params: {
     target.status === "skipped" &&
     target.reason === "already-current" &&
     !previousRelease &&
-    placement?.serving !== unserved?.root
+    unserved !== undefined
   ) {
     await supersedeUnserved();
   }
@@ -434,6 +448,10 @@ export async function updateGitRelease(params: {
           ? "It is the target; the next service start activates it."
           : "It is the target, so this update finishes activating it instead of rebuilding it.",
       );
+      // Its armed trial falls back to the incomplete release; re-arm it on the rebuilt one.
+      if (rebuiltFallback && placement) {
+        await publishGitRelease({ prefix, releaseRoot: placement.fallback, trial: false });
+      }
     }
     // A placed release the link still names on trial keeps that trial and its fallback.
     const current = readPackageReleaseSlotSync(slot);

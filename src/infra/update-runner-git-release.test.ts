@@ -23,6 +23,12 @@ const target = vi.hoisted(() => ({
   inspected: [] as (string | undefined)[],
   /** Release roots whose runtime artifacts do not verify. */
   broken: [] as string[],
+  /** The commit local replay leaves checked out; defaults to the selected revision. */
+  replayed: undefined as string | undefined,
+  /** Runs while the candidate builds, as a concurrently starting service would. */
+  duringBuild: undefined as (() => Promise<void>) | undefined,
+  /** Roots the candidate validator checked. */
+  validated: [] as string[],
 }));
 // mock-isolation: the build runs as a fixture; the real preflight would install and compile a checkout.
 vi.mock("./update-runner-git-preflight.js", () => ({
@@ -67,25 +73,39 @@ vi.mock("./update-runner-git-target.js", async (importOriginal) => ({
     if (params.beforeRuntimeVerified && revision === params.beforeSha) {
       return { status: "skipped", reason: "already-current" };
     }
-    // Admission runs before the candidate's worktree, install and build.
+    // Like the real preflight: admission before the worktree, again after checkout and
+    // local replay, then install and build.
     await params.beforeCandidate(revision);
-    target.builds += 1;
-    await git(params.gitRoot, "worktree", "add", "--detach", params.release.worktreeDir, revision);
+    const checkedOut = target.replayed ?? revision;
+    await git(
+      params.gitRoot,
+      "worktree",
+      "add",
+      "--detach",
+      params.release.worktreeDir,
+      checkedOut,
+    );
     // The caller removes a build it does not place, as with the real preflight.
     params.retainCleanup(async () => {
       await git(params.gitRoot, "worktree", "remove", "--force", params.release.worktreeDir);
       await fs.rm(params.release.prefix, { recursive: true, force: true });
       return true;
     });
-    return { status: "ok", candidateSha: revision };
+    await params.beforeCandidate(checkedOut);
+    target.builds += 1;
+    await target.duringBuild?.();
+    return { status: "ok", candidateSha: checkedOut };
   },
 }));
 vi.mock("./update-git-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-git-runtime.js")>()),
   // The running release is at the requested commit but its runtime artifacts are incomplete.
-  verifyGitUpdateRecovery: async (params: { root: string }) => {
+  verifyGitUpdateRecovery: async (params: { root: string; sha: string | null }) => {
     const root = await fs.realpath(params.root);
-    return (target.runtimeVerified || root !== target.runningRoot) && !target.broken.includes(root)
+    // Like the real check, artifacts verify only against a known commit.
+    return params.sha &&
+      (target.runtimeVerified || root !== target.runningRoot) &&
+      !target.broken.includes(root)
       ? { serviceRestartSafe: true, version: "1.0.0", buildId: "serving" }
       : { serviceRestartSafe: false, reason: "runtime-verification-failed" };
   },
@@ -109,6 +129,9 @@ afterEach(async () => {
   target.revision = undefined;
   target.builds = 0;
   target.inspected.length = 0;
+  target.replayed = undefined;
+  target.duringBuild = undefined;
+  target.validated.length = 0;
   target.broken.length = 0;
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
@@ -363,7 +386,10 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
             inspectGitTarget: async (inspected) => {
               target.inspected.push(inspected.sha);
             },
-            validateCandidate: async () => [],
+            validateCandidate: async (root) => {
+              target.validated.push(await fs.realpath(root));
+              return [];
+            },
             beforeGitMutation: async () => {},
             runGitDoctor: async () => null,
           },
@@ -390,9 +416,11 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     expect(result.before).toMatchObject({ sha: install.commits["1.0.0"], version: "1.0.0" });
     expect(result.after).toMatchObject({ sha: install.commits["2.0.0"], version: "2.0.0" });
     // The placed release is reused, not rebuilt, and its trial still falls back to 1.0.0.
-    // The target is still admitted, so the caller observes the service it restarts.
+    // The target is still admitted, so the caller observes the service it restarts, and
+    // the reused release passes the same candidate checks as a fresh build.
     expect(target.builds).toBe(0);
-    expect(target.inspected).toEqual([install.commits["2.0.0"]]);
+    expect(target.inspected).toContain(install.commits["2.0.0"]);
+    expect(target.validated).toEqual([install.unserved]);
     expect(await fs.realpath(install.slot)).toBe(install.unserved);
     expect(await install.releaseCount()).toBe(2);
     expect(await install.readTrial()).toEqual({
@@ -400,9 +428,11 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
       previous: install.serving,
     });
     const note = result.steps.find((entry) => entry.name === "git-release-placement");
-    expect(note?.advisory?.message).toBe(
-      `Release ${path.basename(path.resolve(install.unserved, "../../.."))} was placed by an earlier update and has not passed its trial. Release ${path.basename(path.resolve(install.serving, "../../.."))} last passed a trial and stays the fallback. It is the target, so this update finishes activating it instead of rebuilding it.`,
-    );
+    // It names both releases and says what this update did.
+    for (const root of [install.unserved, install.serving]) {
+      expect(note?.advisory?.message).toContain(path.basename(path.resolve(root, "../../..")));
+    }
+    expect(note?.advisory?.message).toContain("finishes activating it");
   });
 
   // The launcher runs under Node; Bun does not run it.
@@ -433,7 +463,6 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   it.each([
     [
       "started by the launcher",
-      "1.0.0",
       async (install: HalfSwitchedInstall) => {
         const trial = JSON.parse(await fs.readFile(install.trialFile, "utf8")) as object;
         await fs.writeFile(install.trialFile, JSON.stringify({ ...trial, attempts: 1 }));
@@ -442,24 +471,56 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     ],
     [
       "leased by a running process",
-      "2.0.0",
       async (install: HalfSwitchedInstall) => acquirePackageReleaseLease(install.unserved),
     ],
-  ])("keeps a superseded release that was %s", async (_label, serving, mark) => {
+  ])("leaves a trial whose release was %s to the launcher", async (_label, mark) => {
     const install = await halfSwitchedInstall();
     const release = await mark(install);
     try {
       const result = await install.update(install.commits["3.0.0"]!);
 
       expect(result.status, JSON.stringify(result.steps)).toBe("ok");
-      // A process running from it means it serves; a counted start alone does not.
-      expect(result.before).toMatchObject({ version: serving });
-      // It may have served, so its files stay; it never becomes the fallback either.
+      // The launcher owns a started trial's state rollback; nothing here removes or re-arms it.
       await expect(fs.access(install.unserved)).resolves.toBeUndefined();
-      expect(await install.readTrial()).toMatchObject({ previous: install.serving });
+      expect(result.steps.some((entry) => entry.name === "git-release-placement")).toBe(false);
     } finally {
       release();
     }
+  });
+
+  it("keeps the link on a release that ended its trial while the target built", async () => {
+    const install = await halfSwitchedInstall();
+    // The service starts it and it becomes ready, which settles its trial, mid-update.
+    target.duringBuild = () => fs.rm(install.trialFile);
+
+    const result = await install.update(install.commits["3.0.0"]!);
+
+    expect(result.status, JSON.stringify(result.steps)).toBe("ok");
+    expect(await install.readTrial()).toMatchObject({ previous: install.unserved });
+    await expect(fs.access(install.unserved)).resolves.toBeUndefined();
+  });
+
+  it("builds instead of reusing when local replay changes the target", async () => {
+    const install = await halfSwitchedInstall();
+    // The upstream target is the placed tree, but replaying local commits gives another one.
+    target.replayed = install.commits["3.0.0"];
+
+    const result = await install.update(install.commits["2.0.0"]!);
+
+    expect(result.status, JSON.stringify(result.steps)).toBe("ok");
+    expect(target.builds).toBe(1);
+    expect(result.after).toMatchObject({ sha: install.commits["3.0.0"] });
+  });
+
+  it("builds instead of reusing a placed release whose build does not verify", async () => {
+    const install = await halfSwitchedInstall();
+    target.broken.push(install.unserved);
+
+    const result = await install.update(install.commits["2.0.0"]!);
+
+    expect(result.status, JSON.stringify(result.steps)).toBe("ok");
+    expect(target.builds).toBe(1);
+    expect(await fs.realpath(install.slot)).not.toBe(install.unserved);
   });
 
   it("discards a release a --no-restart update left for the next start once superseded", async () => {
@@ -492,10 +553,13 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     await expect(fs.access(install.unserved)).rejects.toThrow();
   });
 
-  it("changes nothing and refuses when no build of the serving commit exists", async () => {
+  it.each([
+    ["is gone", (install: HalfSwitchedInstall) => path.resolve(install.serving, "../../..")],
+    ["lost its Git metadata", (install: HalfSwitchedInstall) => path.join(install.serving, ".git")],
+  ])("changes nothing and refuses when the fallback %s", async (_label, removed) => {
     const install = await halfSwitchedInstall();
     const trial = await fs.readFile(install.trialFile, "utf8");
-    await fs.rm(path.resolve(install.serving, "../../.."), { recursive: true });
+    await fs.rm(removed(install), { recursive: true });
 
     const result = await install.update(install.commits["3.0.0"]!);
 
