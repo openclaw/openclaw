@@ -21,7 +21,6 @@ import {
   selectMessageActionRequesterIdentity,
   type MessageActionAuthorization,
 } from "../message-action-turn-capability.js";
-import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
 
 /** Redeem host-only message authority from a trusted local agent runtime. */
@@ -55,7 +54,7 @@ export function resolveAgentRuntimeMessageActionConfig(
 export function createMessageActionRuntimeAuthority(
   params: Pick<
     Parameters<GatewayRequestHandlers["message.action"]>[0],
-    "client" | "context" | "respond" | "sessionMutationCommitGuard"
+    "sessionMutationCommitGuard"
   > & {
     request: Pick<MessageActionParams, "action" | "accountId" | "params">;
     authorization?: MessageActionAuthorization;
@@ -82,24 +81,20 @@ export function createMessageActionRuntimeAuthority(
     assertReadCurrent || assertScheduledWriteCurrent
       ? params.authorization?.scheduled?.policy
       : undefined;
-  const agentRuntimeAuthority = createAgentRuntimeAuthorityGuard(
-    params.client,
-    params.context,
-    params.respond,
+  const assertAdmissionCurrent =
     assertActionCurrent || assertDeliveryCurrent
       ? () => {
           params.sessionMutationCommitGuard?.();
           assertActionCurrent?.();
           assertDeliveryCurrent?.();
         }
-      : params.sessionMutationCommitGuard,
-  );
+      : params.sessionMutationCommitGuard;
   const assertDirectAdapterHandoff = params.assertClientUploadAllowed
     ? () => {
-        agentRuntimeAuthority.commitGuard?.();
+        assertAdmissionCurrent?.();
         params.assertClientUploadAllowed?.();
       }
-    : agentRuntimeAuthority.commitGuard;
+    : assertAdmissionCurrent;
   const beforeDeliveryAttempt = () =>
     isFencedProviderReadAction(params.request.action)
       ? undefined
@@ -115,7 +110,6 @@ export function createMessageActionRuntimeAuthority(
       normalizeOptionalString(params.request.accountId) ??
       normalizeOptionalString(params.request.params.accountId) ??
       (scheduledPolicy?.mode === "account" ? scheduledPolicy.ownerAccountId : undefined),
-    agentRuntimeAuthority,
     assertDirectAdapterHandoff,
   };
 }

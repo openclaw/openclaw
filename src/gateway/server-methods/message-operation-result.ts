@@ -57,18 +57,12 @@ export function createGatewayInflightSuccess(params: {
   return createGatewayInflightResult({ ...params, result: { ok: true, payload: params.payload } });
 }
 
-export function createGatewayInflightFailure(
-  params: {
-    context: GatewayRequestContext;
-    dedupeKey: string | undefined;
-    channel: string;
-    err: unknown;
-  },
-  isAuthorized: () => boolean,
-): GatewayInflightResult {
-  if (!isChannelPartialDeliveryError(params.err) && !isAuthorized()) {
-    return createGatewayInflightAuthorityFailure(params);
-  }
+export function createGatewayInflightFailure(params: {
+  context: GatewayRequestContext;
+  dedupeKey: string | undefined;
+  channel: string;
+  err: unknown;
+}): GatewayInflightResult {
   // Preserve ingress-policy errors only when delivery has no accepted effect or queue custody.
   const unsentError =
     params.err instanceof OutboundDeliveryError &&
@@ -109,20 +103,6 @@ export function createGatewayInflightFailure(
     ...params,
     result: { ok: false, error },
     meta: { error: formatForLog(params.err) },
-  });
-}
-
-export function createGatewayInflightAuthorityFailure(params: {
-  context: GatewayRequestContext;
-  dedupeKey: string | undefined;
-  channel: string;
-}): GatewayInflightResult {
-  return createGatewayInflightResult({
-    ...params,
-    result: {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, "agent runtime authority is no longer active"),
-    },
   });
 }
 

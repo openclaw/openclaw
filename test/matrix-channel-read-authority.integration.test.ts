@@ -228,7 +228,6 @@ async function createHarness(origin: RegistrationOrigin) {
           requesterAccountId: "default",
           requesterSenderId: memberId,
           conversationReadOrigin: "delegated",
-          assertDirectAdapterHandoff: run.assert,
           toolContext,
           ...context,
         }),
@@ -347,20 +346,14 @@ describe("registered installed Matrix reads", () => {
   );
 
   it.each([
-    { owner: "caller", boundary: "preparation" },
     { owner: "plugin", boundary: "preparation" },
-    { owner: "caller", boundary: "result" },
     { owner: "plugin", boundary: "result" },
-  ] as const)("fences $owner revocation at $boundary", async ({ owner, boundary }) => {
+  ] as const)("fences $owner revocation at $boundary", async ({ boundary }) => {
     await withHarness("official-installed", async (fixture) => {
       const revokeAt = boundary === "result" ? messagePath : `${roomPath}/state/m.room.name/`;
       fixture.onRequest((path) => {
         if (path === revokeAt) {
-          if (owner === "caller") {
-            fixture.run.revokeTurn();
-          } else {
-            void fixture.instance.dispose();
-          }
+          void fixture.instance.dispose();
         }
       });
       await expect(fixture.invoke("read", { limit: 1 })).rejects.toThrow(/no longer active/);
@@ -369,10 +362,8 @@ describe("registered installed Matrix reads", () => {
       } else {
         expect(fixture.requests.filter((request) => request.path === messagePath)).toHaveLength(1);
       }
-      if (owner === "plugin") {
-        expect((await fixture.instance.dispose()).errors).toEqual([]);
-        expect(fixture.lifecycle.signal?.aborted).toBe(true);
-      }
+      expect((await fixture.instance.dispose()).errors).toEqual([]);
+      expect(fixture.lifecycle.signal?.aborted).toBe(true);
     });
   });
 });

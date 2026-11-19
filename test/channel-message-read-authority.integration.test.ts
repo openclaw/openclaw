@@ -10,13 +10,10 @@ import { dispatchChannelMessageAction } from "../src/channels/plugins/message-ac
 import type { ChannelMessageActionContext } from "../src/channels/plugins/types.core.js";
 import * as commandSecretGateway from "../src/cli/command-secret-gateway.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../src/gateway/message-action-turn-capability.js";
-import { createAgentRuntimeAuthorityGuard } from "../src/gateway/server-methods/agent-runtime-authority.js";
-import type { GatewayClient, GatewayRequestContext } from "../src/gateway/server-methods/types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -71,28 +68,6 @@ function createOriginatingRun(
     requesterSenderId,
     toolContext,
   });
-  const runGuard = createAgentRuntimeAuthorityGuard(
-    {
-      internal: {
-        agentRuntimeIdentity: {
-          kind: "agentRuntime",
-          agentId: "main",
-          sessionKey,
-          operationalRunInstance,
-          delegatedAuthority: { kind: "local", ...delegatedAuthority },
-          messageActionContext: { expiresAtMs: Date.now() + 60_000, turnCapability },
-        },
-      },
-    } as GatewayClient,
-    {
-      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-    } as GatewayRequestContext,
-    () => {},
-  ).commitGuard;
-  if (!runGuard) {
-    throw new Error("Expected originating run authority");
-  }
-  runGuard();
   return {
     wrapTool: (tool: ReturnType<typeof createMessageTool>) =>
       wrapToolWithGatewayCallerIdentity(tool, {
@@ -110,7 +85,6 @@ function createOriginatingRun(
       ...toolContext,
     },
     actionContext: { requesterAccountId, requesterSenderId, toolContext },
-    assert: runGuard,
     revoke: () =>
       mode.includes("claim")
         ? releaseAgentRunDelegatedAuthority(delegatedAuthority)
@@ -207,8 +181,6 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
     ["denied", 0],
     ["revoked", 0, 1],
     ["result-revoked", 1],
-    ["run-revoked-direct", 0],
-    ["run-result-revoked-direct", 1],
     ["bundled-allowed", 1],
     ["bundled-revoked", 0, 1],
   ];
@@ -334,7 +306,6 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
         accountId: "default",
         requesterAccountId: "default",
         conversationReadOrigin: "delegated" as const,
-        assertDirectAdapterHandoff: run?.assert,
         toolContext: {
           currentChannelProvider: channel,
           currentChannelId: channel === "discord" ? current : "C9876543210",
@@ -492,7 +463,6 @@ async function withSlackMetadataHarness(
         params: {},
         accountId: "ops",
         conversationReadOrigin: "delegated",
-        assertDirectAdapterHandoff: run.assert,
         ...run.actionContext,
       },
     });

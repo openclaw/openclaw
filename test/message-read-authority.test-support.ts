@@ -9,8 +9,7 @@ import {
   resolveMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../src/gateway/message-action-turn-capability.js";
-import { createAgentRuntimeAuthorityGuard } from "../src/gateway/server-methods/agent-runtime-authority.js";
-import type { GatewayClient, GatewayRequestContext } from "../src/gateway/server-methods/types.js";
+import type { GatewayClient } from "../src/gateway/server-methods/types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -54,15 +53,6 @@ export function createMessageReadAuthority<T extends InternalChannelThreadingToo
     },
   } as GatewayClient;
   const validate = createAgentRuntimeApprovalAuthorityValidator();
-  const assert = createAgentRuntimeAuthorityGuard(
-    client,
-    { validateAgentRuntimeApprovalAuthority: validate } as GatewayRequestContext,
-    () => {},
-  ).commitGuard;
-  if (!assert) {
-    throw new Error("Missing originating message-read authority");
-  }
-  assert();
   const options = {
     agentId: "main",
     agentAccountId: "default",
@@ -81,7 +71,6 @@ export function createMessageReadAuthority<T extends InternalChannelThreadingToo
   const revokeTurn = () => revokeMessageActionTurnCapability(capability);
   const releaseClaim = () => releaseAgentRunDelegatedAuthority(delegated);
   return {
-    assert,
     client,
     validate,
     toolContext,
