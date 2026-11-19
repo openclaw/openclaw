@@ -1849,7 +1849,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         .flatMap(jobGroups)
         .filter((group) => group.shard_name.replace(/-hosted-\d+$/u, "") === owner);
     const inherited = select();
-    expect(inherited).toHaveLength(4);
+    // Continuation (karmaterminal): the PR's four agent-chat suites take this owner from upstream's
+    // 133 files to 137, one past what four file-bounded hosted groups hold, so it plans five.
+    expect(inherited).toHaveLength(5);
     expectEvery(inherited, (group) => workers(group) === "2");
     const parallelParent = required(
       parseCompactSplitTimingKey(inherited[0]!.timing_key!)?.parentShardName,
@@ -1867,12 +1869,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     for (const key of serialGeneration.timingKeys) {
       timings[key] = 250;
     }
-    expect(select()).toHaveLength(4);
+    expect(select()).toHaveLength(5);
     timings[`${owner}-parallel-native-serial`] = 440;
     timings[parallelParent] = 440;
     const measured = select();
     // Full inventory retains the file bound even when timing permits three groups.
-    expect(measured).toHaveLength(4);
+    expect(measured).toHaveLength(5);
     expectSameEntries(measured.flatMap(requiredPatterns), inherited.flatMap(requiredPatterns));
     const reduced = select(false);
     expect(reduced).toHaveLength(3);
