@@ -91,6 +91,78 @@ function writeTsxFixture(modulesDir: string, marker: string) {
   writeFileSync(path.join(dependencyDir, "index.js"), 'export const value = "loaded";\n');
 }
 
+// `run-vitest.mjs` names a `failureTool`, so it is a gate that owns a terminal
+// marker; the plugin-manifest wrapper names none and must stay silent.
+const VITEST_SHIM_WRAPPER = "scripts/run-vitest.mjs" as const;
+const UNCURATED_SHIM_WRAPPER = "scripts/lib/plugin-npm-package-manifest.mjs" as const;
+
+function runExitTrailerFixture(wrapper: Parameters<typeof withShimFixture>[0], source: string) {
+  return withShimFixture(wrapper, async ({ implementationPath, wrapperPath, runNode }) => {
+    writeFileSync(implementationPath, source);
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PNPM_CONFIG_MODULES_DIR: path.dirname(
+        path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
+      ),
+    };
+    delete env.NODE_OPTIONS;
+    return runNode([wrapperPath], env, process.cwd());
+  });
+}
+
+// The real wrapper's cleanup object is a compiled worker run no unit test can
+// instantiate, so the fixture owns the descriptor, the worker bootstrap and the
+// disposal outcome at the edge; the wrapper, the shim and the child are production.
+function runVitestDisposalFixture(disposeBody: string) {
+  return withShimFixture(
+    VITEST_SHIM_WRAPPER,
+    async ({ checkoutRoot, implementationPath, wrapperPath, runNode }) => {
+      writeFileSync(implementationPath, "process.exitCode = 0;\n");
+      const workerDirectory = path.join(checkoutRoot, "worker");
+      mkdirSync(workerDirectory, { recursive: true });
+      writeFileSync(
+        path.join(checkoutRoot, "scripts/lib/vitest-worker-bootstrap.mts"),
+        `import { pathToFileURL } from "node:url";\nawait import(pathToFileURL(process.argv[3]).href);\n`,
+      );
+      writeFileSync(
+        path.join(checkoutRoot, "scripts/lib/vitest-worker-run.mts"),
+        `export function createVitestWorkerRun() {
+  return {
+    descriptor: { directory: ${JSON.stringify(workerDirectory)} },
+    withBorrower: (run) => run(() => {}),
+    async dispose() {
+      ${disposeBody}
+    },
+  };
+}
+`,
+      );
+      const installer = path.join(checkoutRoot, "scripts/install-worker-descriptor.mjs");
+      writeFileSync(
+        installer,
+        `import { installVitestWorkerDescriptor } from "./lib/vitest-worker-descriptor.mts";
+installVitestWorkerDescriptor({ directory: ${JSON.stringify(workerDirectory)} });
+`,
+      );
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        PNPM_CONFIG_MODULES_DIR: path.dirname(
+          path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
+        ),
+      };
+      delete env.NODE_OPTIONS;
+      return runNode(["--import", pathToFileURL(installer).href, wrapperPath], env, process.cwd());
+    },
+  );
+}
+
+function exitTrailerLines(stderr: string) {
+  return stderr
+    .trim()
+    .split("\n")
+    .filter((line) => line.trim().length > 0);
+}
+
 describe("script direct-run entrypoints", () => {
   it.for([
     { outcome: "failure", code: 1 },
@@ -413,6 +485,76 @@ process.exitCode = child.status ?? 1;
       }
     });
   });
+
+  it.each([0, 5])(
+    "ends a gate wrapper run that exits %i with one [test] EXIT line",
+    async (code) => {
+      // A pass used to print nothing, so a truncated detached log of a green run
+      // was indistinguishable from a killed one.
+      const result = await runExitTrailerFixture(
+        VITEST_SHIM_WRAPPER,
+        `process.exitCode = ${code};\n`,
+      );
+
+      expect(result.error, formatShimResult(result)).toBeUndefined();
+      expect(result.status, formatShimResult(result)).toBe(code);
+      expect(exitTrailerLines(result.stderr), formatShimResult(result)).toEqual(
+        code === 0 ? ["[test] EXIT 0"] : [`[test] EXIT ${code}`, `[test] FAILED (exit ${code})`],
+      );
+    },
+  );
+
+  it.each([0, 5])("keeps a wrapper without a failureTool silent on exit %i", async (code) => {
+    // Most shimmed programs own their stderr (launchers, stream filters); only
+    // wrappers that name a gate tool may append to it.
+    const result = await runExitTrailerFixture(
+      UNCURATED_SHIM_WRAPPER,
+      `process.exitCode = ${code};\n`,
+    );
+
+    expect(result.error, formatShimResult(result)).toBeUndefined();
+    expect(result.status, formatShimResult(result)).toBe(code);
+    expect(result.stderr, formatShimResult(result)).toBe("");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "marks a signal-killed run with the signal exit code",
+    async () => {
+      // The wrapper owns the marker, so kill the wrapper and let it forward
+      // SIGTERM down to this child rather than exiting on its own.
+      const result = await runExitTrailerFixture(
+        VITEST_SHIM_WRAPPER,
+        'process.kill(process.ppid, "SIGTERM");\nsetInterval(() => {}, 50);\n',
+      );
+
+      const lines = exitTrailerLines(result.stderr);
+      expect(lines, formatShimResult(result)).toContain("[test] EXIT 143");
+      expect(lines.at(-1), formatShimResult(result)).toBe("[test] FAILED (exit 143)");
+    },
+  );
+
+  it.each([
+    { cleanup: "clean", disposeBody: "", status: 0, lines: ["[test] EXIT 0"] },
+    {
+      cleanup: "failing",
+      disposeBody: 'throw new Error("cleanup release failed");',
+      status: 2,
+      lines: ["[test] EXIT 2", "[test] FAILED (exit 2)"],
+    },
+  ])(
+    "reports the settled run code after $cleanup worker disposal of a passing child",
+    async ({ disposeBody, status, lines }) => {
+      // The marker used to land at child close, so a disposal failure after a
+      // green child left `[test] EXIT 0` in a run that ends non-zero.
+      const result = await runVitestDisposalFixture(disposeBody);
+
+      expect(result.status, formatShimResult(result)).toBe(status);
+      expect(
+        exitTrailerLines(result.stderr).filter((line) => line.startsWith("[test] ")),
+        formatShimResult(result),
+      ).toEqual(lines);
+    },
+  );
 
   it("runs scripts/verify-docker-attestations.mjs through its guarded CLI", () => {
     const result = spawnSync(
