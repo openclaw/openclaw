@@ -30,7 +30,7 @@ export type ChatNoticeProps = {
     | "runActive"
     | "runWorking"
     | "onRetryRun"
-| "onStartNewSession"
+    | "onStartNewSession"
     | "failedMessageEditSource"
     | "onFocusComposer"
     | "onDismissPendingInput"

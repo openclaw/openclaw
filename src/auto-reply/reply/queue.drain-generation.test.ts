@@ -1,9 +1,9 @@
-import { createDeferred } from "../../../test/helpers/promise.js";
-import { PluginInstanceUnavailableError } from "../../plugins/plugin-instance-error.js";
-import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { PreparedModelRuntimePluginGenerationRetiredError } from "../../agents/prepared-model-runtime-admission-errors.js";
+import { PluginInstanceUnavailableError } from "../../plugins/plugin-instance-error.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resolvePluginProvidersCore } from "../../plugins/providers.runtime.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";

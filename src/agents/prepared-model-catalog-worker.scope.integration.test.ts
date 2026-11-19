@@ -15,7 +15,10 @@ import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.j
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { MINIMAX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
-import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./auth-profiles/store-runtime.js";
+import {
+  saveAuthProfileStore,
+  updateAuthProfileStoreWithLock,
+} from "./auth-profiles/store-runtime.js";
 import { configFor } from "./model-auth.fixtures.test-support.js";
 import { model } from "./model-catalog-fixtures.test-support.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
