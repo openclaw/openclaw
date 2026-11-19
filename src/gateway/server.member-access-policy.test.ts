@@ -18,6 +18,7 @@ import {
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForOpenClawIdIdentity } from "../state/user-profile-openclaw-id.js";
+import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { checkAuthenticatedHttpUserProfile } from "./http-auth-user-profile.js";
 import {
@@ -37,7 +38,7 @@ import type { GatewayConnectionTransport } from "./server/connection-transport.j
 import { prepareGatewayConnectOperatorAccess } from "./server/ws-connection/connect-operator-access.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
-const pluginId = "member-access";
+const pluginId = "staff-access";
 const grantId = "780a6c68-5d66-4df6-b4e8-dba6d24264a2";
 const member: OpenClawIdTunnelPrincipal = {
   kind: "member",
@@ -70,20 +71,20 @@ function fixture(defaultRole = false) {
   const config: OpenClawConfig = {
     gateway: {
       roles: {
-        ...(defaultRole ? { default: "staff" } : {}),
-        assignments: { byGithubLogin: { "member-login": "staff" } },
+        ...(defaultRole ? { default: "member" } : {}),
+        assignments: { byGithubLogin: { "member-login": "member" } },
         definitions: {
           member: {
             scopes: ["operator.sessions.read"],
             agents: "*",
             sessions: { others: "view" },
-            accessPolicyPlugin: pluginId,
+            accessPolicyPlugin: "member-access",
           },
           staff: {
             scopes: ["operator.admin"],
             agents: "*",
             sessions: { others: "write" },
-            accessPolicyPlugin: "staff-access",
+            accessPolicyPlugin: pluginId,
           },
           unbound: { scopes: [], agents: [], sessions: { others: "none" } },
         },
@@ -117,11 +118,13 @@ function fixture(defaultRole = false) {
   return { config, authority, register };
 }
 
-it("requires a member's missing plugin without enabling definitions-only policy for other sign-ins", () => {
+it("requires the profile plugin for member and other sign-ins with a definitions-only catalog", () => {
   const { config } = fixture();
-  expect(hasGatewayOperatorAccessPolicies(config)).toBe(false);
+  expect(hasGatewayOperatorAccessPolicies(config)).toBe(true);
   expect(hasGatewayOperatorAccessPolicies(config, source)).toBe(true);
-  expect(resolvePreparedGatewayOperatorAccessAuthority(preparedProfile, config)).toBeNull();
+  expect(() => resolvePreparedGatewayOperatorAccessAuthority(preparedProfile, config)).toThrow(
+    "[access-cause=policy-unavailable]",
+  );
   expect(() =>
     resolvePreparedGatewayOperatorAccessAuthority(preparedProfile, config, source),
   ).toThrow("[access-cause=policy-unavailable]");
@@ -131,7 +134,7 @@ it("requires a member's missing plugin without enabling definitions-only policy 
 });
 
 it.each([false, true])(
-  "uses membership rather than profile/GitHub/default binding (default=%s)",
+  "uses the profile assignment rather than membership/GitHub/default binding (default=%s)",
   (defaultRole) => {
     const { config, register } = fixture(defaultRole);
     const { authorize, resume } = register();
@@ -141,7 +144,7 @@ it.each([false, true])(
     resumeGatewayOperatorAccessGrant(profile, config, { pluginId, grantId }, source);
     const expected = {
       config,
-      profile: { profileId: profile.profileId, emails: profile.emails, assignedRole: "member" },
+      profile: { profileId: profile.profileId, emails: profile.emails, assignedRole: "staff" },
       requiredByRole: true,
     };
     expect(authorize).toHaveBeenCalledExactlyOnceWith(expected);
@@ -149,14 +152,14 @@ it.each([false, true])(
   },
 );
 
-it("retains the membership role when a transient policy failure is re-evaluated", () => {
+it("retains the profile role when a transient policy failure is re-evaluated", () => {
   const { config, register, authority } = fixture();
   const { authorize, resume } = register();
   authorize.mockImplementation(({ profile: subject }) =>
-    subject.assignedRole === member.role ? authority : undefined,
+    subject.assignedRole === profile.assignedRole ? authority : undefined,
   );
   resume.mockImplementation(({ profile: subject }) =>
-    subject.assignedRole === member.role ? authority : undefined,
+    subject.assignedRole === profile.assignedRole ? authority : undefined,
   );
   const access = resolvePreparedGatewayOperatorAccessAuthority(preparedProfile, config, source);
   vi.spyOn(authority, "assertCurrent").mockImplementationOnce(() => {
@@ -164,25 +167,34 @@ it("retains the membership role when a transient policy failure is re-evaluated"
   });
   expect(() => access?.assertCurrent()).toThrow("Gateway access policy is unavailable");
   expect(resume).toHaveBeenCalledWith(
-    expect.objectContaining({ profile: expect.objectContaining({ assignedRole: member.role }) }),
+    expect.objectContaining({
+      profile: expect.objectContaining({ assignedRole: profile.assignedRole }),
+    }),
   );
   expect(access?.signal.aborted).toBe(false);
   expect(() => access?.assertCurrent()).not.toThrow();
 });
 
-it("does not inherit a profile binding when the membership role has no plugin", () => {
+it("requires the profile plugin even when the membership label has no plugin", () => {
   const { config } = fixture(true);
   expect(() => resolvePreparedGatewayOperatorAccessAuthority(preparedProfile, config)).toThrow(
     "[access-cause=policy-unavailable]",
   );
-  expect(
+  expect(() =>
     resolvePreparedGatewayOperatorAccessAuthority(preparedProfile, config, {
       openclawIdPrincipal: { ...member, role: "unbound" },
     }),
+  ).toThrow("[access-cause=policy-unavailable]");
+  expect(
+    resolvePreparedGatewayOperatorAccessAuthority(
+      { ...preparedProfile, role: "unbound" },
+      config,
+      source,
+    ),
   ).toBeNull();
 });
 
-it("requires confirmation from a loaded membership policy", () => {
+it("requires confirmation from a loaded profile policy", () => {
   const { config, register } = fixture();
   register(false);
   expect(() =>
@@ -190,7 +202,7 @@ it("requires confirmation from a loaded membership policy", () => {
   ).toThrow("[access-cause=access-record-inactive]");
 });
 
-it("refuses recovered work without its membership grant and retains the exact live grant", () => {
+it("refuses recovered work without its profile grant and retains the exact live grant", () => {
   const { config, register, authority } = fixture();
   expect(() => resumeGatewayOperatorAccessGrant(profile, config, null, source)).toThrow(
     "[access-cause=policy-set-changed]",
@@ -199,7 +211,7 @@ it("refuses recovered work without its membership grant and retains the exact li
     resumeGatewayOperatorAccessGrant(
       profile,
       config,
-      { pluginId: "staff-access", grantId },
+      { pluginId: "member-access", grantId },
       source,
     ),
   ).toThrow("[access-cause=policy-set-changed]");
@@ -222,13 +234,14 @@ it("refuses recovered work without its membership grant and retains the exact li
 });
 
 it.each(["websocket", "http", "delegated"] as const)(
-  "enforces the member plugin at %s admission",
+  "enforces the member profile plugin at %s admission",
   async (surface) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { config, register } = fixture();
       const person = await ensureCanonicalUserProfileForOpenClawIdIdentity({
         accountId: member.accountId,
       });
+      await setCanonicalUserProfileRole(person.id, "staff");
       const catalog = await prepareUserProfileCatalog();
       const socket: GatewayConnectionTransport = Object.assign(new EventEmitter(), {
         readyState: 1,

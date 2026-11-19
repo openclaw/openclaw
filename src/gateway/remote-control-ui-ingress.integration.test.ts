@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterAll, assert, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { formatIrohEndpointKey } from "../../packages/openclaw-id-protocol/src/index.js";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -41,6 +41,8 @@ import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import { defineIdMemberPluginHttpTests } from "./remote-control-ui-ingress-http.test-support.js";
 import {
   connect,
+  heldReadBarrier,
+  heldMutationBarrier,
   request,
   expectHello,
   PNG_BYTES,
@@ -91,13 +93,6 @@ const SHARED_TOKEN = "remote-control-ui-integration-shared-token";
 const TOKEN_AUTH = { mode: "token", token: SHARED_TOKEN, allowTailscale: false } as const;
 const SCOPES = ["operator.read", "operator.write"] as const;
 const OWNER_SESSION_KEY = "agent:main:ingress-owner-chat";
-
-function heldReadBarrier() {
-  return { entered: createDeferred(), release: createDeferred() };
-}
-function heldMutationBarrier(count: number) {
-  return { ...heldReadBarrier(), remaining: count, unsettled: count, settled: createDeferred() };
-}
 
 describe("remote Control UI ingress production composition", () => {
   let state: OpenClawTestState;
@@ -794,7 +789,7 @@ describe("remote Control UI ingress production composition", () => {
     configureAuth,
   }));
 
-  it("uses the original ID membership for roleless app RPC, browser access, and recovery", async () => {
+  it("uses the original ID membership and profile role for app RPC, browser access, and recovery", async () => {
     await configureAuth(TOKEN_AUTH, {
       definitions: {
         ...structuredClone(MEMBER_ROLE_PRESETS),
@@ -807,6 +802,7 @@ describe("remote Control UI ingress production composition", () => {
     const accountId = "ingress-id-member";
     try {
       for (const role of ["operator", "viewer"] as const) {
+        await setIngressRole(profile.id, role);
         expect(
           await claw.authority.submit(
             await claw.sign({
@@ -877,7 +873,8 @@ describe("remote Control UI ingress production composition", () => {
               assertCurrent() {},
             });
           recovered = await restore();
-          expect(recovered.authority.readCurrentRoleFacts?.()?.policy?.sessions.others).toBe(
+          expect(recovered.authority.readCurrentRoleFacts?.().assignedRole).toBe(role);
+          expect(recovered.authority.rolePolicy?.sessionAccessCap).toBe(
             role === "operator" ? "write" : "view",
           );
           expect(recovered.authority.scopes).not.toContain("operator.admin");

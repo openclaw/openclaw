@@ -22,6 +22,7 @@ import {
   isOpenClawIdTunnelPrincipalCurrent,
   OpenClawIdPrincipalChangedError,
   openclawIdTunnelRolePolicy,
+  openclawIdSubjectRolePolicy,
 } from "./openclaw-id/tunnel-principal.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
@@ -287,7 +288,7 @@ export function resolveOperatorRolePolicy(
       return roleFacts.policy;
     }
     if (
-      !isNamedOperatorRoleEnforcementEnabled(cfg) ||
+      (!isNamedOperatorRoleEnforcementEnabled(cfg) && principal?.kind !== "member") ||
       authority.profileId === GATEWAY_OWNER_PROFILE_ID
     ) {
       return undefined;
@@ -295,23 +296,29 @@ export function resolveOperatorRolePolicy(
     if (!roleFacts) {
       throw new Error("Operator role assignment was not prepared");
     }
-    return resolveOperatorRolePolicyForAssignment(
-      authority.profileId,
-      roleFacts.assignedRole,
-      cfg,
-      roleFacts.githubLogin ?? null,
+    return openclawIdSubjectRolePolicy(principal, () =>
+      resolveOperatorRolePolicyForAssignment(
+        authority.profileId,
+        roleFacts.assignedRole,
+        cfg,
+        roleFacts.githubLogin ?? null,
+      ),
     );
   }
   const prepared = client?.preparedSessionProfile;
   if (actor?.kind === "operator" && prepared?.aliases.has(actor.profileId)) {
-    return resolveOperatorRolePolicyForAssignment(
-      prepared.profileId,
-      prepared.role,
-      cfg,
-      prepared.githubLogin ?? null,
+    return openclawIdSubjectRolePolicy(principal, () =>
+      resolveOperatorRolePolicyForAssignment(
+        prepared.profileId,
+        prepared.role,
+        cfg,
+        prepared.githubLogin ?? null,
+      ),
     );
   }
-  return resolveOperatorRolePolicyForProfile(actor?.profileId, cfg);
+  return openclawIdSubjectRolePolicy(principal, () =>
+    resolveOperatorRolePolicyForProfile(actor?.profileId, cfg),
+  );
 }
 
 /** A retained caller cannot keep grants removed by the current named role. */

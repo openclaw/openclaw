@@ -8,6 +8,7 @@ import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
@@ -198,6 +199,7 @@ it.each([
           },
         },
       };
+      setUserProfileRole(profile.id, "limited");
       setRuntimeConfigSnapshot(config);
       setOpenClawIdTunnelPrincipalLookup(() => principal);
       try {

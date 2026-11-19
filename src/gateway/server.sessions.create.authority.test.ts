@@ -188,11 +188,11 @@ test.each(
     (["sessions.create", "sessions.reset"] as const).map((method) => ({ defaultRole, method })),
   ),
 )(
-  "ID member $method keeps its agent ceiling with named-role default $defaultRole",
+  "ID member $method keeps its profile agent ceiling with named-role default $defaultRole",
   async ({ defaultRole, method }) => {
     const { storePath } = await createSessionStoreDir();
-    const profile = ensureProfileForEmail("linked-admin-session-creator@example.test");
-    setUserProfileRole(profile.id, "admin");
+    const profile = ensureProfileForEmail("linked-member-session-creator@example.test");
+    setUserProfileRole(profile.id, "member");
     const cfg: OpenClawConfig = {
       ...getRuntimeConfig(),
       session: { ...getRuntimeConfig().session, store: storePath },
@@ -216,12 +216,12 @@ test.each(
       kind: "member",
       peerKey: `iroh:${"ab".repeat(32)}`,
       accountId: "linked-member",
-      role: "member",
+      role: "admin",
     };
     setOpenClawIdTunnelPrincipalLookup(() => principal);
     const localClient = {
       connect: gatewayConnect(["operator.read", "operator.write"]),
-      authenticatedUserProfile: gatewayProfile(profile.id, profile.displayName, profile.updatedAt),
+      authenticatedUserProfile: gatewayProfile(profile.id),
     };
     const memberClient = { ...localClient, internal: { openclawIdPrincipal: principal } };
     const context = { getRuntimeConfig: () => cfg };
@@ -249,8 +249,19 @@ test.each(
           context,
         },
       );
-      expect(local.ok, JSON.stringify(local.error)).toBe(true);
+      expect(local).toMatchObject({
+        ok: false,
+        error: { code: "FORBIDDEN", message: expect.stringContaining('agent "main"') },
+      });
+      expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
 
+      await writeSessionStore({
+        entries: {
+          [key]: sessionStoreEntry("existing-member-session", {
+            createdActor: { type: "human", source: "profile", id: profile.id },
+          }),
+        },
+      });
       const existing = await directSessionReq(method, { key }, { client: memberClient, context });
       expect(existing.ok, JSON.stringify(existing.error)).toBe(true);
 

@@ -592,6 +592,8 @@ it.each(["member", "owner", "definition"] as const)(
       };
       fixture.target.operator!.openclawIdPrincipal = principal;
       if (kind === "member") {
+        await setCanonicalUserProfileRole(fixture.profileId, "operator");
+        fixture.target.operator!.assignedRole = "operator";
         fixture.config.gateway = {
           roles: {
             default: "reader",

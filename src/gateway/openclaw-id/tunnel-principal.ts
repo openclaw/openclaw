@@ -194,7 +194,13 @@ export function openclawIdSubjectRolePolicy(
   if (principal?.kind === "owner") {
     return undefined;
   }
-  return openclawIdTunnelRolePolicy(principal) ?? resolveProfileRole();
+  return (
+    openclawIdTunnelRolePolicy(principal) ??
+    resolveProfileRole() ??
+    (principal?.kind === "member"
+      ? { scopes: [], agents: [], sessions: { others: "none" } }
+      : undefined)
+  );
 }
 
 /**

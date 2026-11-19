@@ -128,11 +128,11 @@ it("allows assigning and clearing member and nonmember profile roles", async ({ 
   const { member, other, service, context } = await memberFixture();
   try {
     await profileWrites.setCanonicalUserProfileRole(member.id, "reader");
-    for (const [profileId, role] of [
-      [other.id, "reader"],
-      [other.id, null],
-      [member.id, "reader"],
-      [member.id, null],
+    for (const [profileId, role, disconnects] of [
+      [other.id, "reader", 1],
+      [other.id, null, 2],
+      [member.id, "reader", 2],
+      [member.id, null, 3],
     ] as const) {
       const pending = setRole(context, profileId, role);
       await pending.request;
@@ -145,6 +145,7 @@ it("allows assigning and clearing member and nonmember profile roles", async ({ 
         "role assignment target profile",
       );
       expect(persisted.role ?? null).toBe(role);
+      expect(context.disconnectClientsForUserProfile).toHaveBeenCalledTimes(disconnects);
     }
   } finally {
     await service.stop();

@@ -302,7 +302,12 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
     assertCurrent();
     // Attribution enriches authenticated requests; configured role/access policies
     // make durable profile resolution a prerequisite for authorization.
-    if (params.authResult.delegation || rolesConfigured || accessPoliciesConfigured) {
+    if (
+      params.authResult.delegation ||
+      openclawIdPrincipal?.kind === "member" ||
+      rolesConfigured ||
+      accessPoliciesConfigured
+    ) {
       throw error;
     }
     return {};
@@ -328,11 +333,13 @@ async function prepareHttpProfile(
   }
   const display = authority.display;
   const operatorRolePolicy = cfg
-    ? resolveOperatorRolePolicyForAssignment(
-        display.id,
-        authority.role,
-        cfg,
-        authority.githubLogin ?? null,
+    ? openclawIdSubjectRolePolicy(openclawIdPrincipal, () =>
+        resolveOperatorRolePolicyForAssignment(
+          display.id,
+          authority.role,
+          cfg,
+          authority.githubLogin ?? null,
+        ),
       )
     : undefined;
   const operatorAccessAuthority = cfg

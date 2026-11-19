@@ -171,6 +171,7 @@ export async function authorizeGatewayConnectDevice(
     (authMethod === "trusted-proxy" && authResult.openclawId?.kind === "owner");
   if (
     roleConfiguredHumanOperator &&
+    configSnapshot.gateway?.roles?.default &&
     !sharedSecretOwner &&
     !authResult.user?.trim() &&
     state.remoteIngressPrincipal?.operatorRoleActor.kind !== "operator"

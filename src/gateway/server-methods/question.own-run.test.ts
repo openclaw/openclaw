@@ -515,16 +515,17 @@ describe("own-run question admission", () => {
     });
   });
 
-  it("keeps producer authority and run-close cancellation while native waiters recheck roles", async () => {
+  it("cancels producer authority and native waiters when the profile role changes", async () => {
     await withOwnRunQuestion(async (f) => {
       const id = await f.request();
       const waiting = await f.beginWait(id);
       setUserProfileRole(f.profile.id, "suspended");
       invalidateOperatorRolePolicy(f.profile.id);
-      expect(f.source.authority.signal?.aborted).toBe(false);
-      expect(f.source.authority.assertCurrent).not.toThrow();
-      expect(manager.get(id)?.status).toBe("pending");
-      releaseAgentRunDelegatedAuthority(f.authority);
+      expect(f.source.authority.signal?.aborted).toBe(true);
+      expect(f.source.authority.assertCurrent).toThrow(
+        "Your operator role changed; reconnect before continuing.",
+      );
+      expect(manager.get(id)?.status).toBe("cancelled");
       const system = createSyntheticPluginRuntimeClient({
         operatorRoleActor: { kind: "system" },
         scopes: ["operator.questions"],
@@ -532,8 +533,6 @@ describe("own-run question admission", () => {
       expect((await f.call("question.get", { id }, system))[1]).toMatchObject({
         question: { id, status: "cancelled" },
       });
-      // Retained source limitation: the native waiter still uses the router's
-      // captureGatewayRequestOperatorGuard at settlement, unlike the admitted producer.
       expect(await waiting.result).toEqual([
         false,
         undefined,

@@ -560,7 +560,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
         if (
           change.kind === "assignment" &&
           change.profileId === profileId &&
-          !(change.roleOnly && openclawIdPrincipal?.kind === "owner")
+          openclawIdPrincipal?.kind !== "owner"
         ) {
           revoke(new Error("Your operator role changed; reconnect before continuing."));
         }
