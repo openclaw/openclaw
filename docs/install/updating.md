@@ -1506,7 +1506,8 @@ Native pnpm updates also relocate pnpm launcher paths before publishing them.
 Each shell word is rewritten by value, so every quoting form pnpm writes is
 covered, including the quoted `"$basedir_abs"/'<target>'` form and paths that
 contain `'`, `"`, `$`, spaces or backslashes. A staged launcher that still points
-into the update stage stops the update before the Gateway is stopped. After
+into the update stage stops the update before the Gateway is stopped; the
+message names the direct pnpm reinstall and `openclaw triage`. After
 activation, a published launcher whose target does not exist fails the update,
 and the package transaction restores the previous launchers. A launcher format
 the updater cannot read only produces a warning with repair guidance. A pnpm

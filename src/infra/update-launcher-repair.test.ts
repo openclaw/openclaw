@@ -68,8 +68,8 @@ describe.skipIf(process.platform === "win32")("staged launcher repair", () => {
     ["team's global", "pnpm-home"],
     // An apostrophe above it: pnpm spells the stage itself with `'\''` in NODE_PATH.
     ["global", "team's base/pnpm-home"],
-    // Every character a single-quoted word carries literally.
-    [`odd "dir" $HOME \\ global`, "pnpm-home"],
+    // Every character a single-quoted word carries literally; `$'` is also a JS replacement token.
+    [`odd "dir" $HOME $' \\ global`, "pnpm-home"],
   ])(
     "rewrites a launcher left pointing at the removed stage to the live install (%s under %s)",
     async (globalName, homeName) =>
