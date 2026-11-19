@@ -634,6 +634,59 @@ it("copies external directory and file links under an aliased state root without
   );
 });
 
+it.skipIf(process.platform === "win32")(
+  "bounds external file links inside a shared package scope",
+  async () => {
+    await writeText(root, "package.json", "{}");
+    const plugin = path.join(root, "plugin");
+    const source = path.join(root, "assets", "config.txt");
+    await writeText(plugin, "package.json", '{"name":"plugin"}');
+    await writeText(path.dirname(source), path.basename(source), "preserved");
+    await link(path.join(root, "missing-target"), path.join(root, "assets", "unrelated"));
+    await link(source, path.join(plugin, "config.txt"));
+    const params = {
+      config: pluginConfig([plugin]),
+      stateDir: path.join(root, "source-state"),
+      targetStateDir: path.join(root, "snapshot"),
+      candidateRoot: root,
+    };
+    const paths = await copyUpdateCandidatePlugins(
+      await prepareUpdateCandidatePlugins(params),
+      params,
+    );
+    const copied = path.join(paths[plugin]!, "config.txt");
+    expect(await fs.readFile(copied, "utf8")).toBe("preserved");
+    expect((await fs.realpath(copied)).startsWith(params.targetStateDir + path.sep)).toBe(true);
+    expect(
+      (await fs.readdir(params.targetStateDir, { recursive: true })).some(
+        (entry) => path.basename(entry) === "unrelated",
+      ),
+    ).toBe(false);
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "refuses file links into private snapshot state",
+  async () => {
+    const plugin = path.join(root, "plugin");
+    const targetStateDir = path.join(root, "snapshot");
+    await writeText(root, "package.json", "{}");
+    await writeText(plugin, "package.json", '{"name":"plugin"}');
+    const source = path.join(targetStateDir, "private.txt");
+    await writeText(targetStateDir, "private.txt", "private snapshot bytes");
+    await link(source, path.join(plugin, "config.txt"));
+    await expect(
+      prepareUpdateCandidatePlugins({
+        config: pluginConfig([plugin]),
+        stateDir: path.join(root, "source-state"),
+        targetStateDir,
+        candidateRoot: root,
+      }),
+    ).rejects.toThrow("Plugin copy source overlaps update state");
+    expect(await fs.readFile(source, "utf8")).toBe("private snapshot bytes");
+  },
+);
+
 it.each([
   { alias: true, shadow: false, linkedModules: false, sharedOrder: "none" },
   { alias: false, shadow: true, linkedModules: false, sharedOrder: "none" },
