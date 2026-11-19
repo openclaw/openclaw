@@ -631,7 +631,10 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           const startTimedOut = err instanceof GatewayRequestStartTimeoutError;
           dispatchOutcome = startTimedOut ? "returned" : "threw";
           // Failure diagnostics and responses belong to the same request trace as the handler.
-          if (!startTimedOut) {
+          if (!startTimedOut && client.connectionSignal?.aborted) {
+            // The requester has gone and its close is already logged; nobody can act on this.
+            logGateway.debug(`request handler failed after disconnect: ${formatForLog(err)}`);
+          } else if (!startTimedOut) {
             logGateway.error(`request handler failed: ${formatForLog(err)}`);
           }
           const staleInstall = classifyGatewayStaleInstall(err);

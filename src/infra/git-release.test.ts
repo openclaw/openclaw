@@ -483,7 +483,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           running: true,
           env: {},
           command: { programArguments: [process.execPath, launcher, "gateway", "--port", "1"] },
-          runtime: { status: "running" },
+          runtime: { status: "running", systemd: { managerUid: 1001 } },
         },
       });
 
@@ -504,7 +504,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           running: entry !== null,
           env: {},
           command: entry ? { programArguments: [process.execPath, entry, "gateway"] } : null,
-          runtime: { status: entry ? "running" : "stopped" },
+          runtime: { status: entry ? "running" : "stopped", systemd: { managerUid: 1001 } },
           ...(sealed
             ? { definitionMutationCapability: { kind: "sealed", reason: "symlink" } }
             : {}),
