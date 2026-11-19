@@ -21,11 +21,11 @@ import { directSessionReq } from "./test/server-sessions.test-helpers.js";
 const { createSessionStoreDir } = setupSessionCreateHandlerTestHarness();
 
 test.each([false, true])(
-  "stamps member-created sessions and rejects unavailable sandbox provisioning (named roles=%s)",
+  "stamps member-created sessions and rejects unavailable sandbox provisioning (named-role default=%s)",
   async (enforced) => {
     const { storePath } = await createSessionStoreDir();
     const profile = ensureProfileForEmail("member-sandbox@example.test");
-    setUserProfileRole(profile.id, "host");
+    setUserProfileRole(profile.id, "guest");
     const cfg: OpenClawConfig = {
       ...getRuntimeConfig(),
       session: { ...getRuntimeConfig().session, store: storePath },
@@ -57,7 +57,7 @@ test.each([false, true])(
       kind: "member",
       peerKey: "iroh:guest",
       accountId: "guest",
-      role: "guest",
+      role: "host",
     };
     setOpenClawIdTunnelPrincipalLookup(() => principal);
     onTestFinished(() => setOpenClawIdTunnelPrincipalLookup(undefined));
@@ -135,9 +135,12 @@ test.each([false, true])(
       createdActor: { id: profile.id },
     });
 
+    const hostProfile = ensureProfileForEmail("host-sandbox@example.test");
+    setUserProfileRole(hostProfile.id, "host");
     const namedClient: GatewayClient = {
       ...client,
       connect: gatewayConnect(["operator.write"]),
+      authenticatedUserProfile: gatewayProfile(hostProfile.id),
       internal: undefined,
     };
     const hostKey = `${key}-other-signin`;
@@ -151,8 +154,8 @@ test.each([false, true])(
       loadSessionEntry({ agentId: "main", sessionKey: hostKey, storePath })?.sandbox,
     ).toBeUndefined();
 
-    setUserProfileRole(profile.id, "guest");
-    principal = { ...principal, role: "operator" };
+    setUserProfileRole(profile.id, "operator");
+    principal = { ...principal, role: "guest" };
     client.internal = { openclawIdPrincipal: principal };
     client.connect.scopes = ["operator.write"];
     const operatorKey = `${key}-operator`;

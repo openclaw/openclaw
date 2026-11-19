@@ -742,14 +742,29 @@ it("uses the profile role for members and leaves owner devices uncapped", () =>
     }
   }));
 
-it("fails closed for identified people when OpenClaw ID is enabled without a role catalog", () => {
-  const cfg = { gateway: { openclawId: { enabled: true } } };
-  expect(resolveOperatorRolePolicyForAssignment("member", "operator", cfg, null)?.scopes).toEqual(
-    [],
-  );
-  expect(resolveOperatorRolePolicyForAssignment("member", null, cfg, null)?.scopes).toEqual([]);
-  expect(
-    resolveOperatorRolePolicyForAssignment(GATEWAY_OWNER_PROFILE_ID, null, cfg, null),
-  ).toBeUndefined();
-  expect(resolveOperatorRolePolicyForAssignment("ordinary", null, {}, null)).toBeUndefined();
-});
+it("fails closed for members without a catalog without changing independent local authority", () =>
+  inState(async () => {
+    const cfg: OpenClawConfig = { gateway: { openclawId: { enabled: true } } };
+    const profile = ensureProfileForEmail("catalog-missing@example.test");
+    const catalog = await prepareUserProfileCatalog();
+    try {
+      const client = identifiedClient(profile.id);
+      client.internal = {
+        openclawIdPrincipal: {
+          kind: "member",
+          peerKey: "iroh:member",
+          accountId: "member",
+          role: "operator",
+        },
+      };
+      setOpenClawIdTunnelPrincipalLookup(() => client.internal?.openclawIdPrincipal);
+      expect(resolveOperatorRolePolicy(client, cfg)?.scopes).toEqual([]);
+      expect(resolveOperatorRolePolicyForAssignment(profile.id, null, cfg, null)).toBeUndefined();
+      expect(
+        resolveOperatorRolePolicyForAssignment(GATEWAY_OWNER_PROFILE_ID, null, cfg, null),
+      ).toBeUndefined();
+    } finally {
+      catalog.release();
+      setOpenClawIdTunnelPrincipalLookup(undefined);
+    }
+  }));

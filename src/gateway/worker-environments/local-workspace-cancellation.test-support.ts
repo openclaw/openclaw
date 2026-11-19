@@ -203,7 +203,13 @@ export async function proveStoppedLocalWorkspaceCheckpoint(
 
 export async function proveStoppedSandboxAuthority(
   owner: LocalWorkspaceOwner,
-  revoke: "operator" | "gateway" | "guest-involvement" | "prepare-release" | "prepare-cancel",
+  revoke:
+    | "operator"
+    | "gateway"
+    | "guest-involvement"
+    | "guest-role-involvement"
+    | "prepare-release"
+    | "prepare-cancel",
   testSignal?: AbortSignal,
 ) {
   const [state, lease, paths, users, roles, auth, server, cfg, workspaces, backends] =
@@ -233,6 +239,7 @@ export async function proveStoppedSandboxAuthority(
     try {
       const guestInvolvement =
         revoke === "guest-involvement" ||
+        revoke === "guest-role-involvement" ||
         revoke === "prepare-release" ||
         revoke === "prepare-cancel";
       const guestScopes: GatewayOperatorRoleDefinition["scopes"] = [
@@ -368,11 +375,8 @@ export async function proveStoppedSandboxAuthority(
           await finish(backend, accepted.finalizeToken);
           await expectSource(owner.worktree.path, "accepted guest edit\n");
 
-          await users.setCanonicalUserProfileRole(profile.id, "denied", {
-            onCommitted: roles.invalidateOperatorRolePolicy,
-          });
           expect(captured.authority.assertCurrent).not.toThrow();
-          expect(captured.authority.reauthorize).toThrow(/operator role changed/);
+          expect(captured.authority.reauthorize).not.toThrow();
           await sandbox.fsBridge.writeFile({
             filePath: "source.txt",
             data: "admitted guest edit\n",
@@ -470,7 +474,17 @@ export async function proveStoppedSandboxAuthority(
               testSignal,
             );
             captured.authority.assertCurrent();
-            source.abort(new Error("operator source execution authority cancelled"));
+            if (revoke === "guest-role-involvement") {
+              await users.setCanonicalUserProfileRole(profile.id, "denied", {
+                onCommitted: roles.invalidateOperatorRolePolicy,
+              });
+              expect(captured.authority.assertCurrent).toThrow(/operator role changed/);
+              expect(captured.authority.reauthorize).toThrow(
+                "operator execution authority is no longer active",
+              );
+            } else {
+              source.abort(new Error("operator source execution authority cancelled"));
+            }
             deliverReceipt();
             releaseResult.resolve();
             await expect(mutation).resolves.toBe(true);
@@ -479,7 +493,7 @@ export async function proveStoppedSandboxAuthority(
             expect(loadSessionEntry(scope)?.profileInvolvement?.profiles[profile.id]?.hidden).toBe(
               true,
             );
-            // A late receipt cannot revive the explicitly cancelled source.
+            // A late receipt cannot revive revoked or explicitly cancelled authority.
             expect(controller.signal.aborted).toBe(false);
             await expect(
               sandbox.fsBridge.writeFile({ filePath: "revoked.txt", data: "must not write" }),
@@ -527,17 +541,21 @@ export async function proveStoppedSandboxAuthority(
           await users.setCanonicalUserProfileRole(profile.id, "denied", {
             onCommitted: roles.invalidateOperatorRolePolicy,
           });
-          expect(captured.authority.assertCurrent).not.toThrow();
-          expect(captured.authority.reauthorize).toThrow(/operator role changed/);
-          await finish(backend, pending.finalizeToken);
-          await expectSource(owner.worktree.path, "revoked guest edit\n");
+          expect(captured.authority.assertCurrent).toThrow(/operator role changed/);
+          expect(captured.authority.reauthorize).toThrow(
+            "operator execution authority is no longer active",
+          );
+          await expect(finish(backend, pending.finalizeToken)).rejects.toThrow(
+            /operator role changed/,
+          );
+          await expectSource(owner.worktree.path, "accepted guest edit\n");
           await writeSource(sandbox.workspaceDir, "cancelled guest edit\n");
           source.abort(new Error("operator source execution authority cancelled"));
           expect(captured.authority.assertCurrent).toThrow();
           await expect(finish(backend, cancelled!.finalizeToken)).rejects.toThrow(
             /operator|source execution authority/,
           );
-          await expectSource(owner.worktree.path, "revoked guest edit\n");
+          await expectSource(owner.worktree.path, "accepted guest edit\n");
         } else {
           gateway.release();
           await expect(finish(backend, pending.finalizeToken)).rejects.toMatchObject({

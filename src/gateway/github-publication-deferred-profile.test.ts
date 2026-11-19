@@ -4,6 +4,7 @@ import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
 } from "./github-publication.test-support.js";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
@@ -40,12 +41,21 @@ async function createDeferredProfileFixture(foreign = false) {
     : f.guestProfile;
   const config = { ...f.config, gateway: { ...f.config.gateway, roles: undefined } };
   setRuntimeConfigSnapshot(config);
-  const client = createOperatorWsClient({ connId: `deferred-${profileId}`, scopes: guestScopes });
+  const socket = new EventEmitter();
+  onTestFinished(() => {
+    socket.emit("close");
+  });
+  const client = createOperatorWsClient({
+    connId: `deferred-${profileId}`,
+    scopes: guestScopes,
+    socket,
+  });
   prepareGatewayConnectOperatorAccess(client);
   const handler = {
     socket: { readyState: WEBSOCKET_OPEN_READY_STATE },
     connectionWork: new AbortController(),
     isClosed: () => false,
+    close: () => socket.emit("close"),
     getClient: () => client,
     buildRequestContext: () => ({}),
   };

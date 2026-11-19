@@ -133,7 +133,11 @@ describe("session sharing sandbox requirements", () => {
           getRuntimeConfig: () => ({}),
         } as GatewayRequestContext);
         if (member) {
-          expect(unscoped.error).toMatchObject({ code: "FORBIDDEN" });
+          // Without a profile role policy, the member cannot discover or run this session.
+          expect(unscoped.error).toEqual({
+            code: "INVALID_REQUEST",
+            message: `Session "${hostSessionKey}" was not found.`,
+          });
         } else {
           expect(unscoped.error).toBeNull();
         }

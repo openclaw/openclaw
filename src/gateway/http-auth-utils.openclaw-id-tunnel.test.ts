@@ -1,7 +1,8 @@
 import { ServerResponse } from "node:http";
 import { afterEach, expect, it } from "vitest";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { ensureCanonicalUserProfileForOpenClawIdIdentity } from "../state/user-profile-openclaw-id.js";
+import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeScopedGatewayHttpRequestOrReply } from "./http-auth-utils.js";
 import { assertGatewayHttpRequestCurrent } from "./http-request-authority.js";
@@ -12,6 +13,7 @@ import {
   setOpenClawIdTunnelPrincipalResolver,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
+import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { AUTH_TOKEN, createRequest } from "./server-http.test-harness.js";
 
 const OWNER_KEY = `iroh:${"1a".repeat(32)}`;
@@ -47,8 +49,8 @@ async function admitTunnelRequest(peerKey: string) {
     req,
     res,
     auth: AUTH_TOKEN,
-    cfg: {},
-    getRuntimeConfig: () => ({}),
+    cfg: getRuntimeConfigSnapshot()!,
+    getRuntimeConfig: () => getRuntimeConfigSnapshot()!,
     operatorMethod: "agent",
   });
   if (!admitted) {
@@ -95,16 +97,22 @@ it("a member's request loses authority when the role changes, and when OpenClaw 
       name: "Member",
       email: "member@example.test",
     });
+    await setCanonicalUserProfileRole(profile.id, "operator");
     const first = await admitTunnelRequest(MEMBER_KEY);
     try {
       expect(first.requestAuth.hasCurrentClientAuthority()).toBe(true);
       expect(first.requestAuth.authenticatedUserProfile?.profileId).toBe(profile.id);
       membership.set(MEMBER_KEY, { ...operator, role: "viewer" });
+      expect(first.requestAuth.hasCurrentClientAuthority()).toBe(true);
+      await setCanonicalUserProfileRole(profile.id, "viewer", {
+        onCommitted: (id) => invalidateOperatorRolePolicy(id, { roleOnly: true }),
+      });
       expect(first.requestAuth.hasCurrentClientAuthority()).toBe(false);
     } finally {
       first.close();
     }
     membership.set(MEMBER_KEY, operator);
+    await setCanonicalUserProfileRole(profile.id, "operator");
     const second = await admitTunnelRequest(MEMBER_KEY);
     try {
       expect(second.requestAuth.hasCurrentClientAuthority()).toBe(true);

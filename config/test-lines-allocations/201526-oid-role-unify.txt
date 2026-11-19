@@ -1,0 +1,7 @@
+# Unified profile-role authority: real Gateway suspension and mention-invite coverage
+# across all enforcement modes, canonical role migration/persistence and Discovery
+# publication, recovered and queued work, HTTP/WS admission, and owner exemptions.
+# Existing member-role recovery coverage is consolidated into the profile-role matrix;
+# CI fixtures now assign canonical roles instead of granting authority via ID labels.
+# Measured against the PR base: 1384 net test lines; 400 ordinary + 984 allocated.
+984

@@ -600,6 +600,15 @@ test.each([
   await withIdentityServer(async ({ connect }) => {
     const { ws, connected } = await connect({ scopes: scenario.deviceScopes });
     try {
+      if (scenario.expectedScopes.length === 0) {
+        expect(connected).toMatchObject({
+          ok: false,
+          error: { code: "FORBIDDEN", details: { code: "OPERATOR_ACCESS_DENIED" } },
+        });
+        expect(responseAuth(connected)).toBeUndefined();
+        expect(await waitForWsClose(ws, 1_000)).toBe(true);
+        return;
+      }
       expectScopes(connected, scenario.expectedScopes);
       expect(responseAuth(connected)).toMatchObject({
         roleAllowsAdmin: scenario.assignedRole === "admin-only",
@@ -968,8 +977,17 @@ test("keeps equivalent identity grants within both proxy scope ceilings", async 
         { device: null },
         { ...TRUSTED_PROXY_HEADERS, "x-forwarded-user": identity, "x-openclaw-scopes": cap },
       );
+      if (expected.length === 0) {
+        expect(connected).toMatchObject({
+          ok: false,
+          error: { code: "FORBIDDEN", details: { code: "OPERATOR_ACCESS_DENIED" } },
+        });
+        expect(responseAuth(connected)).toBeUndefined();
+        expect(await waitForWsClose(ws, 1_000)).toBe(true);
+        continue;
+      }
       expectScopes(connected, expected);
-      expect((await rpcReq(ws, "sessions.list", {})).ok).toBe(expected.length > 0);
+      expect((await rpcReq(ws, "sessions.list", {})).ok).toBe(true);
       await expectWriteDenied(ws, "agent:main:scope-cap");
       ws.close();
     }
@@ -998,19 +1016,22 @@ test.each<[string, GatewayAuthConfig, ConnectOptions, string[]]>([
   });
 });
 
-test("keeps Tailscale identity scopes without a named-role cap when only definitions exist", async () => {
-  testTailscaleWhois.value = { login: "peter", name: "Peter" };
+test("refuses unassigned Tailscale identities when a role catalog has no default", async () => {
+  const login = "peter@example.test";
+  testTailscaleWhois.value = { login, name: "Peter" };
   await configureTailscale(
-    { identityScopes: { peter: ["operator.write"] } },
+    { identityScopes: { [login]: ["operator.write"] } },
     {
       definitions: { guest: role([], "none", []) },
     },
   );
   await withIdentityServer(async ({ tailscale }) => {
-    const { connected } = await tailscale("peter", { scopes: ["operator.read"] });
-    expect(connected.ok, JSON.stringify(connected)).toBe(true);
-    expect(responseAuth(connected)?.scopes).toEqual(expect.arrayContaining(READ_WRITE));
-    expect(responseAuth(connected)?.sessionCap).toBeUndefined();
-    expect(responseAuth(connected)?.deviceToken).toBeTruthy();
+    const { ws, connected } = await tailscale(login, { scopes: ["operator.read"] });
+    expect(connected).toMatchObject({
+      ok: false,
+      error: { code: "FORBIDDEN", details: { code: "OPERATOR_ACCESS_DENIED" } },
+    });
+    expect(responseAuth(connected)).toBeUndefined();
+    expect(await waitForWsClose(ws, 1_000)).toBe(true);
   });
 });

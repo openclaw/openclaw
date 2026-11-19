@@ -212,7 +212,7 @@ export function gatewayIngressPrincipalAuthError(
   if (principal.kind === "person") {
     return gatewayPersonPrincipalAuthError(auth, cfg);
   }
-  if (isNamedOperatorRoleEnforcementEnabled(cfg)) {
+  if (cfg.gateway?.roles?.default) {
     return "Owner ingress does not support gateway.roles. Use a person-bound grant approved in the Gateway Control UI.";
   }
   if (auth.mode !== "token" && auth.mode !== "password") {

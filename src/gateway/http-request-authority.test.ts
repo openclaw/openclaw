@@ -10,10 +10,15 @@ it.each([false, true])(
     const cfg: OpenClawConfig = {
       gateway: {
         auth: { mode: "token", token: "test-secret" },
-        roles: {
-          ...(enabled ? { default: "guest" } : {}),
-          definitions: { guest: { sessions: { others: "none" }, agents: [], scopes: [] } },
-        },
+        ...(enabled
+          ? {
+              roles: {
+                definitions: {
+                  guest: { sessions: { others: "none" as const }, agents: [], scopes: [] },
+                },
+              },
+            }
+          : {}),
       },
     };
     const isCurrent = captureHttpRequestAuthority({

@@ -36,9 +36,8 @@ import {
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
 import { serializeEventPayload } from "../../node-registry.js";
 import { resolveOpenClawIdOwnerProfile } from "../../openclaw-id/owner-account.js";
-import { openclawIdTunnelRolePolicy } from "../../openclaw-id/tunnel-principal.js";
+import { openclawIdSubjectRolePolicy } from "../../openclaw-id/tunnel-principal.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "../../operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "../../operator-role-policy.js";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
@@ -218,7 +217,7 @@ export async function attachAuthenticatedGatewayConnect(
     assertCurrent: profileLifecycle.assertCurrent,
     recordTiming: context.recordAttachTiming,
   });
-  const rolesConfigured = isNamedOperatorRoleEnforcementEnabled(context.configSnapshot);
+  const rolesConfigured = Boolean(context.configSnapshot.gateway?.roles?.default);
   // Only an owner-bound ingress grant receives the shared owner role bypass;
   // an OpenClaw ID owner device is the Gateway owner.
   const openclawIdPrincipal =
@@ -286,21 +285,18 @@ export async function attachAuthenticatedGatewayConnect(
           identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
           upgradeReq: context.handler.upgradeReq,
         });
-  // Only nodes have a transport ceiling; identified people share the profile policy.
-  const openclawIdRolePolicy =
-    role === "operator" ? openclawIdTunnelRolePolicy(openclawIdPrincipal) : undefined;
   const rolePolicy = remoteIngressPrincipal
     ? remoteIngressPrincipal.operatorRolePolicy
-    : openclawIdRolePolicy
-      ? openclawIdRolePolicy
-      : role === "operator" && !operatorOwner
-        ? resolveOperatorRolePolicyForAssignment(
+    : role === "operator" && !operatorOwner
+      ? openclawIdSubjectRolePolicy(openclawIdPrincipal, () =>
+          resolveOperatorRolePolicyForAssignment(
             authenticatedUserProfile?.profileId,
             preparedProfile?.authority.role ?? null,
             context.configSnapshot,
             preparedProfile?.authority.githubLogin ?? null,
-          )
-        : undefined;
+          ),
+        )
+      : undefined;
   const scopes = rolePolicy
     ? intersectOperatorScopes(effectiveScopes, rolePolicy.scopes)
     : effectiveScopes;

@@ -3,6 +3,7 @@ import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/devi
 import type { ConnectParams } from "../../packages/gateway-protocol/src/schema/frames.js";
 import type { SessionsFilesPreviewResult } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   publicKeyRawBase64UrlFromPem,
@@ -177,4 +178,11 @@ export async function expectReadWriteWithoutAdmin(peer: Peer, trigger: string) {
     ok: false,
     error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
   });
+}
+
+export function heldReadBarrier() {
+  return { entered: createDeferred(), release: createDeferred() };
+}
+export function heldMutationBarrier(count: number) {
+  return { ...heldReadBarrier(), remaining: count, unsettled: count, settled: createDeferred() };
 }

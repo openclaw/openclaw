@@ -17,6 +17,10 @@ import {
 import type { UserProfileIdentity } from "../state/user-profiles.types.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
+import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  openclawIdSubjectRolePolicy,
+} from "./openclaw-id/tunnel-principal.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import {
   authorizeCurrentOperatorRoleScopes,
@@ -423,13 +427,17 @@ export function prepareProjectedSessionSharing(params: {
   };
   const retainedSnapshot = params.owner ? projectedSharingKeys.get(params.owner) : undefined;
   const publication = runtimeConfigPublication.current;
+  const principal = client?.internal?.openclawIdPrincipal;
+  if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
+    throw new Error("OpenClaw ID membership authority changed");
+  }
   const policy =
     actor?.kind === "system"
       ? undefined
-      : actor?.kind === "operator" &&
-          (client?.internal?.operatorRunAuthority || client?.internal?.openclawIdPrincipal)
+      : actor?.kind === "operator" && client?.internal?.operatorRunAuthority
         ? resolveOperatorRolePolicy(client, cfg)
-        : retainedSnapshot?.sharing &&
+        : openclawIdSubjectRolePolicy(principal, () =>
+            retainedSnapshot?.sharing &&
             publication?.config === cfg &&
             retainedSnapshot.facts[0] === cfg &&
             retainedSnapshot.facts[1] === publication.revision &&
@@ -437,13 +445,14 @@ export function prepareProjectedSessionSharing(params: {
             retainedSnapshot.facts[17] === roleProfile?.role &&
             retainedSnapshot.facts[18] === roleProfile?.githubLogin &&
             retainedSnapshot.facts[19] === roleProfile?.profileId
-          ? retainedSnapshot.sharing.policy
-          : resolveOperatorRolePolicyForAssignment(
-              roleProfile?.profileId,
-              roleProfile?.role ?? null,
-              cfg,
-              roleProfile?.githubLogin ?? null,
-            );
+              ? retainedSnapshot.sharing.policy
+              : resolveOperatorRolePolicyForAssignment(
+                  roleProfile?.profileId,
+                  roleProfile?.role ?? null,
+                  cfg,
+                  roleProfile?.githubLogin ?? null,
+                ),
+          );
   const ownerEquivalent =
     !identity &&
     isNamedOperatorRoleEnforcementEnabled(cfg) &&

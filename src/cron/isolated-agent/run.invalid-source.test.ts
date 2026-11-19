@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setOpenClawIdTunnelPrincipalLookup } from "../../gateway/openclaw-id/tunnel-principal.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -71,13 +72,21 @@ describe("undecodable scheduled authority", () => {
         hydrated = true;
       },
     );
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const sessionBoundary = new Error("prepared session boundary");
     h.resolveCronSessionMock.mockRejectedValueOnce(sessionBoundary);
     await expect(
       runAgent(
         makeIsolatedAgentParamsFixture({
           cfg: scenario.cfg,
-          job: makeIsolatedAgentJobFixture({ operatorSource: scenario.operatorSource }),
+          job: makeIsolatedAgentJobFixture({
+            operatorSource: scenario.operatorSource,
+            createdActor: {
+              type: "human",
+              source: "profile",
+              id: scenario.operatorSource.source.snapshot.profileId,
+            },
+          }),
         }),
       ),
     ).rejects.toBe(sessionBoundary);
@@ -95,8 +104,16 @@ describe("undecodable scheduled authority", () => {
     );
     const params = makeIsolatedAgentParamsFixture({
       cfg: scenario.cfg,
-      job: makeIsolatedAgentJobFixture({ operatorSource: scenario.operatorSource }),
+      job: makeIsolatedAgentJobFixture({
+        operatorSource: scenario.operatorSource,
+        createdActor: {
+          type: "human",
+          source: "profile",
+          id: scenario.operatorSource.source.snapshot.profileId,
+        },
+      }),
     });
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     await expect(prepareCronCreatorSandbox(params.cfg, params.job)).resolves.toBe("required");
   });
 
@@ -109,7 +126,14 @@ describe("undecodable scheduled authority", () => {
     );
     const params = makeIsolatedAgentParamsFixture({
       cfg: scenario.cfg,
-      job: makeIsolatedAgentJobFixture({ operatorSource: scenario.operatorSource }),
+      job: makeIsolatedAgentJobFixture({
+        operatorSource: scenario.operatorSource,
+        createdActor: {
+          type: "human",
+          source: "profile",
+          id: scenario.operatorSource.source.snapshot.profileId,
+        },
+      }),
       abortSignal: controller.signal,
     });
     await expect(runAgent(params)).rejects.not.toBeInstanceOf(CronOperatorSourceError);

@@ -16,6 +16,7 @@ import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { sendChatAndWait } from "./gateway-chat-fixture.test-support.js";
 import {
   closeProvider,
   listenProvider,
@@ -324,20 +325,19 @@ async function runScenario(cutOff: CutOff, signal: AbortSignal) {
 
     // Work the member owns before the cut-off.
     const cronSession = await create();
-    report.cronCreateTurn = await send(member.client, cronSession, "MAKE_CRON now");
+    report.cronCreateTurn = await sendChatAndWait(
+      member.client,
+      cronSession,
+      "MAKE_CRON now",
+      120_000,
+    );
     const jobs = async () =>
       (
         await owner.request<{
           jobs: Array<{ id: string; enabled?: boolean; createdBy?: unknown }>;
         }>("cron.list", { includeDisabled: true })
       ).jobs;
-    let job: { id: string; enabled?: boolean } | undefined;
-    for (let attempt = 0; attempt < 100 && !job; attempt += 1) {
-      job = (await jobs())[0];
-      if (!job) {
-        await sleep(200);
-      }
-    }
+    const job = (await jobs())[0];
     report.cronJobCreated = Boolean(job);
     const s1 = await create();
     report.holdTurn = await send(member.client, s1, "HOLD_TURN please");
@@ -482,7 +482,8 @@ it.for<CutOff>([
   // B1-B3: queued/steered input, subagent child and the member's automation.
   expect(report.queuedFollowupRanAfterCut).toBe(!cut);
   expect(report.steeredInputRanAfterCut).toBe(!cut);
-  expect(report.childRunAborted).toBe(cut);
+  // Membership removal refuses fresh sources but preserves an admitted recovered child.
+  expect(report.childRunAborted).toBe(cut && cutOff !== "openclaw-id-remove");
   expect(report.cronTurnReachedModelAfterCut).toBe(!cut);
   if (cut) {
     expect(report.cronRuns).toMatchObject({

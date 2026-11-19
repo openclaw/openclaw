@@ -15,7 +15,10 @@ import { CronService } from "../../cron/service.js";
 import { resolveCronOperatorExecutionRevision } from "../../cron/service/jobs-tool-policy.js";
 import { createCronScriptRuntime } from "../../cron/trigger-script.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import { ensureCanonicalGatewayOwnerProfile } from "../../state/user-profile-writes.js";
+import {
+  ensureCanonicalGatewayOwnerProfile,
+  setCanonicalUserProfileRole,
+} from "../../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -70,13 +73,18 @@ it.each([
     const editor = "editor" in scenario ? scenario.editor : undefined;
     const originalRevoked = "originalRevoked" in scenario && scenario.originalRevoked;
     await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
-      setRuntimeConfigSnapshot({
+      const config = {
         gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } },
-      });
+        agents: { defaults: { workspace: path.join(stateDir, "workspace") } },
+      };
+      setRuntimeConfigSnapshot(config);
       const profile =
         kind === "owner"
           ? await ensureCanonicalGatewayOwnerProfile("Synthetic owner")
           : ensureProfileForEmail("condition-member@example.test");
+      if (kind === "member") {
+        await setCanonicalUserProfileRole(profile.id, "operator");
+      }
       let principal: OpenClawIdTunnelPrincipal | undefined = {
         ...(kind === "member"
           ? { kind, accountId: "condition-member", role: "operator" as const }
@@ -123,10 +131,10 @@ it.each([
       ]);
       const fixture = await recoveryFixture(stateDir, profile.id, {
         context,
+        config,
         openclawIdPrincipal: principal,
         scopes: kind === "owner" ? ["operator.admin"] : ["operator.write"],
       });
-      const config = { agents: { defaults: { workspace: path.join(stateDir, "workspace") } } };
       fixture.context.getRuntimeConfig = () => config;
       fixture.context.resolveGatewayContext = () => fixture.context;
       const disposition = vi.fn();
@@ -323,6 +331,9 @@ it.each(["member", "owner"] as const)(
               accountId: "acct-recovery",
               role: "operator",
             };
+      if (kind === "member") {
+        await setCanonicalUserProfileRole(profile.id, "operator");
+      }
       current.authority = {
         clawId: "recovery-claw",
         rootPub: "recovery-root",
@@ -340,6 +351,7 @@ it.each(["member", "owner"] as const)(
                     roles: {
                       default: "reader",
                       definitions: {
+                        ...MEMBER_ROLE_PRESETS,
                         reader: {
                           sessions: { others: "view" },
                           agents: "*",
@@ -374,9 +386,9 @@ it.each(["member", "owner"] as const)(
           });
           expect(scheduled?.snapshot).toBeDefined();
           if (kind === "member") {
-            expect(restored.authority.readCurrentRoleFacts?.().policy?.scopes).toContain(
-              "operator.write",
-            );
+            expect(restored.authority.readCurrentRoleFacts?.().assignedRole).toBe("operator");
+            expect(restored.authority.rolePolicy?.sessionAccessCap).toBe("write");
+            expect(restored.authority.scopes).toContain("operator.write");
           }
           const original = structuredClone(current);
           // Losing the lookup refuses fresh work without canceling this admitted run.
@@ -397,8 +409,17 @@ it.each(["member", "owner"] as const)(
           }
           if (original.kind === "member") {
             current = { ...original, role: "viewer" };
-            await expect(fixture.restore()).rejects.toThrow();
-            expect(restored.authority.reauthorize).toThrow();
+            // Membership labels do not replace the canonical profile's operator role.
+            const relabeled = await fixture.restore();
+            try {
+              expectCurrent(relabeled.authority);
+              expect(relabeled.authority.readCurrentRoleFacts?.().assignedRole).toBe("operator");
+              expect(relabeled.authority.rolePolicy?.sessionAccessCap).toBe("write");
+              expect(relabeled.authority.scopes).toContain("operator.write");
+            } finally {
+              relabeled.release();
+            }
+            expect(restored.authority.reauthorize).not.toThrow();
             expectCurrent(restored.authority);
           }
           current = original;
