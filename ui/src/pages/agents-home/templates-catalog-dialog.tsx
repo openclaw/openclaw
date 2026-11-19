@@ -159,7 +159,9 @@ class TemplatesCatalogModel {
           if (item.kind !== "plugin" || item.source !== "clawhub") {
             return;
           }
-          const local = result?.plugins.find((plugin) => plugin.clawhubPackage === item.ref);
+          const local = result?.plugins.find(
+            (plugin) => plugin.installed && plugin.clawhubPackage === item.ref,
+          );
           let presentation: TemplatePluginPresentation;
           if (local) {
             presentation = { name: local.name, ...(local.hasIcon ? { pluginId: local.id } : {}) };

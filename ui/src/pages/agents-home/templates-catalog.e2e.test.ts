@@ -347,7 +347,17 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       await gateway.setMethodResponse("plugins.list", {
         plugins:
           source === "catalog"
-            ? []
+            ? [
+                {
+                  id: "workflow-tools",
+                  name: "Uninstalled official entry",
+                  clawhubPackage: "@openclaw/workflow-tools",
+                  origin: "official",
+                  installed: false,
+                  enabled: false,
+                  state: "not-installed",
+                },
+              ]
             : [
                 {
                   id: "workflow-tools",
