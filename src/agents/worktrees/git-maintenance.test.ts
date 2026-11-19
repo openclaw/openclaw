@@ -38,6 +38,66 @@ beforeEach(() => {
 });
 afterEach(() => clearRuntimeConfigSnapshot());
 
+it.each([false, true])(
+  "folds delta-heavy packs without inflation (promisor=%s)",
+  async (promisor) => {
+    const root = tempDirs.make("worktree-delta-packs-");
+    const repo = await initRepo(root);
+    await insertRegistryWorktree(env, makeWorktreeRecord(repo, "delta-packs"));
+    await git(repo, "repack", "-ad");
+    const directory = path.join(repo, ".git/objects/pack");
+    const kept = (await fs.readdir(directory)).find((name) => name.endsWith(".pack"))!;
+    await fs.writeFile(path.join(directory, kept.replace(/\.pack$/, ".keep")), "");
+    await fs.link(path.join(directory, kept), path.join(root, "shared.pack"));
+    const keptStat = await fs.stat(path.join(directory, kept));
+    const selected = [];
+    for (let pack = 0; pack < 2; pack++) {
+      const nonce = Buffer.alloc(16, pack);
+      const payload = createCipheriv("aes-256-ctr", Buffer.alloc(32), nonce).update(
+        Buffer.alloc(1024),
+      );
+      const commands = [];
+      for (let revision = 0; revision < 1024; revision++) {
+        const bytes = Buffer.from(payload);
+        bytes.writeUInt32LE(revision);
+        commands.push(Buffer.from("blob\ndata 1024\n"), bytes, Buffer.from("\n"));
+      }
+      const before = new Set(await fs.readdir(directory));
+      // Git's bulk importer stores these unreachable revisions with compact offset deltas.
+      await requireGit(repo, ["-c", "fastimport.unpackLimit=0", "fast-import", "--quiet"], {
+        input: Buffer.concat(commands),
+      });
+      const name = (await fs.readdir(directory)).find(
+        (file) => !before.has(file) && file.endsWith(".pack"),
+      )!;
+      if (promisor) {
+        await fs.writeFile(path.join(directory, name.replace(/\.pack$/, ".promisor")), "");
+      }
+      selected.push({ name, size: (await fs.stat(path.join(directory, name))).size });
+    }
+    const objectsBefore = await git(repo, "cat-file", "--batch-all-objects", "--batch-check");
+    const progress = new WorktreeGcProgress();
+    await createWorktreeGitMaintenance(env)({ progress });
+    expect(progress.result.issues).toEqual([]);
+    const remaining = await fs.readdir(directory);
+    const outputs = remaining.filter((name) => name.endsWith(".pack") && name !== kept);
+    expect(outputs).toHaveLength(1);
+    expect(selected.every(({ name }) => !remaining.includes(name))).toBe(true);
+    const written = (await fs.stat(path.join(directory, outputs[0]!))).size;
+    const retired = selected.reduce((sum, pack) => sum + pack.size, 0);
+    expect(written / retired).toBeLessThanOrEqual(1.01);
+    expect(remaining.filter((name) => name.endsWith(".promisor"))).toHaveLength(promisor ? 1 : 0);
+    const { ino, nlink, size } = await fs.stat(path.join(directory, kept));
+    expect({ ino, nlink, size }).toEqual({
+      ino: keptStat.ino,
+      nlink: keptStat.nlink,
+      size: keptStat.size,
+    });
+    expect(await git(repo, "cat-file", "--batch-all-objects", "--batch-check")).toBe(objectsBefore);
+    await git(repo, "fsck", "--full", "--no-dangling");
+  },
+);
+
 it("preserves shared packs across local clones and stops rewriting private packs", async () => {
   const root = tempDirs.make("worktree-hardlinked-packs-");
   const source = await initRepo(root);
