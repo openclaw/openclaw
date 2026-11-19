@@ -1,5 +1,9 @@
+import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AnyAgentTool } from "../agent-tools.types.js";
+import { readGitHubPublicationToolSelection } from "../github-tool-identity-config.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
 import type { describeSessionToolDefinition } from "./session-tool-definition.js";
 
@@ -52,4 +56,23 @@ export function selectToolSurfaceCheckpoint<T extends { type: string }>(
     }
   }
   return undefined;
+}
+
+/** Tool and plugin configuration a pin depends on; a change starts a new pin. */
+export function resolveSessionToolPolicyDigest(
+  config: OpenClawConfig | undefined,
+  agentId: string,
+) {
+  return sha256Hex(
+    stableStringify([
+      config?.tools,
+      config?.agents?.entries?.[agentId]?.tools,
+      config?.plugins,
+      config?.mcp,
+      config?.desktop,
+      readGitHubPublicationToolSelection(config ?? {}),
+      // Pins written before the fixed listing lack tools it now lists; start one new pin.
+      "fixed-listing",
+    ]),
+  );
 }

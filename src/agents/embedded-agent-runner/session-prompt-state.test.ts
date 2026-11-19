@@ -1,6 +1,9 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
+import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readGitHubPublicationToolSelection } from "../github-tool-identity-config.js";
 import { projectAgentToolDefinition } from "../prepared-tool-definition.js";
 import { canonicalizeSessionEntry } from "../sessions/session-manager-persistence-entry.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
@@ -18,7 +21,10 @@ import {
   readSessionSentTools,
   retireSessionSystemPrompt,
 } from "./session-prompt-state.js";
-import { readToolSurfaceCheckpoint } from "./session-tool-checkpoint.js";
+import {
+  readToolSurfaceCheckpoint,
+  resolveSessionToolPolicyDigest,
+} from "./session-tool-checkpoint.js";
 
 const sessionIds = new Set<string>();
 const entryMetadata = { parentId: null, timestamp: "2026-10-01T00:00:00Z" };
@@ -702,23 +708,32 @@ describe("session tool surface", () => {
   });
 
   it("starts one new pin after an upgrade changes the tool policy digest", async () => {
+    const config = { tools: { toolSearch: { mode: "tools" as const } } };
+    // The digest main wrote for the same configuration (before the MCP and fixed-listing keys).
+    const preUpgrade = sha256Hex(
+      stableStringify([
+        config.tools,
+        undefined,
+        undefined,
+        undefined,
+        readGitHubPublicationToolSelection(config),
+      ]),
+    );
+    const postUpgrade = resolveSessionToolPolicyDigest(config, "main");
+    expect(postUpgrade).not.toBe(preUpgrade);
+    expect(resolveSessionToolPolicyDigest(config, "main")).toBe(postUpgrade);
     const entries: SessionEntry[] = [];
     // A pin written before the upgrade, without `message`.
-    surface([tool("read")], entries, routeKey, "pre-upgrade-policy");
+    surface([tool("read")], entries, routeKey, preUpgrade);
     await persist(entries);
     fixture.reload();
-    const after = surface(
-      [tool("read"), tool("message")],
-      entries,
-      routeKey,
-      "post-upgrade-policy",
-    );
+    const after = surface([tool("read"), tool("message")], entries, routeKey, postUpgrade);
     expect(after.map((entry) => entry.name)).toEqual(["message", "read"]);
     await persist(entries);
     fixture.reload();
     // The new pin holds from then on.
     expect(
-      surface([tool("read")], entries, routeKey, "post-upgrade-policy").map((entry) => entry.name),
+      surface([tool("read")], entries, routeKey, postUpgrade).map((entry) => entry.name),
     ).toEqual(["message", "read"]);
   });
 

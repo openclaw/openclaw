@@ -1,5 +1,3 @@
-import { stableStringify } from "@openclaw/normalization-core";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
@@ -9,7 +7,6 @@ import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import { bindCodeModeSessionStore } from "../../code-mode-session-store.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
-import { readGitHubPublicationToolSelection } from "../../github-tool-identity-config.js";
 import { getOpenClawSystemUpdateKind } from "../../internal-runtime-context.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
@@ -41,6 +38,7 @@ import {
   prepareSessionPublicationToolListing,
   retireSessionSystemPrompt,
 } from "../session-prompt-state.js";
+import { resolveSessionToolPolicyDigest } from "../session-tool-checkpoint.js";
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import type { SystemPromptUpdatePreparation } from "./attempt-permission-prompt.js";
@@ -248,18 +246,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   if (usesSystemPromptSeries) {
     beginSessionSystemPrompt(sessionPromptState);
   }
-  const toolPolicyDigest = sha256Hex(
-    stableStringify([
-      attempt.config?.tools,
-      attempt.config?.agents?.entries?.[sessionAgentId]?.tools,
-      attempt.config?.plugins,
-      attempt.config?.mcp,
-      attempt.config?.desktop,
-      readGitHubPublicationToolSelection(attempt.config ?? {}),
-      // Pins written before the fixed listing lack tools it now lists; start one new pin.
-      "fixed-listing",
-    ]),
-  );
+  const toolPolicyDigest = resolveSessionToolPolicyDigest(attempt.config, sessionAgentId);
   if (usesSystemPromptSeries) {
     const changed = await input.toolCatalog.installToolListingPin((tools, refresh) =>
       prepareSessionPublicationToolListing({
