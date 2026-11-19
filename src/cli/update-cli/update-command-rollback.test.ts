@@ -16,6 +16,7 @@ import { FILE_LOCK_TIMEOUT_ERROR_CODE, withFileLock } from "../../infra/file-loc
 import { runPackagePostInstallVerification } from "../../infra/package-update-verification-step.js";
 import { materializeUpdateCandidateStateWorker } from "../../infra/update-candidate-state.test-support.js";
 import { NativePackageRollbackError } from "../../infra/update-native-package-stage.js";
+import type { PluginCohortRecoveryPair } from "../../infra/update-plugin-cohort-schema.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import * as processRunner from "../../process/exec.js";
@@ -52,7 +53,10 @@ vi.mock("./update-command-service.js", () => ({
   maybeRestartService: mocks.restart,
   resolveUpdatedGatewayRestartPort: async () => 19101,
 }));
+import * as recoveryStore from "../../infra/update-run-recovery-store.js";
 import * as updateShared from "./shared.js";
+import * as cohortModule from "./update-command-cohort.js";
+import * as databaseBackupModule from "./update-command-database-backup.js";
 import * as packageModule from "./update-command-package.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import {
@@ -895,3 +899,66 @@ it("keeps the risk when configuration cannot be restored after the package was",
   });
   expect(mocks.restart).not.toHaveBeenCalled();
 });
+
+it
+  .skipIf(process.platform === "win32" || process.getuid?.() === 0)
+  .each(["databases", "plugin cohort"] as const)(
+  "keeps the risk when the recheck after a %s restore cannot be read",
+  async (restored) => {
+    const env = { OPENCLAW_STATE_DIR: serviceStateDir };
+    const agent = path.join(serviceStateDir, "agents/main/agent/openclaw-agent.sqlite");
+    // The run ledger creates the shared state database with its real schema.
+    const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+    setVersion(agent, 3);
+    const { configSnapshot, schemaVersions } = await readRollbackFixtureState(serviceStateDir, env);
+    const run = { runId, env, executorFence: { assertCurrent: () => {} } };
+    // The restore succeeds; the state recheck that follows it cannot read the agent store.
+    const unreadableAfterRestore = () => fs.chmodSync(agent, 0o000);
+    if (restored === "databases") {
+      setVersion(agent, 4);
+      vi.spyOn(databaseBackupModule, "restoreFailedUpdateDatabases").mockImplementation(
+        async () => {
+          setVersion(agent, 3);
+          unreadableAfterRestore();
+          return true;
+        },
+      );
+    } else {
+      // Rollback reads only the cohort's config publications before settling it.
+      const pair = { cohort: { publications: [] } } as unknown as PluginCohortRecoveryPair;
+      vi.spyOn(recoveryStore, "loadPluginCohortRecovery").mockReturnValue(pair);
+      vi.spyOn(cohortModule, "settleUpdatePluginCohortInCandidate").mockImplementation(async () => {
+        unreadableAfterRestore();
+        return { configPaths: [] };
+      });
+    }
+    const rollback = vi.fn(async () => restoredStep());
+    let outcome: Awaited<ReturnType<typeof rollbackFailedUpdate>>;
+    try {
+      outcome = await runRollback({
+        configSnapshot,
+        schemaVersions,
+        opts: { json: true, run },
+        previousVerified: true,
+        databaseBackup: {
+          directory: path.join(serviceStateDir, "backup"),
+          databases: [],
+          missingPaths: [],
+          sourcePaths: [],
+          sourceGenerations: {},
+          warnings: [],
+        },
+        preManagedServiceStop: stoppedService({ running: false }),
+        packageTransaction: { backupRoot: "/backup", rollback, complete: vi.fn() },
+      });
+    } finally {
+      fs.chmodSync(agent, 0o600);
+    }
+    expect(rollback).not.toHaveBeenCalled();
+    expect(outcome.result).toMatchObject({
+      status: "error",
+      reason: "rollback-state-unverified",
+      recovery: { serviceRestartSafe: false, dataAtRisk: "rollback-state-unverified" },
+    });
+  },
+);
