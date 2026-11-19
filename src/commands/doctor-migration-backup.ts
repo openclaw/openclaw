@@ -183,9 +183,23 @@ export async function backupDoctorMigrationDatabases(params: {
   if (!maintenance?.ownsSchemaMaintenance) {
     throw new Error("Pre-migration SQLite backups require Doctor maintenance ownership.");
   }
-  if (params.preImageOwner === "state-upgrade") {
+  // The start covers the databases its own discovery finds: the shared state and each
+  // agent's default database in this state directory. A store Doctor finds elsewhere
+  // (a configured agent directory, say) gets Doctor's normal backup set.
+  const stateDir = nodePath.resolve(resolveStateDir(params.env));
+  const coveredByStart = (pathname: string) => {
+    const relative = nodePath.relative(stateDir, nodePath.resolve(pathname)).split(nodePath.sep);
+    return (
+      nodePath.resolve(pathname) === nodePath.resolve(sharedPath) ||
+      (relative.length === 4 &&
+        relative[0] === "agents" &&
+        relative[2] === "agent" &&
+        relative[3] === "openclaw-agent.sqlite")
+    );
+  };
+  if (params.preImageOwner === "state-upgrade" && [...pending].every(coveredByStart)) {
     // Gateway start already took (or, without room, skipped) the one pre-migration
-    // image of each outdated database; a second full set protects nothing more.
+    // image of each of these databases; a second full set protects nothing more.
     // The version phase runs only where a bounded migration exists, as with backups.
     const bounded =
       params.versionMigrationsOnly &&

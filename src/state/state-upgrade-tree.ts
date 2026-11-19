@@ -422,8 +422,7 @@ class PreImageSpaceError extends Error {}
 export async function takeStateUpgradePreImage(
   file: string,
   suffix: string,
-  resuming: boolean,
-): Promise<{ path: string; method: "clone" | "copy" | "kept" } | { skipped: string }> {
+): Promise<{ path: string; method: "clone" | "copy" } | { skipped: string }> {
   const image = `${file}${suffix}`;
   const directory = path.dirname(file);
   for (const name of fs.readdirSync(directory)) {
@@ -432,14 +431,8 @@ export async function takeStateUpgradePreImage(
       fs.rmSync(path.join(directory, name), { force: true });
     }
   }
-  if (fs.existsSync(image)) {
-    if (resuming) {
-      // The interrupted start of this build took it before this database changed.
-      return { path: image, method: "kept" };
-    }
-    // Left by an earlier, finished upgrade of this build: not this run's baseline. The new
-    // image replaces it by rename once it is complete; until then the old one stays.
-  }
+  // A same-named file left by an earlier, finished upgrade is not this run's baseline: the
+  // new image replaces it by rename once it is complete, and until then it stays.
   // No writer runs: fold the WAL in so one file holds the whole database.
   const db = openNodeSqliteDatabase(file);
   try {
@@ -508,16 +501,29 @@ export async function takeStateUpgradePreImage(
   return { path: image, method };
 }
 
+/**
+ * Doctor archives a legacy source it imported as `<file>.migrated` (or `.migrated.<n>`).
+ * After the databases return to their images, put each archive this run created back
+ * at its original name, which the previous release reads; never over a live file.
+ */
+export function restoreArchivedSources(
+  before: ReadonlySet<string>,
+  now: ReadonlySet<string>,
+): void {
+  for (const file of now) {
+    const match = /^(.*)\.migrated(?:\.\d+)?$/u.exec(file);
+    const original = match?.[1];
+    if (original && !before.has(file) && before.has(original) && !fs.existsSync(original)) {
+      fs.renameSync(file, original);
+      fsyncPath(path.dirname(original), true);
+    }
+  }
+}
+
 /** Put pre-images back with no companion from the run left beside them. */
 export function restorePreImages(files: readonly string[], suffix: string): void {
   for (const file of files) {
     if (!fs.existsSync(`${file}${suffix}`)) {
-      continue;
-    }
-    if (fs.lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) {
-      // Write the bytes back through the link and keep the link itself.
-      fs.copyFileSync(`${file}${suffix}`, file);
-      fs.rmSync(`${file}${suffix}`);
       continue;
     }
     for (const companion of ["-wal", "-journal", "-shm", ".seal"]) {

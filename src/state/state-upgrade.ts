@@ -56,6 +56,7 @@ import {
   normalizeSqliteText,
   pruneGenerations,
   readPlan,
+  restoreArchivedSources,
   restorePreImages,
   takeStateUpgradePreImage,
   withRecoveredSource,
@@ -362,6 +363,8 @@ export async function upgradeStateDirectory(params: {
    * pre-images are restored when every outdated database has one, so the start's own
    * refusal keeps the previous package's state; otherwise the state stays migrated.
    */
+  /** Called once, before any change, when a database the run starts on has no image. */
+  onUnimaged?: () => Promise<void>;
   admitConfig?: (live: { configPath: string; stateDir: string }) => Promise<string | undefined>;
 }): Promise<StateUpgradeResult> {
   const env = params.env;
@@ -414,6 +417,7 @@ export async function upgradeStateDirectory(params: {
   const interruptedDirs: string[] = [];
   let priorInventory: Set<string> | undefined;
   const priorOutdated = new Set<string>();
+  const priorImages = new Set<string>();
   for (const entry of fs.readdirSync(stateDir)) {
     if (!entry.startsWith(WORK_PREFIX)) {
       continue;
@@ -441,11 +445,14 @@ export async function upgradeStateDirectory(params: {
       try {
         const text = fs.readFileSync(path.join(dir, INVENTORY_FILE), "utf8");
         // SAFETY: only this module writes the inventory.
-        const record = JSON.parse(text) as { files: string[]; outdated: string[] };
+        const record = JSON.parse(text) as {
+          files: string[];
+          outdated: string[];
+          images: string[];
+        };
         priorInventory = new Set([...(priorInventory ?? []), ...record.files]);
-        for (const file of record.outdated) {
-          priorOutdated.add(file);
-        }
+        record.outdated.forEach((file) => priorOutdated.add(file));
+        record.images.forEach((file) => priorImages.add(file));
       } catch {
         // Killed before the inventory was written: nothing had changed yet.
       }
@@ -507,15 +514,36 @@ export async function upgradeStateDirectory(params: {
     );
     // The one pre-migration image: of each outdated database, taken before it changes.
     const images = new Map<string, string>();
+    let configImage: string | undefined;
+    const takeConfigImage = (): { path: string } | { skipped: string } => {
+      const partial = `${configPath}${suffix}.partial-${process.pid}`;
+      try {
+        // Private like the config; it replaces a leftover only by rename once complete.
+        fs.rmSync(partial, { force: true });
+        fs.writeFileSync(partial, fs.readFileSync(configPath), { mode: 0o600, flag: "wx" });
+        fsyncPath(partial);
+        fs.renameSync(partial, `${configPath}${suffix}`);
+        return { path: `${configPath}${suffix}` };
+      } catch (error) {
+        fs.rmSync(partial, { force: true });
+        if (!isMachineFailure(error)) {
+          throw error;
+        }
+        // SAFETY: node:fs throws Error instances; only the message is read.
+        return { skipped: (error as Error).message };
+      }
+    };
     const before = await inCustody(async () => {
+      // A database the interrupted run started on may have changed since: it keeps the
+      // image that run published, or none. Any other same-named file is a leftover.
+      const resumedImage = (file: string) =>
+        priorImages.has(`${file}${suffix}`) && fs.existsSync(`${file}${suffix}`)
+          ? { path: `${file}${suffix}`, method: "kept" as const }
+          : { skipped: "the interrupted start had not imaged it before it could change" };
       for (const target of outdated) {
-        // A resumed chain keeps the interrupted start's images; it never images new data.
-        const image =
-          interruptedChain &&
-          !fs.existsSync(`${target.path}${suffix}`) &&
-          target.version >= expectedVersion(target)
-            ? { skipped: "the interrupted start had already migrated it without one" }
-            : await takeStateUpgradePreImage(target.path, suffix, interruptedChain);
+        const image = priorOutdated.has(target.path)
+          ? resumedImage(target.path)
+          : await takeStateUpgradePreImage(target.path, suffix);
         if ("skipped" in image) {
           warn(
             `No pre-migration image of ${path.relative(stateDir, target.path)}: ${image.skipped}. It is migrated in place; once its migration commits, the previous release cannot open it, so a failed start stays on this release and is fixed forward.`,
@@ -528,26 +556,21 @@ export async function upgradeStateDirectory(params: {
         }
       }
       // The config is small; its pre-image lets a failed trial restore it with the databases.
-      if (
-        fs.existsSync(configPath) &&
-        (!interruptedChain || !fs.existsSync(`${configPath}${suffix}`))
-      ) {
-        const partial = `${configPath}${suffix}.partial-${process.pid}`;
-        try {
-          // A symlinked config is read through its link: the image holds the bytes, and
-          // it is private like the config whatever mode the link's target has.
-          fs.rmSync(partial, { force: true });
-          fs.writeFileSync(partial, fs.readFileSync(configPath), { mode: 0o600, flag: "wx" });
-          fsyncPath(partial);
-          fs.renameSync(partial, `${configPath}${suffix}`);
-        } catch (error) {
-          fs.rmSync(partial, { force: true });
-          if (!isMachineFailure(error)) {
-            throw error;
-          }
-          // SAFETY: node:fs throws Error instances; only the message is read.
-          warn(`No pre-migration image of the config: ${(error as Error).message}.`);
+      // A linked config is never rewritten (the config writer does not follow a final link).
+      if (fs.lstatSync(configPath, { throwIfNoEntry: false })?.isSymbolicLink()) {
+        params.log.info("The config is a link; the upgrade does not write through it.");
+      } else if (fs.existsSync(configPath)) {
+        const taken = priorOutdated.size > 0 ? resumedImage(configPath) : takeConfigImage();
+        if ("skipped" in taken) {
+          warn(`No pre-migration image of the config: ${taken.skipped}.`);
+        } else {
+          configImage = taken.path;
         }
+      }
+      // Every database the run starts on without an image ends the Git release trial:
+      // once its migration commits, no launcher can return to the previous release.
+      if (images.size < outdated.length) {
+        await params.onUnimaged?.();
       }
       // The inventory before Doctor runs; a resumed run keeps the interrupted one's.
       const listed = priorInventory ?? listFiles(stateDir, skip);
@@ -555,7 +578,11 @@ export async function upgradeStateDirectory(params: {
       const inventory = path.join(workDir, INVENTORY_FILE);
       fs.writeFileSync(
         `${inventory}.tmp`,
-        JSON.stringify({ files: [...listed], outdated: outdated.map((target) => target.path) }),
+        JSON.stringify({
+          files: [...listed],
+          outdated: outdated.map((target) => target.path),
+          images: [...images.values(), ...(configImage ? [configImage] : [])],
+        }),
         { mode: 0o600 },
       );
       fsyncPath(`${inventory}.tmp`);
@@ -642,11 +669,18 @@ export async function upgradeStateDirectory(params: {
         await closeOpenClawStateDatabaseByPathAsync(liveState);
       }
       if (refusal !== undefined) {
-        // Without an image for every migrated database, the state cannot be put back.
-        const restorable = outdated.every((target) => images.has(target.path));
+        // Without an image for every migrated database and the config, the state cannot
+        // be put back as one set.
+        const restorable =
+          outdated.every((target) => images.has(target.path)) &&
+          (configImage !== undefined ||
+            !fs.existsSync(configPath) ||
+            fs.lstatSync(configPath).isSymbolicLink());
         if (restorable) {
           await params.beforeSwap?.();
-          restorePreImages([...images.keys(), configPath], suffix);
+          restorePreImages([...images.keys(), ...(configImage ? [configPath] : [])], suffix);
+          // A legacy source Doctor imported is back where the previous release reads it.
+          restoreArchivedSources(before, listFiles(stateDir, skip));
         }
         keepChainLog();
         fs.rmSync(workDir, { recursive: true, force: true });
@@ -660,15 +694,7 @@ export async function upgradeStateDirectory(params: {
       const created = [...listFiles(stateDir, skip)].filter(
         (file) => !before.has(file) && !file.startsWith(`${workDir}${path.sep}`),
       );
-      const databases = new Set(created.filter((file) => isSqliteFile(file)));
-      const added = created.filter(
-        (file) =>
-          databases.has(file) ||
-          ["-wal", "-shm", "-journal"].some(
-            (companion) =>
-              file.endsWith(companion) && databases.has(file.slice(0, -companion.length)),
-          ),
-      );
+      const added = created.filter((file) => isSqliteFile(file));
       const applied: UpgradeOp[] = [
         ...ops,
         ...[...added].map((live) => ({ kind: "add" as const, live })),

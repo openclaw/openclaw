@@ -58,6 +58,30 @@ function collectPreserved(dir, suffix, since, depth, found) {
   return found;
 }
 
+// Doctor archives a legacy source it imported into SQLite as "<file>.migrated" (or
+// ".migrated.<n>"). One the trial created goes back to its name with the databases;
+// one whose name is taken again cannot, so it blocks the revert.
+function collectArchives(dir, since, depth, found) {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return found;
+  }
+  for (const entry of entries) {
+    const file = path.join(dir, entry.name);
+    const match = /^(.*)(\.migrated(?:\.\d+)?)$/.exec(entry.name);
+    if (entry.isDirectory()) {
+      if (depth > 0 && !["git-install", "npm", "node_modules", "tmp", "logs"].includes(entry.name)) {
+        collectArchives(file, since, depth - 1, found);
+      }
+    } else if (match && fs.lstatSync(file).ctimeMs >= since) {
+      found.push({ original: path.join(dir, match[1]), suffix: match[2] });
+    }
+  }
+  return found;
+}
+
 function restoreState(files, suffix) {
   const restored = new Set(files);
   for (const file of files) {
@@ -102,17 +126,24 @@ function plannedAdditions(stateDir, generation) {
     }
   }
   const interrupted = [];
+  const readPlan = (dir) => {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(dir, "plan.json"), "utf8"));
+    } catch (error) {
+      // A record without a plan is an in-place run that had not reached its swap.
+      if (error?.code === "ENOENT") {
+        return undefined;
+      }
+      throw error;
+    }
+  };
   for (const entry of fs.readdirSync(stateDir)) {
     if (!entry.startsWith(".upgrade-" + generation + "-")) {
       continue;
     }
     const dir = path.join(stateDir, entry);
     interrupted.push(dir);
-    let plan;
-    try {
-      plan = JSON.parse(fs.readFileSync(path.join(dir, "plan.json"), "utf8"));
-    } catch {}
-    for (const op of plan?.ops ?? []) {
+    for (const op of readPlan(dir)?.ops ?? []) {
       if (op.kind === "add") {
         added.push(op.live);
       }
@@ -125,7 +156,9 @@ function retirePlans(stateDir, generation) {
   const { added, applied, interrupted } = plannedAdditions(stateDir, generation);
   // A failed removal propagates and keeps the records, so the next start retries.
   for (const file of added) {
-    fs.rmSync(file, { force: true });
+    for (const companion of ["", "-wal", "-shm", "-journal"]) {
+      fs.rmSync(file + companion, { force: true });
+    }
   }
   if (applied) {
     fs.rmSync(applied, { force: true });
@@ -164,17 +197,44 @@ async function revertBlockers(stateDir, previous, restoring, generations, config
   }
   const removed = new Set();
   let upgraded = restoredFrom.size > 0;
-  for (const generation of generations) {
-    const planned = plannedAdditions(stateDir, generation);
-    planned.added.forEach((file) => removed.add(file));
-    upgraded ||= Boolean(planned.applied) || planned.interrupted.length > 0;
+  try {
+    for (const generation of generations) {
+      const planned = plannedAdditions(stateDir, generation);
+      planned.added.forEach((file) => removed.add(file));
+      upgraded ||= Boolean(planned.applied) || planned.interrupted.length > 0;
+    }
+  } catch {
+    return ["could not read the upgrade records"];
   }
   const databases = [[path.join(stateDir, "state", "openclaw.sqlite"), supported.state, true]];
   try {
     for (const agent of fs.readdirSync(path.join(stateDir, "agents"))) {
       databases.push([path.join(stateDir, "agents", agent, "agent", "openclaw-agent.sqlite"), supported.agent, false]);
     }
-  } catch {}
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      return ["could not list the agent databases"];
+    }
+  }
+  // A restored database comes back with the WAL preserved beside it, if any; read the two
+  // together in a private copy so a version committed only in that WAL counts.
+  const restoredWal = (live) =>
+    restoring.find(({ suffix, files }) => files.includes(live + "-wal") && fs.existsSync(live + "-wal" + suffix));
+  const readCopy = (image, wal, read) => {
+    const scratch = fs.mkdtempSync(path.join(stateDir, ".openclaw-revert-read-"));
+    try {
+      fs.copyFileSync(image, path.join(scratch, "db"), fs.constants.COPYFILE_FICLONE);
+      fs.copyFileSync(wal, path.join(scratch, "db-wal"), fs.constants.COPYFILE_FICLONE);
+      const db = new DatabaseSync(path.join(scratch, "db"));
+      try {
+        return read(db);
+      } finally {
+        db.close();
+      }
+    } finally {
+      fs.rmSync(scratch, { recursive: true, force: true });
+    }
+  };
   const blockers = [];
   for (const [live, limit, shared] of databases) {
     const file = restoredFrom.get(live) ?? live;
@@ -182,21 +242,30 @@ async function revertBlockers(stateDir, previous, restoring, generations, config
       continue;
     }
     const name = path.relative(stateDir, live);
+    const read = (db) => {
+      let version = db.prepare("PRAGMA user_version").get()?.user_version;
+      // Shared-state admission also refuses a newer content version behind an older header.
+      if (shared && db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'config_machine_state'").get()) {
+        const row = db.prepare("SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'").get();
+        if (row) {
+          const content = JSON.parse(row.value_json);
+          version = Number.isSafeInteger(content) && content >= 0 ? Math.max(version, content) : undefined;
+        }
+      }
+      return version;
+    };
     let version;
     try {
-      const db = new DatabaseSync(file, { readOnly: true });
-      try {
-        version = db.prepare("PRAGMA user_version").get()?.user_version;
-        // Shared-state admission also refuses a newer content version behind an older header.
-        if (shared && db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'config_machine_state'").get()) {
-          const row = db.prepare("SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'").get();
-          if (row) {
-            const content = JSON.parse(row.value_json);
-            version = Number.isSafeInteger(content) && content >= 0 ? Math.max(version, content) : undefined;
-          }
+      const wal = file !== live ? restoredWal(live) : undefined;
+      if (wal) {
+        version = readCopy(file, live + "-wal" + wal.suffix, read);
+      } else {
+        const db = new DatabaseSync(file, { readOnly: true });
+        try {
+          version = read(db);
+        } finally {
+          db.close();
         }
-      } finally {
-        db.close();
       }
     } catch {
       version = undefined;
@@ -208,7 +277,7 @@ async function revertBlockers(stateDir, previous, restoring, generations, config
     }
   }
   // An upgrade may have rewritten the config; without its image the revert cannot prove it.
-  if (upgraded && config && fs.existsSync(config) && !restoring.some(({ files }) => files.includes(config))) {
+  if (upgraded && config && fs.existsSync(config) && !fs.lstatSync(config).isSymbolicLink() && !restoring.some(({ files }) => files.includes(config))) {
     blockers.push("the config has no pre-migration image");
   }
   return blockers;
@@ -256,7 +325,17 @@ if (trial && counts) {
         }
         trial.restoring.push({ suffix, files });
       }
-      const blockers = await revertBlockers(path.dirname(prefix), trial.previous, trial.restoring, generations, trial.config);
+      const archives = collectArchives(path.dirname(prefix), since, 4, []);
+      for (const { original, suffix } of archives) {
+        if (!fs.existsSync(original)) {
+          trial.restoring.push({ suffix, files: [original] });
+        }
+      }
+      const retaken = archives.filter(({ original }) => fs.existsSync(original));
+      const blockers = [
+        ...retaken.map(({ original }) => "a new " + path.relative(path.dirname(prefix), original) + " replaced the legacy source Doctor archived"),
+        ...(await revertBlockers(path.dirname(prefix), trial.previous, trial.restoring, generations, trial.config)),
+      ];
       if (blockers.length > 0) {
         trial.forward = blockers;
       } else {

@@ -60,6 +60,12 @@ const startGateway = (prefix: string, env: NodeJS.ProcessEnv = {}) =>
     encoding: "utf8",
     env: { ...process.env, ...env },
   });
+/** Two failed trial starts, then the start that decides. */
+const failTwiceThenStart = (prefix: string, env: NodeJS.ProcessEnv = {}) => {
+  startGateway(prefix, env);
+  startGateway(prefix, env);
+  return startGateway(prefix, env);
+};
 
 // The launcher and the service units it names run under Node; Bun runs neither.
 describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
@@ -388,9 +394,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       it("stays on the new release when no pre-image can restore the state", async () => {
         const { prefix, db, slot, target, previousLink } = await migratedTrial({ liveVersion: 40 });
 
-        startGateway(prefix);
-        startGateway(prefix);
-        const third = startGateway(prefix);
+        const third = failTwiceThenStart(prefix);
 
         // The new release still fails to boot, but nothing reverted onto a build that refuses.
         expect(third.status).not.toBe(0);
@@ -411,9 +415,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           liveVersion: 40,
         });
 
-        startGateway(prefix);
-        startGateway(prefix);
-        const third = startGateway(prefix);
+        const third = failTwiceThenStart(prefix);
 
         expect(third.status).toBe(0);
         expect(third.stdout).toContain("old");
@@ -426,9 +428,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         // An image of a database an earlier upgrade had already moved past the previous release.
         const { prefix, db, slot, target } = await migratedTrial({ preImage: 38, liveVersion: 40 });
 
-        startGateway(prefix);
-        startGateway(prefix);
-        const third = startGateway(prefix);
+        const third = failTwiceThenStart(prefix);
 
         expect(third.stdout).not.toContain("old");
         expect(third.stderr).toContain("state/openclaw.sqlite schema 38 (");
@@ -443,9 +443,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           contentVersion: 40,
         });
 
-        startGateway(prefix);
-        startGateway(prefix);
-        const third = startGateway(prefix);
+        const third = failTwiceThenStart(prefix);
 
         expect(third.stdout).not.toContain("old");
         expect(third.stderr).toContain("state/openclaw.sqlite schema 40 (");
@@ -460,9 +458,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           previousSchemas: null,
         });
 
-        startGateway(prefix);
-        startGateway(prefix);
-        const third = startGateway(prefix);
+        const third = failTwiceThenStart(prefix);
 
         expect(third.stderr).toContain(
           `not proven safe: ${previousLink} declares no schema versions.`,
@@ -474,9 +470,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         const { prefix, db, slot, target } = await migratedTrial({ preImage: 36, liveVersion: 40 });
         await fs.writeFile(`${db}.pre-2.0.0`, "not a database");
 
-        startGateway(prefix);
-        startGateway(prefix);
-        const third = startGateway(prefix);
+        const third = failTwiceThenStart(prefix);
 
         expect(third.stderr).toContain("could not read the schema of state/openclaw.sqlite");
         expect(await fs.readlink(slot)).toBe(target);
@@ -498,9 +492,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           const trial = JSON.parse(await fs.readFile(trialFile, "utf8"));
           await fs.writeFile(trialFile, JSON.stringify({ ...trial, config }));
 
-          startGateway(prefix);
-          startGateway(prefix);
-          const third = startGateway(prefix);
+          const third = failTwiceThenStart(prefix);
 
           if (imaged) {
             expect(third.stdout).toContain("old");
@@ -528,27 +520,78 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           using handle = new DatabaseSync(created);
           handle.exec("PRAGMA user_version = 43");
         }
+        await fs.writeFile(`${created}-wal`, "trial wal");
         await fs.writeFile(
           path.join(stateDir, ".upgraded-2.0.0.json"),
           JSON.stringify({ appVersion: "2.0.0", ops: [{ kind: "add", live: created }] }),
         );
 
-        startGateway(prefix);
-        startGateway(prefix);
-        const third = startGateway(prefix);
+        const third = failTwiceThenStart(prefix);
 
         expect(third.stdout).toContain("old");
         expect(path.resolve(path.dirname(slot), await fs.readlink(slot))).toBe(previous);
         expect(witness(db)).toEqual({ v: 36 });
         await expect(fs.access(created)).rejects.toThrow();
+        await expect(fs.access(`${created}-wal`)).rejects.toThrow();
+      });
+
+      it.each([false, true])(
+        "puts Doctor's archived legacy source back with the databases (name retaken: %s)",
+        async (retaken) => {
+          const { prefix, db, slot, target } = await migratedTrial({
+            preImage: 36,
+            liveVersion: 40,
+          });
+          const jobs = path.join(path.dirname(path.dirname(db)), "cron", "jobs.json");
+          await fs.mkdir(path.dirname(jobs), { recursive: true });
+          await fs.writeFile(`${jobs}.migrated`, "legacy jobs");
+          if (retaken) {
+            await fs.writeFile(jobs, "a later file");
+          }
+
+          const third = failTwiceThenStart(prefix);
+
+          if (retaken) {
+            expect(third.stderr).toContain("a new cron/jobs.json replaced the legacy source");
+            expect(await fs.readlink(slot)).toBe(target);
+          } else {
+            expect(third.stdout).toContain("old");
+            expect(await fs.readFile(jobs, "utf8")).toBe("legacy jobs");
+          }
+        },
+      );
+
+      it("reads a restored image together with the WAL preserved beside it", async () => {
+        const { prefix, db, slot, target } = await migratedTrial({ preImage: 36, liveVersion: 40 });
+        // The preserved pair commits a newer schema only in its WAL.
+        await fs.rm(`${db}.pre-2.0.0`);
+        const pair = path.join(path.dirname(db), "pair.sqlite");
+        const writer = new DatabaseSync(pair);
+        writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0; CREATE TABLE w (v)");
+        writer.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA user_version = 40");
+        await fs.copyFile(pair, `${db}.pre-2.0.0`);
+        await fs.copyFile(`${pair}-wal`, `${db}-wal.pre-2.0.0`);
+        writer.close();
+        await fs.rm(pair);
+
+        const third = failTwiceThenStart(prefix);
+
+        expect(third.stderr).toContain("state/openclaw.sqlite schema 40 (");
+        expect(await fs.readlink(slot)).toBe(target);
+      });
+
+      it("stays forward when an upgrade record cannot be read", async () => {
+        const { prefix, db, slot, target } = await migratedTrial({ preImage: 36, liveVersion: 40 });
+        await fs.writeFile(path.join(path.dirname(path.dirname(db)), ".upgraded-2.0.0.json"), "{");
+
+        expect(failTwiceThenStart(prefix).stderr).toContain("could not read the upgrade records");
+        expect(await fs.readlink(slot)).toBe(target);
       });
 
       it("switches back when the state never moved past the previous release", async () => {
         const { prefix, db } = await migratedTrial({ liveVersion: 36 });
 
-        startGateway(prefix);
-        startGateway(prefix);
-        const third = startGateway(prefix);
+        const third = failTwiceThenStart(prefix);
 
         expect(third.status).toBe(0);
         expect(third.stdout).toContain("old");

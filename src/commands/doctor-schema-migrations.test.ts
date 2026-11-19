@@ -702,13 +702,21 @@ it.each([
   },
 );
 
-it.each([undefined, "state-upgrade"] as const)(
-  "commits the version migration and copies only when Doctor owns the image (owner=%s)",
-  async (preImageOwner) => {
+it.each([
+  [undefined, false],
+  ["state-upgrade", false],
+  ["state-upgrade", true],
+] as const)(
+  "commits the version migration and copies only when Doctor owns the image (owner=%s, outside the start's discovery=%s)",
+  async (preImageOwner, external) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       openOpenClawStateDatabase({ env: state.env });
       await closeOpenClawStateDatabaseAsync();
-      const pathname = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
+      // A configured agent directory outside the state is not one the start imaged.
+      const pathname = external
+        ? state.statePath("custom-agents", "main", "openclaw-agent.sqlite")
+        : state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
+      fs.mkdirSync(path.dirname(pathname), { recursive: true });
       openLegacyDatabase(pathname).close();
       const backups = () =>
         listDirectoryTreeStrictSync(state.stateDir)
@@ -736,7 +744,7 @@ it.each([undefined, "state-upgrade"] as const)(
         OPENCLAW_AGENT_SCHEMA_VERSION,
       );
       // Gateway start took the one image itself; a Doctor set would be a second copy.
-      expect(backups().length > 0).toBe(preImageOwner === undefined);
+      expect(backups().length > 0).toBe(preImageOwner === undefined || external);
     });
   },
 );
