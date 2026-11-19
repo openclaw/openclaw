@@ -2254,6 +2254,7 @@
 ["src/auto-reply/reply/followup-runner.test.ts","./agent-runner-result-accounting.js","1aded2fbbce6c8855f68e94d07d09e8b61b2b3d79bce8bd632c4743057621021",1]
 ["src/auto-reply/reply/followup-runner.test.ts","./followup-delivery.js","d147d7fdd33629257e5180aa1e2f3907ac0ffd46b8c3d2787421503f08977a8b",1]
 ["src/auto-reply/reply/followup-runner.test.ts","./followup-turn-execution.js","230f37de1d59a5ce17afc6e43fbbf6bd9187d66916db4474c092e3c5e4c6cdd2",1]
+["src/auto-reply/reply/followup-turn-execution.test-support.ts","./agent-runner-execution.js","10dd5fa980ed6dc2356cdc4269b7c5356bc6d124afd0fc8fab9a8ab11c3b0351",1]
 ["src/auto-reply/reply/get-reply-directives-apply.test.ts","../../infra/system-events.js","030748390314969e5520ac2bdff37ea43684a3d909f0bf26b80399660c565562",1]
 ["src/auto-reply/reply/get-reply-directives-apply.test.ts","./directive-handling.impl.js","79098a15bce9124b287bc3d66b72a84639343f95ec580b98d030aa823d9988a2",1]
 ["src/auto-reply/reply/get-reply-directives.target-session.test.ts","../../agents/defaults.js","1d9a7c7590f9a370eacf62a0e432ab2f1c9ce29f2c98ae97db6200f776ee4c9c",1]
