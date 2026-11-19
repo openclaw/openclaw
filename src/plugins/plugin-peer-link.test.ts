@@ -4,10 +4,12 @@ import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { setImmediate as nextImmediate } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   auditDeclaredOpenClawHostDependency,
   auditOpenClawPeerDependenciesInManagedNpmRoot,
@@ -118,6 +120,24 @@ function makeTempDir() {
 }
 
 describe("plugin peer links", () => {
+  it.runIf(process.platform === "linux")(
+    "rejects distinct case-sensitive hosts under Windows comparison semantics",
+    () => {
+      const { root, packageDir, linkPath } = peerFixture("missing-link");
+      const selected = path.join(root, "OpenClaw");
+      const other = path.join(root, "openclaw");
+      fs.mkdirSync(selected);
+      fs.mkdirSync(other);
+      fs.symlinkSync(other, linkPath, "junction");
+      vi.stubGlobal("__openclawStandaloneRootUrl", pathToFileURL(selected + path.sep).href);
+
+      const issue = withMockedPlatform("win32", () =>
+        auditOpenClawPeerDependencyLinkSync({ packageDir }),
+      );
+      expect(issue?.reason).toContain(other + " instead of " + selected);
+    },
+  );
+
   function standalone(root: string, overrides: Record<string, unknown> = {}) {
     const runtime = path.join(root, "runtime");
     writePackage(runtime, { name: "openclaw" });

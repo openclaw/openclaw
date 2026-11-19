@@ -5,10 +5,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { writeJsonFile as writeJson } from "../../test/helpers/temp-repo.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { swapAsciiCase } from "../infra/path-case.js";
 import {
   runPluginPayloadSmokeCheck,
   runPluginPayloadSmokeCheckForManifestRecords,
 } from "./payload-verification.js";
+import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 
 type BundleFormat = "agent" | "codex" | "claude" | "cursor";
 let tmpRoot: string;
@@ -312,6 +314,40 @@ it.each(["missing", "wrong root", "host root"])(
         ? []
         : [target === "wrong root" ? expect.objectContaining(failure) : failure],
     );
+  },
+);
+
+it.runIf(process.platform === "win32")(
+  "accepts Windows host junction casing after link creation and recreation",
+  async () => {
+    const dir = path.join(tmpRoot, "peer-alias");
+    await writePackage(
+      dir,
+      {
+        name: "peer-alias",
+        main: "index.js",
+        peerDependencies: { openclaw: "*" },
+      },
+      "export default {};",
+    );
+    const hostRoot = swapAsciiCase(resolveTestHostRoot());
+    for (const reinstall of [false, true]) {
+      if (reinstall) {
+        await fs.rm(path.join(dir, "node_modules"), { recursive: true });
+      }
+      expect(
+        await linkOpenClawPeerDependencies({
+          installedDir: dir,
+          peerDependencies: { openclaw: "*" },
+          hostRoot,
+          logger: {},
+        }),
+      ).toEqual({ repaired: 1, skipped: 0 });
+      expect(await checkPackage("peer-alias", dir)).toEqual({
+        checked: ["peer-alias"],
+        failures: [],
+      });
+    }
   },
 );
 
