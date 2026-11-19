@@ -6,7 +6,18 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { writeProviderAuthConfig } from "./provider-auth-config.js";
+import { createProviderAuthConfigPatch, writeProviderAuthConfig } from "./provider-auth-config.js";
+
+it("creates no credential-only delta for absent model maps and authored null metadata", () => {
+  const model = buildCatalogModel("gpt-fixture", { thinkingLevelMap: { off: null } });
+  const config: OpenClawConfig = configForProviders({
+    openai: { baseUrl: "https://api.openai.com/v1", models: [model] },
+  });
+
+  expect(createProviderAuthConfigPatch(config, structuredClone(config))).toEqual({});
+  expect(config.agents?.defaults?.models).toBeUndefined();
+  expect(config.models?.providers?.openai?.models[0]?.thinkingLevelMap?.off).toBeNull();
+});
 
 it.each([
   { sourceKey: "LiteLLM", patchKey: "litellm", canonicalKey: "litellm" },
