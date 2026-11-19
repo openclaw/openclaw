@@ -50,6 +50,16 @@ vi.mock("../../openclaw-plugin-tools.js", async (importOriginal) => {
 });
 
 // One bundle MCP server tool, through the production bundle pass.
+// Records whether each run may build the computer schema.
+const computerAllowedByRun: boolean[] = [];
+vi.mock("../../computer-use-node-capabilities.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../computer-use-node-capabilities.js")>()),
+  loadPairedComputerUseAvailabilityForSurface: async (params: { computerAllowed: boolean }) => {
+    computerAllowedByRun.push(params.computerAllowed);
+    return undefined;
+  },
+}));
+
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
   acquireSessionMcpRuntime: async () => ({ runtime: {}, releaseLease: () => {} }),
   materializeBundleMcpToolsForRun: async () => {
@@ -557,4 +567,15 @@ it("keeps a sender's optional-plugin grant when building the fixed listing", asy
   expect(pluginToolAllowlists.at(-1)).toEqual(
     expect.arrayContaining(["diffs", "__openclaw_default_plugin_tools__"]),
   );
+});
+
+it("decides the computer schema from session facts, whatever the run allowlist names", async () => {
+  const config = {
+    ...baseConfig,
+    tools: { ...baseConfig.tools, alsoAllow: ["world__calendar_list", "computer"] },
+  };
+  computerAllowedByRun.length = 0;
+  await prepareTools({ ...scheduled, toolsAllow: ["read"] }, config);
+  await prepareTools({ runId: "user", trigger: "user", senderIsOwner: true }, config);
+  expect(computerAllowedByRun).toEqual([true, true]);
 });

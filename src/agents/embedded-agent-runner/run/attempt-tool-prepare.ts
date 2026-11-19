@@ -263,9 +263,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const computerTransport = resolveSessionPlacementComputer(
     attempt.admittedRunContext.operationalRunInstance,
   );
-  const allowsConversationTool = (name: string) =>
+  const allowsConversationTool = (name: string, policy = runtimeCapabilityProfile.policy) =>
     projectConversationToolNames({
-      capabilityProfile: runtimeCapabilityProfile,
+      capabilityProfile: { ...runtimeCapabilityProfile, policy },
       toolNames: [name],
       warn: () => undefined,
     }).length === 1;
@@ -279,7 +279,21 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       preparedRequesterPolicy: runtimeCapabilityProfile.policy,
       pluginMetadataSnapshot: attempt.preparedModelRuntime?.metadataSnapshot,
     });
-  const computerAllowed = shouldConstructTools && allowsConversationTool("computer");
+  // A fixed listing decides the computer schema from session facts; the turn policy gates calls.
+  const { policy } = runtimeCapabilityProfile;
+  const computerAllowed =
+    shouldConstructTools &&
+    allowsConversationTool(
+      "computer",
+      fixedListing
+        ? {
+            ...policy,
+            groupPolicy: undefined,
+            senderPolicy: undefined,
+            runtimeToolPolicyForInheritance: undefined,
+          }
+        : policy,
+    );
   const pairedNodeComputerUse = (
     await loadPairedComputerUseAvailabilityForSurface({
       computerAllowed,
