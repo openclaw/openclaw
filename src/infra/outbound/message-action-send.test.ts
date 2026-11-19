@@ -48,6 +48,30 @@ function registerGatewayChat(handleAction = vi.fn(async () => jsonResult({ ok: t
     "gatewaychat",
   );
 }
+function registerGatewayDeliver() {
+  setTestPlugin(
+    {
+      ...createActionPluginBase(
+        "gatewaydeliver",
+        "Gateway Deliver",
+        "Gateway delivery-mode send test plugin.",
+      ),
+      messaging: { targetResolver: { looksLikeId: () => true } },
+      outbound: { deliveryMode: "gateway" },
+    },
+    "gatewaydeliver",
+  );
+}
+function mockDirectRoute(channel: string) {
+  vi.mocked(resolveOutboundSessionRoute).mockResolvedValueOnce({
+    sessionKey: `agent:main:${channel}:direct:user-123`,
+    baseSessionKey: `agent:main:${channel}:direct:user-123`,
+    peer: { kind: "direct", id: "user-123" },
+    chatType: "direct",
+    from: `${channel}:user-123`,
+    to: "user-123",
+  });
+}
 function gatewayMessageParams() {
   const call = readMockCallArg(mocks.callGatewayLeastPrivilege, "gateway least privilege call");
   return readRecordField(
@@ -158,20 +182,35 @@ describe("runMessageAction plugin dispatch", () => {
       ],
       ["successful delivery", { ok: true, messageId: "sent-1" }, true],
     ] as const)("handles Gateway-relayed %s receipts", async (_name, receipt, accepted) => {
-      vi.mocked(resolveOutboundSessionRoute).mockResolvedValueOnce({
-        sessionKey: "agent:main:gatewaychat:direct:user-123",
-        baseSessionKey: "agent:main:gatewaychat:direct:user-123",
-        peer: { kind: "direct", id: "user-123" },
-        chatType: "direct",
-        from: "gatewaychat:user-123",
-        to: "user-123",
-      });
+      mockDirectRoute("gatewaychat");
       registerGatewayChat(vi.fn());
       mocks.callGatewayLeastPrivilege.mockResolvedValue(receipt);
       const result = await gatewaySend({ message: "omitted" }, { agentId: "main" });
       expect(result.payload).toEqual(receipt);
       expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(accepted ? 1 : 0);
     });
+    it.each([
+      ["relayed through the Gateway", undefined, 0],
+      ["delivered by the Gateway itself", true, 1],
+    ])(
+      "commits the route for a core send %s once",
+      async (_name, gatewayOwnedDelivery, commits) => {
+        mockDirectRoute("gatewaydeliver");
+        registerGatewayDeliver();
+        mocks.executeSendAction.mockResolvedValueOnce({
+          handledBy: "core",
+          payload: { ok: true },
+          sendResult: { channel: "gatewaydeliver", to: "user-123", via: "gateway", mediaUrl: null },
+        });
+        await sendTo(
+          "gatewaydeliver",
+          "user-123",
+          { message: "hello" },
+          { agentId: "main", gatewayOwnedDelivery },
+        );
+        expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(commits);
+      },
+    );
     it.each(["gatewaychat", "gatewaydeliver"])(
       "preserves data URL bytes and MIME through %s",
       async (channel) => {
@@ -185,18 +224,7 @@ describe("runMessageAction plugin dispatch", () => {
             messageId: "gw-send-buffer",
           });
         } else {
-          setTestPlugin(
-            {
-              ...createActionPluginBase(
-                channel,
-                "Gateway Deliver",
-                "Gateway delivery-mode send test plugin.",
-              ),
-              messaging: { targetResolver: { looksLikeId: () => true } },
-              outbound: { deliveryMode: "gateway" },
-            },
-            channel,
-          );
+          registerGatewayDeliver();
           mocks.executeSendAction.mockResolvedValueOnce({
             handledBy: "core",
             payload: { ok: true },
