@@ -325,6 +325,62 @@ struct ChatSessionsCodingTests {
         ]
         let decoded = try await OpenClawChatViewModel.decodeMessages((prefix + [nested, answer]).map(Self.nestedRaw))
         let raw = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: decoded))
+        var livePrefix = prefix
+        livePrefix[0]["__openclaw"] = ["id": "question", "runId": "nested-run"]
+        let live = try await OpenClawChatViewModel.decodeMessages((livePrefix + [nested]).map(Self.nestedRaw))
+        let streaming = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: live))
+        try #require(streaming.count == 3)
+        let liveGroups = ChatAssistantRunGroup.build(
+            streaming, liveRunID: "nested-run", hasLiveContent: true, searchActive: false)
+        #expect(liveGroups.map(\.id) == [.row(streaming[0].id), .run("nested-run", streaming[0].id, 0)])
+        let liveGroup = try #require(liveGroups.last)
+        #expect(liveGroup.parts.map(\.id) == streaming.dropFirst().map { "row:\($0.id)" })
+        #expect(liveGroup.runID == "nested-run" && liveGroup.includesLive)
+        let cells = ChatAssistantListCell.cells(liveGroups[...])
+        #expect(cells.map(\.id) == streaming.map { .row($0.id) } + [.live])
+        #expect(cells.map(\.joinsAbove) == [false, false, true, true])
+        #expect(cells.map(\.joinsBelow) == [false, true, true, false])
+
+        for scope in ["wrong-run", "unknown-run", "custom", "boundary", "search"] {
+            var isolated = nested
+            if scope == "wrong-run" {
+                isolated["__openclaw"] = ["id": "nested-row", "runId": "other"]
+            } else if scope == "unknown-run" {
+                isolated["__openclaw"] = ["id": "nested-row"]
+            } else if scope == "custom" {
+                isolated["customType"] = "unrelated"
+            } else if scope == "boundary" {
+                isolated["__openclaw"] = ["id": "nested-row", "runId": "nested-run", "turnBoundary": true]
+            }
+            let messages = try await OpenClawChatViewModel.decodeMessages((livePrefix + [isolated]).map(Self.nestedRaw))
+            let isolatedRows = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: messages))
+            try #require(isolatedRows.count == 3)
+            let groups = ChatAssistantRunGroup.build(
+                isolatedRows, liveRunID: "nested-run", hasLiveContent: true, searchActive: scope == "search")
+            #expect(groups.count == (["boundary", "search"].contains(scope) ? 4 : 3))
+            #expect(groups[1].parts.map(\.id) == ["row:\(isolatedRows[1].id)"])
+            #expect(groups[2].id == .row(isolatedRows[2].id) && groups[2].runID == nil)
+            #expect(!groups[2].includesLive)
+            #expect(groups.flatMap(\.parts).map(\.id) == isolatedRows.map { "row:\($0.id)" })
+            if scope == "search" { #expect(groups.allSatisfy { $0.runID == nil }) }
+        }
+
+        var followup = prefix[0]
+        followup["__openclaw"] = ["id": "followup", "runId": "next-run"]
+        followup["timestamp"] = 2.5
+        let late = try await OpenClawChatViewModel.decodeMessages((livePrefix + [followup, nested]).map(Self.nestedRaw))
+        let lateRows = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: late))
+        try #require(lateRows.count == 4)
+        let lateGroups = ChatAssistantRunGroup.build(
+            lateRows, liveRunID: "nested-run", hasLiveContent: true, searchActive: false)
+        #expect(lateGroups.map(\.id) == [
+            .row(lateRows[0].id), .run("nested-run", lateRows[0].id, 0),
+            .row(lateRows[2].id), .run("nested-run", lateRows[0].id, 1),
+        ])
+        #expect(lateGroups.last?.parts.map(\.id) == ["row:\(lateRows[3].id)"])
+        #expect(lateGroups.filter(\.includesLive).map(\.id) == [.run("nested-run", lateRows[0].id, 1)])
+        #expect(ChatAssistantListCell.cells(lateGroups[...]).map(\.id) == lateRows.map { .row($0.id) } + [.live])
+
         let rows = ChatTranscriptRow.collapseCompletedWork(raw, runWorking: false)
         #expect(rows.count == 3)
         guard case let .message(question)? = rows.first,
