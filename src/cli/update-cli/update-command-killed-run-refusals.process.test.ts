@@ -34,7 +34,7 @@ import { updateRepairCommand } from "./update-repair-command.js";
 // The restart rule's controls are in the restart suite, a source checkout's in its own.
 describe.skipIf(process.platform === "win32")("next update after a killed update run", () => {
   const otherHistory = new RegExp(
-    `Other update history also needs repair \\(.+\\)\\. Run ${repair}`,
+    `Other update history also needs repair \\(.+\\)\\. .* By hand: Run ${repair}`,
     "u",
   );
   it.each<RefusalCase>([
@@ -142,7 +142,7 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
     {
       // Repair's own history rule: a full page ending after the killed run hides what is older.
       name: "an unverified candidate is installed and a full history page ends after the killed run",
-      refusal: /Other update history also needs repair\. Run openclaw update repair/u,
+      refusal: /Other update history also needs repair\. .* By hand: Run openclaw update repair/u,
       dead: { installed: "candidate" },
       control: () => settledHistory(100, "after"),
     },
