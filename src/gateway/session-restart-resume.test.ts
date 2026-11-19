@@ -101,12 +101,11 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
     }
   }));
 
-it("leaves durable, cron and external-harness sessions with their execution owner", () =>
+it("leaves running cron and external-harness sessions with their execution owner", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
-    const cases: Array<{ sessionKey: string; durable?: true; entry?: Partial<SessionEntry> }> = [
+    const cases: Array<{ sessionKey: string; entry?: Partial<SessionEntry> }> = [
       { sessionKey: "agent:main:ordinary-running" },
-      { sessionKey: "agent:main:durable-running", durable: true },
       { sessionKey: "agent:main:cron:scheduled:run:occurrence" },
       { sessionKey: "agent:main:acp:external" },
       {
@@ -125,7 +124,7 @@ it("leaves durable, cron and external-harness sessions with their execution owne
       { sessionKey: "agent:main:external-harness", entry: { modelSelectionLocked: true } },
     ];
     try {
-      for (const { sessionKey, entry, durable } of cases) {
+      for (const { sessionKey, entry } of cases) {
         replaceSessionEntrySync(
           { agentId: "main", sessionKey },
           { sessionId: sessionKey, updatedAt: 1, ...entry },
@@ -134,17 +133,6 @@ it("leaves durable, cron and external-harness sessions with their execution owne
         process.agentId = "main";
         process.sessionKey = sessionKey;
         process.scopeKey = sessionKey;
-        if (durable) {
-          const settled = async () => {};
-          process.durable = {
-            observe: settled,
-            cancel() {},
-            remove() {},
-            finalize: settled,
-            drain: settled,
-          };
-        }
-
         addSession(process);
       }
       await persistRunningSessionsForRestart({ cfg: {} });

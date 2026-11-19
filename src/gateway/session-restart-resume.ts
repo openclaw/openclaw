@@ -62,8 +62,8 @@ import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-age
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { GATEWAY_RESTART_RESUME_TEXT } from "./session-restart-resume-prompt.js";
 import { prepareRestartCompletionCustody } from "./session-restart-resume-custody.js";
+import { GATEWAY_RESTART_RESUME_TEXT } from "./session-restart-resume-prompt.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
 const BACKGROUND_EXEC_STOPPED_TEXT =
@@ -180,8 +180,7 @@ export async function persistRunningSessionsForRestart(params: {
   for (const process of listRunningSessions()) {
     assertCurrent();
     const sessionKey = process.sessionKey ?? process.scopeKey;
-    // Durable processes survive restart; their registry adopts them and wakes on exit.
-    if (sessionKey && !process.durable) {
+    if (sessionKey) {
       add({ sessionKey, agentId: process.agentId, hadBackgroundExec: true });
     }
   }

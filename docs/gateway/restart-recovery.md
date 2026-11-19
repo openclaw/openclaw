@@ -50,8 +50,7 @@ ordinary admission no longer depends on the retired tombstone gate.
 | Running root session at graceful shutdown            | Receives one resume input at the next startup                                                     |
 | Accepted user input captured in that shutdown marker | Runs after the resume input, in FIFO order, with its original source limits and current authority |
 | Running sub-agent                                    | Stops quietly; its root requester receives the resume input                                       |
-| Non-durable background process                       | Ends with the old process; its root session receives the resume input                             |
-| Durable background process                           | Keeps its process-registry recovery; does not create a stopped-process resume marker              |
+| Background process                                   | Ends with the old process; its root session receives the resume input                             |
 | Already-produced outbound messages and media         | Keep the existing delivery queue and delivery reconciliation                                      |
 | Scheduled jobs                                       | Keep cron's own scheduling, catch-up, and interruption policy                                     |
 | ACP or external-harness session                      | Keeps its harness owner's restart policy                                                          |
