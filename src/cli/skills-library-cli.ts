@@ -67,7 +67,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
     );
   const execute = <T>(
     command: Command,
-    action: (opts: GatewayRpcOpts, signal?: AbortSignal) => Promise<T>,
+    action: (opts: GatewayRpcOpts) => Promise<T>,
     format: (result: T) => string,
     readOnly = false,
   ) =>
@@ -88,7 +88,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
       const signal = readOnly ? getAsyncWorkSignal() : undefined;
       let result: T;
       try {
-        result = await action(opts, signal);
+        result = await action(opts);
       } catch (error) {
         if (signal?.aborted) {
           return;
@@ -114,16 +114,11 @@ export function registerSkillsLibraryCli(skills: Command): void {
     .action((opts: LibraryOptions, command: Command) =>
       execute(
         command,
-        (rpc, signal) =>
-          callGatewayFromCliWithTransport<SkillsLibraryListResult>(
-            "skills.library.list",
-            rpc,
-            {
-              scope: opts.scope,
-              ...(opts.session ? { sessionKey: opts.session } : {}),
-            },
-            { signal },
-          ),
+        (rpc) =>
+          callGatewayFromCliWithTransport<SkillsLibraryListResult>("skills.library.list", rpc, {
+            scope: opts.scope,
+            ...(opts.session ? { sessionKey: opts.session } : {}),
+          }),
         (result) =>
           [
             `Default target: ${result.defaultTarget}`,
@@ -166,7 +161,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
     .action((skillId: string, opts: LibraryOptions, command: Command) =>
       execute(
         command,
-        (rpc, signal) => {
+        (rpc) => {
           if (opts.session && !opts.revision) {
             throw new Error("--session requires --revision to read an exact selected pin.");
           }
@@ -178,7 +173,6 @@ export function registerSkillsLibraryCli(skills: Command): void {
               ...(opts.revision ? { revision: opts.revision } : {}),
               ...(opts.session ? { sessionKey: opts.session } : {}),
             },
-            { signal },
           );
         },
         (result) =>

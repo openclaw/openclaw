@@ -207,7 +207,7 @@ Notes:
   ```bash
   openclaw infer image providers --json
   openclaw infer image generate \
-    --model google/gemini-3.1-flash-image \
+    --model google/gemini-nano-banana-2.1 \
     --prompt "Minimal flat test image: one blue square on a white background, no text." \
     --output ./openclaw-infer-image-smoke.png \
     --json
@@ -240,9 +240,9 @@ late transcript output.
 The same cancellation behavior applies to `infer video describe`: interruption
 stops the pending provider request and suppresses late description output.
 
-For audio transcription and video description on POSIX systems, `--file` follows
-directory symlinks before resolving `..`, matching filesystem path resolution.
-Final-file symlinks remain subject to the existing media-directory checks.
+On POSIX systems, `--file` and `--output` paths follow directory symlinks
+before resolving `..`, matching filesystem path resolution. Final-file symlinks
+remain subject to the existing media-directory checks.
 
 For CLI-backed transcription, the result's `provider` identifies the tool family
 and `model` reports the executed command. Auto-detected tools report their resolved

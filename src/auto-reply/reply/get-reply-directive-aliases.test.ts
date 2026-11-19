@@ -335,20 +335,35 @@ describe("reply directive resolution", () => {
     expect(sessionEntry).toEqual(createSessionEntry());
   });
 
-  it("still routes model directives after unknown skill references", async () => {
-    const body = "Please use $missing_skill then /model anthropic/claude-opus-4-6";
+  it.each([
+    {
+      body: "Please use $missing_skill then /model anthropic/claude-opus-4-6",
+      cleanedBody: "Please use $missing_skill then /model anthropic/claude-opus-4-6",
+      selectsModel: false,
+    },
+    {
+      body: "/model anthropic/claude-opus-4-6 Please use $missing_skill",
+      cleanedBody: "Please use $missing_skill",
+      selectsModel: true,
+    },
+  ])(
+    "keeps unknown skill references independent of slash admission: $body",
+    async ({ body, cleanedBody, selectsModel }) => {
+      const { result } = await resolveModelDirective({
+        body,
+        cfg: { commands: { text: true } } as OpenClawConfig,
+        surface: "webchat",
+      });
 
-    const { result } = await resolveModelDirective({
-      body,
-      cfg: { commands: { text: true } } as OpenClawConfig,
-      surface: "webchat",
-    });
-
-    expect(continued(result)).toMatchObject({
-      directives: { hasModelDirective: true, rawModelDirective: "anthropic/claude-opus-4-6" },
-      cleanedBody: "Please use $missing_skill then",
-    });
-  });
+      expect(continued(result)).toMatchObject({
+        directives: {
+          hasModelDirective: selectsModel,
+          rawModelDirective: selectsModel ? "anthropic/claude-opus-4-6" : undefined,
+        },
+        cleanedBody,
+      });
+    },
+  );
 
   it.each([
     {

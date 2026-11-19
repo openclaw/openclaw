@@ -1,4 +1,5 @@
 import { brandIconData } from "./icon-data-brand.ts";
+import { navigationIconData } from "./icon-data-navigation.ts";
 import { statusIconPaths } from "./icon-data-status.ts";
 import { keyboardIconData, toolIconData } from "./icon-data-tools.ts";
 import { strokeIconData, strokePathData, type IconData } from "./icon-data-types.ts";
@@ -326,6 +327,15 @@ export const iconData = {
     ["path", { d: "M15 13v2" }],
     ["path", { d: "M9 13v2" }],
   ]),
+  // An agent head above lines of text: the instructions an agent works from.
+  botText: strokeIconData([
+    ["rect", { width: "14", height: "8.5", x: "5", y: "4.5", rx: "2.5" }],
+    ["path", { d: "M12 2v2.5" }],
+    ["path", { d: "M9.5 8.75h.01" }],
+    ["path", { d: "M14.5 8.75h.01" }],
+    ["path", { d: "M5 17.5h14" }],
+    ["path", { d: "M5 21.5h9" }],
+  ]),
   userPlus: strokeIconData([
     ["path", { d: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" }],
     ["circle", { cx: "9", cy: "7", r: "4" }],
@@ -500,6 +510,24 @@ export const iconData = {
     ["circle", { cx: "15.5", cy: "7.5", r: "5.5" }],
   ]),
   flag: strokePathData("M5 22V4", "M5 4c5-4 9 4 14 0v11c-5 4-9-4-14 0"),
+  // Lucide rocket (ISC).
+  rocket: strokePathData(
+    "M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5",
+    "M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09",
+    "M9 12a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.4 22.4 0 0 1-4 2z",
+    "M9 12H4s.55-3.03 2-4c1.62-1.08 5 .05 5 .05",
+  ),
+  // Lucide drama (ISC).
+  drama: strokePathData(
+    "M10 11h.01",
+    "M14 6h.01",
+    "M18 6h.01",
+    "M6.5 13.1h.01",
+    "M22 5c0 9-4 12-6 12s-6-3-6-12c0-2 2-3 6-3s6 1 6 3",
+    "M17.4 9.9c-.8.8-2 .8-2.8 0",
+    "M10.1 7.1C9 7.2 7.7 7.7 6 8.6c-3.5 2-4.7 3.9-3.7 5.6 4.5 7.8 9.5 8.4 11.2 7.4.9-.5 1.9-2.1 1.9-4.7",
+    "M9.1 16.5c.3-1.1 1.4-1.7 2.4-1.4",
+  ),
   lock: strokeIconData([
     ["rect", { width: "18", height: "11", x: "3", y: "11", rx: "2" }],
     ["path", { d: "M7 11V7a5 5 0 0 1 10 0v4" }],
@@ -632,9 +660,28 @@ export const iconData = {
     ["circle", { cx: "19", cy: "12", r: "1" }],
   ]),
   ...toolIconData,
+  ...navigationIconData,
 } as const satisfies Record<string, IconData>;
 
 export type IconName = keyof typeof iconData;
+
+/** Navigation icons swap to these filled forms while their page is current. */
+export const filledIconNames: Partial<Record<IconName, IconName>> = {
+  access: "accessFilled",
+  atSign: "atSignFilled",
+  automations: "automationsFilled",
+  clawrouter: "clawrouterFilled",
+  customize: "customizeFilled",
+  dashboards: "dashboardsFilled",
+  knowledge: "knowledgeFilled",
+  meetings: "meetingsFilled",
+  portals: "portalsFilled",
+  sessions: "sessionsFilled",
+  systems: "systemsFilled",
+  usage: "usageFilled",
+  users: "usersFilled",
+  workboard: "workboardFilled",
+};
 
 export function isIconName(name: string | undefined): name is IconName {
   return Object.hasOwn(iconData, name ?? "");

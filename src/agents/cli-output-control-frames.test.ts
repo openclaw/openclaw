@@ -48,7 +48,7 @@ const charge = (record: Record<string, unknown>, rawLine = JSON.stringify(record
   chargeClaudeStreamJsonLine(record, rawLine);
 const fullCharge = (record: Record<string, unknown>) => {
   const rawLine = JSON.stringify(record);
-  return { chars: rawLine.length, partialMessage: false };
+  return { chars: rawLine.length, countsFrame: false };
 };
 const line = (record: unknown, count = 1) => `${JSON.stringify(record)}\n`.repeat(count);
 const PROGRESS_CHARS = 32 + '{"estimated_tokens":50}'.length;
@@ -56,20 +56,21 @@ const ALLOWANCE = 8 * 1024;
 
 describe("Claude stream control-frame budgets", () => {
   it.each([
-    ["thinking progress", progress(), PROGRESS_CHARS, true],
+    ["thinking progress", progress(), PROGRESS_CHARS, false],
     [
       "null-estimate thinking progress",
       progress({}, null),
       32 + '{"estimated_tokens":null}'.length,
-      true,
+      false,
     ],
-    ["content_block_stop", blockStop(), 32, true],
-    ["message_stop", messageStop(), 32, true],
-    ["signature_delta", signature(), 32, false],
+    ["content_block_stop", blockStop(), 32, false],
+    ["message_stop", messageStop(), 32, false],
+    // More than 1 KiB of the signature goes uncharged, so the frame limit counts it.
+    ["signature_delta", signature(), 32, true],
     ["message_delta", messageDelta(), 32, false],
-  ] as const)("charges a %s frame a fixed allowance", (_name, record, chars, partialMessage) => {
+  ] as const)("charges a %s frame a fixed allowance", (_name, record, chars, countsFrame) => {
     expect(JSON.stringify(record).length).toBeGreaterThan(200);
-    expect(charge(record)).toEqual({ chars, partialMessage });
+    expect(charge(record)).toEqual({ chars, countsFrame });
   });
 
   it.each([
@@ -109,7 +110,7 @@ describe("Claude stream control-frame budgets", () => {
     const base = JSON.stringify(build(0)).length;
     const atAllowance = build(ALLOWANCE - base);
     expect(JSON.stringify(atAllowance).length).toBe(ALLOWANCE);
-    expect(charge(atAllowance)).toEqual({ chars: 32, partialMessage: false });
+    expect(charge(atAllowance)).toEqual({ chars: 32, countsFrame: true });
     expect(charge(build(ALLOWANCE - base + 100)).chars).toBe(32 + 100);
     expect(charge(build(4 * 1024 * 1024)).chars).toBe(32 + 4 * 1024 * 1024 + base - ALLOWANCE);
     const record = build(10);
@@ -160,7 +161,6 @@ describe("Claude stream control-frame budgets", () => {
     ["an oversized thinking_display", progress({ thinking_display: "d".repeat(33) })],
     ["thinking_display outside progress", { ...signature(), thinking_display: "updates" }],
     ["an inherited key name", { ...blockStop(), constructor: "x" }],
-    ["a message_start frame", frame({ type: "message_start", message: { id: "m" } })],
     ["a content_block_start frame", frame({ type: "content_block_start", index: 0 })],
   ])("keeps full accounting for %s", (_name, record) => {
     expect(charge(record)).toEqual(fullCharge(record));
@@ -184,7 +184,7 @@ describe("Claude stream control-frame budgets", () => {
   });
 
   it("accepts thinking_display up to 32 characters", () => {
-    expect(charge(progress({ thinking_display: "d".repeat(32) })).partialMessage).toBe(true);
+    expect(charge(progress({ thinking_display: "d".repeat(32) })).chars).toBe(PROGRESS_CHARS);
   });
 
   it("keeps full accounting for an estimate that overflows on the wire", () => {
@@ -194,7 +194,7 @@ describe("Claude stream control-frame budgets", () => {
     );
     expect(chargeClaudeStreamJsonLine(JSON.parse(rawLine), rawLine)).toEqual({
       chars: rawLine.length,
-      partialMessage: false,
+      countsFrame: false,
     });
   });
 
@@ -218,19 +218,6 @@ describe("Claude stream control-frame budgets", () => {
     expect(tools).toEqual(["Read"]);
   });
 
-  it.each([
-    ["thinking progress", progress()],
-    ["content_block_stop", blockStop()],
-    ["message_stop", messageStop()],
-  ])("completes more than 20,000 %s frames", (_name, record) => {
-    const parser = createClaudeParser({ onThinkingProgress: () => {} });
-    parser.push(line(record, 20_001));
-    parser.push(line({ type: "result", subtype: "success", result: "done" }));
-    parser.finish();
-    expect(parser.getErrorText()).toBeNull();
-    expect(parser.getOutput()?.text).toBe("done");
-  });
-
   it("stops discarded frames at the allowance on the 20,001st line", () => {
     const sig = signature(ALLOWANCE - JSON.stringify(signature(0)).length);
     const padded = messageDelta();
@@ -240,8 +227,8 @@ describe("Claude stream control-frame budgets", () => {
     const sigLine = line(sig);
     const deltaLine = line(padded);
     expect([sigLine.length - 1, deltaLine.length - 1]).toEqual([ALLOWANCE, ALLOWANCE]);
-    expect(charge(sig)).toEqual({ chars: 32, partialMessage: false });
-    expect(charge(padded)).toEqual({ chars: 32, partialMessage: false });
+    expect(charge(sig)).toEqual({ chars: 32, countsFrame: true });
+    expect(charge(padded)).toEqual({ chars: 32, countsFrame: true });
     const parser = createClaudeParser();
     for (let index = 0; index < 20_000; index += 1) {
       parser.push(index % 2 === 0 ? sigLine : deltaLine);

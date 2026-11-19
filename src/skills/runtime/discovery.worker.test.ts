@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as skillPaths from "../../agents/utils/paths.js";
@@ -8,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as boundaryFileRead from "../../infra/boundary-file-read.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
@@ -53,7 +55,12 @@ const write = (dir: string, name: string, description: string) =>
   writeSkill({ dir: path.join(dir, name), name, description });
 const localFact = (index: number) => [`local-${index}`, `Workspace ${index}`] as const;
 async function scan(requests: ScanRequest[]) {
-  const result = await worker({ kind: "scan", path: process.env.PATH, requests });
+  const result = await worker({
+    kind: "scan",
+    nativeMode: "auto",
+    path: process.env.PATH,
+    requests,
+  });
   if (result.kind !== "scan") {
     throw new Error("Expected scan results");
   }
@@ -323,4 +330,59 @@ it("fingerprints precedence winners without resolving paths for discarded collis
     sha256Hex(JSON.stringify([[winner, extra], result!.sources.runtime])),
   );
   expect(canonicalize).not.toHaveBeenCalled();
+});
+
+it("preserves programmatic native policy across filesystem worker reuse", async () => {
+  const runtimeUrl = (name: string) =>
+    resolveRuntimeWorkerUrl({
+      currentModuleUrl: import.meta.url,
+      sourceWorkerName: name,
+      distWorkerPath: `legacy-finalizer/src/skills/runtime/${name}.js`,
+    });
+  const refreshUrl = runtimeUrl("refresh");
+  const result = await runNodeScript(
+    (workerArgv) => [
+      ...workerArgv(refreshUrl).slice(0, -1),
+      "--input-type=module",
+      "--eval",
+      `
+      import assert from "node:assert/strict";
+      import fs from "node:fs/promises";
+      import path from "node:path";
+      import { configureFsSafeNative } from "@openclaw/fs-safe/config";
+      import { FsSafeError } from "@openclaw/fs-safe/errors";
+      const refresh = await import(process.argv[1]);
+      const { getTrackedWorkerLifecycleSnapshot } = await import(process.argv[2]);
+      const directory = process.argv[3];
+      const source = path.join(directory, "source");
+      await fs.mkdir(source);
+      await fs.writeFile(path.join(source, "same.txt"), "same");
+      configureFsSafeNative({ mode: "off" });
+      const prepared = await refresh.syncSkillsFilesystem(
+        { operation: "prepare", directory: path.join(directory, "target") }, undefined, () => {});
+      const run = () => refresh.syncSkillsFilesystem({ operation: "copy", source,
+        destination: path.join(prepared.target.directory, "skill"), target: prepared.target,
+        reconcile: true }, undefined, () => {});
+      try {
+        for (const mode of ["off", "require", "off"]) {
+          configureFsSafeNative({ mode });
+          if (mode === "require") await assert.rejects(run, error =>
+            error instanceof FsSafeError && error.code === "helper-unavailable");
+          else await run();
+        }
+        assert.equal(getTrackedWorkerLifecycleSnapshot().workerLifecycle.find(
+          entry => entry.script === "discovery.worker.js").started, 1);
+      } finally {
+        await refresh.closeSkillsWatchers(true);
+      }
+      `,
+      refreshUrl.href,
+      runtimeUrl("../../infra/worker-cpu").href,
+      temporary.make("skills-native-policy-"),
+    ],
+    { ...process.env, NODE_OPTIONS: "--no-addons", FS_SAFE_NATIVE_MODE: "auto" },
+    15_000,
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
 });

@@ -1,27 +1,14 @@
-import type { ModelAuthStatusProfile } from "../../api/types.ts";
+import type { ModelAuthStatusProfile, ModelsProbeResult } from "../../api/types.ts";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { providerUsageAttention } from "../../components/solid/provider-usage.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { hasRoutineOAuthExpiry } from "../../lib/model-auth.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import type { ModelProviderAuthKind, ModelProviderCard } from "./data.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
-
-/** The auth owner supplies a reason for unusable grants, not for routine access expiry. */
-export function isAccessTokenExpiry(profile: ModelAuthStatusProfile): boolean {
-  return (
-    profile.type === "oauth" &&
-    (profile.status === "expiring" || profile.status === "expired") &&
-    profile.reasonCode === undefined
-  );
-}
-
-/** For OAuth, the auth owner reports `expired` only while a refresh claim may still settle. */
-export function isOAuthRefreshPending(profile: ModelAuthStatusProfile): boolean {
-  return profile.type === "oauth" && profile.reasonCode === "expired";
-}
 
 /** A failed refresh or a lost grant: only a fresh sign-in recovers the account. */
 export function needsOAuthSignIn(profile: ModelAuthStatusProfile): boolean {
@@ -107,11 +94,7 @@ export function needsAuthAttention(card: ModelProviderCard): boolean {
   }
   // A rollup has no credential type. Unknown or mixed expiry retains its warning.
   // A refresh in progress is routine too; it settles without the operator.
-  const expiring = card.profiles.filter((profile) => profile.status === card.auth?.kind);
-  return (
-    expiring.length === 0 ||
-    !expiring.every((profile) => isAccessTokenExpiry(profile) || isOAuthRefreshPending(profile))
-  );
+  return !hasRoutineOAuthExpiry(card.auth.kind, card.profiles);
 }
 
 /**
@@ -131,7 +114,18 @@ export function hasVerifiedProvider(card: ModelProviderCard): boolean {
   return card.catalogStatus === "ready" && !needsAuthAttention(card);
 }
 
-export function renderProviderStatus(card: ModelProviderCard) {
+export function probeStatus(result: ModelsProbeResult): {
+  kind: "ok" | "warn" | "danger";
+  label: string;
+} {
+  const partial = result.status === "ok" && result.results.some((target) => target.status !== "ok");
+  return {
+    kind: partial ? "warn" : result.status === "ok" ? "ok" : "danger",
+    label: t(`modelProviders.probe.status.${partial ? "partial" : result.status}`),
+  };
+}
+
+export function renderProviderStatus(card: ModelProviderCard, result?: ModelsProbeResult) {
   if (card.catalogStatus === "auth-rejected") {
     // The card-wide outcome does not identify which saved credential was rejected.
     return <SettingsStatus kind="danger" label={t("modelProviders.status.denied")} />;
@@ -141,6 +135,11 @@ export function renderProviderStatus(card: ModelProviderCard) {
   }
   if (card.catalogStatus === "unavailable") {
     return <SettingsStatus kind={"warn"} label={t("modelProviders.status.modelsUnavailable")} />;
+  }
+  // A successful catalog lists models; it does not prove inference access.
+  const checked = result && probeStatus(result);
+  if (checked && checked.kind !== "ok") {
+    return <SettingsStatus {...checked} />;
   }
   if (!isProviderUsable(card)) {
     return renderAuthStatus(card.auth);

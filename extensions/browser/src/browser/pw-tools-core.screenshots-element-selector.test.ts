@@ -38,6 +38,24 @@ it("screenshots a ref locator", async () => {
   expect(sessionMocks.refLocator).toHaveBeenCalledWith(page, "76");
   expect(refScreenshot).toHaveBeenCalledWith({ type: "jpeg", timeout: 0 });
 });
+it.each([
+  [undefined, ["bringToFront", "screenshot"]],
+  [false, ["screenshot"]],
+])(
+  "activates the tab before capture unless Chrome is headed (headless=%s)",
+  async (headless, calls) => {
+    const order: string[] = [];
+    setPwToolsCoreCurrentPage({
+      bringToFront: async () => void order.push("bringToFront"),
+      screenshot: async () => {
+        order.push("screenshot");
+        return Buffer.from("P");
+      },
+    });
+    await capture({ ...target, headless });
+    expect(order).toEqual(calls);
+  },
+);
 it("rejects fullPage for element or ref screenshots", async () => {
   const locator = {};
   setPwToolsCoreCurrentRefLocator(locator);

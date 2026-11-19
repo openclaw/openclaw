@@ -64,6 +64,7 @@ export async function acquireTestPortBlock(params: {
 export async function reserveTestPortListener<T extends Server>(params: {
   offsets: number[];
   port?: number | TestPortClaim;
+  host?: string;
   signal?: AbortSignal;
   createListener: () => T;
   verifyCleanup?: (cleanup: () => Promise<void>) => Promise<void>;
@@ -99,7 +100,7 @@ export async function reserveTestPortListener<T extends Server>(params: {
           reject(error);
         };
         listener.once("error", failed);
-        listener.listen(claim.port, "127.0.0.1", () => {
+        listener.listen(claim.port, params.host ?? "127.0.0.1", () => {
           listener.off("error", failed);
           resolve();
         });

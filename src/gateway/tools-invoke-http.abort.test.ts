@@ -377,7 +377,7 @@ describe("POST /tools/invoke request cancellation", () => {
     });
   });
 
-  it("executes an HTTP member under its membership role and revokes retained work with that device", async () => {
+  it("keeps an HTTP member's admitted work after membership removal but refuses another start", async () => {
     await withOpenClawTestState({ label: "http-tool-membership" }, async () => {
       const cfg: OpenClawConfig = {
         gateway: {
@@ -461,9 +461,10 @@ describe("POST /tools/invoke request cancellation", () => {
         expect(authority).toBeDefined();
         expect(() => authority?.assertCurrent()).not.toThrow();
         membership.delete(principal.peerKey);
-        expect(() => authority?.assertCurrent()).toThrow(
-          /OpenClaw ID membership authority changed/,
-        );
+        expect(() => authority?.assertCurrent()).not.toThrow();
+        expect(() => authority?.reauthorize?.()).toThrow();
+        admission?.close();
+        expect(() => authority?.assertCurrent()).toThrow(/no longer active/);
       } finally {
         admission?.close();
         resolveGatewayContext = undefined;

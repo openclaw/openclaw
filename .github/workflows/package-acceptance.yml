@@ -120,7 +120,7 @@ on:
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional baseline list; use supported-lines for latest/previous/extended/floor, last-stable-4, all-since-2026.6.1, release-history, or exact June 2026+ versions
+        description: Optional baseline list; use supported-lines for latest/previous/extended, last-stable-4, all-since-2026.6.1, release-history, or exact June 2026+ versions
         required: false
         default: ""
         type: string
@@ -267,7 +267,7 @@ on:
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional baseline list; use supported-lines for latest/previous/extended/floor, last-stable-4, all-since-2026.6.1, release-history, or exact June 2026+ versions
+        description: Optional baseline list; use supported-lines for latest/previous/extended, last-stable-4, all-since-2026.6.1, release-history, or exact June 2026+ versions
         required: false
         default: ""
         type: string

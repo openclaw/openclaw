@@ -51,7 +51,7 @@ const enLabs = {
         "Suggest a next message after a reply in the active conversation. Adds a tool-free model call using conversation context. Tab accepts the suggestion into your draft; it never sends automatically. Off by default.",
       model: "Prediction model",
       modelDescription:
-        "Utility is recommended for short, lower-cost predictions. Session uses the current session model; Default uses the agent’s configured primary model. An unavailable choice skips predictions instead of switching models.",
+        "Utility uses the agent’s utility model and may try its configured fallback models. Session uses the current session model; Default uses the agent’s configured primary model. Without a utility model, Utility skips predictions.",
       utility: "Utility model (recommended)",
       conversation: "Session model",
       default: "Default model",

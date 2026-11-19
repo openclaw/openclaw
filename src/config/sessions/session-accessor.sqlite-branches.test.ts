@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import * as sqliteRuntime from "../../infra/node-sqlite.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as storeWriterQueue from "../../shared/store-writer-queue.js";
 import {
@@ -182,16 +183,18 @@ describe("SQLite session branches", () => {
       expect.objectContaining({ code: "TRANSCRIPT_COLD" }),
     );
     const archive = readSessionColdTranscript(fixture.database(), historicalId);
+    const source = { readIdentity: readDatabasePathIdentitySync(storePath) };
     const entered = createDeferredCore();
     const release = createDeferredCore<undefined>();
     const held = coldStorage.restoreSessionColdTranscript(fixture.scope, undefined, {
       target: { ...fixture.scope, path: storePath },
       readMetadata: async (phase) => {
         if (phase === "initial") {
-          return archive;
+          return { kind: "cold-metadata", archive, source };
         }
         entered.resolve();
-        return release.promise;
+        await release.promise;
+        return { kind: "cold-metadata", archive: undefined };
       },
     });
     const controller = new AbortController();

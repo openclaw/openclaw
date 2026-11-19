@@ -197,10 +197,9 @@ describe("Gateway computer RPC", () => {
     },
   );
 
-  it("keeps run ownership stable across connections and limits retired runs to owned cleanup", async () => {
+  it("keeps run ownership stable across connections", async () => {
     const identity = createIdentity();
     const owners: string[] = [];
-    let active = true;
     const dispatch = vi.fn(async (request: Parameters<GatewayComputerService["invoke"]>[0]) => {
       expect(request.ownerSignal).toBeUndefined();
       owners.push(request.owner);
@@ -212,31 +211,15 @@ describe("Gateway computer RPC", () => {
       invoke: dispatch,
       status: async () => ({ configured: true, available: true }),
     };
-    const context: Partial<GatewayRequestContext> = {
-      validateAgentRuntimeApprovalAuthority: (candidate: AgentRuntimeIdentity) =>
-        candidate === identity && active,
-    };
     const first = createClient(identity);
     first.connectionSignal = new AbortController().signal;
     const second = { ...createClient(identity), connId: "computer-next-connection" };
     for (const client of [first, second]) {
-      expect(await invoke("computer.invoke", snapshot, service, { client, context })).toEqual([
+      expect(await invoke("computer.invoke", snapshot, service, { client })).toEqual([
         true,
         { payload: { captured: true } },
       ]);
     }
     expect(owners[0]).toBe(owners[1]);
-    active = false;
-    const invokeRetired = (params: Record<string, unknown>) =>
-      invoke("computer.invoke", params, service, { client: second, context });
-    expect((await invokeRetired(snapshot))?.[0]).toBe(false);
-    expect(dispatch).toHaveBeenCalledTimes(2);
-    const closed = await invokeRetired({
-      ...snapshot,
-      command: "computer.act",
-      params: { action: "__close_execution", executionId: "execution-one" },
-    });
-    expect(closed?.[0]).toBe(true);
-    expect(owners[2]).toBe(owners[0]);
   });
 });

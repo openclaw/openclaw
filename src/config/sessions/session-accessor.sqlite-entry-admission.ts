@@ -1,12 +1,12 @@
 import path from "node:path";
 import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { readDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../paths.js";
@@ -24,8 +24,10 @@ import {
   retainSessionEntryReadFacts,
 } from "./session-entry-read-facts.js";
 import { createAdmittedSessionEntryCohortReader } from "./session-entry-read-ordered.js";
-import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
-import { withSessionStoreTarget } from "./session-store-target-runtime.js";
+import {
+  prepareSessionStoreReaderCandidates,
+  withSessionStoreTarget,
+} from "./session-store-target-runtime.js";
 import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -123,19 +125,22 @@ export async function loadSessionEntryForAdmission(
     }
     storePath = resolveOpenClawAgentSqlitePath({ agentId, env });
   }
-  const candidates = captureSessionStoreReadCandidates(storePath);
+  const { candidates } = await prepareSessionStoreReaderCandidates(storePath, {
+    inspection: false,
+    allowDirect: false,
+  });
   let claim: ActorSessionAdmissionClaim | undefined;
   try {
     const result = await withSessionStoreTarget(
       { agentId, defaultAgentId: scope.defaultAgentId, storePath, env, candidates },
       async (target, owner) => {
         const options = { ...target.database, env };
-        const observed = readDatabasePathIdentitySync(options.path);
+        const observed = await readDatabasePathIdentity(options.path);
         return await runOpenClawAgentWorkerWrite(
           options,
           async () => {
             // Discovery retains the file while queued; an earlier cancelled open may retire its executor.
-            const execution = captureOpenClawAgentDatabaseExecution(options, {
+            const execution = await captureOpenClawAgentDatabaseExecutionAsync(options, {
               ...toAgentExecutionConstraints(observed),
               requestedPath: target.sourcePath,
             });
@@ -148,6 +153,7 @@ export async function loadSessionEntryForAdmission(
               ...createSessionWorkerExecutionSource(
                 assertSourceCurrent,
                 "Session admission authority expired",
+                [owner.readCustody],
               ),
               onRegistryChange(change) {
                 owner.onRegistryChange(change);
@@ -234,6 +240,11 @@ export async function loadSessionEntryForAdmission(
                   reader: admitted
                     ? createAdmittedSessionEntryCohortReader({
                         execution: borrowed,
+                        identity: {
+                          key: `file:${identity.physicalIdentity}`,
+                          canonicalPath: identity.nativeLocation,
+                          birthtime: identity.birthtime,
+                        },
                         generation,
                         database: { ...target.database, env },
                         sessionKey,
@@ -268,7 +279,7 @@ export async function loadSessionEntryForAdmission(
                     if (!expectedIdentity) {
                       throw new Error("Session transition lost its admitted physical identity");
                     }
-                    const successor = captureOpenClawAgentDatabaseExecution(
+                    const successor = await captureOpenClawAgentDatabaseExecutionAsync(
                       { ...options, path: borrowed.path },
                       { expectedIdentity, requestedPath: storePath },
                     );

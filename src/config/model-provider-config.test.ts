@@ -219,6 +219,7 @@ it.each([
   [{ supportsReasoningEffort: "true" }, "present"],
   [{ supportedReasoningEfforts: [] }, "present"],
   [{ supportedReasoningEfforts: ["none"] }, "present"],
+  [{ supportedReasoningEfforts: ["none", "custom"] }, "present"],
   [{ supportedReasoningEfforts: ["high", false] }, "present"],
   [{ supportsTemperature: false }, "none"],
   [{ codeMode: "preferred" }, "none"],
