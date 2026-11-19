@@ -537,7 +537,8 @@ public final class GatewayDiscoveryModel {
                 hostName: Host.current().name,
                 displayName: Host.current().localizedName)
             let merged = LocalIdentity(
-                hostTokens: knownIdentity.hostTokens.union(processIdentity.hostTokens).union(resolvedIdentity.hostTokens),
+                hostTokens: knownIdentity.hostTokens.union(processIdentity.hostTokens)
+                    .union(resolvedIdentity.hostTokens),
                 displayTokens: knownIdentity.displayTokens.union(processIdentity.displayTokens)
                     .union(resolvedIdentity.displayTokens))
             await MainActor.run { [weak self] in

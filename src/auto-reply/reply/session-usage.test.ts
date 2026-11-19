@@ -483,7 +483,10 @@ describe("session actor usage accounting", () => {
           output: 0,
           cacheRead: 0,
           cacheWrite: 0,
-          tieredPricing: [{ input: 2, output: 0, cacheRead: 0, cacheWrite: 0, range: [200_000] }],
+          tieredPricing: [
+            { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, range: [0, 200_000] },
+            { input: 2, output: 0, cacheRead: 0, cacheWrite: 0, range: [200_000] },
+          ],
         }),
         usage: {
           ...(withTokens ? { input: 300_000, output: 200 } : {}),

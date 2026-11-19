@@ -107,8 +107,12 @@ or login still allows the remaining connections to be tried.
 If none works, OpenClaw asks you to sign in with ChatGPT and runs it on its own
 harness. When Codex is installed or signed in on the Gateway host, it instead
 installs or enables the official Codex plugin and uses its existing login, or
-asks for Codex login. Apple Foundation Models
-is a utility option and is never chosen as the primary model.
+asks for Codex login. If a connection failed for a reason other than credentials,
+setup shows **Couldn’t connect your AI** and the failed attempts instead of
+presenting sign-in as the diagnosis. You can still sign in as another connection.
+Missing or expired credentials without other failures keep the sign-in prompt.
+Apple Foundation Models is a utility option and is never chosen as the primary
+model.
 
 When automatic setup reuses Codex, it shares the Gateway user's `CODEX_HOME`
 (or `~/.codex`), including the login, threads, and `config.toml`. Codex owns

@@ -11,11 +11,7 @@ import {
 } from "./subagent-registry-read-topology.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  isSameSubagentRun,
-  latestSubagentRun,
-  recordLatestSubagentRun,
-} from "./subagent-run-generation.js";
+import { isSameSubagentRun, latestSubagentRun } from "./subagent-run-generation.js";
 import {
   getSubagentRunStaleAt,
   hasSubagentRunEnded,
@@ -519,57 +515,6 @@ export function listSwarmRunsForGroupFromRuns<T extends SubagentRunReadRecord>(
         (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey) &&
       (!requesterAgentId || resolveRecordedRequester(entry) === requesterAgentId),
   );
-}
-
-/** Counts active direct child runs plus completed children that still have pending descendants. */
-export function countActiveRunsForSessionFromRuns<T extends SubagentRunReadRecord>(
-  runs: Map<string, T>,
-  controllerSessionKey: string,
-  options?: { collect?: boolean; requesterAgentId?: string },
-): number {
-  const key = controllerSessionKey.trim();
-  if (!key) {
-    return 0;
-  }
-
-  const now = Date.now();
-  let readIndex: SubagentRunReadIndex<T> | undefined;
-
-  const latestByChildSessionKey = new Map<string, T>();
-  // Records already carry collect, and spawn admission is not request-hot, so a
-  // filtered snapshot is simpler than maintaining a second registry index.
-  for (const entry of runs.values()) {
-    if (options?.collect !== undefined && (entry.collect === true) !== options.collect) {
-      continue;
-    }
-    const ownerSessionKey = entry.collect
-      ? entry.swarmRequesterSessionKey?.trim() || resolveControllerSessionKey(entry)
-      : resolveControllerSessionKey(entry);
-    if (ownerSessionKey !== key) {
-      continue;
-    }
-    if (options?.requesterAgentId && resolveRecordedRequester(entry) !== options.requesterAgentId) {
-      continue;
-    }
-    recordLatestSubagentRun(latestByChildSessionKey, entry.childSessionKey, entry);
-  }
-
-  let count = 0;
-  for (const entry of latestByChildSessionKey.values()) {
-    if (isRetainedUnendedSubagentRun(entry)) {
-      count += 1;
-      continue;
-    }
-    readIndex ??= buildSubagentRunReadIndexFromRuns({ runs, now });
-    if (
-      readIndex.countPendingDescendantRuns(entry.childSessionKey, {
-        excludeSuspendedDelivery: true,
-      }) > 0
-    ) {
-      count += 1;
-    }
-  }
-  return count;
 }
 
 export function buildScopedSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecord>(

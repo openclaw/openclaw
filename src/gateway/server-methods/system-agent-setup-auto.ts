@@ -86,6 +86,7 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
   const attempts: SystemAgentSetupAutoResult["attempts"] = [];
   const failed = new Set<string>();
   const installedPlugins: string[] = [];
+  let hasNonAuthFailure = false;
   let codexNeedsSignIn = false;
   let codexFailed = false;
   let shared = false;
@@ -204,6 +205,7 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
       return true;
     }
     failed.add(candidate.kind);
+    hasNonAuthFailure ||= activation.status !== "auth";
     if (candidate.kind === "codex-cli" && activation.status === "auth") {
       codexNeedsSignIn = true;
     }
@@ -244,7 +246,10 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
         !codexLogins.has(option.id),
     );
     return signIn
-      ? { ...result("needs-sign-in"), signIn: { authOptionId: signIn.id, label: signIn.label } }
+      ? {
+          ...result(hasNonAuthFailure ? "unavailable" : "needs-sign-in"),
+          signIn: { authOptionId: signIn.id, label: signIn.label },
+        }
       : result("unavailable");
   }
   try {
@@ -336,7 +341,7 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
       const signIn = findCodexSignIn(refreshed.authOptions);
       if (signIn) {
         return {
-          ...result("needs-sign-in"),
+          ...result(hasNonAuthFailure ? "unavailable" : "needs-sign-in"),
           signIn: { authOptionId: signIn.id, label: signIn.label },
         };
       }

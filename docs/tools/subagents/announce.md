@@ -23,6 +23,9 @@ have no terminal non-delivery disposition. Once the transcript owner commits the
 input, it immediately records `state: "consumed"` and the consuming run in the
 registry, before the requester source settles. Registry readers use that stored
 fact directly.
+An ordinary requester run ending or a later follow-up taking over does not discard
+the waiting results. An accepted completion turn keeps its delivery; findings not
+yet accepted remain pending for the requester's next turn.
 Consumption is distinct from sending a reply to the user. A later cancellation
 does not turn a consumed private result into failed delivery; restart recovery
 and the existing completion retention window remain unchanged.

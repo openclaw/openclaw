@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { copyFileSync, cpSync, mkdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 
 export function copyDockerSchedulerHarness(root: string) {
   const scriptsDir = path.join(root, "scripts");

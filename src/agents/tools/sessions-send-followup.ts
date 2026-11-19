@@ -119,7 +119,8 @@ export async function dispatchSessionsSendFollowup(
   },
 ) {
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
-  const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
+  const caller = getGatewayToolCallerIdentity();
+  const instance = caller?.operationalRunInstance;
   const completionChild = options.watch
     ? getLatestLiveSubagentRunByChildSessionKey(
         params.sessionStoreTarget.canonicalKey,
@@ -230,6 +231,7 @@ export async function dispatchSessionsSendFollowup(
           await registerSubagentRun(
             {
               runId: start.runId,
+              gatewayContextResolver: caller?.gatewayContextResolver,
               childSessionKey,
               sessionEntry: options.targetSession,
               childAgentId: params.sessionStoreTarget.agentId,

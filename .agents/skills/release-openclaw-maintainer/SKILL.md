@@ -84,7 +84,16 @@ FRV must conclude **success** under pinned P's
 [checked-in release-tooling policy](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers).
 Apply only the exact exceptions in that policy, including its operator-authorized
 Kova grants; preserve each grant’s version, job, optional candidate SHA, and
-optional attempt restrictions.
+optional attempt restrictions. When an operator approves a job waiver, default
+to the exact release version, child role, and job across all future FRV runs,
+attempts, and candidates for that release. Do not add `evidence` run/attempt or
+`targetSha` restrictions by default. Reserve attempt-specific waivers for
+exceptionally high-risk cases where approval intentionally covers only the
+reviewed execution; record that risk and the explicit limit in the PR/handoff.
+Preserve any narrower scope the operator explicitly requested. Diagnostic run
+IDs belong in the PR/handoff, not in matching restrictions merely because they
+identify the original failure. See the [attempt-binding correction in #201694](https://github.com/openclaw/openclaw/pull/201694)
+and the [operator-directed release-wide default in #201769](https://github.com/openclaw/openclaw/pull/201769).
 For grant-only edits, reuse the policy tests; add cases only for new matching or
 validation behavior. Keep new reasons to one sentence and authorization details
 in the PR/handoff, not published docs ([#199776](https://github.com/openclaw/openclaw/pull/199776)).

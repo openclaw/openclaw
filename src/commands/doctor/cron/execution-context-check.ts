@@ -30,6 +30,7 @@ import { resolveCronSessionTargetSessionKey } from "../../../cron/session-target
 import { rowToCronJob } from "../../../cron/store/row-codec.js";
 import { resolveCronRunToolsAllow } from "../../../cron/tools-allow.js";
 import type { CronStoredJob } from "../../../cron/types.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../../../gateway/operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "../../../gateway/operator-role-policy.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { executeExistingOpenClawStateRead } from "../../../state/openclaw-state-db-readonly.js";
@@ -120,7 +121,8 @@ function checkRequesterOwnerReadOnly(
       return {
         owner:
           typeof profile === "object" &&
-          (!cfg.gateway?.roles || requester.profileId === GATEWAY_OWNER_PROFILE_ID),
+          (!isNamedOperatorRoleEnforcementEnabled(cfg) ||
+            requester.profileId === GATEWAY_OWNER_PROFILE_ID),
         check: "checked",
       };
     case "channel": {
@@ -128,8 +130,10 @@ function checkRequesterOwnerReadOnly(
       if (isConfiguredCommandOwner(cfg, { channel, accountId, senderId })) {
         return { owner: true, check: "checked" };
       }
-      // Without roles or identity scopes no linked channel operator can be an owner.
-      const linkable = Boolean(cfg.gateway?.roles || cfg.gateway?.auth?.identityScopes);
+      // Without named-role enforcement or identity scopes no linked channel operator can be an owner.
+      const linkable = Boolean(
+        isNamedOperatorRoleEnforcementEnabled(cfg) || cfg.gateway?.auth?.identityScopes,
+      );
       return { owner: false, check: linkable ? "unverified" : "checked" };
     }
     case "operator-source":

@@ -118,3 +118,21 @@ it("keeps admitted method authority after preparation; refuses the next request"
     error: { code: "FORBIDDEN", message: "Gateway requester authority changed" },
   });
 });
+
+it("refuses a new request from an ended run, not session authorization inside an admitted one", async () => {
+  const client = authorizationClient("ended-run", ["operator.admin"]);
+  const identity = { agentId: "main", sessionKey: "agent:main:main" };
+  client.internal = { ...client.internal, agentRuntimeIdentity: identity as never };
+  const methodRegistry = createRequestGatewayMethodRegistry({ "demo.endedRun": () => {} });
+  const context = {
+    getRuntimeConfig: () => ({}),
+    validateAgentRuntimeApprovalAuthority: () => false,
+  } as unknown as GatewayRequestContext;
+  const request = { method: "demo.endedRun", requestParams: {}, client, context, methodRegistry };
+  expect(await authorizeGatewayRequestPreDispatch(request)).toMatchObject({
+    error: { code: "INVALID_REQUEST", message: expect.stringContaining("agent run has ended") },
+  });
+  expect(await authorizeGatewayRequestPreDispatch({ ...request, admitted: true })).toMatchObject({
+    error: null,
+  });
+});

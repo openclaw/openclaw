@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   AgentDatabaseAdmissionError,
@@ -16,6 +21,7 @@ import {
 import { serveControlUiSessionEntry } from "./control-ui-session-entry.js";
 import { AUTH_TOKEN, createRequest, createResponse } from "./server-http.test-harness.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
 const { authenticate, resolveSession, current } = vi.hoisted(() => ({
   authenticate: vi.fn(),
@@ -51,6 +57,7 @@ async function request(
   path = entry,
   mode: "token" | "password" | "trusted-proxy" = "trusted-proxy",
   startup?: AgentDatabasePreparation,
+  rows = projection,
 ) {
   const response = createResponse();
   const serveApp = vi.fn<Parameters<typeof serveControlUiSessionEntry>[0]["serveApp"]>(
@@ -60,7 +67,7 @@ async function request(
     req: createRequest({ path, host: "localhost" }),
     res: response.res,
     basePath: "/control",
-    projection,
+    projection: rows,
     auth: { ...AUTH_TOKEN, mode },
     serveApp,
     ...(startup ? { agentDatabaseStartup: startup } : {}),
@@ -221,6 +228,41 @@ describe("protected canonical session handoff", () => {
     expect(opened.setHeader).not.toHaveBeenCalledWith("Location", expect.anything());
     expect(opened.getBody()).toContain("Session unavailable");
     expect(opened.setHeader).not.toHaveBeenCalledWith("X-OpenClaw-Session-Entry", "1");
+  });
+  it("opens the main route before its first message, as with a present main", async () => {
+    const actual = await vi.importActual<typeof import("./control-ui-session-path-resolve.js")>(
+      "./control-ui-session-path-resolve.js",
+    );
+    resolveSession.mockImplementation(actual.resolveControlUiSessionPath);
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const rows = createSessionRowProjectionFixture({ cfg, store: {} });
+    try {
+      const main = "/control/chat/main";
+      const mainEntry = entryUrl(main, "/control");
+      const openMain = async () => {
+        const probe = await request(`${mainEntry}&probe=1`, undefined, undefined, rows);
+        expect(probe.res.statusCode).toBe(204);
+        const opened = await request(mainEntry, undefined, undefined, rows);
+        expect(opened.serveApp).toHaveBeenCalledWith(main, expect.any(Function));
+        expect(opened.setHeader).toHaveBeenCalledWith("X-OpenClaw-Session-Entry", "1");
+        return opened.serveApp.mock.calls[0]?.[1];
+      };
+      const beforeFirstMessage = await openMain();
+      rows.setEntry("agent:main:main", { sessionId: "first", updatedAt: 1 });
+      // The row appearing keeps an app document that was opened without one.
+      expect(beforeFirstMessage?.()).toBe(true);
+      await openMain();
+      // Any other missing session still ends the handoff.
+      const missing = await request(entry, undefined, undefined, rows);
+      expect(missing.res.statusCode).toBe(403);
+      expect(missing.getBody()).toContain("Session unavailable");
+      current.mockReturnValue(false);
+      expect(beforeFirstMessage?.()).toBe(false);
+    } finally {
+      rows.dispose();
+      clearRuntimeConfigSnapshot();
+    }
   });
   it("keeps explicit password login on the existing app login gate", async () => {
     authenticate.mockImplementation(async ({ res, replyOnFailure }) => {

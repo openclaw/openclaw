@@ -296,6 +296,30 @@ describe("Checkout chip state", () => {
     );
   });
 
+  it("lists branch-name and path-segment matches before other matches", async () => {
+    const params = checkoutFixture({
+      baseRef: "release",
+      repository: {
+        kind: "git",
+        repoRoot: "/repo",
+        branches: ["main", "prerelease", "release/next", "docs/release-notes"].map((name) => ({
+          name,
+          kind: "local" as const,
+        })),
+      },
+    });
+    const { container } = mountCheckout(params);
+    await waitForOpen(container);
+    container.querySelector<HTMLInputElement>("#new-session-worktree-base-ref")!.focus();
+    await waitForSolid(() =>
+      expect(
+        [...container.querySelectorAll("[data-worktree-suggestion]")].map((row) =>
+          row.getAttribute("data-worktree-suggestion"),
+        ),
+      ).toEqual(["release/next", "docs/release-notes", "prerelease"]),
+    );
+  });
+
   it("preserves editable fields through repository discovery failure and retry", async () => {
     const initial = createDeferred();
     const initialRead = { completed: initial.promise };

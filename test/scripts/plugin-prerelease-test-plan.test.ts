@@ -603,7 +603,20 @@ export const createExtensionTestShards = () => [{
     expect(
       boatRows.map(({ runner_label: _label, ...row }: Record<string, unknown>) => row),
     ).toEqual(physicalRows.map(({ runner_label: _label, ...row }: Record<string, unknown>) => row));
-    expect(boatRows.slice(20)).toEqual(physicalRows.slice(20));
+    const mixedBatches = boatRows.filter(
+      (row: { task: string }) => row.task === "extensions-batch",
+    );
+    expect(mixedBatches.length).toBeGreaterThan(0);
+    expect(
+      mixedBatches.every((row: { runner_label: string }) =>
+        row.runner_label.startsWith("blacksmith-"),
+      ),
+    ).toBe(true);
+    for (const [index, row] of boatRows.entries()) {
+      if (!row.runner_label.startsWith("boat")) {
+        expect(row).toEqual(physicalRows[index]);
+      }
+    }
     const boatLabels = new Set(boatRows.map((row: Record<string, unknown>) => row.runner_label));
     for (const runner_label of boatLabels) {
       for (const releaseRunnerGroup of ["", "release-runners"]) {

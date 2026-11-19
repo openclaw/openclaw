@@ -140,8 +140,12 @@ qualify for `npm-beta-v1`.
 
 FRV `normalCi` Windows Node shards and all other unwaived hard-gate failures
 block. Only the exact checked-in operator grants may accept a failed job;
-preserve their candidate, version, job, and attempt scope. Decide
-blocker or flake for every failure,
+preserve their explicit scope. Default new approved job waivers to the exact
+release version, child role, and job for all future FRV runs, attempts, and
+candidates of that release. Do not bind ordinary waivers to the diagnostic run
+or candidate. Attempt-specific waivers are only for exceptionally high-risk
+cases with an explicitly limited approval; document the risk and honor any
+operator-requested narrower scope. Decide blocker or flake for every failure,
 rerun flakes on the same Release SHA at most twice, and file a fix-in-parallel
 issue/PR on `main`. Do not re-cut solely to clear a flake. Every unwaived selected
 job must pass, and FRV itself must conclude success before publication. See the

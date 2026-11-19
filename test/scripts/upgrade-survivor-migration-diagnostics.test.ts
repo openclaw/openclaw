@@ -103,19 +103,26 @@ function capture(f: ReturnType<typeof fixture>, outcome: "failed" | "passed" = "
 }
 
 it.each([
-  { name: "update.json", prefix: "", failure: { exitCode: 1 } },
-  { name: "recovery-update.json", prefix: "", failure: { exitCode: null, termination: "timeout" } },
+  { name: "update.json", prefix: "", status: "ok", failure: { exitCode: 1 } },
+  { name: "update.json", prefix: "", status: "error", failure: { exitCode: 1 } },
+  {
+    name: "recovery-update.json",
+    prefix: "",
+    status: "error",
+    failure: { exitCode: null, termination: "timeout" },
+  },
   {
     name: "update.json",
     prefix: "Update warning before JSON\n",
+    status: "error",
     failure: { exitCode: 0, outputLimitExceeded: true },
   },
 ])(
-  "keeps a later failed update step visible before successful output exhausts $name ($failure)",
-  ({ name, prefix, failure }) => {
+  "keeps a later failed update step visible before successful output exhausts $name ($status, $failure)",
+  ({ name, prefix, status, failure }) => {
     const f = fixture();
     const update = {
-      status: "error",
+      status,
       reason: "runtime-verification-failed",
       steps: [
         {
