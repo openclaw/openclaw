@@ -32,9 +32,10 @@ const SENDER = "agent:main:prefix-stability-sender";
 const OTHER = "agent:other:prefix-stability-other";
 // A chat whose first turn is a scheduled job; its next owner turn must list the same tools.
 const CRON_FIRST = "agent:main:prefix-stability-cron-first";
-// Tools main adds on that owner turn. Remove when the owner lands; the journey then fails.
+// Main adds `message` on that owner turn (13 -> 14 tools); its owner lists one tool set from a
+// series' first request. Remove the entry when the owner lands; the journey then fails until it goes.
 const CRON_FIRST_GROWTH = {
-  tools: [] as string[],
+  tools: ["message"],
   owner: "https://github.com/openclaw/openclaw/pull/201710",
 };
 const OVERFLOW_CHUNKS = 24;
@@ -499,10 +500,10 @@ export function usePrefixStabilityJourney() {
           const [cronTools, ownerTools] = [cronFirstRequests[0]!, cronFirstRequests.at(-1)!].map(
             (request) => toolNames(request.tools),
           );
-          expect(
-            ownerTools.filter((name) => !CRON_FIRST_GROWTH.tools.includes(name)),
-            `owner turn tools: ${ownerTools.join(",")}`,
-          ).toEqual(cronTools);
+          const known = (name: string) => !CRON_FIRST_GROWTH.tools.includes(name);
+          expect(ownerTools.filter(known), `owner turn tools: ${ownerTools.join(",")}`).toEqual(
+            cronTools.filter(known),
+          );
         }
         // An unrelated chat on a small window: its tool results fill the window inside one run,
         // and the pressure check before the next request acts.
