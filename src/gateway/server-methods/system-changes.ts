@@ -48,24 +48,24 @@ export async function recordRoleAssignmentChange(
   client: GatewayClient | null,
   log: Pick<SubsystemLogger, "warn">,
 ): Promise<void> {
-  const actor = {
-    profileId: client?.authenticatedUserProfile?.profileId,
-    deviceId: client?.connect?.device?.id,
-    clientId: client?.connect?.client?.id,
-  };
-  const by = actor.profileId
-    ? `profile ${actor.profileId}`
-    : actor.deviceId
-      ? `device ${actor.deviceId}`
-      : `client ${actor.clientId ?? "unknown"}`;
-  const from = change.previousRole === null ? "no role" : `"${change.previousRole}"`;
+  // Keep only the most specific requester identifier; never link profile and device.
+  const profileId = client?.authenticatedUserProfile?.profileId;
+  const deviceId = client?.connect?.device?.id;
+  const actor = profileId
+    ? { kind: "profile", id: profileId }
+    : deviceId
+      ? { kind: "device", id: deviceId }
+      : { kind: "client", id: client?.connect?.client?.id ?? "unknown" };
+  const by = `${actor.kind} ${actor.id}`;
+  // Role names are free-form; JSON quoting keeps embedded quotes and newlines unambiguous.
+  const from = change.previousRole === null ? "no role" : JSON.stringify(change.previousRole);
   try {
     await appendSystemAgentAuditEntry({
       operation: ROLE_ASSIGNMENT_OPERATION,
       summary:
         change.role === null
           ? `Role for profile ${change.profileId} cleared (was ${from}) by ${by}`
-          : `Role for profile ${change.profileId} changed from ${from} to "${change.role}" by ${by}`,
+          : `Role for profile ${change.profileId} changed from ${from} to ${JSON.stringify(change.role)} by ${by}`,
       details: { ...change, actor },
     });
   } catch (error) {

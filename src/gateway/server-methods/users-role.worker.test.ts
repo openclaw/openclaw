@@ -71,6 +71,7 @@ function roleConfig(): OpenClawConfig {
         definitions: {
           administrator: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
           reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "none" } },
+          'night "ops"': { scopes: ["operator.read"], agents: "*", sessions: { others: "none" } },
         },
       },
     },
@@ -264,8 +265,10 @@ it("lists committed role assignments, not refused or unchanged ones, in change h
     const setRole = (id: string, profileId: string, role: string | null) =>
       request(id, "users.setRole", { profileId, role });
 
-    expect(await setRole("assign", target.id, "reader")).toMatchObject({ ok: true });
-    expect(await setRole("repeat", target.id, "reader")).toMatchObject({ ok: true });
+    // A quoted role name stays unambiguous in the summary.
+    const role = 'night "ops"';
+    expect(await setRole("assign", target.id, role)).toMatchObject({ ok: true });
+    expect(await setRole("repeat", target.id, role)).toMatchObject({ ok: true });
     expect(await setRole("unknown-role", target.id, "ghost")).toMatchObject({
       ok: false,
       error: { message: expect.stringContaining('unknown operator role "ghost"') },
@@ -284,12 +287,12 @@ it("lists committed role assignments, not refused or unchanged ones, in change h
       expect.objectContaining({
         kind: "operation",
         source: "config-rpc",
-        summary: `Role for profile ${target.id} cleared (was "reader") ${by}`,
+        summary: `Role for profile ${target.id} cleared (was "night \\"ops\\"") ${by}`,
       }),
       expect.objectContaining({
         kind: "operation",
         source: "config-rpc",
-        summary: `Role for profile ${target.id} changed from no role to "reader" ${by}`,
+        summary: `Role for profile ${target.id} changed from no role to "night \\"ops\\"" ${by}`,
       }),
     ]);
   } finally {
