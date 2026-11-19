@@ -501,25 +501,6 @@ export async function takeStateUpgradePreImage(
   return { path: image, method };
 }
 
-/**
- * Doctor archives a legacy source it imported as `<file>.migrated` (or `.migrated.<n>`).
- * After the databases return to their images, put each archive this run created back
- * at its original name, which the previous release reads; never over a live file.
- */
-export function restoreArchivedSources(
-  before: ReadonlySet<string>,
-  now: ReadonlySet<string>,
-): void {
-  for (const file of now) {
-    const match = /^(.*)\.migrated(?:\.\d+)?$/u.exec(file);
-    const original = match?.[1];
-    if (original && !before.has(file) && before.has(original) && !fs.existsSync(original)) {
-      fs.renameSync(file, original);
-      fsyncPath(path.dirname(original), true);
-    }
-  }
-}
-
 /** Put pre-images back with no companion from the run left beside them. */
 export function restorePreImages(files: readonly string[], suffix: string): void {
   for (const file of files) {
@@ -531,5 +512,91 @@ export function restorePreImages(files: readonly string[], suffix: string): void
     }
     fs.renameSync(`${file}${suffix}`, file);
     fsyncPath(path.dirname(file), true);
+  }
+}
+
+/**
+ * Fold an imaged live database's WAL into it under custody, through SQLite only. A
+ * checkpoint another connection blocks, or a mode SQLite will not switch, stops the
+ * fallback with every file in place; the next start retries.
+ */
+export function foldLiveWal(file: string): void {
+  const refuse = (cause?: unknown) =>
+    new Error(
+      `State upgrade could not fold the write-ahead log of ${file} into it; nothing was removed, and the next start retries.`,
+      { cause },
+    );
+  let folded = false;
+  try {
+    const db = openNodeSqliteDatabase(file);
+    try {
+      // SAFETY: SQLite fixes these pragmas' result columns.
+      const checkpoint = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as
+        | { busy: number }
+        | undefined;
+      // SAFETY: SQLite fixes these pragmas' result columns.
+      const mode = db.prepare("PRAGMA journal_mode = DELETE").get() as
+        | { journal_mode: string }
+        | undefined;
+      folded = checkpoint?.busy === 0 && mode?.journal_mode === "delete";
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    throw refuse(error);
+  }
+  if (!folded) {
+    throw refuse();
+  }
+}
+
+export type Restore = { suffix: string; files: string[]; remove: string[] };
+const RESTORE_FILE = "restore.json";
+
+/** Durable before the first image is renamed back, so a stop mid-restore resumes it. */
+export function writeRestore(workDir: string, restore: Restore): void {
+  const file = path.join(workDir, RESTORE_FILE);
+  fs.writeFileSync(`${file}.tmp`, JSON.stringify(restore), { mode: 0o600 });
+  fsyncPath(`${file}.tmp`);
+  fs.renameSync(`${file}.tmp`, file);
+  fsyncPath(workDir, true);
+}
+
+export function readRestore(workDir: string): Restore | undefined {
+  try {
+    // SAFETY: writeRestore in this module is the only writer of the restore record.
+    return JSON.parse(fs.readFileSync(path.join(workDir, RESTORE_FILE), "utf8")) as Restore;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Idempotent: the images go back, and the databases the run created go with their companions. */
+export function finishRestore(restore: Restore): void {
+  restorePreImages(restore.files, restore.suffix);
+  for (const file of restore.remove) {
+    for (const companion of ["", "-wal", "-shm", "-journal"]) {
+      fs.rmSync(`${file}${companion}`, { force: true });
+    }
+  }
+}
+
+/** Fold this run's own rebuilt databases into one file each; nothing else holds them. */
+export function checkpointShadowDatabases(files: readonly string[]): void {
+  for (const file of files) {
+    if (!isSqliteFile(file)) {
+      continue;
+    }
+    const db = openNodeSqliteDatabase(file);
+    try {
+      // A rollback-journal file needs no WAL or SHM companion, so read-only openers
+      // can admit it before the first writer switches it back to WAL.
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode = DELETE;");
+    } finally {
+      db.close();
+    }
+    for (const suffix of ["-wal", "-shm", "-journal", ".seal"]) {
+      fs.rmSync(`${file}${suffix}`, { force: true });
+    }
   }
 }

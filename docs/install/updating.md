@@ -113,31 +113,42 @@ pre-migration image of each outdated database and of the config:
 Snapshot space never stops a start; only a disk too full for the migration itself
 can. Doctor then runs on the live state. Every schema step commits in one SQLite
 transaction with its version bump, so a killed or failed start leaves each database
-at its old or new version, and the next start finishes the same run on the same images. Doctor takes no original-state
-capture and no pre-migration `.bak` set of its own in this run; the start's images
-are the only ones. A standalone `openclaw doctor --fix` keeps its own backups.
+at its old or new version, and the next start finishes the same run on the same images.
+In this run Doctor takes no original-state capture and no pre-migration `.bak` set for the
+databases the start imaged. It still takes its normal set for a store the start does not
+discover (a configured agent directory) and the scoped images some legacy repairs take
+inside their own transaction. A standalone `openclaw doctor --fix` keeps its own backups.
 
-If Doctor fails validation, the generic rebuild produces the outdated databases
-from the databases as Doctor left them, so rows Doctor already imported stay, and
-replaces them through a durable plan; the images stay the rollback baseline and the
-generation is pinned. A database's write-ahead log is folded in through SQLite first;
-if SQLite cannot fold it, the start stops with every file in place and the next start
-retries. If the upgraded
-config is invalid, the start restores the images when every outdated database has
-one; otherwise the databases stay migrated and the start reports that.
+If Doctor fails validation, the generic rebuild produces the outdated databases from the
+databases as Doctor left them, so rows Doctor already imported stay, and replaces them
+through a durable plan; the images stay the rollback baseline and the generation is
+pinned. A database's write-ahead log is folded in through SQLite first; if SQLite cannot
+fold it, the start stops with every file in place and the next start retries.
+
+If the upgraded config is invalid, the start puts the previous state back only as a
+complete set: an image of every database it started on and of an unlinked config, and no
+legacy source that Doctor moved into SQLite (such as `cron/jobs.json`, archived under a
+`.migrated` name). It then removes the databases the run created. Otherwise the databases
+stay migrated and the start says why. A stop during that restore is finished by the next
+start before anything else. A linked config is never imaged or written through.
 
 A failed Git release trial now restores less than before. It restores the outdated
-databases and the config from their images, and removes the databases the run
-created. Other new files, such as the archive Doctor leaves of a legacy file it moved
-into SQLite, always stay. It reverts only on positive evidence that the previous release
-opens what the revert leaves: that release declares its schemas, every remaining database
-(the image it restores, else the live file) reads at or below them, including the shared
-state's content version, and an upgraded config has its image. Otherwise it stays
-forward. It no longer restores other files Doctor changed in place (for example workspace files
-it migrated or legacy files it moved); the earlier copy-and-swap upgrade restored them
-too. Only the fallback rebuild still replaces a database file; a successful start
-migrates `state/openclaw.sqlite` in place, so a process holding it open keeps the same
-file.
+databases and the config from their images, and removes the databases the run created.
+It reverts only on positive evidence that the previous release opens what the revert
+leaves:
+
+- that release declares its schemas;
+- every remaining database (the image it restores, read with any WAL preserved beside it,
+  else the live file) reads at or below them, including the shared state's content version;
+- an upgraded, unlinked config has its image;
+- Doctor moved no legacy source the previous release reads.
+
+Otherwise it stays forward. When a database the start migrates has no image, the start
+ends the trial before migrating, so no launcher counts failed starts. Files Doctor changes
+in place are not restored (for example workspace files it migrated); the earlier
+copy-and-swap upgrade restored them too. Only the fallback rebuild still replaces a
+database file; a successful start migrates `state/openclaw.sqlite` in place, so a process
+holding it open keeps the same file.
 
 During startup upgrades, Doctor records carried-over scheduled jobs against
 credential databases at their live paths. No environment variable or operator
@@ -1855,10 +1866,10 @@ remaining database's header and the shared state's content version, and the conf
 after an upgrade. Otherwise the service stays on the new release, the launcher says why,
 and the failure is fixed forward (`openclaw triage`). The launcher is written by the
 installed updater, so this rule applies from the first update after the updater that ships
-it. On the first hop, the earlier launcher restores the start's `.pre-<buildId>` images like
-any other preserved file, so a revert still works whenever every outdated database was
-imaged; only a database whose image was skipped (no clone and no room for a copy) can then
-be reverted onto a release that refuses it. The Git release inspection also does not
+it. On the first hop the earlier launcher, which the installed updater wrote, decides. It
+restores the start's `.pre-<buildId>` images like any other preserved file, and when a
+database had no image the start has already ended the trial. It does not check for legacy
+sources Doctor moved. The Git release inspection also does not
 require the new schema before that start: "migration did not finish" applies only to
 installs whose updater runs Doctor before restarting. Installed updaters that run Git
 releases without this change (main builds since the release layout landed) fail

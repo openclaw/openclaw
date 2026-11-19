@@ -4,10 +4,6 @@ import path from "node:path";
 import { parseConfigJson5 } from "../config/io.read-helpers.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
-import {
-  resolveOpenClawInstallationRootSync,
-  resolveOpenClawPackageRootSync,
-} from "../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
 import {
@@ -88,11 +84,8 @@ export async function upgradeStateOnGatewayStart(
       // unreachable: end the trial before it commits, so no launcher (including one an
       // older updater wrote) switches back onto a release that refuses this state.
       onUnimaged: async () => {
-        const packageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
-        const { settleGitReleaseTrial } = await import("../infra/git-release.js");
-        await settleGitReleaseTrial(
-          packageRoot ? resolveOpenClawInstallationRootSync(packageRoot, process.argv[1]) : null,
-        );
+        const { settleRunningGitReleaseTrial } = await import("../infra/git-release.js");
+        await settleRunningGitReleaseTrial();
         log.warn(
           "A Git release trial, if any, has ended: a failed start of this release is fixed forward (openclaw triage).",
         );

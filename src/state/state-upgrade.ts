@@ -56,8 +56,11 @@ import {
   normalizeSqliteText,
   pruneGenerations,
   readPlan,
-  restoreArchivedSources,
-  restorePreImages,
+  finishRestore,
+  checkpointShadowDatabases,
+  foldLiveWal,
+  readRestore,
+  writeRestore,
   takeStateUpgradePreImage,
   withRecoveredSource,
   writePlan,
@@ -238,25 +241,6 @@ function buildFallback(
   return { reports, foldInFailures };
 }
 
-function checkpointShadowDatabases(files: readonly string[]): void {
-  for (const file of files) {
-    if (!isSqliteFile(file)) {
-      continue;
-    }
-    const db = openNodeSqliteDatabase(file);
-    try {
-      // A rollback-journal file needs no WAL or SHM companion, so read-only openers
-      // can admit it before the first writer switches it back to WAL.
-      db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode = DELETE;");
-    } finally {
-      db.close();
-    }
-    for (const suffix of ["-wal", "-shm", "-journal", ".seal"]) {
-      fs.rmSync(`${file}${suffix}`, { force: true });
-    }
-  }
-}
-
 function recordDiagnostics(
   shadowStatePath: string,
   report: Record<string, unknown>,
@@ -423,6 +407,15 @@ export async function upgradeStateDirectory(params: {
       continue;
     }
     const dir = path.join(stateDir, entry);
+    const restore = readRestore(dir);
+    if (restore) {
+      // A refusal was putting the previous state back; finish it as one set.
+      await params.beforeSwap?.();
+      finishRestore(restore);
+      fs.rmSync(dir, { recursive: true, force: true });
+      params.log.info("Finished restoring the state an earlier refused upgrade had migrated.");
+      continue;
+    }
     const plan = readPlan(dir);
     if (plan) {
       // Environment selection may already hold the shared database being replaced.
@@ -509,6 +502,7 @@ export async function upgradeStateDirectory(params: {
   const handOff = params.custody?.handOff ?? (<T>(operation: () => Promise<T>) => operation());
   try {
     fs.mkdirSync(workDir, { recursive: true, mode: 0o700 });
+    fsyncPath(stateDir, true);
     params.log.info(
       `Upgrading state to ${VERSION} in place: ${outdated.map((t) => `${path.relative(stateDir, t.path)} v${t.version}`).join(", ")}`,
     );
@@ -523,6 +517,7 @@ export async function upgradeStateDirectory(params: {
         fs.writeFileSync(partial, fs.readFileSync(configPath), { mode: 0o600, flag: "wx" });
         fsyncPath(partial);
         fs.renameSync(partial, `${configPath}${suffix}`);
+        fsyncPath(path.dirname(configPath), true);
         return { path: `${configPath}${suffix}` };
       } catch (error) {
         fs.rmSync(partial, { force: true });
@@ -668,37 +663,56 @@ export async function upgradeStateDirectory(params: {
       } finally {
         await closeOpenClawStateDatabaseByPathAsync(liveState);
       }
+      // Databases the run created with no predecessor, which a revert removes, and files
+      // that existed before Doctor and are gone now: legacy sources it moved into SQLite.
+      // The previous release reads those sources, so no revert can bring them back.
+      const now = listFiles(stateDir, skip);
+      const added = [...now].filter(
+        (file) =>
+          !before.has(file) && !file.startsWith(`${workDir}${path.sep}`) && isSqliteFile(file),
+      );
+      const moved = [...before].filter(
+        (file) => !fs.lstatSync(file, { throwIfNoEntry: false }) && !now.has(file),
+      );
       if (refusal !== undefined) {
-        // Without an image for every migrated database and the config, the state cannot
-        // be put back as one set.
+        // Only a complete set can be put back: an image of every database the run started
+        // on and of an unlinked config, and no legacy source Doctor moved away.
         const restorable =
+          moved.length === 0 &&
           outdated.every((target) => images.has(target.path)) &&
           (configImage !== undefined ||
             !fs.existsSync(configPath) ||
             fs.lstatSync(configPath).isSymbolicLink());
         if (restorable) {
           await params.beforeSwap?.();
-          restorePreImages([...images.keys(), ...(configImage ? [configPath] : [])], suffix);
-          // A legacy source Doctor imported is back where the previous release reads it.
-          restoreArchivedSources(before, listFiles(stateDir, skip));
+          const restore = {
+            suffix,
+            files: [...images.keys(), ...(configImage ? [configPath] : [])],
+            remove: added,
+          };
+          writeRestore(workDir, restore);
+          finishRestore(restore);
         }
         keepChainLog();
         fs.rmSync(workDir, { recursive: true, force: true });
         params.log.warn(
-          `State upgrade to ${VERSION} not applied: ${refusal}${restorable ? " The previous databases and config were restored." : " The databases stay migrated; no pre-migration image exists to restore them."}`,
+          `State upgrade to ${VERSION} not applied: ${refusal}${
+            restorable
+              ? " The previous databases and config were restored."
+              : moved.length > 0
+                ? ` The databases stay migrated: Doctor moved legacy files the previous release reads (${moved
+                    .slice(0, 3)
+                    .map((file) => path.relative(stateDir, file))
+                    .join(", ")}).`
+                : " The databases stay migrated; no pre-migration image exists to restore them."
+          }`,
         );
         return { status: "refused", reason: refusal };
       }
-      // Databases the run created with no predecessor; a failed Git release trial removes
-      // them. Other new files can be archives of moved sources, so they always stay.
-      const created = [...listFiles(stateDir, skip)].filter(
-        (file) => !before.has(file) && !file.startsWith(`${workDir}${path.sep}`),
-      );
-      const added = created.filter((file) => isSqliteFile(file));
-      const applied: UpgradeOp[] = [
-        ...ops,
-        ...[...added].map((live) => ({ kind: "add" as const, live })),
-      ];
+      const additions = added.map((live) => ({ kind: "add" as const, live }));
+      // Recorded so a launcher can tell; removing an absent file is a no-op in the plan.
+      const removals = moved.map((live) => ({ kind: "remove" as const, live }));
+      const applied: UpgradeOp[] = [...ops, ...additions, ...removals];
       recordDiagnostics(
         mode === "fallback" && outdated.some((t) => t.path === liveState)
           ? ops.find((op) => op.live === liveState)!.next!
@@ -723,7 +737,7 @@ export async function upgradeStateDirectory(params: {
         pinned,
       );
       if (ops.length > 0) {
-        ops.push(...companionRemovals(ops), ...applied.filter((op) => op.kind === "add"));
+        ops.push(...companionRemovals(ops), ...additions, ...removals);
         for (const op of ops) {
           if (op.next && fs.statSync(op.next, { throwIfNoEntry: false })?.isFile()) {
             fsyncPath(op.next);
@@ -790,41 +804,6 @@ export function explainMachineFailure(error: unknown, stateDir: string): unknown
         { cause: error },
       )
     : error;
-}
-
-/**
- * Fold an imaged live database's WAL into it under custody, through SQLite only. A
- * checkpoint another connection blocks, or a mode SQLite will not switch, stops the
- * fallback with every file in place; the next start retries.
- */
-function foldLiveWal(file: string): void {
-  const refuse = (cause?: unknown) =>
-    new Error(
-      `State upgrade could not fold the write-ahead log of ${file} into it; nothing was removed, and the next start retries.`,
-      { cause },
-    );
-  let folded = false;
-  try {
-    const db = openNodeSqliteDatabase(file);
-    try {
-      // SAFETY: SQLite fixes these pragmas' result columns.
-      const checkpoint = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as
-        | { busy: number }
-        | undefined;
-      // SAFETY: SQLite fixes these pragmas' result columns.
-      const mode = db.prepare("PRAGMA journal_mode = DELETE").get() as
-        | { journal_mode: string }
-        | undefined;
-      folded = checkpoint?.busy === 0 && mode?.journal_mode === "delete";
-    } finally {
-      db.close();
-    }
-  } catch (error) {
-    throw refuse(error);
-  }
-  if (!folded) {
-    throw refuse();
-  }
 }
 
 /** Another process holds the state when the chain hands custody back; it continues. */

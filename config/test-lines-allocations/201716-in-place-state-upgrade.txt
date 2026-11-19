@@ -4,4 +4,4 @@
 # version, unreadable state, removed additions, preserved WAL, config and archive restore).
 # The copy-and-swap tests this replaces were removed. Exact measured net test-line growth
 # at the head beyond the allowance.
-307
+386

@@ -7,6 +7,10 @@ import { ignoreMissingPath } from "./errno.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
 import { writeGitReleaseLauncher, type GitReleaseTrial } from "./git-release-launcher.js";
 import { GIT_RELEASE_TRIAL, gitReleaseSlot } from "./git-release-paths.js";
+import {
+  resolveOpenClawInstallationRootSync,
+  resolveOpenClawPackageRootSync,
+} from "./openclaw-root.js";
 import { readPackageVersion } from "./package-json.js";
 import { collectPackageReleases } from "./package-release-retention.js";
 import {
@@ -115,6 +119,18 @@ export async function settleGitReleaseTrial(runningRoot: string | null): Promise
   if (trial?.target === slot.target) {
     await fs.rm(trialFile, { force: true });
   }
+}
+
+/**
+ * End the trial of the Git release this process runs, if any. A migration that leaves no
+ * way back (a database without a pre-migration image) makes any revert unsafe, so no
+ * launcher, including one an older updater wrote, may count failed starts toward one.
+ */
+export async function settleRunningGitReleaseTrial(): Promise<void> {
+  const packageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+  await settleGitReleaseTrial(
+    packageRoot ? resolveOpenClawInstallationRootSync(packageRoot, process.argv[1]) : null,
+  );
 }
 
 /**

@@ -795,26 +795,68 @@ describe("startup pre-images", () => {
     },
   );
 
-  it("puts a legacy source Doctor archived back when a refusal restores the images", async () => {
-    const { stateDir } = corpus("openclaw-upgrade-refusal-archive-");
+  it("keeps the state migrated when Doctor moved a legacy source a refusal cannot put back", async () => {
+    const { stateDir } = corpus("openclaw-upgrade-refusal-moved-");
     const jobs = path.join(stateDir, "cron", "jobs.json");
     fs.mkdirSync(path.dirname(jobs), { recursive: true });
     fs.writeFileSync(jobs, '{"jobs":[]}');
+    const warn = vi.fn();
 
     const result = await upgradeStateDirectory({
       env: stateEnv(stateDir),
-      log: quiet,
+      log: { info: () => {}, warn },
       runChain: async (params) => {
-        // Doctor imports the jobs into SQLite and archives the source.
-        fs.renameSync(jobs, `${jobs}.migrated`);
+        // Doctor imports the jobs into SQLite and archives the source under its own name.
+        fs.renameSync(jobs, `${jobs}.migrated-20261119-1`);
         return await migrate(params);
       },
       admitConfig: async () => "the upgraded config is invalid (test)",
     });
 
+    // Restoring the images would hide the imported jobs from the previous release.
     expect(result).toMatchObject({ status: "refused" });
-    expect(fs.readFileSync(jobs, "utf8")).toBe('{"jobs":[]}');
-    expect(fs.existsSync(`${jobs}.migrated`)).toBe(false);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Doctor moved legacy files"));
+    for (const [file, version] of databases(stateDir)) {
+      expect(userVersion(file)).toBe(version);
+    }
+  });
+
+  it("finishes a refusal's restore that a stop interrupted before anything else", async () => {
+    const { stateDir } = corpus("openclaw-upgrade-refusal-resume-");
+    const files = databases(stateDir).map(([file]) => file);
+    const original = new Map(files.map((file) => [file, userVersion(file)] as const));
+    const rename = fs.renameSync;
+    let restored = 0;
+    // The process stops after the first image is renamed back.
+    vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (String(from) === preImage(String(to)) && restored++ === 1) {
+        throw Object.assign(new Error("killed"), { code: "EINTR" });
+      }
+      rename(from, to);
+    });
+    await expect(
+      upgradeStateDirectory({
+        env: stateEnv(stateDir),
+        log: quiet,
+        runChain: migrate,
+        admitConfig: async () => "the upgraded config is invalid (test)",
+      }),
+    ).rejects.toThrow("killed");
+    vi.mocked(fs.renameSync).mockRestore();
+    const chain = vi.fn(migrate);
+
+    await upgradeStateDirectory({
+      env: stateEnv(stateDir),
+      log: quiet,
+      runChain: chain,
+      admitConfig: async () => "the upgraded config is invalid (test)",
+    });
+
+    // The whole set went back before the next attempt, which refused again and restored.
+    expect(chain).toHaveBeenCalledTimes(1);
+    for (const file of files) {
+      expect(userVersion(file)).toBe(original.get(file));
+    }
   });
 
   it("resumes only with images the interrupted run published, never a leftover", async () => {

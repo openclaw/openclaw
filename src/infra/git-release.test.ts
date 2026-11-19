@@ -535,31 +535,59 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         await expect(fs.access(`${created}-wal`)).rejects.toThrow();
       });
 
-      it.each([false, true])(
-        "puts Doctor's archived legacy source back with the databases (name retaken: %s)",
-        async (retaken) => {
+      it.each(["applied record", "interrupted inventory"])(
+        "stays forward when Doctor moved a legacy source the previous release reads (%s)",
+        async (source) => {
           const { prefix, db, slot, target } = await migratedTrial({
             preImage: 36,
             liveVersion: 40,
           });
-          const jobs = path.join(path.dirname(path.dirname(db)), "cron", "jobs.json");
-          await fs.mkdir(path.dirname(jobs), { recursive: true });
-          await fs.writeFile(`${jobs}.migrated`, "legacy jobs");
-          if (retaken) {
-            await fs.writeFile(jobs, "a later file");
+          const stateDir = path.dirname(path.dirname(db));
+          const jobs = path.join(stateDir, "cron", "jobs.json");
+          if (source === "applied record") {
+            await fs.writeFile(
+              path.join(stateDir, ".upgraded-2.0.0.json"),
+              JSON.stringify({ appVersion: "2.0.0", ops: [{ kind: "remove", live: jobs }] }),
+            );
+          } else {
+            const record = path.join(stateDir, ".upgrade-2.0.0-1-1");
+            await fs.mkdir(record);
+            await fs.writeFile(
+              path.join(record, "inventory.json"),
+              JSON.stringify({ files: [db, jobs], outdated: [db], images: [`${db}.pre-2.0.0`] }),
+            );
           }
 
           const third = failTwiceThenStart(prefix);
 
-          if (retaken) {
-            expect(third.stderr).toContain("a new cron/jobs.json replaced the legacy source");
-            expect(await fs.readlink(slot)).toBe(target);
-          } else {
-            expect(third.stdout).toContain("old");
-            expect(await fs.readFile(jobs, "utf8")).toBe("legacy jobs");
-          }
+          expect(third.stderr).toContain(
+            "Doctor moved legacy files the previous release reads (cron/jobs.json)",
+          );
+          expect(await fs.readlink(slot)).toBe(target);
         },
       );
+
+      it("removes a store an interrupted in-place run created when it reverts", async () => {
+        const { prefix, db, slot, previous } = await migratedTrial({
+          preImage: 36,
+          liveVersion: 40,
+        });
+        const stateDir = path.dirname(path.dirname(db));
+        const created = path.join(stateDir, "client", "credentials.sqlite");
+        await fs.mkdir(path.dirname(created), { recursive: true });
+        await fs.writeFile(created, "");
+        const record = path.join(stateDir, ".upgrade-2.0.0-1-1");
+        await fs.mkdir(record);
+        await fs.writeFile(
+          path.join(record, "inventory.json"),
+          JSON.stringify({ files: [db], outdated: [db], images: [`${db}.pre-2.0.0`] }),
+        );
+
+        failTwiceThenStart(prefix);
+
+        expect(path.resolve(path.dirname(slot), await fs.readlink(slot))).toBe(previous);
+        await expect(fs.access(created)).rejects.toThrow();
+      });
 
       it("reads a restored image together with the WAL preserved beside it", async () => {
         const { prefix, db, slot, target } = await migratedTrial({ preImage: 36, liveVersion: 40 });

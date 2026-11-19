@@ -34,6 +34,12 @@ import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-ba
 import { assertSqliteMigrationScopePreserved } from "../state/sqlite-migration-scope.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { assertDoctorMaintenanceReady } from "./doctor-maintenance-inspection.js";
+
+const settleTrial = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../infra/git-release.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/git-release.js")>()),
+  settleRunningGitReleaseTrial: settleTrial,
+}));
 import { restoreDoctorMigrationBackup } from "./doctor-migration-backup-restore.js";
 import { prepareDoctorDatabaseMigrations } from "./doctor-schema-migrations.js";
 import { withMaintenance } from "./doctor-schema-migrations.test-support.js";
@@ -745,6 +751,9 @@ it.each([
       );
       // Gateway start took the one image itself; a Doctor set would be a second copy.
       expect(backups().length > 0).toBe(preImageOwner === undefined || external);
+      // No launcher restores Doctor's backup of an uncovered store: the trial ends.
+      expect(settleTrial).toHaveBeenCalledTimes(preImageOwner && external ? 1 : 0);
+      settleTrial.mockClear();
     });
   },
 );

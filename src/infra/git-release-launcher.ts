@@ -58,30 +58,6 @@ function collectPreserved(dir, suffix, since, depth, found) {
   return found;
 }
 
-// Doctor archives a legacy source it imported into SQLite as "<file>.migrated" (or
-// ".migrated.<n>"). One the trial created goes back to its name with the databases;
-// one whose name is taken again cannot, so it blocks the revert.
-function collectArchives(dir, since, depth, found) {
-  let entries = [];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return found;
-  }
-  for (const entry of entries) {
-    const file = path.join(dir, entry.name);
-    const match = /^(.*)(\.migrated(?:\.\d+)?)$/.exec(entry.name);
-    if (entry.isDirectory()) {
-      if (depth > 0 && !["git-install", "npm", "node_modules", "tmp", "logs"].includes(entry.name)) {
-        collectArchives(file, since, depth - 1, found);
-      }
-    } else if (match && fs.lstatSync(file).ctimeMs >= since) {
-      found.push({ original: path.join(dir, match[1]), suffix: match[2] });
-    }
-  }
-  return found;
-}
-
 function restoreState(files, suffix) {
   const restored = new Set(files);
   for (const file of files) {
@@ -111,45 +87,69 @@ function writeTrial(record) {
 // the suffix restore covers the rest.
 function plannedAdditions(stateDir, generation) {
   const added = [];
-  const applied = path.join(stateDir, ".upgraded-" + generation + ".json");
-  let record;
-  try {
-    record = JSON.parse(fs.readFileSync(applied, "utf8"));
-  } catch (error) {
-    if (error?.code !== "ENOENT") {
-      throw error;
+  // Legacy sources Doctor moved into SQLite: the previous release reads them.
+  const moved = [];
+  const companion = /(-wal|-shm|-journal|\.seal)$/;
+  const read = (ops) => {
+    for (const op of ops ?? []) {
+      if (op.kind === "add") {
+        added.push(op.live);
+      } else if (op.kind === "remove" && !companion.test(op.live) && !fs.existsSync(op.live)) {
+        moved.push(op.live);
+      }
     }
-  }
-  for (const op of record?.ops ?? []) {
-    if (op.kind === "add") {
-      added.push(op.live);
-    }
-  }
-  const interrupted = [];
-  const readPlan = (dir) => {
+  };
+  const readJson = (file) => {
     try {
-      return JSON.parse(fs.readFileSync(path.join(dir, "plan.json"), "utf8"));
+      return JSON.parse(fs.readFileSync(file, "utf8"));
     } catch (error) {
-      // A record without a plan is an in-place run that had not reached its swap.
+      // A missing record is a run that had not reached it.
       if (error?.code === "ENOENT") {
         return undefined;
       }
       throw error;
     }
   };
+  const applied = path.join(stateDir, ".upgraded-" + generation + ".json");
+  const record = readJson(applied);
+  read(record?.ops);
+  const interrupted = [];
   for (const entry of fs.readdirSync(stateDir)) {
     if (!entry.startsWith(".upgrade-" + generation + "-")) {
       continue;
     }
     const dir = path.join(stateDir, entry);
     interrupted.push(dir);
-    for (const op of readPlan(dir)?.ops ?? []) {
-      if (op.kind === "add") {
-        added.push(op.live);
-      }
+    read(readJson(path.join(dir, "plan.json"))?.ops);
+    // An in-place run stopped before its records: its inventory names what existed before.
+    const inventory = readJson(path.join(dir, "inventory.json"));
+    if (inventory) {
+      const before = new Set(inventory.files);
+      moved.push(...inventory.files.filter((file) => !fs.existsSync(file)));
+      added.push(...collectDatabases(stateDir, 4, []).filter((file) => !before.has(file)));
     }
   }
-  return { added, applied: record ? applied : undefined, interrupted };
+  return { added, moved, applied: record ? applied : undefined, interrupted };
+}
+
+function collectDatabases(dir, depth, found) {
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return found;
+  }
+  for (const entry of entries) {
+    const file = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (depth > 0 && !entry.name.startsWith(".upgrade") && !["git-install", "npm", "node_modules", "tmp", "logs"].includes(entry.name)) {
+        collectDatabases(file, depth - 1, found);
+      }
+    } else if (entry.name.endsWith(".sqlite")) {
+      found.push(file);
+    }
+  }
+  return found;
 }
 
 function retirePlans(stateDir, generation) {
@@ -196,15 +196,20 @@ async function revertBlockers(stateDir, previous, restoring, generations, config
     return ["node:sqlite is unavailable to read the state"];
   }
   const removed = new Set();
+  const moved = [];
   let upgraded = restoredFrom.size > 0;
   try {
     for (const generation of generations) {
       const planned = plannedAdditions(stateDir, generation);
       planned.added.forEach((file) => removed.add(file));
+      moved.push(...planned.moved);
       upgraded ||= Boolean(planned.applied) || planned.interrupted.length > 0;
     }
   } catch {
     return ["could not read the upgrade records"];
+  }
+  if (moved.length > 0) {
+    return ["Doctor moved legacy files the previous release reads (" + moved.slice(0, 3).map((file) => path.relative(stateDir, file)).join(", ") + ")"];
   }
   const databases = [[path.join(stateDir, "state", "openclaw.sqlite"), supported.state, true]];
   try {
@@ -325,17 +330,8 @@ if (trial && counts) {
         }
         trial.restoring.push({ suffix, files });
       }
-      const archives = collectArchives(path.dirname(prefix), since, 4, []);
-      for (const { original, suffix } of archives) {
-        if (!fs.existsSync(original)) {
-          trial.restoring.push({ suffix, files: [original] });
-        }
-      }
-      const retaken = archives.filter(({ original }) => fs.existsSync(original));
-      const blockers = [
-        ...retaken.map(({ original }) => "a new " + path.relative(path.dirname(prefix), original) + " replaced the legacy source Doctor archived"),
-        ...(await revertBlockers(path.dirname(prefix), trial.previous, trial.restoring, generations, trial.config)),
-      ];
+
+      const blockers = await revertBlockers(path.dirname(prefix), trial.previous, trial.restoring, generations, trial.config);
       if (blockers.length > 0) {
         trial.forward = blockers;
       } else {

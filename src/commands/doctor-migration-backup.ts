@@ -197,7 +197,12 @@ export async function backupDoctorMigrationDatabases(params: {
         relative[3] === "openclaw-agent.sqlite")
     );
   };
-  if (params.preImageOwner === "state-upgrade" && [...pending].every(coveredByStart)) {
+  if (params.preImageOwner === "state-upgrade" && ![...pending].every(coveredByStart)) {
+    // The start has no image of such a store and no launcher restores Doctor's backup of
+    // it, so no Git release trial may revert past its migration.
+    const { settleRunningGitReleaseTrial } = await import("../infra/git-release.js");
+    await settleRunningGitReleaseTrial();
+  } else if (params.preImageOwner === "state-upgrade") {
     // Gateway start already took (or, without room, skipped) the one pre-migration
     // image of each of these databases; a second full set protects nothing more.
     // The version phase runs only where a bounded migration exists, as with backups.
