@@ -60,6 +60,7 @@ import {
   deferUpdateCommandTerminalPreparation,
   recordUpdatePackageCompletion,
 } from "./update-command-terminal.js";
+import { releaseLaunchedMigration } from "./update-command-verification.js";
 
 export async function finishUpdate(
   params: FinishUpdateParams,
@@ -549,6 +550,7 @@ async function finishSettledUpdate(
         const restarted = await forward(() =>
           restartService({
             onGatewayStartAttempted,
+            rollbackBlockedReason: params.rollbackBlockedReason,
             originalManagedServiceRuntime: params.originalManagedServiceRuntime,
             shouldRestart: shouldRestart && restartContext.serviceMutationAllowed,
             observePackageReplacement:
@@ -587,8 +589,12 @@ async function finishSettledUpdate(
         if (activationVerified && restarted === "restart-health-failed") {
           throw new GatewayRestartHealthError(`Restart finalization: ${verificationFailure}.`);
         }
+        // A launched candidate owns the state it migrated; rollback stays unattempted.
+        const launched = await releaseLaunchedMigration(params, restarted, resultWithPostUpdate);
+        rollbackAttempted ||= launched !== undefined;
         const failure: UpdateRunResult = {
           ...resultWithPostUpdate,
+          ...launched,
           status: "error",
           reason: verificationFailure,
           recovery: unsafeUpdateRecovery(resultWithPostUpdate.recovery),
