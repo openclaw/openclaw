@@ -43,12 +43,12 @@ const environment = {
   OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
   OPENCLAW_BUNDLED_SKILLS_DIR: path.join(state, "absent"),
 };
+function skillContent(name) {
+  return `---\nname: ${name}\ndescription: Synthetic skill ${name}\n---\nSynthetic instructions.\n`;
+}
 async function writeSkill(directory, name) {
   await fs.mkdir(directory, { recursive: true });
-  await fs.writeFile(
-    path.join(directory, "SKILL.md"),
-    `---\nname: ${name}\ndescription: Synthetic skill ${name}\n---\nSynthetic instructions.\n`,
-  );
+  await fs.writeFile(path.join(directory, "SKILL.md"), skillContent(name));
 }
 const pluginContributions = [];
 for (let index = 0; index < pluginCount; index++) {
@@ -82,17 +82,10 @@ for (let workspace = 0; workspace < 4; workspace++) {
           options: {
             managedSkillsDir: path.join(state, "managed"),
             bundledSkillsDir: path.join(state, "absent"),
-            pluginSkillsDir: path.join(state, "generated-plugin-skills"),
           },
         },
       },
       request: {
-        sourcePlan: {
-          workspaceDir: directory,
-          managedSkillsDir: skills,
-          pluginSkillRoots: [],
-          roots: [{ dir: skills, source: "openclaw-workspace", tier: "workspace" }],
-        },
         limits: {
           maxCandidatesPerRoot: 100,
           maxSkillsLoadedPerSource: 100,
@@ -107,6 +100,50 @@ const expectedNames = [
   ...Array.from({ length: skillCount }, (_, index) => `skill-${index}`),
   ...Array.from({ length: pluginCount }, (_, index) => `plugin-skill-${index}`),
 ].toSorted();
+const pluginSkillsDir = path.join(environment.OPENCLAW_STATE_DIR, "plugin-skills");
+function expectedRecord(name, baseDir, source, discoveryRoot, syncSourceDir, syncDirName) {
+  return JSON.stringify([
+    name,
+    `Synthetic skill ${name}`,
+    createHash("sha256").update(skillContent(name)).digest("hex"),
+    source,
+    baseDir,
+    path.join(baseDir, "SKILL.md"),
+    discoveryRoot,
+    syncSourceDir,
+    syncDirName,
+  ]);
+}
+// Raw discovery retains direct roots and generated links for collision diagnostics.
+// Build the exact multiset before timing; effective names still occur only once.
+const expectedRecords = new Map(
+  requests.map(({ key }) => [
+    key,
+    [
+      ...Array.from({ length: skillCount }, (_, index) => {
+        const name = `skill-${index}`;
+        const root = path.join(key, "skills");
+        return expectedRecord(name, path.join(root, name), "openclaw-workspace", root);
+      }),
+      ...Array.from({ length: pluginCount }, (_, index) => {
+        const name = `plugin-skill-${index}`;
+        const root = path.join(state, `contribution-${index}`, "skills");
+        const sourceDir = path.join(root, name);
+        return [
+          expectedRecord(name, sourceDir, "openclaw-extra", root),
+          expectedRecord(
+            name,
+            path.join(pluginSkillsDir, name),
+            "openclaw-extra",
+            pluginSkillsDir,
+            sourceDir,
+            name,
+          ),
+        ];
+      }).flat(),
+    ].toSorted(),
+  ]),
+);
 function verify(reply) {
   assert.equal(reply.kind, "scan");
   assert.equal(reply.results.length, 4);
@@ -115,8 +152,30 @@ function verify(reply) {
     requests.map((request) => request.key),
   );
   for (const result of reply.results) {
+    assert.equal(result.plan.pluginSkillsDir, pluginSkillsDir);
+    assert.deepEqual(result.sources.executionEntries, []);
     assert.deepEqual(
-      result.sources.entries.map((skillEntry) => skillEntry.skill.name).toSorted(),
+      result.sources.entries
+        .map(({ skill, syncSourceDir, syncDirName }) =>
+          JSON.stringify([
+            skill.name,
+            skill.description,
+            skill.contentHash,
+            skill.source,
+            skill.baseDir,
+            skill.filePath,
+            skill.discoveryRoot?.path,
+            syncSourceDir,
+            syncDirName,
+          ]),
+        )
+        .toSorted(),
+      expectedRecords.get(result.key),
+    );
+    assert.deepEqual(
+      [...new Set(result.sources.entries.map((skillEntry) => skillEntry.skill.name))].toSorted(
+        (left, right) => (left < right ? -1 : left > right ? 1 : 0),
+      ),
       expectedNames,
     );
     assert.match(result.fingerprint, /^[a-f0-9]{64}$/);
