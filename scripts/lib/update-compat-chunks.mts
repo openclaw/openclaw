@@ -19,7 +19,8 @@ import { ModuleGraph, type UpdateCompatibilityOrigin } from "./update-compat-mod
 
 export { isUpdateCompatibilityChunk } from "./update-compat-contract.mjs";
 const HASHED_CHUNK = /-[A-Za-z0-9_-]{8}\.m?js$/;
-const POST_SWAP_OWNER = /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup(?:-scope)?\.ts$)/;
+const POST_SWAP_OWNER =
+  /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup(?:-scope)?\.ts$|infra\/deferred-plugin-migrations\.ts$)/;
 const STANDALONE_CHUNK_PREFIXES = Object.keys(standaloneRuntimeProcessBuildEntries).flatMap(
   (name) => {
     const { chunkFileNames } = getStandaloneRuntimeProcessOutputOptions(name);
