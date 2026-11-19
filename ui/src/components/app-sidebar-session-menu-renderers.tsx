@@ -19,6 +19,7 @@ import {
 import { createPersonalSessionGroupActions } from "./personal-session-group-actions.ts";
 import type { PickerFocusHandle } from "./select-picker-types.ts";
 import {
+  archiveSessionGroupFromMenu,
   createSessionGroup,
   renameSessionGroupFromMenu,
   deleteSessionGroupFromMenu,
@@ -50,6 +51,7 @@ type SidebarSessionGroupMenuAction =
   | "group-defaults"
   | "rename-group"
   | "new-group"
+  | "archive-group"
   | "delete-group";
 
 const EMPTY_GROUPS_OPTIONS = [
@@ -76,6 +78,7 @@ export function renderSidebarSessionGroupMenuForMenus(
     "group-defaults": "sessions.groups.update",
     "rename-group": "sessions.groups.rename",
     "new-group": "sessions.groups.put",
+    "archive-group": "sessions.patchMany",
     "delete-group": "sessions.groups.delete",
   } as const;
   const actionDisabledReasons = createMemo(() =>
@@ -120,6 +123,7 @@ export function renderSidebarSessionGroupMenuForMenus(
     ),
     renderAction("rename-group", t("sessionsView.renameGroupMenu"), <Icon name="edit" />),
     renderAction("new-group", t("sessionsView.newGroup"), <Icon name="folder" />),
+    renderAction("archive-group", t("sessionsView.archiveGroupMenu"), <Icon name="archive" />),
     {
       kind: "content",
       id: "separator",
@@ -137,6 +141,7 @@ export function renderSidebarSessionGroupMenuForMenus(
           (value === "group-defaults" ||
             value === "rename-group" ||
             value === "new-group" ||
+            value === "archive-group" ||
             value === "delete-group") &&
           !actionDisabledReasons()[value]
         ) {
@@ -155,6 +160,9 @@ export function renderSidebarSessionGroupMenuForMenus(
               break;
             case "new-group":
               void createSessionGroup(host.sessionOrganizer);
+              break;
+            case "archive-group":
+              void archiveSessionGroupFromMenu(host.sessionOrganizer, menu.group);
               break;
             case "delete-group":
               void deleteSessionGroupFromMenu(host.sessionOrganizer, menu.group);
