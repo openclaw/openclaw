@@ -97,6 +97,10 @@ jobs:
           install-bun: "false"
           cache-mode: "off"
 
+      - name: Probe candidate install/build/runtime isolation
+        if: inputs.client_sha != ''
+        run: python3 scripts/probe-native-candidate-isolation.py
+
       - name: Checkout independent candidate Gateway
         if: inputs.client_sha != '' && inputs.target_sha != '' && inputs.target_sha != github.sha
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -118,14 +122,10 @@ jobs:
         if: inputs.client_sha != ''
         run: test "$(git -C .openclaw/tmp/stable-client rev-parse HEAD)" = "$CLIENT_SHA"
 
-      - name: Build candidate Gateway and prepare stable client dependencies
+      - name: Build qualification harness and prepare stable client dependencies
         if: inputs.client_sha != ''
         run: |
           pnpm build:runtime
-          if [[ "$TARGET_SHA" != "$GITHUB_SHA" ]]; then
-            pnpm --dir .openclaw/tmp/candidate-gateway install --frozen-lockfile
-            pnpm --dir .openclaw/tmp/candidate-gateway build:runtime
-          fi
           pnpm --dir .openclaw/tmp/stable-client install --frozen-lockfile
 
       - name: Prepare stable Gateway selection

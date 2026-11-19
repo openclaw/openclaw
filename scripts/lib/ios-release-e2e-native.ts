@@ -299,8 +299,10 @@ export async function createNativeDependencies(options: {
     simslim: binary ? "0.11.0" : null,
   });
   const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-ios-release-e2e-"));
+  let disposeGateway: (() => Promise<void>) | undefined;
   // Never export raw xcresults or fixture logs: they can contain pairing credentials.
   const cleanup = async () => {
+    await disposeGateway?.();
     if (retainRoot) {
       throw new OperationError("cleanup", "cleanup-unconfirmed");
     }
@@ -333,6 +335,7 @@ export async function createNativeDependencies(options: {
           throw operationError("gateway-install", error);
         }
       });
+      disposeGateway = gateway.dispose;
       options.proof.gateway = gateway.identity;
       options.proof.gatewayInstallMs = performance.now() - installStarted;
       const installedGateway = gateway;

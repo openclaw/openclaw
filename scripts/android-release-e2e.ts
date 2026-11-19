@@ -377,6 +377,7 @@ export async function main(argv = process.argv.slice(2)) {
     throw new Error("readiness-timeout");
   }
   let instance: Awaited<ReturnType<typeof createOpenClawTestInstance>> | undefined;
+  let disposeGateway: (() => Promise<void>) | undefined;
   const transports: AndroidReleaseTransportSnapshot[] = [];
   evidence.transport = transports;
   try {
@@ -456,6 +457,7 @@ export async function main(argv = process.argv.slice(2)) {
       ...(compatibility ? { candidateDir: candidateRoot } : {}),
       signal: abort.signal,
     });
+    disposeGateway = gateway.dispose;
     evidence.gateway = gateway.identity;
     const requestLog = path.join(root, "requests.private.jsonl");
     const responseControl = path.join(root, "response-control.json");
@@ -1074,9 +1076,11 @@ export async function main(argv = process.argv.slice(2)) {
       child.stop.abort();
     }
     const gatewayCleanup = await Promise.allSettled([instance?.cleanup()]);
+    const isolatedCleanup = await Promise.allSettled([disposeGateway?.()]);
     const cleanup = await Promise.allSettled(services.map((child) => child.done));
     const cleanupFailed =
       gatewayCleanup.some((entry) => entry.status === "rejected") ||
+      isolatedCleanup.some((entry) => entry.status === "rejected") ||
       cleanup.some((entry) => entry.status === "rejected" && hasUnjoinedWork(entry.reason));
     evidence.cleanupConfirmed = !cleanupFailed && !preserveRoot;
     if (!evidence.cleanupConfirmed) {

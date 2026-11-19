@@ -106,10 +106,6 @@ jobs:
           test -f scripts/lib/ios-release-e2e-native.ts
           test -f test/helpers/openclaw-test-instance.ts
 
-      - name: Probe candidate UID and network isolation
-        if: inputs.client_sha != ''
-        run: python3 scripts/probe-native-candidate-isolation.py
-
       - name: Verify frozen published client before execution
         id: stable-client
         if: inputs.client_sha != ''
@@ -124,6 +120,10 @@ jobs:
           node-version: "24.22.1"
           install-bun: "false"
           cache-mode: "off"
+
+      - name: Probe candidate install/build/runtime isolation
+        if: inputs.client_sha != ''
+        run: python3 scripts/probe-native-candidate-isolation.py
 
       - name: Checkout independent candidate Gateway
         if: inputs.client_sha != '' && inputs.target_sha != '' && inputs.target_sha != github.sha
@@ -146,14 +146,10 @@ jobs:
         if: inputs.client_sha != ''
         run: test "$(git -C .openclaw/tmp/stable-client rev-parse HEAD)" = "$CLIENT_SHA"
 
-      - name: Build candidate Gateway and prepare stable client dependencies
+      - name: Build qualification harness and prepare stable client dependencies
         if: inputs.client_sha != ''
         run: |
           pnpm build:runtime
-          if [[ "$TARGET_SHA" != "$GITHUB_SHA" ]]; then
-            pnpm --dir .openclaw/tmp/candidate-gateway install --frozen-lockfile
-            pnpm --dir .openclaw/tmp/candidate-gateway build:runtime
-          fi
           pnpm --dir .openclaw/tmp/stable-client install --frozen-lockfile
 
       - name: Prepare stable Gateway selection

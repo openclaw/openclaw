@@ -3,6 +3,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:
 import path from "node:path";
 import { z } from "zod";
 import { hasUnjoinedWork, runManagedCommand } from "./managed-child-process.mjs";
+import { prepareNativeCandidateGateway } from "./native-candidate-gateway.js";
 import { parseReleaseVersion } from "./release-version.mjs";
 
 const REGISTRY = "https://registry.npmjs.org";
@@ -285,43 +286,7 @@ export async function prepareIOSReleaseGateway(options: {
   candidateDir?: string;
 }) {
   if (options.candidateDir) {
-    options.signal.throwIfAborted();
-    const cwd = path.resolve(options.candidateDir);
-    let head = "";
-    const code = await runManagedCommand({
-      bin: "git",
-      args: ["rev-parse", "HEAD"],
-      cwd,
-      signal: options.signal,
-      timeoutMs: 30_000,
-      requireProcessTreeExit: true,
-      stdio: ["ignore", "pipe", "pipe"],
-      onReady(child) {
-        child.stdout?.on("data", (chunk: Buffer) => {
-          head += chunk.toString("utf8");
-        });
-      },
-    });
-    const build = z
-      .object({ commit: z.string().regex(SHA) })
-      .parse(JSON.parse(await readFile(path.join(cwd, "dist", "build-info.json"), "utf8")));
-    if (
-      !SHA.test(options.targetSha) ||
-      code !== 0 ||
-      head.trim() !== options.targetSha ||
-      build.commit !== options.targetSha
-    ) {
-      throw new Error("Candidate Gateway checkout and build must match the qualification target.");
-    }
-    return {
-      cwd,
-      entrypoint: [path.join(cwd, "openclaw.mjs")],
-      identity: {
-        kind: "candidate-source" as const,
-        targetSha: options.targetSha,
-        sourceSha: build.commit,
-      },
-    };
+    return prepareNativeCandidateGateway({ ...options, candidateDir: options.candidateDir });
   }
   const selectionDir = options.selectionDir;
   if (!selectionDir) {
@@ -357,5 +322,10 @@ export async function prepareIOSReleaseGateway(options: {
     throw new Error("Installed Gateway identity differs from the selected stable release.");
   }
   options.signal.throwIfAborted();
-  return { cwd, entrypoint: [path.join(cwd, "openclaw.mjs")], identity: selection };
+  return {
+    cwd,
+    entrypoint: [path.join(cwd, "openclaw.mjs")],
+    identity: selection,
+    dispose: undefined,
+  };
 }

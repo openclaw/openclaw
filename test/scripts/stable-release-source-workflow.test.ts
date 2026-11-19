@@ -53,9 +53,8 @@ describe("stable client compatibility release wiring", () => {
       );
       expect(identity).toBeGreaterThan(dependencies);
       expect(identity).toBeLessThan(
-        steps.findIndex(
-          (step: { name?: string }) =>
-            step.name === "Build candidate Gateway and prepare stable client dependencies",
+        steps.findIndex((step: { name?: string }) =>
+          step.name?.endsWith("and prepare stable client dependencies"),
         ),
       );
       expect(dependencies).toBeLessThan(
@@ -84,6 +83,7 @@ describe("stable client compatibility release wiring", () => {
       const nativeRun = steps.find((step: { name?: string }) =>
         step.name?.startsWith("Qualify "),
       ).run;
+      expect(JSON.stringify(steps)).not.toContain("pnpm --dir .openclaw/tmp/candidate-gateway");
       expect(nativeRun).toContain("--client-root");
       expect(nativeRun).toContain("--client-sha");
       expect(nativeRun).toContain("--client-release-tag");

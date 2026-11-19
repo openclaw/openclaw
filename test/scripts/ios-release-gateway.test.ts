@@ -180,45 +180,45 @@ function fixture(options: { annotatedTag?: boolean } = {}) {
 }
 
 describe("candidate Gateway source qualification", () => {
-  it.each(["match", "wrong-checkout", "wrong-build"])(
-    "selects the built candidate without npm: %s",
+  it.each(["match", "build-failure", "cleanup-failure"])(
+    "runs candidate preparation and cleanup only through the isolated owner: %s",
     async (state) => {
       const root = tempDirs.make("candidate-gateway-");
-      mkdirSync(path.join(root, "dist"));
-      writeJson(path.join(root, "dist", "build-info.json"), {
-        commit: state === "wrong-build" ? sourceSha : targetSha,
+      vi.stubGlobal("fetch", vi.fn());
+      vi.stubEnv("GITHUB_TOKEN", "must-not-reach-candidate-launcher");
+      command.mockImplementation(async ({ bin, args, env }) => {
+        expect(bin).toBe("python3");
+        expect(args?.[0]).toMatch(/native-candidate-(linux|macos)\.py$/u);
+        expect(env?.GITHUB_TOKEN).toBeUndefined();
+        if (args?.[1] === "build") {
+          expect(args).toContain(targetSha);
+          expect(args).toContain(root);
+          return state === "build-failure" ? 17 : 0;
+        }
+        expect(args?.[1]).toBe("cleanup");
+        return state === "cleanup-failure" ? 19 : 0;
       });
-      command.mockImplementation(async ({ bin, cwd, onReady }) => {
-        expect(bin).toBe("git");
-        expect(cwd).toBe(root);
-        const stdout = new PassThrough();
-        const child = new ChildProcess();
-        Object.defineProperty(child, "stdout", { value: stdout });
-        onReady?.(child);
-        stdout.end((state === "wrong-checkout" ? sourceSha : targetSha) + "\n");
-        return 0;
-      });
-      const fetch = vi.fn();
-      vi.stubGlobal("fetch", fetch);
       const result = prepareIOSReleaseGateway({
         candidateDir: root,
         targetSha,
         signal: new AbortController().signal,
         selectionDir: path.join(root, "must-not-read"),
-        installDir: path.join(root, "must-not-install"),
+        installDir: path.join(root, "unused"),
       });
-      if (state === "match") {
-        await expect(result).resolves.toEqual({
-          cwd: root,
-          entrypoint: [path.join(root, "openclaw.mjs")],
-          identity: { kind: "candidate-source", targetSha, sourceSha: targetSha },
-        });
+      if (state === "build-failure") {
+        await expect(result).rejects.toThrow(/build failed.*17/u);
       } else {
-        await expect(result).rejects.toThrow("Candidate Gateway checkout and build");
+        const gateway = await result;
+        expect(gateway.entrypoint[0]).toMatch(/native-candidate-entrypoint\.mjs$/u);
+        const cleanup = gateway.dispose?.();
+        if (state === "cleanup-failure") {
+          await expect(cleanup).rejects.toThrow(/cleanup failed.*19/u);
+        } else {
+          await cleanup;
+        }
       }
-      expect(fetch).not.toHaveBeenCalled();
-      expect(command).toHaveBeenCalledTimes(1);
-      expect(existsSync(path.join(root, "must-not-install"))).toBe(false);
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+      expect(command).toHaveBeenCalledTimes(2);
     },
   );
 });

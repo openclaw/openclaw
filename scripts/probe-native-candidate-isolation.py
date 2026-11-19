@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Disposable-host feasibility proof, not a production isolation implementation."""
+"""Hostile synthetic source through the production native candidate boundary."""
+import http.server
 import json
 import os
 from pathlib import Path
-import pwd
+import shutil
 import socket
 import subprocess
 import sys
@@ -11,157 +12,161 @@ import tempfile
 import threading
 
 
-def child(uid, profile, root, allowed, denied, parent):
-    # Retain only the isolated, nontrusted GID; no runner groups cross the boundary.
-    os.setgroups([uid])
-    os.setgid(uid)
-    os.setuid(uid)
-    assert os.getuid() == os.geteuid() == uid
-    assert os.getgid() == os.getegid() == uid
-    os.chdir(root + "/candidate")
-    # Establish the canary after sudo filtering, immediately before the allowlisted exec.
-    os.environ["ISOLATION_SECRET_CANARY"] = "must-not-cross"
-    code = r'''
-import ctypes, json, os, pathlib, socket, subprocess, sys
-root, allowed, denied, parent = sys.argv[1:]
-# Python uses Darwin's account-directory extension, not the process group vector.
-# The unsuffixed libc symbol reads the kernel credentials, including setgroups().
-getgroups = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True).getgroups
-getgroups.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_uint32)]
-getgroups.restype = ctypes.c_int
-count = getgroups(0, None)
-if count < 0:
-    raise OSError(ctypes.get_errno(), "kernel getgroups count failed")
-groups = (ctypes.c_uint32 * count)()
-if getgroups(count, groups) != count:
-    raise OSError(ctypes.get_errno(), "kernel getgroups failed")
-result = {"uid": os.getuid(), "groups": list(groups)}
-for name in ("qualification", "actions"):
-    path = pathlib.Path(root) / name / "canary"
-    for action in ("read", "write"):
-        try:
-            path.read_text() if action == "read" else path.write_text("forged")
-            result[name + "_" + action] = "escaped"
-        except OSError:
-            result[name + "_" + action] = "denied"
-try:
-    os.kill(int(parent), 0)
-    result["parent_signal"] = "escaped"
-except OSError:
-    result["parent_signal"] = "denied"
-for label, port in (("provider", allowed), ("unrelated_local_service", denied)):
-    try:
-        with socket.create_connection(("127.0.0.1", int(port)), timeout=2) as connection:
-            connection.sendall(b"probe")
-            result[label] = connection.recv(2).decode()
-    except OSError:
-        result[label] = "denied"
-try:
-    result["sudo"] = subprocess.run(["/usr/bin/sudo", "-n", "/usr/bin/true"], capture_output=True).returncode
-except PermissionError:
-    result["sudo"] = "execution-denied"
-path = pathlib.Path(root) / "candidate" / "allowed"
-path.write_text("candidate writes stay private")
-result["own_write"] = path.read_text()
-code = "import json, pathlib, sys\ntry:\n pathlib.Path(sys.argv[1]).write_text('forged')\n print(json.dumps({'write': 'escaped'}))\nexcept PermissionError:\n print(json.dumps({'write': 'denied'}))"
-descendant = subprocess.run([sys.executable, "-I", "-c", code, str(pathlib.Path(root) / "qualification" / "canary")], capture_output=True, text=True, check=True)
-result["descendant_write"] = json.loads(descendant.stdout)["write"]
-result["credential_env"] = os.environ.get("ISOLATION_SECRET_CANARY")
-print(json.dumps(result))
-'''
-    print(json.dumps({'launchPid': os.getpid(), 'python': sys.executable}), file=sys.stderr, flush=True)
-    os.execve('/usr/bin/sandbox-exec', ['/usr/bin/sandbox-exec', '-p', profile,
-              sys.executable, '-I', '-c', code, root, allowed, denied, parent],
-              {'PATH': '/usr/bin:/bin', 'HOME': root + '/candidate',
-               'TMPDIR': root + '/candidate', 'LANG': 'en_US.UTF-8'})
-
-
 def main():
-    if sys.platform != 'darwin':
-        raise SystemExit('This feasibility probe requires the disposable macOS native runner.')
-    if len(sys.argv) > 1:
-        child(int(sys.argv[2]), *sys.argv[3:])
-        return
-    subprocess.run(['sudo', '-n', 'true'], check=True)
-    occupied = {entry.pw_uid for entry in pwd.getpwall()}
-    uid = next(value for value in range(55000, 60000) if value not in occupied)
-    root = Path(tempfile.mkdtemp(prefix='openclaw-isolation-probe-', dir='/private/tmp'))
-    os.chmod(root, 0o755)
-    sockets = []
-    threads = []
+    if sys.platform not in ("darwin", "linux"):
+        raise SystemExit("Native candidate isolation requires macOS or Linux.")
+    repo = Path(__file__).resolve().parent.parent
+    helper = repo / "scripts/lib" / ("native-candidate-macos.py" if sys.platform == "darwin" else "native-candidate-linux.py")
+    node = shutil.which("node")
+    if not node:
+        raise RuntimeError("Q's pinned Node toolchain is required before the probe")
+    npm = Path(subprocess.check_output([node, "-p", "require.resolve('npm/package.json')"], cwd=repo, text=True).strip()).parent
+    version = json.loads((repo / "package.json").read_text())["packageManager"].split("@", 1)[1].split("+", 1)[0]
+    root = Path(tempfile.mkdtemp(prefix="openclaw-isolation-proof-",
+                                 dir="/private/tmp" if sys.platform == "darwin" else None)).resolve()
+    root.chmod(0o755)
+    boundary = root / "boundary"
+    servers = []
+    cleanup_ok = False
     try:
-        for name in ('qualification', 'actions', 'candidate'):
-            directory = root / name
-            directory.mkdir(mode=0o700)
-            if name != 'candidate':
-                (directory / 'canary').write_text('trusted')
-        subprocess.run(['sudo', '-n', 'chown', str(uid) + ':' + str(uid), str(root / 'candidate')], check=True)
-        for _ in range(2):
-            listener = socket.socket()
-            listener.bind(('127.0.0.1', 0))
-            listener.listen()
-            listener.settimeout(15)
-            sockets.append(listener)
-            def serve(sock):
-                try:
-                    connection, _ = sock.accept()
-                    with connection:
-                        connection.recv(16)
-                        connection.sendall(b'ok')
-                except OSError:
-                    pass
-            thread = threading.Thread(target=serve, args=(listener,), daemon=True)
-            thread.start()
-            threads.append(thread)
-        allowed, denied = (str(sock.getsockname()[1]) for sock in sockets)
-        profile = '''(version 1)
-(deny default)
-(allow process-exec process-fork)
-(allow signal process-info* (target same-sandbox))
-(allow sysctl-read)
-(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))
-(allow file-read* file-map-executable
-  (subpath "/System") (subpath "/usr") (subpath "/bin")
-  (subpath "/Library/Developer") (subpath "/Applications")
-  (literal "/dev/null") (literal "/dev/random") (literal "/dev/urandom")
-  (literal "/private/etc/passwd") (literal "/private/etc/localtime"))
-; The system Python loader reads the root directory itself, not its descendants.
-(allow file-read-data (literal "/"))
-(allow file-read-metadata (literal "/") (literal "/private") (literal "/private/tmp"))
-(allow file-read* file-write* (subpath CANDIDATE))
-(allow file-write-data (literal "/dev/null"))
-(allow network-outbound (remote tcp "localhost:PORT"))
-'''.replace('CANDIDATE', json.dumps(str(root / 'candidate'))).replace('PORT', allowed)
-        result = subprocess.run(['sudo', '-n', '/usr/bin/python3', '-I', str(Path(__file__).resolve()),
-                                 '--child', str(uid), profile, str(root), allowed, denied, str(os.getpid())],
-                                env={**os.environ, 'ISOLATION_SECRET_CANARY': 'must-not-cross'},
-                                text=True, capture_output=True, timeout=30, close_fds=True)
+        protected = root / "qualification"
+        protected.mkdir(mode=0o700)
+        canary = protected / "evidence"
+        canary.write_text("trusted Q evidence")
+        fixture = root / "source"
+        fixture.mkdir()
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"ok")
+            def log_message(self, *_args):
+                pass
+        for address in ("127.0.0.1", "0.0.0.0"):
+            server = http.server.ThreadingHTTPServer((address, 0), Handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            servers.append(server)
+        provider, unrelated = (server.server_port for server in servers)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route:
+            route.connect(("1.1.1.1", 443))
+            host_address = route.getsockname()[0]
+        with socket.socket() as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            gateway_port = reservation.getsockname()[1]
+        payload = r'''
+const fs = require("node:fs");
+const path = require("node:path");
+const http = require("node:http");
+const net = require("node:net");
+const assert = require("node:assert/strict");
+const { spawn, spawnSync } = require("node:child_process");
+const phase = process.argv[2];
+const details = JSON.parse(fs.readFileSync(path.join(__dirname, "probe.json"), "utf8"));
+const denied = new Set(["EACCES", "EPERM", "ENOENT"]);
+for (const action of [() => fs.readFileSync(details.canary), () => fs.writeFileSync(details.canary, "forged")]) {
+  assert.throws(action, error => denied.has(error.code));
+}
+assert.notEqual(process.getuid(), 0);
+assert.equal(process.env.ISOLATION_SECRET_CANARY, undefined);
+assert.throws(() => process.kill(details.parent, 0), error => denied.has(error.code) || error.code === "ESRCH");
+const sudo = spawnSync("sudo", ["-n", "true"]);
+assert(sudo.status !== 0);
+const own = path.join(process.env.HOME, "own-write");
+fs.writeFileSync(own, "private");
+assert.equal(fs.readFileSync(own, "utf8"), "private");
+// Both owners must remove descendants that detach and ignore graceful shutdown.
+const detached = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });
+detached.unref();
+async function request(port, host = "127.0.0.1") {
+  return await new Promise((resolve, reject) => {
+    const req = http.get({ host, port, path: "/v1/probe", timeout: 2500 }, response => {
+      let text = "";
+      response.on("data", chunk => text += chunk);
+      response.on("end", () => resolve(text));
+    });
+    req.on("error", reject);
+    req.on("timeout", () => req.destroy(new Error("timeout")));
+  });
+}
+(async () => {
+  if (phase === "probe") {
+    const config = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8"));
+    const endpoint = new URL(config.models.providers.fixture.baseUrl);
+    const result = await new Promise((resolve, reject) => {
+      http.get(endpoint, response => { let text = ""; response.on("data", chunk => text += chunk); response.on("end", () => resolve(text)); }).on("error", reject);
+    });
+    assert.equal(result, "ok");
+    await assert.rejects(request(details.unrelated));
+    const state = path.join(process.env.OPENCLAW_STATE_DIR, "probe-count");
+    const count = fs.existsSync(state) ? Number(fs.readFileSync(state, "utf8")) + 1 : 1;
+    fs.writeFileSync(state, String(count));
+    console.error("candidate-runtime-diagnostic");
+    console.log(JSON.stringify({ phase, count, provider: "ok", protected: "denied", unrelated: "denied" }));
+  } else {
+    await assert.rejects(request(details.unrelated, details.host));
+    if (process.env.HTTPS_PROXY) {
+      const proxy = new URL(process.env.HTTPS_PROXY);
+      const response = await new Promise((resolve, reject) => {
+        const socket = net.connect(Number(proxy.port), proxy.hostname);
+        socket.setTimeout(2500, () => socket.destroy(new Error("proxy denial timed out")));
+        socket.on("connect", () => socket.write("CONNECT 127.0.0.1:443 HTTP/1.1\r\nHost: 127.0.0.1:443\r\n\r\n"));
+        socket.once("data", data => { resolve(data.toString()); socket.destroy(); });
+        socket.on("error", reject);
+      });
+      assert.match(response, /^HTTP\/1\.[01] 403 /);
+    }
+    console.log("phase:" + phase + ":checked");
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });
+'''
+        (fixture / "boundary.cjs").write_text(payload)
+        (fixture / "openclaw.mjs").write_text('import "./boundary.cjs";\n')
+        (fixture / "probe.json").write_text(json.dumps({"canary": str(canary), "parent": os.getpid(), "unrelated": unrelated, "host": host_address}))
+        (fixture / "package.json").write_text(json.dumps({"name": "native-isolation-hostile-fixture", "version": "1.0.0", "private": True,
+            "scripts": {"postinstall": "node boundary.cjs install", "build:runtime": "node boundary.cjs build"}}))
+        (fixture / "pnpm-lock.yaml").write_text("lockfileVersion: '9.0'\n\nimporters:\n  .: {}\n")
+        git_env = {"PATH": os.environ["PATH"], "HOME": str(root), "GIT_AUTHOR_NAME": "Synthetic Fixture", "GIT_AUTHOR_EMAIL": "fixture@example.invalid", "GIT_COMMITTER_NAME": "Synthetic Fixture", "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
+        for command in (["init", "--quiet"], ["add", "."], ["-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "synthetic isolation fixture"]):
+            subprocess.run(["git", *command], cwd=fixture, env=git_env, check=True)
+        sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=fixture, text=True).strip()
+        env = {**os.environ, "ISOLATION_SECRET_CANARY": "must-not-cross"}
+        result = subprocess.run([sys.executable, str(helper), "build", "--source-dir", str(fixture), "--target-sha", sha,
+            "--root", str(boundary), "--node", node, "--npm-dir", str(npm), "--pnpm-version", version],
+            env=env, text=True, capture_output=True, timeout=1900)
         if result.returncode:
-            diagnostic = subprocess.run(
-                ['/usr/bin/log', 'show', '--last', '1m', '--style', 'compact',
-                 '--predicate', 'subsystem == "com.apple.sandbox.reporting"'],
-                text=True, capture_output=True, timeout=15)
-            # Only this synthetic probe's denials are relevant; never dump host logs.
-            launch = json.loads(result.stderr.splitlines()[0])
-            denials = '\n'.join(line for line in diagnostic.stdout.splitlines()
-                                if str(root) in line or f"({launch['launchPid']})" in line)[-8000:]
-            raise RuntimeError(f'Sandbox launch failed (exit {result.returncode}): '
-                               + result.stderr + denials)
-        facts = json.loads(result.stdout)
-        assert facts['uid'] == uid and facts['groups'] == [uid], facts
-        for key in ('qualification_read', 'qualification_write', 'actions_read', 'actions_write',
-                    'parent_signal', 'unrelated_local_service'):
-            assert facts[key] == 'denied', facts
-        assert facts['sudo'] != 0 and facts['descendant_write'] == 'denied', facts
-        assert facts['provider'] == 'ok' and facts['credential_env'] is None, facts
-        assert facts['own_write'] == 'candidate writes stay private', facts
-        assert all((root / name / 'canary').read_text() == 'trusted' for name in ('qualification', 'actions'))
-        print(json.dumps({'status': 'passed', 'kind': 'macos-uid-seatbelt-feasibility', 'facts': facts}))
+            raise RuntimeError("production boundary build failed:\n" + result.stdout[-16000:] + result.stderr[-8000:])
+        for phase in ("install", "build"):
+            assert "phase:" + phase + ":checked" in result.stdout, result.stdout[-16000:]
+        assert canary.read_text() == "trusted Q evidence"
+        config_path = protected / "config.json"
+        config_path.write_text(json.dumps({"gateway": {"port": gateway_port}, "models": {"providers": {"fixture": {"baseUrl": f"http://127.0.0.1:{provider}/v1"}}}}))
+        for expected in (1, 2):
+            result = subprocess.run([sys.executable, str(helper), "run", "--root", str(boundary), "--config", str(config_path), "--", "probe"],
+                env=env, text=True, capture_output=True, timeout=45)
+            if result.returncode:
+                raise RuntimeError("production boundary runtime failed:\n" + result.stdout[-8000:] + result.stderr[-8000:])
+            assert "candidate-runtime-diagnostic" in result.stderr, result.stderr
+            facts = json.loads(result.stdout.strip().splitlines()[-1])
+            assert facts["count"] == expected and facts["provider"] == "ok", facts
+            assert facts["protected"] == facts["unrelated"] == "denied", facts
+            assert canary.read_text() == "trusted Q evidence"
+        cleanup = subprocess.run([sys.executable, str(helper), "cleanup", "--root", str(boundary)], text=True, capture_output=True, timeout=60)
+        if cleanup.returncode:
+            raise RuntimeError("production boundary cleanup failed: " + cleanup.stderr[-8000:])
+        assert not boundary.exists()
+        cleanup_ok = True
+        print(json.dumps({"status": "passed", "kind": "native-production-isolation", "platform": sys.platform,
+            "install": "protected", "build": "protected", "runtime": facts, "cleanup": "confirmed"}))
     finally:
-        for listener in sockets:
-            listener.close()
-        subprocess.run(['sudo', '-n', 'rm', '-rf', str(root)], check=True)
+        for server in servers:
+            server.shutdown()
+            server.server_close()
+        if not cleanup_ok and boundary.exists():
+            cleanup = subprocess.run([sys.executable, str(helper), "cleanup", "--root", str(boundary)], timeout=60)
+            cleanup_ok = cleanup.returncode == 0
+        if cleanup_ok:
+            shutil.rmtree(root)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
