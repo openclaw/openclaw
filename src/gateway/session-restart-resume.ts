@@ -347,18 +347,21 @@ async function resumeAgentSessions(
   const processStartedAt = performance.timeOrigin;
   const cfg = context.getRuntimeConfig();
   const configuredAgents = new Set(listConfiguredSessionStoreAgentIds(cfg));
-  const inventory = prepareSessionStoreTargetInventoryRead(
-    prepareSessionStoreTargetInventory(
-      cfg,
-      agentIds.filter((agentId) => configuredAgents.has(agentId)),
-      undefined,
-      "configured",
-    ),
+  const inventoryRequest = prepareSessionStoreTargetInventory(
+    cfg,
+    agentIds.filter((agentId) => configuredAgents.has(agentId)),
+    undefined,
+    "configured",
   );
+  const inventory = prepareSessionStoreTargetInventoryRead(inventoryRequest);
   const targets = await inventory.withRead(
     async (snapshot) =>
       snapshot.agents.flatMap(({ reads }) =>
-        reads.map(({ target, database }) => ({ ...target, storePath: database.path })),
+        reads.map(({ target, database }) => ({
+          ...target,
+          storePath: database.path,
+          env: inventoryRequest.env,
+        })),
       ),
     () => signal.throwIfAborted(),
     signal,
