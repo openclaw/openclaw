@@ -8,6 +8,10 @@ import {
   createInitializationContext,
 } from "./chat-application-context.test-support.ts";
 import {
+  CHAT_HISTORY_REQUEST_LIMIT,
+  CHAT_HISTORY_REQUEST_MAX_BYTES,
+} from "./chat-history-request-params.ts";
+import {
   connectPaneTestView,
   createTestChatPane,
   createRenderTestChatPane,
@@ -73,11 +77,13 @@ it("fills an initially short transcript when its first geometry settles without 
 });
 
 it("loads older history when upward input interrupts a pending restoration", async () => {
-  const older = Array.from({ length: 160 }, (_, index) => nativeHistoryMessage(index + 1));
+  const older = Array.from({ length: CHAT_HISTORY_REQUEST_LIMIT }, (_, index) =>
+    nativeHistoryMessage(index + 1),
+  );
   const historyRequest = vi.fn(async (_params: unknown, _options: unknown) => ({
     messages: older,
     hasMore: false,
-    totalMessages: 190,
+    totalMessages: CHAT_HISTORY_REQUEST_LIMIT + 30,
   }));
   const context = createInitializationContext();
   context.config.subscribe = () => () => {};
@@ -96,12 +102,14 @@ it("loads older history when upward input interrupts a pending restoration", asy
       method === "chat.history" ? historyRequest(params, options) : Promise.resolve({}),
   });
   state.connected = true;
-  state.chatMessages = Array.from({ length: 30 }, (_, index) => nativeHistoryMessage(index + 161));
+  state.chatMessages = Array.from({ length: 30 }, (_, index) =>
+    nativeHistoryMessage(index + CHAT_HISTORY_REQUEST_LIMIT + 1),
+  );
   state.chatHistoryPagination = {
     hasMore: true,
     olderCursor: "older-restoration",
     nextOffset: 30,
-    totalMessages: 190,
+    totalMessages: CHAT_HISTORY_REQUEST_LIMIT + 30,
   };
   state.chatLoading = false;
   pane.render();
@@ -140,14 +148,14 @@ it("loads older history when upward input interrupts a pending restoration", asy
   expect(historyRequest).toHaveBeenCalledExactlyOnceWith(
     {
       sessionKey: state.sessionKey,
-      limit: 1000,
-      maxBytes: 3 * 1024 * 1024,
+      limit: CHAT_HISTORY_REQUEST_LIMIT,
+      maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES,
       toolResultMaxChars: 2_000,
       cursor: "older-restoration",
     },
     { signal: expect.any(AbortSignal) },
   );
-  await expect.poll(() => state.chatMessages.length).toBe(190);
+  await expect.poll(() => state.chatMessages.length).toBe(CHAT_HISTORY_REQUEST_LIMIT + 30);
   expect(state.chatFollowLocked).toBe(true);
   expect(state.chatReadingHistory).toBe(true);
   // This renderer fixture commits the pane's next props explicitly.

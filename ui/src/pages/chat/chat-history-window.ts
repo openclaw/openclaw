@@ -14,6 +14,7 @@ import {
   sourceGroups,
   intrinsicGroup,
   intrinsicChatHistorySource,
+  ordinaryChatSendMessages,
 } from "./chat-history-cost.ts";
 import type {
   ChatHistoryCursor,
@@ -236,8 +237,9 @@ export function prepareChatHistoryResidencySegments(
   messages: readonly unknown[],
   pagination: ChatHistoryPagination,
   localOutputs: readonly unknown[],
+  ordinaryMessages: readonly unknown[] = [],
 ): readonly ChatHistorySegment[] | null {
-  if (!pagination.segments?.length && !localOutputs.length) {
+  if (!pagination.segments?.length && !localOutputs.length && !ordinaryMessages.length) {
     return null;
   }
   return pagination.segments?.length
@@ -253,9 +255,11 @@ export function selectChatHistoryResidency(
   readerSource?: string | null,
   localOutputs: readonly unknown[] = [],
   admission?: ChatHistoryResidencyAdmission,
+  ordinaryMessages: readonly unknown[] = [],
 ): { messages: readonly unknown[]; pagination: ChatHistoryPagination; withinBudget: boolean } {
   const pages =
-    admission?.pages ?? prepareChatHistoryResidencySegments(messages, pagination, localOutputs);
+    admission?.pages ??
+    prepareChatHistoryResidencySegments(messages, pagination, localOutputs, ordinaryMessages);
   if (!pages) {
     return { messages, pagination, withinBudget: true };
   }
@@ -449,7 +453,10 @@ export function selectChatHistoryResidency(
   const first = segments[0]!;
   const last = segments[segments.length - 1]!;
   const retained = memberships;
-  const admittedOutputs = new Set(localOutputs.length ? [newestOutput] : []);
+  const admittedOccurrences = new Set<number>();
+  if (localOutputs.length) {
+    admittedOccurrences.add(messages.lastIndexOf(newestOutput));
+  }
   const outputCost = { ...cost };
   const localPair = Boolean(
     localOutputSource ||
@@ -458,26 +465,35 @@ export function selectChatHistoryResidency(
       packetCost!.count <= CHAT_RESIDENT_ENTRY_TARGET &&
       packetCost!.weight <= CHAT_RESIDENT_WEIGHT_TARGET),
   );
-  // Older outcomes use only spare ordinary capacity. They cannot block a new
-  // page or spend an exemption needed only for the newest outcome/source pair.
+  // Older outcomes and cached send copies use only spare ordinary capacity.
+  // Count occurrences, not identities: a repeated object cannot borrow a slot.
   if (!localPair) {
-    for (let index = localOutputs.length - 2; index >= 0; index--) {
-      const output = localOutputs[index]!;
-      const weight = messageWeight(output);
+    const candidates = new Map<unknown, number>();
+    for (const message of [...localOutputs.slice(0, -1), ...ordinaryMessages]) {
+      candidates.set(message, (candidates.get(message) ?? 0) + 1);
+    }
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index];
+      const count = candidates.get(message) ?? 0;
+      if (!count || admittedOccurrences.has(index)) {
+        continue;
+      }
+      candidates.set(message, count - 1);
+      const weight = messageWeight(message);
       if (
         outputCost.count + 1 > CHAT_RESIDENT_ENTRY_TARGET ||
         outputCost.weight + weight > CHAT_RESIDENT_WEIGHT_TARGET
       ) {
         continue;
       }
-      admittedOutputs.add(output);
+      admittedOccurrences.add(index);
       outputCost.count += 1;
       outputCost.weight += weight;
     }
   }
-  const admitted = messages.filter((message) => {
+  const admitted = messages.filter((message, index) => {
     const source = nativeHistoryMessageSourceIdentity(message);
-    return admittedOutputs.has(message) || (source !== null && retained.has(source));
+    return admittedOccurrences.has(index) || (source !== null && retained.has(source));
   });
   // Retain traversed edges only while their original outer source boundary survives.
   // A real cut/eviction instead reopens the surviving packet's own boundary.
@@ -564,6 +580,8 @@ export function projectResidentChatHistory(
     "tail",
     readerSource,
     projection.entries.filter((entry) => entry.localOutput).map((entry) => entry.message),
+    undefined,
+    ordinaryChatSendMessages(projection.entries),
   );
   return {
     projection: reduceSessionProjection(projection, {

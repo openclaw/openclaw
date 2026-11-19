@@ -656,44 +656,52 @@ describe("chat history run ownership recovery", () => {
   });
 });
 
-it("reconciles cached identical steers by send identity after reload", async () => {
-  const runId = "active-run";
-  const state = createState(activeSnapshot(runId));
-  const sends = ["a", "b"];
-  const cached = sends.map((sendId) =>
-    buildLocalUserMessage({
-      text: "Keep going",
-      runId: sendId,
-      steerTargetRunId: runId,
-      createdAt: 1,
-      sender: { id: "owner" },
-    }),
-  );
-  applyChatCacheSnapshot(state, {
-    messages: cached,
-    sessionId: "session-one",
-    pagination: state.chatHistoryPagination,
-  });
-  const receipts = sends.map((sendId, index) =>
-    message("user", "Keep going", {
-      id: `durable-${sendId}`,
-      seq: index + 1,
-      idempotencyKey: `${sendId}:user`,
-    }),
-  );
-  for (const [index, receipt] of receipts.entries()) {
-    publish(state, runId, { message: receipt });
-    publish(state, runId, {
-      message: {
-        ...receipt,
-        __openclaw: { ...receipt["__openclaw"], steerTargetRunId: runId },
-      },
+it.each(["forward", "reverse"])(
+  "reconciles cached identical steers in %s receipt order after reload",
+  async (order) => {
+    const runId = "active-run";
+    const state = createState(activeSnapshot(runId));
+    const sends = ["a", "b"];
+    const cached = sends.map((sendId) =>
+      buildLocalUserMessage({
+        text: "Keep going",
+        runId: sendId,
+        steerTargetRunId: runId,
+        createdAt: 1,
+        sender: { id: "owner" },
+      }),
+    );
+    applyChatCacheSnapshot(state, {
+      messages: cached,
+      sessionId: "session-one",
+      pagination: state.chatHistoryPagination,
     });
-    // Each receipt replaces one cached steer; identical text never collapses or duplicates them.
-    expect(renderedText(state)).toEqual(["Keep going", "Keep going"]);
-    expect(state.chatMessages.slice(0, index + 1)).toMatchObject(receipts.slice(0, index + 1));
-  }
-  vi.spyOn(state.client!, "request").mockResolvedValue({ messages: receipts });
-  await loadChatHistory(state);
-  expect(state.chatMessages).toEqual(receipts);
-});
+    expect(state.chatMessages).toEqual(cached);
+    const receipts = sends.map((sendId, index) =>
+      message("user", "Keep going", {
+        id: `durable-${sendId}`,
+        seq: index + 1,
+        idempotencyKey: `${sendId}:user`,
+      }),
+    );
+    const received = new Set<unknown>();
+    for (const receipt of order === "forward" ? receipts : receipts.toReversed()) {
+      publish(state, runId, { message: receipt });
+      publish(state, runId, {
+        message: {
+          ...receipt,
+          __openclaw: { ...receipt["__openclaw"], steerTargetRunId: runId },
+        },
+      });
+      // Each receipt replaces one cached steer; identical text never collapses or duplicates them.
+      expect(renderedText(state)).toEqual(["Keep going", "Keep going"]);
+      received.add(receipt);
+      expect(state.chatMessages).toMatchObject(
+        receipts.map((candidate, index) => (received.has(candidate) ? candidate : cached[index])),
+      );
+    }
+    vi.spyOn(state.client!, "request").mockResolvedValue({ messages: receipts });
+    await loadChatHistory(state);
+    expect(state.chatMessages).toEqual(receipts);
+  },
+);

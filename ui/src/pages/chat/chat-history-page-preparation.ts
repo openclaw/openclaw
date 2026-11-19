@@ -456,7 +456,12 @@ export function prepareChatHistoryPages(
   const pinned = new Set(transformed.pins.map(nativeHistoryMessageSourceIdentity));
   const visible = direction === "around" ? [] : (reader?.visibleSources ?? []);
   const knownVisible = visible.every((source) => covered.has(source) || pinned.has(source));
-  const pages = prepareChatHistoryResidencySegments(messages, coverage, localOutputs);
+  const pages = prepareChatHistoryResidencySegments(
+    messages,
+    coverage,
+    localOutputs,
+    transformed.ordinaryMessages,
+  );
   const resident = selectChatHistoryResidency(
     messages,
     coverage,
@@ -464,6 +469,7 @@ export function prepareChatHistoryPages(
     reader?.anchor,
     localOutputs,
     pages ? prepareChatHistoryAdmission(messages, pages, visible, transformed.pins) : undefined,
+    transformed.ordinaryMessages,
   );
   const retained = new Set(resident.pagination.segments?.flatMap((segment) => segment.sources));
   // Incoming sources and the actual reader bridge must survive together.

@@ -1,12 +1,14 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { assert, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
   deleteSessionEntryLifecycle,
+  patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import * as historyWorker from "../../config/sessions/session-history-worker-runtime.js";
@@ -28,6 +30,55 @@ function expectWrongSession(respond: Awaited<ReturnType<ReturnType<typeof histor
     message: "sessionId does not belong to sessionKey",
   });
 }
+
+it.each([
+  ["chat.history", "replacement"],
+  ["chat.startup", "replacement"],
+  ["chat.history", "lifecycle"],
+  ["chat.startup", "lifecycle"],
+] as const)("%s refuses private history after an in-flight %s change", async (method, change) => {
+  await withHistoryState(async () => {
+    await captureRuntimeConfigAsyncReader()();
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:incognito-inflight",
+      sessionId: "private-before",
+    };
+    await upsertSessionEntryCore(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      incognito: true,
+      lifecycleRevision: "before",
+      sessionStartedAt: 1,
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "private-body",
+      message: { role: "user", content: "private in-flight body" },
+    });
+    const entered = createDeferred();
+    const release = createDeferred();
+    const readChatStartupProjection = vi.fn(async () => {
+      entered.resolve();
+      await release.promise;
+      return undefined;
+    });
+    const context = await createHistoryReadContext({ readChatStartupProjection });
+    const pending = historyRpc(context, scope.sessionKey)(method);
+    try {
+      await Promise.race([entered.promise, pending]);
+      expect(readChatStartupProjection).toHaveBeenCalledOnce();
+      await patchSessionEntryCore(scope, () =>
+        change === "replacement" ? { sessionId: "private-after" } : { lifecycleRevision: "after" },
+      );
+    } finally {
+      release.resolve();
+      await pending;
+    }
+    const respond = await pending;
+    expectHistoryError(respond, { code: "UNAVAILABLE" });
+    expect(JSON.stringify(respond.mock.calls)).not.toContain("private in-flight body");
+  });
+});
 
 async function seed(agentId: string, sessionKey: string, sessionId: string, content?: string) {
   const scope = { agentId, sessionKey, sessionId };

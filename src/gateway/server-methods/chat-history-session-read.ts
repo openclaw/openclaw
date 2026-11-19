@@ -258,7 +258,9 @@ export async function prepareChatHistorySessionRead({
         }
       }
       const currentEntry = current.entry;
-      // Cron history separately validates its retained transcript; its live session may advance.
+      // describe validates the captured row generation, including session and lifecycle identity.
+      // The start time is an independent read fence. Cron history instead validates its
+      // retained transcript separately because its live session may advance.
       if (
         entry &&
         (!currentEntry ||
@@ -270,8 +272,6 @@ export async function prepareChatHistorySessionRead({
               { key: canonicalKey, agentId: sessionAgentId, storePath },
               selectedSession.record,
             ) ||
-              currentEntry.sessionId !== entry.sessionId ||
-              currentEntry.lifecycleRevision !== entry.lifecycleRevision ||
               (entry.sessionStartedAt !== undefined &&
                 currentEntry.sessionStartedAt !== entry.sessionStartedAt))))
       ) {

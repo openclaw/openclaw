@@ -20,5 +20,7 @@
 # coverage, physical compaction ancestry, native Home placement, and typed
 # accepted-steer regressions, less retired unused test helpers.
 # plus 83 LF for physical-source retirement and end-to-end older recovery after compaction.
-# Net 15274 LF = 14874 allocation + 400 allowance.
-1358
+# plus 197 LF for cached-send residency/count limits, private generation fences,
+# reverse receipt ordering and bounded asynchronous fixture corrections.
+# Net 15471 LF = 15071 allocation + 400 allowance.
+1555

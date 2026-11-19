@@ -18,6 +18,58 @@ import {
 const admit = (state: SessionProjectionState, messages: readonly unknown[] = []) =>
   reduceSessionProjection(state, { type: "residencyChanged", messages });
 
+it.each([false, true])("retains only admitted repeated occurrences (durable: %s)", (durable) => {
+  const repeated = durable
+    ? savedUser("same object", "saved", 1)
+    : {
+        role: "user",
+        content: "cached",
+        __openclaw: { idempotencyKey: "send:user", senderId: "owner" },
+      };
+  const divider = { role: "system", content: "divider" };
+  const before = projection([repeated, repeated, divider, repeated]);
+  const after = admit(before, [repeated, divider, repeated]);
+  expect(after.messages).toEqual([repeated, divider, repeated]);
+  expect(after.entries).toEqual(before.entries.slice(1));
+  expect(
+    admit(after, [repeated, repeated, repeated, repeated, divider]).messages.filter(
+      (message) => message === repeated,
+    ),
+  ).toHaveLength(4);
+});
+
+it("keeps only the independently pending occurrence of a repeated cached send", () => {
+  const message = {
+    role: "user",
+    content: "cached",
+    __openclaw: { idempotencyKey: "send:user", senderId: "owner" },
+  };
+  const before = reduceSessionProjection(projection([message, message]), {
+    type: "sendPending",
+    runId: "send",
+    message,
+  });
+  const after = admit(before);
+  expect(after.messages).toEqual([message]);
+  expect(after.entries[0]).toBe(before.entries[0]);
+  expect(after.entries[0]?.pending).toBe(true);
+  // Admitting a separate display occurrence is not a persistence receipt.
+  expect(admit(before, [message]).entries).toEqual(before.entries);
+  const receipt = savedUser("cached", "receipt", 1, { idempotencyKey: "send:user" });
+  expect(admit(before, [receipt]).messages).toEqual([receipt]);
+});
+
+it("does not let a retained local output retain older occurrences of the same object", () => {
+  const message = { role: "system", content: "local result" };
+  let before = projection();
+  for (let index = 0; index < 3; index++) {
+    before = reduceSessionProjection(before, { type: "localOutput", message });
+  }
+  const after = admit(before, [message]);
+  expect(after.messages).toEqual([message]);
+  expect(after.entries[0]).toBe(before.entries[2]);
+});
+
 it("preserves explicit local output on refresh but lets residency and reset retire it", () => {
   const output = { role: "system", content: "command result" };
   const before = savedUser("before", "before", 1);

@@ -1,7 +1,82 @@
 import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { expect, it, vi } from "vitest";
 import { prepareChatHistoryAdmission } from "./chat-history-admission.ts";
+import { CHAT_RESIDENT_WEIGHT_TARGET, ordinaryChatSendMessages } from "./chat-history-cost.ts";
 import { prepareChatHistorySegment, selectChatHistoryResidency } from "./chat-history-window.ts";
+
+const cachedSend = (id: number, content = "cached send") => ({
+  role: "user",
+  content,
+  __openclaw: { idempotencyKey: `${id}:user`, senderId: "owner" },
+});
+
+it("bounds cached send occurrences without inventing sources or retaining unrelated unkeyed rows", () => {
+  const repeated = cachedSend(1);
+  const messages = [
+    ...Array.from({ length: 405 }, () => repeated),
+    { role: "assistant", content: "unkeyed assistant" },
+    { role: "user", content: "unkeyed user" },
+  ];
+  const projection = createSessionProjection({}, messages);
+  const selected = selectChatHistoryResidency(
+    messages,
+    { hasMore: false },
+    "tail",
+    null,
+    [],
+    undefined,
+    ordinaryChatSendMessages(projection.entries),
+  );
+  expect(selected.messages).toHaveLength(400);
+  expect(selected.messages.every((message) => message === repeated)).toBe(true);
+  expect(selected.pagination.segments?.flatMap((segment) => segment.sources)).toEqual([]);
+  expect(selected.pagination).toMatchObject({ hasMore: false });
+  expect(selected.withinBudget).toBe(true);
+  expect(
+    reduceSessionProjection(projection, {
+      type: "residencyChanged",
+      messages: selected.messages,
+    }).messages,
+  ).toHaveLength(400);
+});
+
+it("evicts oversized cached sends while retaining ordinary sends that fit spare bytes", () => {
+  const small = cachedSend(1);
+  const large = cachedSend(2, "x".repeat(CHAT_RESIDENT_WEIGHT_TARGET));
+  const messages = [small, large];
+  const projection = createSessionProjection({}, messages);
+  const selected = selectChatHistoryResidency(
+    messages,
+    { hasMore: false },
+    "tail",
+    null,
+    [],
+    undefined,
+    ordinaryChatSendMessages(projection.entries),
+  );
+  expect(selected.messages).toEqual([small]);
+  expect(selected.withinBudget).toBe(true);
+});
+
+it("charges cached sends only after admitted native sources and the newest local outcome", () => {
+  const cached = cachedSend(1);
+  const native = Array.from({ length: 399 }, (_, index) => row(index + 1));
+  const output = { role: "system", content: "latest local result" };
+  const messages = [cached, ...native, output];
+  const segment = prepareChatHistorySegment(native, { hasMore: false });
+  const selected = selectChatHistoryResidency(
+    messages,
+    { hasMore: false, segments: [segment] },
+    "tail",
+    null,
+    [output],
+    undefined,
+    [cached],
+  );
+  expect(selected.messages).toEqual([...native, output]);
+  expect(selected.withinBudget).toBe(true);
+  expect(selected.pagination.segments?.[0]).toBe(segment);
+});
 
 function row(seq: number) {
   return {

@@ -19,7 +19,7 @@ import {
 } from "./session-projection-message-content.js";
 import {
   createSessionProjectionEntry as createEntry,
-  isLocallyOptimisticSessionMessage,
+  createSessionProjectionEntries as createProjectionEntries,
   sameTranscriptIdentity,
   normalizeSessionProjectionRunId,
   sameAssistantPersistenceReceipt,
@@ -31,6 +31,7 @@ import {
   insertSessionProjectionEntry as insertEntry,
   localOutputPlacement,
 } from "./session-projection-order.js";
+import { retainSessionProjectionResidency } from "./session-projection-residency.js";
 import { retainSessionProjectionRuns } from "./session-projection-run-retention.js";
 export {
   hasSessionProjectionAcceptedFinal,
@@ -149,29 +150,6 @@ export type SessionProjectionEvent = ScopedSessionProjectionEvent &
     | { type: "transportGap" }
     | { type: "reconnected" }
   );
-
-function createProjectionEntries(messages: readonly unknown[]): SessionProjectionEntry[] {
-  let pendingUserRunId: string | null = null;
-  return messages.map((message) => {
-    const entry = createEntry(message);
-    if (entry.identity?.role === "user") {
-      pendingUserRunId = entry.pending ? entry.pendingRunId : null;
-      return entry;
-    }
-    if (
-      pendingUserRunId &&
-      entry.identity?.role === "assistant" &&
-      !entry.pending &&
-      isLocallyOptimisticSessionMessage(message)
-    ) {
-      return createEntry(message, { pendingRunId: pendingUserRunId });
-    }
-    if (!isLocallyOptimisticSessionMessage(message)) {
-      pendingUserRunId = null;
-    }
-    return entry;
-  });
-}
 
 export function createSessionProjection(
   scope: SessionProjectionScope = {},
@@ -570,85 +548,8 @@ export function reduceSessionProjection(
         { ...createEntry(event.message), localOutput: true, ...placement },
       ]);
     }
-    case "residencyChanged": {
-      const admitted = new Set(event.messages);
-      const pinnedRuns = new Set(event.pinnedRunIds);
-      const inferredMessages = new Set(
-        Object.values(state.runs).flatMap((run) =>
-          run.inferredSnapshotTerminal ? [run.inferredSnapshotTerminal.entry.message] : [],
-        ),
-      );
-      const inferredCandidates = Object.values(state.runs).flatMap((run) =>
-        run.inferredSnapshotTerminal ? [run.inferredSnapshotTerminal.matchedIdentity] : [],
-      );
-      const existing = new Map(state.entries.map((entry) => [entry.message, entry]));
-      const incoming = createProjectionEntries(event.messages);
-      const retainedMessages = new Set(event.messages);
-      for (const entry of state.entries) {
-        const run = entry.identity?.runId ? state.runs[entry.identity.runId] : undefined;
-        const provisional =
-          entry.live &&
-          entry.identity &&
-          !entry.identity.id &&
-          entry.identity.sequence === null &&
-          !entry.identity.externalSource;
-        const pinned =
-          entry.pending ||
-          provisional ||
-          inferredMessages.has(entry.message) ||
-          inferredCandidates.some((identity) => sameTranscriptIdentity(identity, entry.identity)) ||
-          (run &&
-            entry.message === run.message &&
-            (run.status === "streaming" || run.status === "error" || pinnedRuns.has(run.runId)));
-        if (
-          !admitted.has(entry.message) &&
-          pinned &&
-          !(
-            entry.pending &&
-            incoming.some(
-              (candidate) =>
-                !existing.get(candidate.message)?.pending && entryMatches(entry, candidate, true),
-            )
-          )
-        ) {
-          retainedMessages.add(entry.message);
-        }
-      }
-      // Retirement changes residency, never the canonical relative order of
-      // retained live/pending rows around durable sequence boundaries.
-      let entries: readonly SessionProjectionEntry[] = state.entries.filter((entry) =>
-        retainedMessages.has(entry.message),
-      );
-      for (const entry of incoming) {
-        if (!existing.has(entry.message)) {
-          entries = insertEntry(entries, entry, state.runs);
-        }
-      }
-      const retained = new Set(entries.map((entry) => entry.message));
-      let runs = state.runs;
-      for (const [runId, run] of Object.entries(state.runs)) {
-        if (
-          run.message === undefined ||
-          retained.has(run.message) ||
-          run.status === "streaming" ||
-          run.status === "error" ||
-          run.inferredSnapshotTerminal ||
-          pinnedRuns.has(runId)
-        ) {
-          continue;
-        }
-        if (runs === state.runs) {
-          runs = Object.assign({}, runs);
-        }
-        const { message: _message, ...retired } = run;
-        Object.assign(runs, { [runId]: retired });
-      }
-      return entries.length === state.entries.length &&
-        entries.every((entry, index) => entry === state.entries[index]) &&
-        runs === state.runs
-        ? state
-        : { ...withEntries(state, entries), runs };
-    }
+    case "residencyChanged":
+      return retainSessionProjectionResidency(state, event);
     case "messagePersisted":
       return projectLiveSessionMessage(state, event.message, event.envelope ?? event, scope);
     case "sendPending": {

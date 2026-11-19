@@ -1,3 +1,4 @@
+import type { SessionProjectionEntry } from "@openclaw/gateway-client/browser";
 import {
   nativeHistoryMessageSourceIdentity,
   nativeHistoryMessageSourceId,
@@ -10,6 +11,24 @@ export const CHAT_RESIDENT_ENTRY_TARGET = 400;
 export const CHAT_RESIDENT_WEIGHT_TARGET = 3 * 1024 * 1024;
 export function messageWeight(message: unknown): number {
   return serializedMessageArrayWeight(message) - 1;
+}
+
+/** Cached send copies have display custody, but no reloadable source or live pin. */
+export function ordinaryChatSendMessages(entries: readonly SessionProjectionEntry[]) {
+  return entries
+    .filter(
+      ({ identity, pending, live, localOutput }) =>
+        !pending &&
+        !live &&
+        !localOutput &&
+        identity?.role === "user" &&
+        !identity.isImported &&
+        identity.id === null &&
+        identity.sequence === null &&
+        identity.idempotencyKey !== null &&
+        identity.sendId !== null,
+    )
+    .map((entry) => entry.message);
 }
 
 export function sourceGroups(messages: readonly unknown[]) {

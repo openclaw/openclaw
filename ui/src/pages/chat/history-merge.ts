@@ -22,6 +22,7 @@ import {
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import type { ChatComposerScope } from "../../lib/chat/outbox-store.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
+import { ordinaryChatSendMessages } from "./chat-history-cost.ts";
 import {
   type ChatHistoryResidencyOwner,
   invalidateChatHistoryPacketSources,
@@ -220,7 +221,7 @@ export function prepareChatHistoryProjectionMessages(
 ) {
   const current = chatSessionProjections.get(owner)?.projection;
   if (!current || !hasProjectionSessionKey(owner)) {
-    return { messages, pins: [], changedSources: new Set<string>() };
+    return { messages, pins: [], ordinaryMessages: [], changedSources: new Set<string>() };
   }
   const scope = prospectiveScope ?? readChatSessionProjectionScope(owner);
   const { messages: prepared, changedSources } = prepareChatProjectionMessages(
@@ -237,7 +238,10 @@ export function prepareChatHistoryProjectionMessages(
           ? [owner.lastLocalTerminalReconcile.runId]
           : [],
       }).messages;
-  return { messages: prepared, pins, changedSources };
+  const ordinaryMessages = chatProjectionScopeChanged(current.scope, scope)
+    ? []
+    : ordinaryChatSendMessages(current.entries);
+  return { messages: prepared, pins, ordinaryMessages, changedSources };
 }
 
 /** The only mutation boundary for the reducer and its rendered message array. */

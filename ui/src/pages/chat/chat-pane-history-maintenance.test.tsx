@@ -69,16 +69,19 @@ it.each([
     const state = (pane as unknown as TestChatPane).state;
     state.sessionKey = pane.sessionKey;
     const request = vi.fn(async () => ({
-      messages: Array.from({ length: pendingMovement ? 160 : 2 }, (_, index) =>
-        nativeHistoryMessage(index + 1),
+      messages: Array.from(
+        { length: pendingMovement ? CHAT_HISTORY_REQUEST_LIMIT : 2 },
+        (_, index) => nativeHistoryMessage(index + 1),
       ),
       hasMore: false,
-      totalMessages: pendingMovement ? 190 : 4,
+      totalMessages: pendingMovement ? CHAT_HISTORY_REQUEST_LIMIT + 30 : 4,
     }));
     state.client = createGatewayBrowserClientFixture({ request });
     state.connected = true;
     state.chatMessages = Array.from({ length: pendingMovement ? 30 : 12 }, (_, index) => {
-      const message = nativeHistoryMessage(index + (pendingMovement ? 161 : 3));
+      const message = nativeHistoryMessage(
+        index + (pendingMovement ? CHAT_HISTORY_REQUEST_LIMIT + 1 : 3),
+      );
       // A remote image keeps the earlier row measurable for late intrinsic resize.
       return index === 4
         ? {
@@ -93,7 +96,7 @@ it.each([
     state.chatHistoryPagination = {
       hasMore: true,
       olderCursor: "older-2",
-      totalMessages: pendingMovement ? 190 : 4,
+      totalMessages: pendingMovement ? CHAT_HISTORY_REQUEST_LIMIT + 30 : 4,
     };
     state.chatLoading = false;
     state.chatHasAutoScrolled = true;
@@ -207,14 +210,14 @@ it.each([
           "chat.history",
           {
             sessionKey: state.sessionKey,
-            limit: 1000,
-            maxBytes: 3 * 1024 * 1024,
+            limit: CHAT_HISTORY_REQUEST_LIMIT,
+            maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES,
             toolResultMaxChars: 2_000,
             cursor: "older-2",
           },
           { signal: expect.any(AbortSignal) },
         );
-        expect(state.chatMessages).toHaveLength(190);
+        expect(state.chatMessages).toHaveLength(CHAT_HISTORY_REQUEST_LIMIT + 30);
         expect(state.chatFollowLocked).toBe(true);
         expect(state.chatReadingHistory).toBe(true);
       }

@@ -226,3 +226,28 @@ export function createSessionProjectionEntry(
     pendingRunId,
   };
 }
+
+export function createSessionProjectionEntries(
+  messages: readonly unknown[],
+): SessionProjectionEntry[] {
+  let pendingUserRunId: string | null = null;
+  return messages.map((message) => {
+    const entry = createSessionProjectionEntry(message);
+    if (entry.identity?.role === "user") {
+      pendingUserRunId = entry.pending ? entry.pendingRunId : null;
+      return entry;
+    }
+    if (
+      pendingUserRunId &&
+      entry.identity?.role === "assistant" &&
+      !entry.pending &&
+      isLocallyOptimisticSessionMessage(message)
+    ) {
+      return createSessionProjectionEntry(message, { pendingRunId: pendingUserRunId });
+    }
+    if (!isLocallyOptimisticSessionMessage(message)) {
+      pendingUserRunId = null;
+    }
+    return entry;
+  });
+}

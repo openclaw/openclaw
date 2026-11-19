@@ -228,7 +228,7 @@ it.each(["mixed", "separate", "unavailable"])(
       "id:shared",
     ]);
     expect(result.pagination.segments?.[1]).toBe(sharedPacket);
-    expect(result.pagination).not.toHaveProperty("nextOffset");
+    expect(result.pagination.hasMore && result.pagination.nextOffset).toBeUndefined();
     if (layout === "mixed") {
       expect(result.pagination.segments?.[0]).toMatchObject({
         boundedPacket: undefined,
