@@ -170,7 +170,12 @@ describe("authenticated Talk permission parity", () => {
         cwd,
         sessionRoot: cwd,
         permissionMode: "guarded",
-        execOverrides: { host: "node", node: "session-node", nodeCwd: "/node/task" },
+        // The typed-turn owner carries the session's exec pin; exec defaults resolve from it.
+        execSession: expect.objectContaining({
+          execHost: "node",
+          execNode: "session-node",
+          execCwd: "/node/task",
+        }),
       });
       return { payloads: [{ text: "Prepared." }], meta: {} };
     });

@@ -1,5 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { getAgentCommandAdmissionFacts } from "../../agents/agent-command-admission-facts.js";
+import type { AgentCommandGatewayIngressOpts } from "../../agents/command/types.js";
 import { withPluginRuntimeGatewayContextResolver as withGateway } from "../../plugins/runtime/gateway-request-scope.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import {
   captureSessionTarget,
   getCurrentSessionControllerClaim,
@@ -13,13 +16,19 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import { createTalkClientAgentRuntime } from "./client-agent-runtime.js";
+import type { TalkClientRunAuthority } from "./client-run-authority.js";
 
-const model = vi.hoisted(() => ({ run: vi.fn() }));
-// mock-isolation: Replace model execution while keeping registration, runtime admission and selector real.
-vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: model.run }));
+const model = vi.hoisted(() => ({ run: vi.fn(), embedded: vi.fn() }));
+// Replace the typed-turn command owner while keeping registration, runtime
+// admission and selector real. Talk must never reach the embedded runner directly.
+// mock-isolation: command-owner stand-in; registration, admission and selector stay real.
+vi.mock("../../agents/agent-command.js", () => ({ agentCommandFromGatewayIngress: model.run }));
+// mock-isolation: detects any direct embedded-runner call, which Talk must never make.
+vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: model.embedded }));
 afterEach(() => {
   testing.resetSessionControllerForTest();
   model.run.mockReset();
+  model.embedded.mockReset();
 });
 
 it.each([true, false])(
@@ -331,6 +340,96 @@ it("does not let a settled runtime acquire a successor registration with the sam
   } finally {
     replacement?.controller.abort();
     replacement?.cleanup();
+    fixture.close();
+  }
+});
+
+it("runs the consult as a typed turn of the same chat with the caller's owner authority", async () => {
+  const fixture = consultation("synthetic-typed-turn", "agent:main:typed-turn-proof");
+  const operatorAuthority = { assertCurrent: vi.fn() };
+  const assertSourceCurrent = vi.fn();
+  const release = vi.fn();
+  const runAuthority = {
+    retainRun: vi.fn(async () => ({ authority: operatorAuthority, assertSourceCurrent, release })),
+  } as unknown as TalkClientRunAuthority;
+  const bound: unknown[] = [];
+  const runtime = createTalkClientAgentRuntime({
+    config: { plugins: { enabled: false } },
+    rawSourceRef: "synthetic-connection",
+    getRegisteredSource: () => fixture.registration.entry,
+    runAuthority,
+    bindOperationalRunInstance: (instance) => bound.push(instance),
+  });
+  let opts: AgentCommandGatewayIngressOpts | undefined;
+  let nestedInputs: readonly unknown[] | undefined;
+  model.run.mockImplementation(async (received: AgentCommandGatewayIngressOpts) => {
+    opts = received;
+    // The command owner enters its own session turn without a controller input; inside the
+    // Talk turn it must inherit the consultation's claim rather than reserve a second input.
+    await withSessionTurn(
+      {
+        sessionKey: fixture.request.sessionTarget.sessionKey,
+        sessionId: fixture.request.sessionTarget.sessionId,
+        agentId: fixture.request.sessionTarget.agentId,
+        storePath: fixture.request.sessionTarget.storePath,
+        abortSignal: received.abortSignal,
+      },
+      async () => {
+        nestedInputs = [...(getCurrentSessionControllerClaim()?.inputs ?? [])];
+      },
+    );
+    return { payloads: [{ text: "Typed turn answer" }], meta: { durationMs: 0 } };
+  });
+  try {
+    const result = await runtime.runEmbeddedAgent({
+      ...fixture.request,
+      prompt: "GENERATED voice consult prompt",
+      lane: "talk",
+      messageProvider: "webchat",
+      senderIsOwner: true,
+      senderId: "owner-sender",
+      thinkLevel: "high",
+      extraSystemPrompt: "voice bridge",
+      toolsAllow: undefined,
+    });
+    expect(result.payloads).toEqual([{ text: "Typed turn answer" }]);
+    expect(model.embedded).not.toHaveBeenCalled();
+    expect(model.run).toHaveBeenCalledOnce();
+    expect(nestedInputs).toEqual([fixture.registration.entry.input]);
+    expect(fixture.registration.entry.input.mailbox.entries.length).toBeLessThanOrEqual(1);
+    expect(opts).toMatchObject({
+      message: "GENERATED voice consult prompt",
+      agentId: "main",
+      sessionKey: fixture.request.sessionKey,
+      sessionId: fixture.request.sessionId,
+      runId: fixture.request.runId,
+      lane: "talk",
+      deliver: false,
+      allowModelOverride: false,
+      senderIsOwner: true,
+      thinkingOnce: "high",
+      // A configured Talk level is a preference: the typed-turn owner falls back per model.
+      normalizeThinkingLevelOverride: true,
+      messageChannel: "webchat",
+      extraSystemPrompt: "voice bridge",
+      operatorAuthority,
+      assertSourceCurrent,
+      runContext: { senderId: "owner-sender", messageChannel: "webchat" },
+    });
+    // Per-run settings must not persist onto the shared chat session.
+    expect(opts).not.toHaveProperty("thinking");
+    expect(opts).not.toHaveProperty("verbose");
+    expect(opts?.operationalRunInstance).toBeDefined();
+    expect(bound).toEqual([opts?.operationalRunInstance]);
+    expect(getAgentCommandAdmissionFacts(opts!.runContext!)?.ingress).toEqual({
+      kind: "gateway-client",
+      boundary: "talk-agent-consult",
+      state: "present",
+      rawSourceRef: "synthetic-connection",
+    });
+    expect(opts?.userTurnTranscriptRecorder).toBeDefined();
+    expect(release).toHaveBeenCalledOnce();
+  } finally {
     fixture.close();
   }
 });

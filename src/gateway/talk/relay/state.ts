@@ -268,6 +268,7 @@ export type RelayAgentRun = {
 
 export type RelayAgentRunRegistration = {
   run: RelayAgentRun;
+  onSessionIdChanged?: (sessionId: string) => void;
   isCurrent: (phase?: "active" | "completion") => boolean;
   release: () => void;
   abortIfCurrent: () => void;
