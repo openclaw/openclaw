@@ -3606,15 +3606,11 @@ function splitOversizedCompactGroup(
   const isCliProcess = group.shard_name === "agentic-cli-process";
   const isTooling = isParallelToolingGroup(group);
   const hostedFileLimit =
-<<<<<<< HEAD
-    // Full dual-runtime dispatches use the compact PR layout too. Gateway methods
-    // exceeded an hour in that layout (FRV 44290065577); retain its existing
-    // 96-file hosted bound independently of the event selecting the layout.
-    (hostedMain || (runnerBackend === "github" && group.shard_name === "agentic-gateway-methods")
-=======
-    // Full dispatch keeps the same hosted file bounds; ordinary PR policy is unchanged.
-    (hostedMain || (runnerBackend === "github" && fullInventory)
->>>>>>> 83280799a784 (fix(ci): bound full-dispatch compact test groups (#201181))
+    // Full dispatch inherits the hosted owner bounds; ordinary compact PRs
+    // retain the 11.6 gateway-methods bound.
+    (hostedMain ||
+    (runnerBackend === "github" &&
+      (fullInventory || group.shard_name === "agentic-gateway-methods"))
       ? COMPACT_HOSTED_MAIN_MAX_FILES.get(group.shard_name)
       : undefined) ??
     (runnerBackend === "github" && group.shard_name === "core-runtime-infra-storage-state"

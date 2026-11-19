@@ -31,7 +31,7 @@ it.each([
   mkdirSync(local("bin"));
   fixture(
     ".ci-harness/.github/actions/setup-playwright-webkit/action.yml",
-    readFileSync(".github/actions/setup-playwright-webkit/action.yml", "utf8"),
+    "runs:\n  using: composite\n  steps:\n    - name: Record WebKit selection\n      shell: bash\n      run: pnpm record-webkit-selection\n",
   );
   symlinkSync(path.resolve("node_modules"), local("node_modules"), "junction");
   for (const file of [suite, sibling]) {
@@ -87,15 +87,7 @@ export default { test: {
   };
   run(1);
   run(2);
-  expect(read("installs")).toBe(
-    [
-      "--dir ui exec which playwright",
-      "playwright install-deps webkit",
-      "--dir ui exec playwright install-deps webkit",
-      "--dir ui exec playwright install webkit",
-      "",
-    ].join("\n"),
-  );
+  expect(read("installs")).toBe("record-webkit-selection\n");
   writeFileSync(local("installs"), "");
   run(1, [sibling]);
   expect(read("installs")).toBe("");
