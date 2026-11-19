@@ -11,6 +11,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import {
@@ -260,10 +261,14 @@ describe("operator access cancellation", () => {
         expect(retained.authority!.assertCurrent).not.toThrow();
         expect(retained.authority!.signal?.aborted).not.toBe(true);
         target.expectCurrent();
-        // The accepted turn still enforces the sender's device, profile and role.
+        // Revocation applies to new work, not the turn that already started.
+        const reauthorize = expectDefined(retained.authority?.reauthorize, "next turn admission");
+        expect(reauthorize).not.toThrow();
         invalidateGatewayDeviceRevocation(occurrence.context, "recovery-device", "operator");
-        expect(retained.authority!.assertCurrent).toThrow();
-        expect(retained.authority!.signal?.aborted).toBe(true);
+        expect(reauthorize).toThrow(GatewayOperatorRecoveryAuthorizationError);
+        expect(retained.authority!.assertCurrent).not.toThrow();
+        expect(retained.authority!.signal?.aborted).not.toBe(true);
+        target.expectCurrent();
       } finally {
         restored.release();
       }
