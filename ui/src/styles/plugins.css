@@ -1491,10 +1491,6 @@
   border-bottom: 0;
 }
 
-.plugin-catalog-detail__empty {
-  color: var(--muted);
-}
-
 .skill-library-import {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
