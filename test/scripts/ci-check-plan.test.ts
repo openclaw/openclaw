@@ -341,12 +341,18 @@ it("retains the complete full-check stripe inventory", async () => {
   expect(plan.core_type_matrix).toEqual(stripeMatrix(5));
 });
 
-it.each(["hybrid", "github"])(
-  "sizes serial extension and script type checks independently on %s",
-  async (runnerProfile) => {
+it.each([
+  ["hybrid", false],
+  ["github", false],
+  ["hybrid", true],
+  ["github", true],
+] as const)(
+  "sizes serial extension and script type checks on %s with full checks %s",
+  async (runnerProfile, preserveFullChecks) => {
     typeSelection.graphs = resolveCiTsgoGraphs(["extensions-test", "scripts"]);
     const plan = await createPlan({
       runnerProfile,
+      preserveFullChecks,
       extensionLintMode: "affected",
       checkMatrix: {
         include: [
@@ -357,16 +363,25 @@ it.each(["hybrid", "github"])(
     expect(plan.check_matrix.include[0]).toMatchObject({
       runner: "unused",
       runner_label: "blacksmith-2vcpu-ubuntu-2404",
-      core_type_graph_names_json: "[]",
-      core_type_concurrency: 1,
-      type_graph_names_json: JSON.stringify(["extensions-test", "scripts"]),
+      ...(preserveFullChecks
+        ? {}
+        : {
+            core_type_graph_names_json: "[]",
+            core_type_concurrency: 1,
+            type_graph_names_json: JSON.stringify(["extensions-test", "scripts"]),
+          }),
     });
+    if (preserveFullChecks) {
+      expect(plan.core_type_matrix).toEqual(stripeMatrix(5));
+      expect(plan.check_matrix.include[0]).not.toHaveProperty("type_graph_names_json");
+    }
   },
 );
 
 it.each([
   { extensionLintMode: undefined },
-  { preserveFullChecks: true },
+  { preserveFullChecks: true, extensionLintMode: undefined },
+  { preserveFullChecks: true, coreTypeMatrix: stripeMatrix(4) },
   { runnerProfile: "blacksmith" },
   { runnerProfile: "boat" },
   { graphs: ["scripts", "test-root-tooling"] },

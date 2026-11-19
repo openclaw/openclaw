@@ -662,7 +662,9 @@ principal or lost access prevents automatic resume. An admission failure records
 a visible interruption notice in the existing session, with a bounded, redacted
 diagnostic. The warning identifies the session, interrupted run, and admission
 stage. Resolve the reported error, then send a new message to continue. Archived
-or deleted sessions remain skipped with a log entry.
+or deleted sessions remain skipped with a log entry. Settling an obsolete marker
+without a recorded yield wait does not read or restore its cold transcript; the
+cleared marker does not trigger recovery again on the next restart.
 The Gateway never substitutes an administrator. A recorded connection is only a basis for
 revalidation, never a saved grant.
 Sessions with no human principal use ordinary system-event authority; if it lacks

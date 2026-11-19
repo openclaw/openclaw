@@ -236,7 +236,7 @@ it.each([
   },
 );
 
-it("fails closed when optional SDK relative imports reach a parent install", async () => {
+it("keeps optional SDK relative imports inside a checkout nested in a parent install", async () => {
   const ancestor = tempRoot("optional-imports");
   const root = path.join(ancestor, ".worktrees/validation");
   const fixture = createNativeFixture(root);
@@ -268,28 +268,46 @@ it("fails closed when optional SDK relative imports reach a parent install", asy
     [localTypes]: requestTypes("local"),
     [path.join(ancestor, "node_modules/synthetic-fetch/index.d.ts")]: requestTypes("ancestor"),
   });
-  const manifest = '{"name":"synthetic-js","version":"1.0.0","main":"index.js"}';
-  for (const directory of [root, ancestor]) {
-    fixture.write({
-      [path.join(directory, "node_modules/synthetic-js/package.json")]: manifest,
-      [path.join(directory, "node_modules/synthetic-js/index.js")]: "exports.value = 1;\n",
-    });
-  }
+  fixture.write({
+    "node_modules/synthetic-js/package.json":
+      '{"name":"synthetic-js","version":"1.0.0","main":"index.js"}',
+    "node_modules/synthetic-js/index.js": "exports.value = 1;\n",
+  });
   fixture.write({
     "src/index.ts":
       'import type { Options } from "synthetic-sdk";\nexport type { Fallback } from "synthetic-sdk";\nexport function origin(options: Options) { return options.origin; }\n',
   });
-  // The compiler reads its real filesystem: an optional import that climbs past the
-  // checkout into a parent install fails with the escaped path instead of being hidden.
+  // An update builds its candidate in a worktree nested inside the installed checkout;
+  // the parent's install must not change or block the candidate's declarations.
+  const first = await fixture.compile();
+  expect(first.declarations.get(entry)?.code).toContain('origin(options: Options): "local"');
+  fixture.expectInputs(first.inputs, "src/index.ts", localTypes);
+  expect(first.inputs.every((file) => !path.relative(root, file).startsWith(".."))).toBe(true);
+
   const ancestorTypes = path.join(ancestor, "node_modules/synthetic-fetch/index.d.ts");
-  await expect(fixture.compile()).rejects.toThrow(
-    `Declaration input escapes checkout: ${ancestorTypes}`,
+  fixture.write({ [ancestorTypes]: requestTypes("changed-ancestor") });
+  const ancestorChanged = await fixture.compile();
+  expect(ancestorChanged.declarations.get(entry)).toEqual(first.declarations.get(entry));
+
+  fixture.write({ [localTypes]: requestTypes("changed-local") });
+  const localChanged = await fixture.compile();
+  expect(localChanged.declarations.get(entry)?.code).toContain(
+    'origin(options: Options): "changed-local"',
   );
-  fs.rmSync(path.dirname(ancestorTypes), { recursive: true });
-  const local = await fixture.compile();
-  expect(local.declarations.get(entry)?.code).toContain('origin(options: Options): "local"');
-  fixture.expectInputs(local.inputs, "src/index.ts", localTypes);
-  expect(local.inputs.every((file) => !path.relative(root, file).startsWith(".."))).toBe(true);
+
+  // A checkout path that links to the parent install is still an escape.
+  fs.rmSync(path.join(root, path.dirname(localTypes)), { recursive: true });
+  fs.symlinkSync(
+    path.dirname(ancestorTypes),
+    path.join(root, path.dirname(localTypes)),
+    "junction",
+  );
+  // Callers without their own input policy still get the checkout boundary.
+  for (const options of [{}, { assertInput: undefined }]) {
+    await expect(fixture.compile(options)).rejects.toThrow(
+      `Declaration input escapes checkout: ${path.join(root, path.dirname(localTypes))}`,
+    );
+  }
 });
 
 for (const kind of [
@@ -360,7 +378,11 @@ it("rejects a native reference through an unrelated outside symlink back inside"
     "src/index.ts": `/// <reference path="${reference.replaceAll(path.sep, "/")}" />\nexport type Marker = FixtureContract;\n`,
   });
   expect(fs.realpathSync.native(reference)).toBe(path.join(root, "src/referenced.d.ts"));
-  await expect(f.compile()).rejects.toThrow(`Declaration input escapes checkout: ${reference}`);
+  // The outside spelling is absent behind the bounded filesystem, so the reference is missing.
+  // The compiler reports the reference as written, with forward slashes.
+  await expect(f.compile()).rejects.toThrow(
+    `error TS6053: File '${reference.replaceAll(path.sep, "/")}' not found`,
+  );
 });
 
 it("rejects a checkout config that inherits options from outside the checkout", async () => {

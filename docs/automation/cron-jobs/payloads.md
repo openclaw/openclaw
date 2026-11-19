@@ -395,7 +395,10 @@ keeps runner delivery silent without hiding execution failures. A `progress`,
 `done`, `blocked`, or `needs_attention` summary is the run's authored outcome:
 an earlier tool failure the run moved past no longer adds a generic
 `⚠️ <tool> failed` notice to an otherwise silent run. The failure stays visible
-in the transcript and progress lane. Adaptive scheduling still uses `next_check` on a paced
+in the transcript and progress lane. A failed tool call counts as recovered
+once the same tool later succeeds. A call to a tool the run does not have never
+runs, so the next tool call that runs and succeeds recovers it. A run that only
+made that call and then ended silently is still a failure. Adaptive scheduling still uses `next_check` on a paced
 job. Scratch is context, not another scheduler:
 runtime does not parse `tasks:` blocks or read `HEARTBEAT.md`.
 

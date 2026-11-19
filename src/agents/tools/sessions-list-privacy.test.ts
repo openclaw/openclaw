@@ -325,9 +325,12 @@ test.each([
         const invoke = () => list(cfg, args, options);
         const pending = embedded ? invoke() : asReader(invoke);
         if (change === "role") {
-          await expect(pending).rejects.toThrow(
-            "Your operator role changed; reconnect before continuing.",
-          );
+          const admitted = await pending;
+          expect(admitted.details).toMatchObject({
+            count: 2,
+            sessions: [{ key: first.sessionKey }, { key: second.sessionKey }],
+          });
+          expect(JSON.stringify(admitted)).toContain(bufferedText);
           expect(changed).toBe(true);
         }
         const result =

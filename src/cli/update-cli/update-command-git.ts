@@ -482,7 +482,11 @@ export async function updateGitInstall(params: {
     }
     return snapshot;
   };
-  const snapshotBeforeClone = params.switchToGit ? await checkSnapshot() : undefined;
+  // A Git release takes no database image and migrates at Gateway start, whose
+  // upgrade owns its own space; only a checkout updated in place is checked here.
+  const checksSnapshot = params.gitReleases !== true;
+  const snapshotBeforeClone =
+    params.switchToGit && checksSnapshot ? await checkSnapshot() : undefined;
   if (snapshotBeforeClone && snapshotBeforeClone.exitCode !== 0) {
     return failed(
       "snapshot-capacity-insufficient",
@@ -529,12 +533,13 @@ export async function updateGitInstall(params: {
           params.assertCurrent?.();
         },
         inspectGitTarget: (target) => params.inspectGitTarget(target, installTarget ?? undefined),
-        beforeGitStaging: params.switchToGit
-          ? undefined
-          : async () => ({
-              step: await checkSnapshot(),
-              failureReason: "snapshot-capacity-insufficient",
-            }),
+        beforeGitStaging:
+          params.switchToGit || !checksSnapshot
+            ? undefined
+            : async () => ({
+                step: await checkSnapshot(),
+                failureReason: "snapshot-capacity-insufficient",
+              }),
         publishGitCheckout,
         gitArtifactStorageRoot,
         validateCandidate: params.validateCandidate,
