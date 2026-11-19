@@ -2,7 +2,8 @@ import { expect, it, vi } from "vitest";
 import { cardinalityEvents } from "./label-cardinality.test-support.js";
 import { createMetricsHarness } from "./service.test-helpers.js";
 
-vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>()),
   getPluginRuntimeGatewayRequestScope: () => ({
     client: { connect: { scopes: ["operator.read"] } },
   }),
