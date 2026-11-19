@@ -188,6 +188,25 @@ sessions, and the admitted search schema; run `openclaw memory index` to rebuild
 See [Database engines](/reference/database-engines#search-on-postgresql) for setup,
 permissions, storage diagnostics, and PostgreSQL limitations.
 
+### Rebuild older session indexes before porting
+
+Session-derived search text replaces NUL characters with spaces before computing
+chunk hashes and embeddings. Canonical session transcripts are not changed.
+Older SQLite indexes can still contain NUL-bearing chunks that PostgreSQL cannot
+represent. With the updated version, rebuild each affected agent's index while
+its database is still SQLite, then retry the database port:
+
+```sh
+openclaw memory index --force --agent main
+```
+
+Use the affected agent ID instead of `main`, and keep session indexing enabled
+with the original sessions available. Wait for indexing to succeed before
+retrying the port. Rebuilding uses the configured embedding provider and may
+incur its normal costs. This is an explicit rebuild of derived session memory,
+not automatic migration or repair of arbitrary database text; port validation
+continues to reject unrepresentable values rather than silently changing them.
+
 ## Memory tools
 
 The agent has three tools for working with memory:

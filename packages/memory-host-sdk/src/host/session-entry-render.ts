@@ -149,7 +149,8 @@ export function sessionPathForSessionIdentity(agentId: string, sessionId: string
 }
 
 function normalizeSessionText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
+  // oxlint-disable-next-line eslint/no-control-regex -- Derived search text must be PostgreSQL-compatible; canonical events stay intact.
+  return value.replace(/[\s\u0000]+/g, " ").trim();
 }
 
 const GENERATED_SYSTEM_MESSAGE_RE = /^System(?: \(untrusted\))?: \[[^\]]+\]\s*/;
