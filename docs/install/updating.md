@@ -111,8 +111,9 @@ additional environment variable or operator configuration is needed.
 If an earlier upgrade already broke a scheduled job, run `openclaw doctor --fix`.
 While the applied upgrade receipt remains, Doctor can verify the saved account at
 its old path and restore it without changing the schedule, enabling the job, or
-replaying a missed run. If the receipt is gone or the account changed, Doctor
-leaves the job alone. To explicitly choose its account, use
+replaying a missed run. If the saved account no longer matches and no usable
+receipt remains, Doctor names the affected job and shows how to choose its
+account. It leaves the job unchanged. To explicitly choose an account, use
 `openclaw automations edit <id> --model <provider/model>@<profileId>`.
 
 The copy excludes managed worktrees, configured agent workspaces, nested mounts
