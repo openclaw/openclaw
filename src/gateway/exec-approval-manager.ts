@@ -4,7 +4,6 @@ import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   ApprovalMutationRefusedError,
   createExecApprovalMutationGuard,
-  isExecApprovalRuntimeActive,
   isExecApprovalMutationRefused,
 } from "./exec-approval-authority.js";
 import { prepareExecApprovalConsumption } from "./exec-approval-consumption.js";
@@ -673,21 +672,5 @@ export class ExecApprovalManager<
       return null;
     }
     return decision;
-  }
-
-  /** Atomically closes a live approval whose exact runtime owner is gone. */
-  async forceDenyIfRuntimeAuthorityClosed(
-    recordId: string,
-  ): Promise<ExecApprovalForceDenyResult<TPayload> | null> {
-    const record = this.pending.get(recordId)?.record;
-    if (!record || isExecApprovalRuntimeActive(this.options, record)) {
-      return null;
-    }
-    return this.forceDenyDetailed(
-      recordId,
-      "run-aborted",
-      { kind: "system", id: null },
-      "cancelled",
-    );
   }
 }

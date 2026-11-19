@@ -38,15 +38,17 @@ export type SessionIdentity = {
 };
 
 /** Select live work by its execution owner before shutdown aborts those owners. */
-export function selectLiveRestartResumeSessions(
+export async function selectLiveRestartResumeSessions(
   cfg: OpenClawConfig,
   summary: ReturnType<typeof createRestartResumeSummary>,
-): Map<string, SessionIdentity> {
+): Promise<Map<string, SessionIdentity>> {
   const sessions = new Map<string, SessionIdentity>();
-  const add = (input: Partial<SessionIdentity> & { sessionKey: string }) => {
+  const inputs: Array<Partial<SessionIdentity> & { sessionKey: string }> = [];
+  const add = (input: (typeof inputs)[number]) => inputs.push(input);
+  const select = async (input: (typeof inputs)[number]) => {
     const root = input.parked
       ? input
-      : resolveRootSubagentRequester(input.sessionKey, input.agentId);
+      : await resolveRootSubagentRequester(input.sessionKey, input.agentId);
     const agentId =
       root.agentId ?? parseAgentSessionKey(root.sessionKey)?.agentId ?? resolveDefaultAgentId(cfg);
     const storePath =
@@ -138,11 +140,16 @@ export function selectLiveRestartResumeSessions(
       add({ sessionKey: run.sessionKey, agentId: run.agentId, sessionId: run.sessionId });
     }
   }
-  for (const root of listLiveSubagentRootSessions()) {
+  const roots = listLiveSubagentRootSessions();
+  const waiting = [...listYieldWaitingSessions()];
+  for (const root of await roots) {
     add(root);
   }
-  for (const session of listYieldWaitingSessions()) {
+  for (const session of waiting) {
     add(session);
+  }
+  for (const input of inputs) {
+    await select(input);
   }
   return sessions;
 }
