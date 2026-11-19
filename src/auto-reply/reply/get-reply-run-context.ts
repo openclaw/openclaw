@@ -228,7 +228,8 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   // can instead select the variant owned by their final prepared harness.
   const sessionStableConversationContext = sourceConversationContext(sessionPromptMode);
   // A result-required turn cannot end silently; only this turn's copy says so,
-  // so the CLI binding hash stays session-stable.
+  // so the CLI binding hash stays session-stable. Accepted cost: a warm CLI
+  // process restarts when a session alternates between the two copies.
   const turnConversationContext = sourceConversationContextByMode[sessionPromptMode];
   // Claude CLI fixes the system prompt at session creation; group intro must stay session-stable.
   const groupIntro = isGroupChat
