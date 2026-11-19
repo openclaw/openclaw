@@ -28,7 +28,10 @@ function writePackage(root: string, version: string) {
 }
 
 /** A pnpm 11 global install whose entry pnpm repointed from 2026.11.5 to 2026.11.6. */
-function pnpmSwitch(candidate: "registry" | "tarball" | "pnpm11-group" = "registry") {
+function pnpmSwitch(
+  candidate: "registry" | "tarball" | "pnpm11-group" = "registry",
+  activeEntries: 0 | 1 | 2 = 1,
+) {
   const base = tempDirs.make("openclaw-shipped-restart-");
   const storeEntry = (home: string, version: string, hash: string) =>
     path.join(
@@ -62,7 +65,11 @@ function pnpmSwitch(candidate: "registry" | "tarball" | "pnpm11-group" = "regist
   fs.mkdirSync(path.join(project, "node_modules"), { recursive: true });
   fs.writeFileSync(path.join(project, "package.json"), '{"dependencies":{"openclaw":"2026.11.6"}}');
   fs.symlinkSync(current, path.join(project, "node_modules", "openclaw"), "dir");
-  fs.symlinkSync(project, path.join(home, "global", "v11", "9440847f"), "dir");
+  // pnpm marks the active global project with a hash link; tests vary how many resolve here.
+  for (const link of ["9440847f", "9440847e"].slice(0, activeEntries)) {
+    fs.symlinkSync(project, path.join(home, "global", "v11", link), "dir");
+  }
+  const activeEntry = path.join(home, "global", "v11", "9440847f", "node_modules", "openclaw");
   const foreign = writePackage(
     storeEntry(path.join(base, "other-home"), "2026.11.5", "c3"),
     "2026.11.5",
@@ -73,7 +80,18 @@ function pnpmSwitch(candidate: "registry" | "tarball" | "pnpm11-group" = "regist
   const env = { OPENCLAW_STATE_DIR: path.join(base, "state") };
   // The lexical global entry the shipped driver runs the Doctor from.
   const entry = path.join(project, "node_modules", "openclaw");
-  return { base, previous, current, entry, foreign, npm, pruned, env, options: { env } };
+  return {
+    base,
+    previous,
+    current,
+    entry,
+    activeEntry,
+    foreign,
+    npm,
+    pruned,
+    env,
+    options: { env },
+  };
 }
 
 type Fixture = ReturnType<typeof pnpmSwitch>;
@@ -187,6 +205,18 @@ describe("Doctor gate for a shipped updater's refused pnpm restart", () => {
     { name: "a waiter that could not start", spawn: "failed", notice: MANUAL_RECOVERY_NOTICE },
     { name: "a waiter already running", spawn: "duplicate" },
     {
+      name: "two active global entries for the running package",
+      activeEntries: 2,
+      gate: false,
+      notice: MANUAL_RECOVERY_NOTICE,
+    },
+    {
+      name: "no active global entry for the running package",
+      activeEntries: 0,
+      gate: false,
+      notice: MANUAL_RECOVERY_NOTICE,
+    },
+    {
       name: "a live driver that is not an ancestor",
       runIdEnv: false,
       driver: "unrelated",
@@ -198,7 +228,10 @@ describe("Doctor gate for a shipped updater's refused pnpm restart", () => {
     { name: "an unwritable definition", writable: false, gate: false },
     { name: "a Doctor the updater lets repair services", repair: "1", gate: false, quiet: true },
   ] as const)("for $name", async (variant) => {
-    const fixture = pnpmSwitch("candidate" in variant ? variant.candidate : "registry");
+    const fixture = pnpmSwitch(
+      "candidate" in variant ? variant.candidate : "registry",
+      "activeEntries" in variant ? variant.activeEntries : 1,
+    );
     const runId = startShippedRun(fixture, {
       driver: await driverFor(("driver" in variant ? variant.driver : undefined) ?? "self"),
     });
@@ -246,10 +279,12 @@ describe("shipped-updater Gateway restart waiter", () => {
   function harness(fixture: Fixture, overrides: Partial<FinisherDeps> = {}) {
     const service = { packageRoot: fixture.previous, owned: true, writable: true, running: false };
     const updates: string[] = [];
+    const entries: string[] = [];
     const deps: FinisherDeps = {
       env: fixture.env,
       inspectService: async () => ({ ...service }),
-      runUpdate: async (args) => {
+      runUpdate: async (entry, args) => {
+        entries.push(entry);
         updates.push(args.join(" "));
       },
       withServiceLock: (operation) => operation(),
@@ -258,7 +293,7 @@ describe("shipped-updater Gateway restart waiter", () => {
       sleep: async () => {},
       ...overrides,
     };
-    return { deps, service, updates };
+    return { deps, service, updates, entries };
   }
   const finish = (fixture: Fixture, runId: string, deps: FinisherDeps) =>
     runShippedRestartFinisher({ runId, root: fixture.current, deps });
@@ -271,7 +306,7 @@ describe("shipped-updater Gateway restart waiter", () => {
   it("waits for the updater, then hands the restart to an update pinned to the installed version", async () => {
     const fixture = pnpmSwitch();
     const runId = startShippedRun(fixture);
-    const { deps, updates } = harness(fixture, {
+    const { deps, updates, entries } = harness(fixture, {
       sleep: async () => {
         expect(updates).toEqual([]);
         failRevalidation(fixture, runId);
@@ -280,6 +315,9 @@ describe("shipped-updater Gateway restart waiter", () => {
 
     await expect(finish(fixture, runId, deps)).resolves.toBe("handed-off");
     expect(updates).toEqual(["update --tag 2026.11.6 --yes --json"]);
+    // The lexical active global entry, never the running package's real store path.
+    expect(entries).toEqual([fixture.activeEntry]);
+    expect(entries).not.toEqual([fixture.current]);
   });
 
   it.each([

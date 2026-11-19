@@ -77,7 +77,8 @@ export type FinisherDeps = {
   /** Ledger and child environment: the Doctor's, without the updater's markers. */
   env: NodeJS.ProcessEnv;
   inspectService: (root: string) => Promise<ServiceFacts | undefined>;
-  runUpdate: (args: string[]) => Promise<void>;
+  /** Runs the CLI from the lexical active global entry (a package root). */
+  runUpdate: (entry: string, args: string[]) => Promise<void>;
   withServiceLock: <T>(operation: () => Promise<T>) => Promise<T>;
   lockDir: string;
   now: () => number;
@@ -106,7 +107,10 @@ function parsePnpmPackageHome(root: string) {
 async function inspectPnpmSwitch(
   root: string,
   deps: Pick<FinisherDeps, "inspectService">,
-): Promise<{ skip: string } | { service: ServiceFacts; version: string }> {
+): Promise<
+  | { skip: string; manualRecovery?: boolean }
+  | { service: ServiceFacts; version: string; entry: string }
+> {
   const realRoot = await fs.realpath(root).catch(() => undefined);
   const running = realRoot ? parsePnpmPackageHome(realRoot) : undefined;
   const version = realRoot ? await readPackageVersion(realRoot) : null;
@@ -116,12 +120,13 @@ async function inspectPnpmSwitch(
   const active = await listActivePnpmIsolatedGlobalPackages({
     globalRoot: path.join(running.home, "global", running.layout),
   });
-  const activeReal = await Promise.all(
-    active.map((entry) => fs.realpath(entry.packageRoot).catch(() => undefined)),
-  );
-  if (!activeReal.includes(realRoot)) {
-    return { skip: `no active pnpm global entry resolves to ${realRoot}` };
-  }
+  const entries = (
+    await Promise.all(
+      active.map(async ({ packageRoot }) =>
+        (await fs.realpath(packageRoot).catch(() => undefined)) === realRoot ? [packageRoot] : [],
+      ),
+    )
+  ).flat();
   const service = await deps.inspectService(realRoot);
   const previous = service?.packageRoot ? parsePnpmPackageHome(service.packageRoot) : undefined;
   // A pruned entry no longer has a manifest; its path still places it in this home.
@@ -140,7 +145,17 @@ async function inspectPnpmSwitch(
       skip: `the service runs ${service?.packageRoot ?? "no readable package"}, not another version in ${running.home}`,
     };
   }
-  return { service, version };
+  // The update is started through the lexical global entry, so it classifies this install
+  // exactly as a user's own `openclaw update` would; a real store path needs layout inference.
+  const [entry] = entries;
+  if (!entry || entries.length > 1) {
+    return {
+      skip: `${entries.length} active pnpm global entries resolve to ${realRoot}`,
+      // Only a service this waiter would otherwise restart is owed the manual recovery.
+      manualRecovery: service.owned && service.writable,
+    };
+  }
+  return { service, version, entry };
 }
 
 /** The Doctor gate: holds only for this package's Doctor run by a shipped updater. */
@@ -149,7 +164,7 @@ export async function inspectShippedRestartGate(params: {
   env: NodeJS.ProcessEnv;
   isDriverAncestor: (driver: UpdateRunDriver) => boolean;
   inspectService: FinisherDeps["inspectService"];
-}): Promise<{ runId: string } | { skip: string } | undefined> {
+}): Promise<{ runId: string } | { skip: string; manualRecovery?: boolean } | undefined> {
   const { env } = params;
   if (
     (process.platform !== "linux" && process.platform !== "darwin") ||
@@ -297,7 +312,7 @@ export async function runShippedRestartFinisher(params: {
     const createdAtMs = run.createdAtMs;
     // Under the service lock a user's install or restart finishes first; its result decides.
     // A lock that cannot be taken, or is borrowed by a handoff, means someone else is acting.
-    const version = await deps
+    const target = await deps
       .withServiceLock(async () => {
         const later = listUpdateRuns({ limit: 5 }, options).filter(
           (other) => other.createdAtMs >= createdAtMs,
@@ -312,19 +327,19 @@ export async function runShippedRestartFinisher(params: {
           !pnpm.service.running &&
           pnpm.service.owned &&
           pnpm.service.writable
-          ? pnpm.version
+          ? pnpm
           : undefined;
       })
       .catch(() => undefined);
-    if (!version) {
+    if (!target) {
       return "yielded";
     }
     // From here the update owns admission: it refuses a concurrent update and revalidates the
     // service itself, so the short gap after the lock release cannot double-apply anything.
-    await deps.runUpdate([
+    await deps.runUpdate(target.entry, [
       "update",
       "--tag",
-      await resolveHandOffTag(run.target.tag, version),
+      await resolveHandOffTag(run.target.tag, target.version),
       "--yes",
       "--json",
     ]);
@@ -420,6 +435,9 @@ export async function maybeLeaveShippedRestartFinisher(params: {
   }
   if ("skip" in gate) {
     diagnose(`skipped: ${gate.skip}`);
+    if (gate.manualRecovery) {
+      params.log(MANUAL_RECOVERY_NOTICE);
+    }
     return;
   }
   const outcome = await (params.spawnFinisher ?? spawnFinisher)(
@@ -530,12 +548,16 @@ export async function finishShippedRestartCommand(runId: string): Promise<void> 
     deps: {
       env,
       inspectService: (serviceRoot) => inspectGatewayServiceFacts(serviceRoot, env),
-      runUpdate: async (args) => {
-        // The update reports and records its own outcome; this waiter only starts it.
-        await runCommandWithTimeout([process.execPath, entry, ...args], {
-          env,
-          timeoutMs: UPDATE_COMMAND_TIMEOUT_MS,
-        });
+      runUpdate: async (activeEntry, args) => {
+        // The update reports and records its own outcome; this waiter only starts it. Its
+        // install root comes from this lexical argv path, as for a user's own `openclaw update`.
+        await runCommandWithTimeout(
+          [process.execPath, path.join(activeEntry, "openclaw.mjs"), ...args],
+          {
+            env,
+            timeoutMs: UPDATE_COMMAND_TIMEOUT_MS,
+          },
+        );
       },
       withServiceLock: (operation) => withGatewayServiceOperationLock(env, () => operation()),
       lockDir: resolvePreferredOpenClawTmpDir({ purpose: "coordination" }),
