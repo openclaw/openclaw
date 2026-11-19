@@ -10,6 +10,7 @@ import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
+import { mock } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { getFreePort } from "../lib/gateway-bench-probes.ts";
@@ -78,17 +79,6 @@ const { replaceSessionEntry } = await import("../../src/config/sessions/session-
 const inspector = new Session();
 let start = 0;
 let cpu = process.threadCpuUsage();
-let stopping = false;
-let injected = false;
-// oxlint-disable-next-line typescript/unbound-method -- call below preserves each scheduler's receiver.
-const stop = GatewayScheduler.prototype.stop;
-GatewayScheduler.prototype.stop = async function () {
-  await stop.call(this);
-  if (stopping && !injected) {
-    injected = true;
-    await delay(holdMs);
-  }
-};
 const snapshots: unknown[] = [];
 function snapshot(phase: string) {
   const usage = process.threadCpuUsage(cpu);
@@ -150,7 +140,15 @@ await runCliWithExitFinalization({
         setImmediate(() => {
           start = performance.now();
           cpu = process.threadCpuUsage();
-          stopping = true;
+          const stop = mock.method(
+            GatewayScheduler.prototype,
+            "stop",
+            async function (this: InstanceType<typeof GatewayScheduler>) {
+              stop.mock.restore();
+              await this.stop();
+              await delay(holdMs);
+            },
+          );
           snapshot("signal");
           setTimeout(() => snapshot("after-late-settlement"), 8000).unref();
           setTimeout(() => {
