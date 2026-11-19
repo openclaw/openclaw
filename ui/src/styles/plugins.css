@@ -1311,6 +1311,12 @@
   border-radius: var(--radius-md);
   color: var(--accent);
 }
+.plugin-capability__icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: inherit;
+}
 .plugin-capability__icon svg {
   width: 18px;
   height: 18px;
@@ -1328,8 +1334,11 @@
     justify-content: flex-end;
   }
 }
+/* Only action rows stack; a navigation row keeps its status on the chevron's line. */
 @media (max-width: 560px) {
-  .plugin-capabilities .settings-row:has(> .plugin-capability__icon) > .settings-row__control {
+  .plugin-capabilities
+    .settings-row:not(.settings-row--nav):has(> .plugin-capability__icon)
+    > .settings-row__control {
     flex-direction: column;
     align-items: flex-end;
     gap: 6px;
