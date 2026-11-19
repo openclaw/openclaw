@@ -233,6 +233,8 @@ describe("prepareDelegatedSystemAgentApproval", () => {
     const approvalId = await queue();
     expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
     expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
+    // System-agent reconciliation closes stale authority explicitly; resolve does not poll it.
+    expect(await manager.forceDenyIfRuntimeAuthorityClosed(approvalId)).not.toBeNull();
     expect(await manager.resolve(approvalId, "allow-once", "operator-ui")).toBe(false);
     expect((await manager.getSnapshot(approvalId))?.status).toBe("cancelled");
     await vi.waitFor(() =>
