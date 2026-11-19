@@ -59,10 +59,15 @@ export function prepareGatewaySessionLifecycleEvent(params: GatewaySessionLifecy
   if (!phase) {
     return async () => {};
   }
-  const child = getLatestLiveSubagentRunByChildSessionKey(params.sessionKey);
-  // Shutdown already settled this child's row; its aborted run gets no fallback resume marker.
-  const settled = child !== null && hasSubagentRunEnded(child) && !isYieldedSubagentRun(child);
-  const gatewayShutdown = getGatewayRestartDrainSignal().aborted && !settled ? true : undefined;
+  const draining = getGatewayRestartDrainSignal().aborted;
+  const child = draining ? getLatestLiveSubagentRunByChildSessionKey(params.sessionKey) : null;
+  // Shutdown already settled this run's row; its aborted run gets no fallback resume marker.
+  const settled =
+    child !== null &&
+    child.runId === params.event.runId &&
+    hasSubagentRunEnded(child) &&
+    !isYieldedSubagentRun(child);
+  const gatewayShutdown = draining && !settled ? true : undefined;
   const prepared = loadGatewaySessionEntryReadOnlyInWorker({
     cfg: getRuntimeConfig(),
     key: params.sessionKey,

@@ -37,12 +37,19 @@ async function childAwaitsRestartResume(entry: SubagentRunRecord): Promise<boole
     return false;
   }
   const storePath = resolveSessionStorePathCore(getRuntimeConfig().session?.store, { agentId });
-  const child = await readSessionEntryReadOnlyInWorker({
-    agentId,
-    sessionKey: entry.childSessionKey,
-    storePath,
-  });
-  return child?.resumeAfterRestart !== undefined;
+  try {
+    const child = await readSessionEntryReadOnlyInWorker({
+      agentId,
+      sessionKey: entry.childSessionKey,
+      storePath,
+    });
+    return child?.resumeAfterRestart !== undefined;
+  } catch (error) {
+    // Defer only this row; the next tick reads again. A marker that never clears waits for
+    // the next restart (accepted: rare, visible, recoverable).
+    subagentRegistryLog.warn("Restart marker read failed", { runId: entry.runId, error });
+    return true;
+  }
 }
 
 /**
