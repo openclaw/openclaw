@@ -19,9 +19,47 @@ import { prepareCodexAttemptTools } from "./run-attempt-tool-setup.js";
 import { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import { startCodexAttemptTurn } from "./run-attempt-turn-start.js";
 import { createCodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import type { CodexRunAttemptOptions } from "./run-attempt-types.js";
+import type { CodexRunAttemptOptions, CodexTierAttemptState } from "./run-attempt-types.js";
+import { nextCodexServiceTier, type CodexTierFallback } from "./service-tier-fallback.js";
 
 export async function runCodexAppServerAttempt(
+  params: EmbeddedRunAttemptParamsV2,
+  options: CodexRunAttemptOptions,
+): Promise<EmbeddedRunAttemptResult> {
+  const startedAt = Date.now();
+  let override: CodexTierFallback | undefined;
+  let userMessagePersisted = params.suppressNextUserMessagePersistence === true;
+  for (;;) {
+    const tierAttempt: CodexTierAttemptState = { override };
+    const remaining = params.timeoutMs - (Date.now() - startedAt);
+    const attemptParams = override
+      ? {
+          ...params,
+          timeoutMs: Math.max(1, remaining),
+          suppressNextUserMessagePersistence: userMessagePersisted,
+        }
+      : params;
+    let result: EmbeddedRunAttemptResult;
+    try {
+      result = await runCodexAppServerAttemptOnce(attemptParams, { ...options, tierAttempt });
+    } catch (error) {
+      await tierAttempt.commitUsageLimit?.();
+      throw error;
+    }
+    const next =
+      !params.providerReviewAcknowledgment && !params.abortSignal?.aborted && remaining > 0
+        ? nextCodexServiceTier(tierAttempt.requested, result, tierAttempt.turnStartRejected)
+        : undefined;
+    if (!next || Date.now() - startedAt >= params.timeoutMs) {
+      await tierAttempt.commitUsageLimit?.();
+      return result;
+    }
+    userMessagePersisted ||= result.terminalTurnId !== undefined;
+    override = next;
+  }
+}
+
+async function runCodexAppServerAttemptOnce(
   params: EmbeddedRunAttemptParamsV2,
   options: CodexRunAttemptOptions,
 ): Promise<EmbeddedRunAttemptResult> {

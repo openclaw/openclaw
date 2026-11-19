@@ -205,6 +205,7 @@ export async function finalizeCodexAttempt(
         params,
         authProfileId: startupAuthProfileId,
         rateLimits: refreshedUsageLimitPromptError.rateLimitsForProfile,
+        tierAttempt: connection.options.tierAttempt,
       });
       enrichedPromptError = new CodexUsageLimitPromptError(refreshedUsageLimitPromptError.message);
     } else if (
@@ -217,6 +218,7 @@ export async function finalizeCodexAttempt(
         params,
         authProfileId: startupAuthProfileId,
         rateLimits: readRecentCodexRateLimits(resourceState.client),
+        tierAttempt: connection.options.tierAttempt,
       });
     }
     const projectTerminalOutcome = () => {

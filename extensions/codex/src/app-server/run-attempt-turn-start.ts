@@ -10,6 +10,7 @@ import {
   isInvalidCodexImagePayloadError,
 } from "./attempt-results.js";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { CodexAppServerRpcError } from "./rpc-error.js";
 import { emitCodexAppServerEvent, runCodexAgentEndHook } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
@@ -29,6 +30,7 @@ import {
   CodexUsageLimitPromptError,
   formatCodexTurnStartUsageLimitError,
   markCodexAuthProfileBlockedFromRateLimits,
+  resolveCodexTurnStartPromptError,
 } from "./usage-limit-error.js";
 import { buildCodexUserPromptMessage } from "./user-prompt-message.js";
 
@@ -136,6 +138,12 @@ export async function startCodexAttemptTurn(
       }
     }
     if (started === undefined) {
+      if (connection.options.tierAttempt) {
+        connection.options.tierAttempt.turnStartRejected =
+          turnStartError instanceof CodexAppServerRpcError &&
+          turnStartError.method === "turn/start" &&
+          !resourceState.remoteRecoveryFailed;
+      }
       const usageLimitError = await formatCodexTurnStartUsageLimitError({
         client: resourceState.client,
         error: turnStartError,
@@ -207,6 +215,7 @@ export async function startCodexAttemptTurn(
           params,
           authProfileId: startupAuthProfileId,
           rateLimits: usageLimitError.rateLimitsForProfile,
+          tierAttempt: connection.options.tierAttempt,
         });
         return {
           result: buildCodexTurnStartFailureResult({
@@ -257,6 +266,24 @@ export async function startCodexAttemptTurn(
               replaySafe: true,
             },
           },
+        };
+      }
+      const providerError = connection.options.tierAttempt?.turnStartRejected
+        ? resolveCodexTurnStartPromptError(turnStartError, state.latestStartupErrorNotification)
+        : undefined;
+      if (
+        providerError instanceof Error &&
+        "status" in providerError &&
+        (providerError.status === 429 || providerError.status === 503)
+      ) {
+        return {
+          result: buildCodexTurnStartFailureResult({
+            params,
+            message,
+            promptError: providerError,
+            messagesSnapshot,
+            systemPromptReport,
+          }),
         };
       }
       throw turnStartError;
