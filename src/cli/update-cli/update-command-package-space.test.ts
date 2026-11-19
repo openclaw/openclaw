@@ -58,7 +58,7 @@ it("continues a package update past a pre-migration image that does not fit", as
 
   expect(packageUpdate.stagePackageInstallUpdate).toHaveBeenCalledTimes(1);
   expect(printedWarnings()).toContain(
-    `Warning: No pre-migration database image: it needs 112 MiB near ${backupDirectory} and 100 MiB is free. Without it, the previous version cannot be restored once the new version's database migration commits; a failed update then stays on the new version and is fixed forward. The update continues and checks again before the migration.`,
+    `Warning: No pre-migration database image: it needs 112 MiB near ${backupDirectory} and 100 MiB is free. Without it, the previous version cannot be restored once the new version's database migration commits; a failed update then stays on the new version and is fixed forward. The update continues and measures the image again before the migration.`,
   );
   const result = vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0];
   expect(result).not.toMatchObject({ reason: "snapshot-capacity-insufficient" });

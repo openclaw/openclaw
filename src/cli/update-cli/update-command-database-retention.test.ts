@@ -181,6 +181,46 @@ it.each([
   },
 );
 
+it("keeps an earlier run's images at a reused root when this run's image is skipped", async () => {
+  const base = await fs.realpath(dirs.make("update-database-skip-"));
+  const root = path.join(base, "install");
+  await fs.mkdir(root);
+  const env = await captureEnvironment(path.join(base, "state"));
+  const directory = path.join(base, "runtime.backup.databases");
+  const retained = path.join(directory, "earlier-run.sqlite");
+  await fs.mkdir(directory);
+  await fs.writeFile(retained, "retained for manual recovery");
+  vi.spyOn(databaseBackup, "createUpdateDatabaseBackup").mockRejectedValue(
+    new Error("Capture failed.", {
+      // SQLite's own wording when a write runs out of room.
+      cause: new Error("database or disk is full"),
+    }),
+  );
+
+  const capture = await captureUpdateDatabases({
+    transaction: {
+      backupRoot: path.join(base, "runtime.backup"),
+      rollback: async () => {
+        throw new Error("Unexpected rollback");
+      },
+      complete: async () => {
+        throw new Error("Unexpected completion");
+      },
+    },
+    execution: captureExecution(root, env, "package"),
+    context: undefined,
+    assertCurrent: () => {},
+  });
+
+  expect(capture.backup).toBeUndefined();
+  expect(capture.step.warnings).toEqual([
+    expect.stringMatching(
+      /^No pre-migration database image: the disk filled while it was written\./u,
+    ),
+  ]);
+  expect(await fs.readFile(retained, "utf8")).toBe("retained for manual recovery");
+});
+
 it("still fails the update when the image fails for a reason other than space", async () => {
   const base = await fs.realpath(dirs.make("update-database-skip-"));
   const root = path.join(base, "install");

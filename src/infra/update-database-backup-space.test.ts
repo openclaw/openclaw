@@ -14,6 +14,8 @@ afterEach(() => vi.restoreAllMocks());
 
 const GiB = 1024 ** 3;
 const MiB = 1024 ** 2;
+// NTFS extends a truncated file with written zeros, not a sparse tail.
+const sparse = it.skipIf(process.platform === "win32");
 
 /** Two SQLite families; `sharedBytes` extends the shared file sparsely, as SQLite allows. */
 async function fixture({
@@ -55,7 +57,8 @@ async function fixture({
         mtimeNs: (await fs.stat(file, { bigint: true })).mtimeNs,
       })),
     );
-  const before = sharedBytes ? [] : await artifacts();
+  // A sparse 20 GiB file is never hashed; only real-content fixtures compare bytes.
+  const before = sharedBytes ? undefined : await artifacts();
   const input = { stateDir, backupRoot, stagingRoot, config: {}, env: {} };
   return {
     ...input,
@@ -63,7 +66,10 @@ async function fixture({
     agent,
     directory,
     inspectionPlan: await discoverUpdateStateSchemaInspectionInProcess(input),
-    unchanged: async () => expect(await artifacts()).toEqual(before),
+    unchanged: async () => {
+      expect(before).toBeDefined();
+      expect(await artifacts()).toEqual(before);
+    },
   };
 }
 
@@ -74,24 +80,27 @@ function freeSpace(bytes: () => number) {
   );
 }
 
-it("continues past a pre-migration image that does not fit and names what it gives up", async () => {
-  // A 20 GiB shared database with 50 GiB free: the former 5x preflight wanted 100 GiB.
-  const f = await fixture({ sharedBytes: 20 * GiB });
-  freeSpace(() => 50 * GiB);
+sparse(
+  "continues past a pre-migration image that does not fit and names what it gives up",
+  async () => {
+    // A 20 GiB shared database with 50 GiB free: the former 5x preflight wanted 100 GiB.
+    const f = await fixture({ sharedBytes: 20 * GiB });
+    freeSpace(() => 50 * GiB);
 
-  const { step, shortfall } = await assessInitialUpdateSnapshotCapacity({
-    ...f,
-    backupDirectory: f.directory,
-  });
+    const { step, shortfall } = await assessInitialUpdateSnapshotCapacity({
+      ...f,
+      backupDirectory: f.directory,
+    });
 
-  expect(step.exitCode, step.stderrTail ?? undefined).toBe(0);
-  expect(shortfall).toBe(true);
-  expect(step.warnings).toEqual([
-    `No pre-migration database image: it needs 60 GiB near ${f.directory} and 50 GiB is free. Without it, the previous version cannot be restored once the new version's database migration commits; a failed update then stays on the new version and is fixed forward. The update continues and checks again before the migration.`,
-  ]);
-});
+    expect(step.exitCode, step.stderrTail ?? undefined).toBe(0);
+    expect(shortfall).toBe(true);
+    expect(step.warnings).toEqual([
+      `No pre-migration database image: it needs 60 GiB near ${f.directory} and 50 GiB is free. Without it, the previous version cannot be restored once the new version's database migration commits; a failed update then stays on the new version and is fixed forward. The update continues and measures the image again before the migration.`,
+    ]);
+  },
+);
 
-it("refuses only when the migration itself has no room, saying how much to free", async () => {
+sparse("refuses only when the migration itself has no room, saying how much to free", async () => {
   const f = await fixture({ sharedBytes: 20 * GiB });
   freeSpace(() => 10 * GiB);
 
@@ -107,7 +116,7 @@ it("refuses only when the migration itself has no room, saying how much to free"
   );
 });
 
-it("keeps the image when it fits beside the migration", async () => {
+sparse("keeps the image when it fits beside the migration", async () => {
   const f = await fixture({ sharedBytes: 20 * GiB });
   freeSpace(() => 61 * GiB);
 

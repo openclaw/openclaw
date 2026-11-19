@@ -1024,8 +1024,9 @@ The update refuses before it changes anything only when the database volume
 cannot hold the migration itself: the largest database plus 64 MiB, because a
 schema migration's write-ahead log holds about one copy of each rewritten page
 (measured: 685 MB of log for a shared database of about 0.7 GB). The refusal
-names how much to free. Git release updates take no database snapshot and run
-no snapshot check; their databases migrate when the new Gateway starts.
+names how much to free. Git release updates take no database snapshot; an install
+already serving from a release runs no snapshot check, and its databases migrate
+when the new Gateway starts.
 Hard-linked database or journal files refuse before migration because restoring
 one pathname cannot safely restore every alias.
 

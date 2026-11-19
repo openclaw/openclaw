@@ -89,7 +89,7 @@ export async function checkUpdateDatabaseBackupSpace(
   );
   if (space && space.availableBytes < requiredBytes) {
     throw new UpdateCaptureSpaceError(
-      `The pre-migration database image needs ${formatDiskSpaceBytes(requiredBytes)} (${requiredBytes} bytes) near ${directory}, but only ${formatDiskSpaceBytes(space.availableBytes)} (${space.availableBytes} bytes) is available.`,
+      `The pre-migration database image needs ${formatDiskSpaceBytes(requiredBytes)} (${requiredBytes} bytes) near ${directory}, but only ${formatDiskSpaceBytes(space.availableBytes)} (${space.availableBytes} bytes) is available. Free disk space before retrying; the databases have not been migrated.`,
       { requiredBytes, availableBytes: space.availableBytes, volume: "backup" },
     );
   }
@@ -134,7 +134,7 @@ export async function assessUpdateDatabaseSpace(directory: string, measured: Mea
     if (space && space.availableBytes < plan.imageRequiredBytes) {
       imageSkipped = true;
       warnings.push(
-        `${formatUpdateDatabaseImageSkip(plan.imageRequiredBytes, space.availableBytes, directory)} The update continues and checks again before the migration.`,
+        `${formatUpdateDatabaseImageSkip(plan.imageRequiredBytes, space.availableBytes, directory)} The update continues and measures the image again before the migration.`,
       );
     } else if (!space) {
       warnings.push(

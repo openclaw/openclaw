@@ -128,39 +128,44 @@ function isDiskFull(error: unknown): boolean {
  */
 async function skipUpdateDatabaseImageForSpace(
   error: unknown,
-  directory: string | undefined,
+  directory: { path: string; ownedByRun: boolean } | undefined,
   env: NodeJS.ProcessEnv,
-): Promise<UpdateStepResult | undefined> {
+  assertCurrent: () => void,
+): Promise<{ step: UpdateStepResult; retained: boolean } | undefined> {
   const space = findUpdateCaptureSpaceError(error)?.capacity;
   if (!space && !isDiskFull(error)) {
     return undefined;
   }
   let retained = "";
-  if (directory) {
+  if (directory?.ownedByRun) {
     try {
+      assertCurrent();
       // This run created the directory and nothing refers to a partial image.
-      await fs.rm(directory, { recursive: true, force: true });
+      await fs.rm(directory.path, { recursive: true, force: true });
     } catch (cleanupError) {
-      retained = ` Its partial files remain at ${directory} (${formatErrorMessage(cleanupError)}).`;
+      retained = ` Its partial files remain at ${directory.path} (${formatErrorMessage(cleanupError)}).`;
     }
   }
   return {
-    name: "database snapshot",
-    command: "snapshot databases before migrations",
-    cwd: resolveStateDir(env),
-    durationMs: 0,
-    exitCode: 0,
-    warnings: [
-      `${
-        space
-          ? formatUpdateDatabaseImageSkip(
-              space.requiredBytes,
-              space.availableBytes,
-              directory ?? resolveStateDir(env),
-            )
-          : "No pre-migration database image: the disk filled while it was written. Without it, the previous version cannot be restored once the new version's database migration commits; a failed update then stays on the new version and is fixed forward."
-      }${retained} The update continues.`,
-    ],
+    retained: retained !== "",
+    step: {
+      name: "database snapshot",
+      command: "snapshot databases before migrations",
+      cwd: resolveStateDir(env),
+      durationMs: 0,
+      exitCode: 0,
+      warnings: [
+        `${
+          space
+            ? formatUpdateDatabaseImageSkip(
+                space.requiredBytes,
+                space.availableBytes,
+                directory?.path ?? resolveStateDir(env),
+              )
+            : "No pre-migration database image: the disk filled while it was written. Without it, the previous version cannot be restored once the new version's database migration commits; a failed update then stays on the new version and is fixed forward."
+        }${retained} The update continues.`,
+      ],
+    },
   };
 }
 
@@ -190,7 +195,7 @@ export async function captureUpdateDatabases(params: {
   const maintenance = ownership.maintenance;
   let unavailable = ownership.unavailable;
   let outcome: { value: UpdateDatabaseBackup } | { error: unknown };
-  let backupDirectory: string | undefined;
+  let backupDirectory: { path: string; ownedByRun: boolean } | undefined;
   try {
     const capture = async () => {
       params.assertCurrent();
@@ -231,7 +236,15 @@ export async function captureUpdateDatabases(params: {
         params.assertCurrent();
         backupRoot = path.join(physicalArtifactRoot, path.basename(backupRoot));
       }
-      backupDirectory = `${backupRoot}.databases`;
+      const directory = `${backupRoot}.databases`;
+      // A fixed-name root can hold an earlier run's retained images; only this run's own is removable.
+      backupDirectory = {
+        path: directory,
+        ownedByRun: !(await fs.lstat(directory).then(
+          () => true,
+          () => false,
+        )),
+      };
       const captured = await createUpdateDatabaseBackup({
         backupRoot,
         stateDir: resolveStateDir(env),
@@ -281,18 +294,23 @@ export async function captureUpdateDatabases(params: {
     throw cleanupError;
   }
   if ("error" in outcome) {
-    const skipped = await skipUpdateDatabaseImageForSpace(outcome.error, backupDirectory, env);
+    const skipped = await skipUpdateDatabaseImageForSpace(
+      outcome.error,
+      backupDirectory,
+      env,
+      assertCurrent,
+    );
     if (!skipped) {
       throw outcome.error;
     }
-    await reportUpdateStepCompletion(execution.progress, {
-      ...skipped,
-      durationMs: Date.now() - startedAt,
-      index: 0,
-      total: 0,
-    });
+    if (skipped.retained) {
+      // Retirement must not remove files the warning says remain.
+      transaction.databaseBackupRoot = undefined;
+    }
+    const step = { ...skipped.step, durationMs: Date.now() - startedAt };
+    await reportUpdateStepCompletion(execution.progress, { ...step, index: 0, total: 0 });
     assertCurrent();
-    return { backup: undefined, step: { ...skipped, durationMs: Date.now() - startedAt } };
+    return { backup: undefined, step };
   }
   const backup = outcome.value;
   transaction.discardDatabaseCaptures = async () => {
