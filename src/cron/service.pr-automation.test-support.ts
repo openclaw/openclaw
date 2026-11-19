@@ -431,10 +431,9 @@ export async function createFixture(
     );
     expect(creator.context.resolveGatewayContext?.()).toBe(creator.context);
     if (!direct) {
-      expect(selected.operatorSource?.source).toMatchObject({
-        sessionId: SESSION_ID,
-        lifecycleRevision: "original",
-      });
+      // The source links its conversation by key, so edits and resets keep it.
+      expect(selected.operatorSource?.source).toMatchObject({ sessionKey: SESSION });
+      expect(selected.operatorSource?.source).not.toHaveProperty("sessionId");
     }
   }
   const other = await add({ ...target, number: 42 });

@@ -5,6 +5,7 @@ import type { Static } from "typebox";
 import type { ChatAppContextAttachment } from "../../../packages/gateway-protocol/src/chat-app-context.js";
 import {
   GATEWAY_CLIENT_CAPS,
+  isNativeAppUiClient,
   hasGatewayClientCap,
   type GatewayClientInfo,
 } from "../../../packages/gateway-protocol/src/client-info.js";
@@ -35,6 +36,7 @@ import {
   readProviderReviewAcknowledgment,
   type ProviderReviewAcknowledgment,
 } from "../../sessions/provider-review.js";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import {
   isBrowserCopilotClient,
   isBrowserOperatorUiClient,
@@ -65,6 +67,7 @@ type ChatSendRequestParams = Omit<
 };
 
 export type NormalizedChatSendRequest = {
+  normalizeThinkingLevelOverride?: boolean;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
   chatSendReceivedAtMs: number;
@@ -91,6 +94,17 @@ export type NormalizedChatSendRequest = {
   reconnectResumeRequested: boolean;
 };
 
+/** Talk settings are machine preferences, not user commands for a particular model. */
+function shouldNormalizeTalkThinking(
+  request: Pick<NormalizedChatSendRequest, "p" | "systemInputProvenance">,
+): boolean {
+  return (
+    request.p.thinking !== undefined &&
+    request.systemInputProvenance?.kind === "internal_system" &&
+    request.systemInputProvenance.sourceTool === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
+  );
+}
+
 type NormalizeChatSendRequestResult =
   | { ok: true; value: NormalizedChatSendRequest }
   | { ok: false; error: string; reason?: string };
@@ -112,7 +126,7 @@ export function normalizeChatSendRequest(params: {
       : undefined;
   const clientInfo = client?.connect?.client;
   const supportsTaskSuggestions =
-    isOperatorUiClient(clientInfo) &&
+    (isOperatorUiClient(clientInfo) || isNativeAppUiClient(clientInfo)) &&
     params.client?.connect?.scopes?.includes("operator.admin") === true &&
     hasGatewayClientCap(params.client?.connect?.caps, GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS);
   const controlUiReconnectResume = resolveControlUiReconnectResumeParams(params.params, clientInfo);
@@ -268,7 +282,7 @@ export function normalizeChatSendRequest(params: {
     !rawMessage.startsWith("!");
   if (
     mentions.value &&
-    (!isBrowserOperatorUiClient(clientInfo) ||
+    (!(isBrowserOperatorUiClient(clientInfo) || isNativeAppUiClient(clientInfo)) ||
       !client?.authenticatedUserProfile ||
       client.internal?.syntheticClient ||
       client.internal?.senderAttribution ||
@@ -319,6 +333,7 @@ export function normalizeChatSendRequest(params: {
     ...(workContext ? { workContext } : {}),
     ...(p.appContext ? { appContext: p.appContext } : {}),
     systemInputProvenance,
+    normalizeThinkingLevelOverride: shouldNormalizeTalkThinking({ p, systemInputProvenance }),
     systemProvenanceReceipt,
     suppressCommandInterpretation: commandInterpretationSuppressed,
     toolBindings: p.toolBindings,

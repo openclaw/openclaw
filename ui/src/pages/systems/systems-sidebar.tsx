@@ -305,7 +305,9 @@ function SystemsInventory(props: { controller: Systems }) {
             );
           }}
         </For>
-        {!inventoryRead.pending() && rows().length === 0 ? (
+        {controller().state.inventory !== null &&
+        !inventoryRead.pending() &&
+        rows().length === 0 ? (
           <p class="systems-sidebar__empty">
             {t(
               query() || controller().state.statusFilter !== "all"

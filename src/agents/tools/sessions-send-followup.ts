@@ -78,6 +78,29 @@ export async function startSessionsSendFollowup(
   return { start, completion };
 }
 
+/**
+ * The target run keeps its dispatch assertion for as long as it lives. A closed admission can only
+ * refuse, so it drops the sender's checks instead of keeping the sending turn reachable.
+ */
+function openChildFollowupAdmission(assertCurrent: () => void, assertDispatchCurrent?: () => void) {
+  let checks: { assertCurrent: () => void; assertDispatchCurrent?: () => void } | undefined = {
+    assertCurrent,
+    assertDispatchCurrent,
+  };
+  return {
+    assertDispatchCurrent: () => {
+      if (!checks) {
+        throw new Error("Child followup admission was closed.");
+      }
+      checks.assertCurrent();
+      checks.assertDispatchCurrent?.();
+    },
+    close: () => {
+      checks = undefined;
+    },
+  };
+}
+
 /** Eligible followups retain their accepted result through the existing completion owner. */
 export async function dispatchSessionsSendFollowup(
   params: Parameters<typeof startSessionsSendAgentRun>[0],
@@ -96,7 +119,8 @@ export async function dispatchSessionsSendFollowup(
   },
 ) {
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
-  const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
+  const caller = getGatewayToolCallerIdentity();
+  const instance = caller?.operationalRunInstance;
   const completionChild = options.watch
     ? getLatestLiveSubagentRunByChildSessionKey(
         params.sessionStoreTarget.canonicalKey,
@@ -148,11 +172,13 @@ export async function dispatchSessionsSendFollowup(
           targetSessionKey: params.sessionStoreTarget.canonicalKey,
         })
       : undefined;
-  let admissionOpen = true;
   const assertCurrent = () => {
     assertCallerCurrent?.();
     request?.custody.assertCurrent();
   };
+  const admission = registryTurn
+    ? openChildFollowupAdmission(assertCurrent, params.assertDispatchCurrent)
+    : undefined;
   const { start, completion } =
     "ok" in active
       ? { start: active, completion: undefined }
@@ -161,17 +187,8 @@ export async function dispatchSessionsSendFollowup(
           {
             ...params,
             ...active,
-            ...(registryTurn
-              ? {
-                  retainAcceptance: true,
-                  assertDispatchCurrent: () => {
-                    if (!admissionOpen) {
-                      throw new Error("Child followup admission was closed.");
-                    }
-                    assertCurrent();
-                    params.assertDispatchCurrent?.();
-                  },
-                }
+            ...(admission
+              ? { retainAcceptance: true, assertDispatchCurrent: admission.assertDispatchCurrent }
               : {}),
           },
           replyContext,
@@ -214,6 +231,7 @@ export async function dispatchSessionsSendFollowup(
           await registerSubagentRun(
             {
               runId: start.runId,
+              gatewayContextResolver: caller?.gatewayContextResolver,
               childSessionKey,
               sessionEntry: options.targetSession,
               childAgentId: params.sessionStoreTarget.agentId,
@@ -302,7 +320,7 @@ export async function dispatchSessionsSendFollowup(
       watchField: {},
     };
   } finally {
-    admissionOpen = false;
+    admission?.close();
     if (registryTurn) {
       request?.custody.release();
     }

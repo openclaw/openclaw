@@ -25,7 +25,7 @@ import {
 } from "../test-support/message-fixtures.test-support.js";
 import { RED_H264_VIDEO_BASE64 as GOOGLE_LIVE_RED_VIDEO_BASE64 } from "../test-support/native-video-fixture.test-support.js";
 import plugin from "./index.js";
-import { buildGoogleLiveCatalogProvider } from "./provider-catalog-runtime.js";
+import { loadGoogleLiveCatalog } from "./provider-catalog-runtime.js";
 import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
@@ -117,7 +117,7 @@ describeLive("google plugin live", () => {
   it.each(["gemini-4-argon", "gemini-3.8-flash", "gemini-3.5-flash-lite"])(
     "discovers and completes through %s",
     async (modelId) => {
-      const provider = await buildGoogleLiveCatalogProvider({
+      const { provider } = await loadGoogleLiveCatalog({
         apiKey: "GEMINI_API_KEY",
         discoveryApiKey: GOOGLE_API_KEY,
       });
@@ -146,7 +146,7 @@ describeLive("google plugin live", () => {
   );
 
   it("completes a Gemini 4 tool-call round trip with unsigned replay through the registered transport", async () => {
-    const catalog = await buildGoogleLiveCatalogProvider({
+    const { provider: catalog } = await loadGoogleLiveCatalog({
       apiKey: "GEMINI_API_KEY",
       discoveryApiKey: GOOGLE_API_KEY,
     });
@@ -222,7 +222,7 @@ describeLive("google plugin live", () => {
   }, 180_000);
 
   it("understands native video through the registered Google chat transport", async () => {
-    const catalog = await buildGoogleLiveCatalogProvider({
+    const { provider: catalog } = await loadGoogleLiveCatalog({
       apiKey: "GEMINI_API_KEY",
       discoveryApiKey: GOOGLE_API_KEY,
     });

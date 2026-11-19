@@ -24,6 +24,7 @@ import {
   type HandleInlineActionsInput,
 } from "./get-reply-inline-actions.test-support.js";
 import { stripInlineStatus } from "./reply-inline.js";
+import { resolveSessionResetCommand } from "./session-reset-command.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 function commandCtx(body: string, overrides: Parameters<typeof buildTestCtx>[0] = {}) {
@@ -708,17 +709,17 @@ describe("handleInlineActions", () => {
   it.each([
     {
       name: "channel mention",
-      rawText: "<@BOT> (Bek (Ops)) Please /help continue",
-      commandSourceText: "<@BOT> (Bek (Ops)) Please /help continue",
-      commandText: "Please /help continue",
+      rawText: "<@BOT> (Bek (Ops)) /help Please continue",
+      commandSourceText: "<@BOT> (Bek (Ops)) /help Please continue",
+      commandText: "/help Please continue",
       expected: "<@BOT> (Bek (Ops)) Please continue",
     },
 
     {
       name: "multiline sender before attachment context",
-      rawText: "<@BOT> (Bek (Ops)) Please /help\ncontinue\n[slack attachment unavailable]",
-      commandSourceText: "<@BOT> (Bek (Ops)) Please /help\ncontinue",
-      commandText: "Please /help continue",
+      rawText: "<@BOT> (Bek (Ops)) /help Please\ncontinue\n[slack attachment unavailable]",
+      commandSourceText: "<@BOT> (Bek (Ops)) /help Please\ncontinue",
+      commandText: "/help Please",
       expected: "<@BOT> (Bek (Ops)) Please\ncontinue\n[slack attachment unavailable]",
     },
   ])("routes a Slack inline shortcut once after $name rendering", async (params) => {
@@ -788,7 +789,41 @@ describe("sender command dispatch ownership", () => {
     buildStatusReplyMock.mockReset();
   });
 
-  it.each([
+  it.each<{
+    name: string;
+    shape: "prose" | "skill" | "standalone" | "inline";
+    surface?: string;
+    forwarded: boolean;
+    commandName: string;
+    commandText: string;
+    normalized?: string;
+    botUsername?: string;
+    expectedPrompt?: string;
+  }>([
+    ...["discord", "slack", "telegram", "whatsapp", "signal", "imessage", "webchat"].map(
+      (surface) => ({
+        name: `${surface} slash mentions in prose`,
+        shape: "prose" as const,
+        surface,
+        forwarded: false,
+        commandName: "/help",
+        commandText: "Please explain /help and /status before /reset.",
+      }),
+    ),
+    {
+      name: "bracketed command example",
+      shape: "prose",
+      forwarded: false,
+      commandName: "/help",
+      commandText: "[example] /help",
+    },
+    {
+      name: "sender-label command example",
+      shape: "prose",
+      forwarded: false,
+      commandName: "/status",
+      commandText: "Ada: /status",
+    },
     {
       name: "explicit skill reference",
       shape: "skill",
@@ -831,6 +866,7 @@ describe("sender command dispatch ownership", () => {
       normalized = commandText,
       botUsername,
       expectedPrompt,
+      surface = "discord",
     }) => {
       const suffix = forwarded ? "\n[Forwarded message]\nA separate quoted request." : "";
       const agentText = commandText + suffix;
@@ -840,11 +876,12 @@ describe("sender command dispatch ownership", () => {
         RawBody: commandText,
         CommandBody: commandText,
         CommandAuthorized: true,
-        Provider: "discord",
-        Surface: "discord",
-        From: "discord:123456789012345678",
+        Provider: surface,
+        Surface: surface,
+        From: `${surface}:123456789012345678`,
         To: "channel:223456789012345678",
         SenderId: "123456789012345678",
+        SenderName: "Ada",
         BotUsername: botUsername,
       });
       const sessionCtx = { ...ctx, BodyStripped: ctx.agentText };
@@ -853,6 +890,7 @@ describe("sender command dispatch ownership", () => {
         commands: { text: true },
         agents: { defaults: { thinkingDefault: "off" as const, reasoningDefault: "off" as const } },
       });
+      const sessionKey = `agent:main:${surface}:direct:123456789012345678`;
       const sessionEntry = { sessionId: "sender-command-session", updatedAt: 1 };
       const onBlockReply = vi.fn(async (_reply: { text?: string }) => {});
       const commandReply = "Output for " + commandName;
@@ -862,6 +900,16 @@ describe("sender command dispatch ownership", () => {
           : { shouldContinue: true },
       );
 
+      const resetCommand = resolveSessionResetCommand({
+        ctx,
+        cfg,
+        agentId: "main",
+        isGroup: false,
+        commandText: ctx.commandText,
+        rawText: ctx.rawText,
+        resetTriggers: ["/new", "/reset"],
+        resetAuthorized: true,
+      });
       const directiveResult = await resolveReplyDirectives(
         replyDirectiveParams({
           ctx,
@@ -869,9 +917,9 @@ describe("sender command dispatch ownership", () => {
           agentCfg: cfg.agents.defaults,
           sessionCtx,
           sessionEntry,
-          sessionKey: "agent:main:discord:direct:123456789012345678",
+          sessionKey,
           storePath: undefined,
-          triggerBodyNormalized: ctx.commandText,
+          triggerBodyNormalized: resetCommand.triggerBodyNormalized,
           commandAuthorized: true,
           typing,
         }),
@@ -893,7 +941,7 @@ describe("sender command dispatch ownership", () => {
         overrides: {
           cfg,
           sessionEntry,
-          sessionKey: "agent:main:discord:direct:123456789012345678",
+          sessionKey,
           allowTextCommands: routed.allowTextCommands,
           inlineStatusRequested: routed.inlineStatusRequested,
           inlineCommand: routed.inlineCommand,
@@ -908,7 +956,13 @@ describe("sender command dispatch ownership", () => {
         ([params]) => params.command.commandBodyNormalized,
       );
 
-      if (shape === "skill") {
+      if (shape === "prose") {
+        expect(result.kind).toBe("continue");
+        expect(sessionCtx.agentText).toBe(commandText);
+        expect(dispatched).toEqual([]);
+        expect(onBlockReply).not.toHaveBeenCalled();
+        expect(buildStatusReplyMock).not.toHaveBeenCalled();
+      } else if (shape === "skill") {
         const expected = expandedOfficeHoursRequest(commandText);
         expect(result.kind).toBe("continue");
         expect(sessionCtx.agentText).toBe(expected);

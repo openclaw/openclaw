@@ -5,6 +5,7 @@ import {
   execContainer,
   type SandboxContainerEngine,
 } from "./container-engine.js";
+import { parseInspectedSandboxMounts } from "./docker-mount-source.js";
 
 /** Termination proof is stricter than provisioning's best-effort existence probe. */
 export async function containerHasTerminated(
@@ -107,13 +108,13 @@ export async function containerState(
   name: string,
   options: { strict?: boolean; includePaused?: boolean } = {},
 ) {
+  // .ID keeps Docker's typed template path; raw JSON can omit an empty Tmpfs field.
   const result = await execContainer(
     engine,
     [
       "inspect",
       "-f",
-      '{{.Id}}\n{{.State.Running}}\n{{.HostConfig.ReadonlyRootfs}}\n{{ index .Config.Labels "openclaw.configHash" }}' +
-        (options.includePaused ? "\n{{.State.Paused}}" : ""),
+      '{"Id":{{json .ID}},"State":{{json .State}},"Labels":{{json .Config.Labels}},"ReadonlyRootfs":{{json .HostConfig.ReadonlyRootfs}},"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}',
       name,
     ],
     { allowFailure: true },
@@ -131,19 +132,26 @@ export async function containerState(
     }
     return { exists: false as const, running: false };
   }
-  const [id, running, readOnlyRoot, ...label] = result.stdout.trim().split(/\r?\n/u);
-  if (!id || !/^[a-f0-9]{64}$/u.test(id)) {
+  const data: unknown = JSON.parse(result.stdout);
+  if (!isRecord(data) || typeof data.Id !== "string" || !/^[a-f0-9]{64}$/u.test(data.Id)) {
     throw new Error("Container inspect did not return an immutable container ID.");
   }
-  const paused = options.includePaused ? label.pop() === "true" : undefined;
-  const configHash = label.join("\n").trim();
+  if (
+    !isRecord(data.State) ||
+    typeof data.State.Running !== "boolean" ||
+    typeof data.State.Paused !== "boolean"
+  ) {
+    throw new Error("Container inspect did not return runtime state.");
+  }
+  const configHash = isRecord(data.Labels) ? data.Labels["openclaw.configHash"] : null;
   return {
     exists: true as const,
-    running: running === "true",
-    ...(options.includePaused ? { paused } : {}),
-    id,
-    readOnlyRoot: readOnlyRoot === "true",
-    configHash: configHash && configHash !== "<no value>" ? configHash : null,
+    running: data.State.Running,
+    ...(options.includePaused ? { paused: data.State.Paused } : {}),
+    id: data.Id,
+    readOnlyRoot: data.ReadonlyRootfs === true,
+    configHash: typeof configHash === "string" && configHash ? configHash : null,
+    mounts: parseInspectedSandboxMounts(data.Mounts, data.Tmpfs),
   };
 }
 

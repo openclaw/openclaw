@@ -502,8 +502,8 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
           const session = read.currentSession();
           const assertResponseCurrent = () => read.assertSessionUnchanged(session);
           let sharedUnavailableReason: SessionGitHubOptionsResult["sharedUnavailableReason"];
-          // Independent account and receipt owners can read concurrently. The response
-          // still revalidates the same session and personal authority after all awaits.
+          // Independent account and receipt owners can read concurrently. Target identity
+          // stays fenced after awaits; the admitted person's authority stays fixed.
           const [identity, personalSnapshot, pendingPersonal, latestShared] = await Promise.all([
             prepareCurrentGitHubPublicationOptionsIdentity(
               read.session.agentId,

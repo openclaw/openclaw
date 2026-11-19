@@ -193,11 +193,12 @@ parameters, timeouts, or payload compatibility switches. It preserves those
 settings instead of silently dropping them. Once a harness starts executing,
 its failures are not replayed through another runtime.
 
-Affirmative `compat.supportsReasoningEffort: true` and a nonempty
-`compat.supportedReasoningEfforts` list containing only `minimal`, `low`,
-`medium`, `high`, `xhigh`, `max`, or `ultra` describe native reasoning
-capabilities; they do not opt an otherwise compatible route out of Codex.
-Disabling reasoning, custom effort labels, and other compatibility switches
+Affirmative `compat.supportsReasoningEffort: true` and a
+`compat.supportedReasoningEfforts` list containing only `none`, `minimal`,
+`low`, `medium`, `high`, `xhigh`, `max`, or `ultra`, with at least one effort
+other than `none`, describe native reasoning capabilities; they do not opt an
+otherwise compatible route out of Codex. Disabling reasoning (including a list
+of only `none`), custom effort labels, and other compatibility switches
 remain request behavior. Model-level runtime controls such as `fastMode` and
 `thinking` also preserve native selection when their values are valid.
 

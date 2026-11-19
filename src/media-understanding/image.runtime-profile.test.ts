@@ -116,6 +116,7 @@ describe("describeImageWithModelCore", () => {
     };
     resolveModelAsyncMock
       .mockResolvedValueOnce({ model: hintedModel, authStorage, modelRegistry })
+      .mockResolvedValueOnce({ model: hintedModel, authStorage, modelRegistry })
       .mockResolvedValueOnce({ model: authoritativeModel, authStorage, modelRegistry });
     getApiKeyForModelMock.mockResolvedValueOnce({
       [API_KEY_FIELD]: "test-token",
@@ -130,10 +131,8 @@ describe("describeImageWithModelCore", () => {
 
     await describeImage("github-copilot", "gpt-5.6-sol", { profile: "github-copilot:preferred" });
 
-    expect(resolveModelAsyncMock).toHaveBeenCalledTimes(2);
-    expect(resolveModelAsyncMock.mock.calls[1]?.[4]).toMatchObject({
-      authStorage,
-      modelRegistry,
+    expect(resolveModelAsyncMock).toHaveBeenCalledTimes(3);
+    expect(resolveModelAsyncMock.mock.calls[2]?.[4]).toMatchObject({
       authProfileId: "github-copilot:backup",
     });
     const [model, , options] = expectDefined(completeMock.mock.calls[0], "completion");
@@ -144,6 +143,45 @@ describe("describeImageWithModelCore", () => {
     }
     expect(options.signal).toBe(requestSignal);
     expect(model).toMatchObject({ contextWindow: 1_050_000, maxTokens: 128_000 });
+  });
+
+  it("rematerializes image metadata for the profile auth selects when none was requested", async () => {
+    const authStorage = preparedAuthStorage;
+    const modelRegistry = {};
+    // Two Copilot-like accounts: the unscoped catalog describes the first, auth selects the second.
+    const unscopedModel = {
+      provider: "github-copilot",
+      id: "gpt-5.6-sol",
+      api: "openai-responses",
+      input: ["text", "image"],
+      contextWindow: 200_000,
+      maxTokens: 64_000,
+    };
+    const secondAccountModel = { ...unscopedModel, contextWindow: 1_050_000, maxTokens: 2048 };
+    resolveModelAsyncMock
+      .mockResolvedValueOnce({ model: unscopedModel, authStorage, modelRegistry })
+      .mockResolvedValueOnce({ model: unscopedModel, authStorage, modelRegistry })
+      .mockResolvedValueOnce({ model: secondAccountModel, authStorage, modelRegistry });
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      [API_KEY_FIELD]: "test-token",
+      source: "profile:github-copilot:second",
+      mode: "token",
+      profileId: "github-copilot:second",
+    });
+    shouldPreferProviderRuntimeResolvedModelMock.mockReturnValue(true);
+    completeMock.mockResolvedValue(
+      imageCompletion("openai-responses", "github-copilot", "gpt-5.6-sol", "ok"),
+    );
+
+    await describeImage("github-copilot", "gpt-5.6-sol", { maxTokens: 8192 });
+
+    expect(resolveModelAsyncMock.mock.calls[2]?.[4]).toMatchObject({
+      authProfileId: "github-copilot:second",
+      authProfileMode: "token",
+    });
+    const [model, , options] = expectDefined(completeMock.mock.calls[0], "completion");
+    expect(model).toMatchObject({ contextWindow: 1_050_000, maxTokens: 2048 });
+    expect(options.maxTokens).toBe(2048);
   });
 
   it("places image prompt in user content for github-copilot provider", async () => {

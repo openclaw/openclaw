@@ -7,7 +7,7 @@ import {
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveCompatibleAgentRuntimeForProvider } from "../../agents/session-runtime-compat.js";
-import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-runtime.js";
+import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-selection.js";
 import {
   runUtilityCompletion,
   type UtilityCompletionAttempt,

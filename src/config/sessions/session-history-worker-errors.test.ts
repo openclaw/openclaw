@@ -304,6 +304,8 @@ it("retires idle history workers under critical pressure after active scopes rel
 it("retains aliases until native cleanup and preserves later read custody", async () => {
   useAdmittedHistoryReader();
   const { database, candidates, read } = input();
+  const unownedPath = "/synthetic/unowned.sqlite";
+  candidates.push({ path: unownedPath, physicalPath: unownedPath });
   const cleanup = deferCleanup();
   observed.run.mockResolvedValue(workerReply(false));
   const discovery = withSessionHistoryWorkerReadCandidates(candidates, async (scope) => {
@@ -326,11 +328,11 @@ it("retains aliases until native cleanup and preserves later read custody", asyn
   await discovery;
   expect(decodeAgentDatabaseReaderRequest(observed.closeResources.mock.calls[0]?.[0])).toEqual({
     kind: "close",
-    candidates: [{ path: database.path }],
+    candidates: [{ path: unownedPath }],
     retainedPaths: [database.path],
     deleted: false,
   });
-  expect(observed.unregister).toHaveBeenCalledTimes(1);
+  expect(observed.unregister).toHaveBeenCalledTimes(2);
   const retained = observed.resources.find((resource) => resource.agentId === "main");
   assert(retained);
   await retained.close();

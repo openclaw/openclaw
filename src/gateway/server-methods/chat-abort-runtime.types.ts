@@ -31,8 +31,6 @@ export type ChatSessionAbortParams = {
   controllerTargets?: readonly SessionTarget[];
   requester: ChatAbortRequester;
   assertCurrent?: () => void;
-  /** Prepare persisted request facts immediately before the synchronous cancellation effects. */
-  beforeAbort?: () => Promise<void>;
   /** Explicit user Stop: announce the stopped runs through `notifySessionRunStopped`. */
   announceRunStopped?: true;
   preserveSideRuns?: boolean;

@@ -240,6 +240,31 @@ export function hiddenBelowComposer(frame: ProbeFrame | undefined) {
   return bottoms.length > 0 ? round(Math.max(0, Math.max(...bottoms) - composer[0])) : undefined;
 }
 
+/** One line of text recognized on a screenshot; box normalized to the image, origin top left. */
+export type ScreenLine = { text: string; x: number; y: number; w: number; h: number };
+export type Rect = { x: number; y: number; width: number; height: number };
+
+/**
+ * Text drawn inside the transcript: recognized lines whose center lies in `transcript` (points)
+ * and outside every `exclude` rect (progress card, run footer: chrome that stays drawn while the
+ * messages are gone). This is the screen oracle: it judges pixels, not the view or accessibility
+ * tree, which both still listed content while a real iPhone showed a blank chat (#191478).
+ */
+export function transcriptText(
+  lines: ScreenLine[],
+  screen: { width: number; height: number },
+  transcript: Rect,
+  exclude: Rect[] = [],
+) {
+  const inside = (x: number, y: number, rect: Rect) =>
+    x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
+  return lines.filter((line) => {
+    const x = (line.x + line.w / 2) * screen.width;
+    const y = (line.y + line.h / 2) * screen.height;
+    return inside(x, y, transcript) && !exclude.some((rect) => inside(x, y, rect));
+  });
+}
+
 export function lastFrameBefore(frames: ProbeFrame[], t: number) {
   return frames.findLast((frame) => frame.t <= t);
 }

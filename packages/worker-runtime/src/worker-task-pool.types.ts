@@ -66,6 +66,12 @@ export type WorkerTaskOptions<Input> = {
   /** Only callbacks with their own deadline may replace the pool clock during host waits. */
   hostTimeout?: "owner";
   signal?: AbortSignal;
+  /**
+   * Class 0: access checks and other point reads. The pending caps never refuse it, it runs
+   * before queued bulk work on one reserved worker, and its input carries every fact it needs:
+   * it cannot call back into the host.
+   */
+  pointRead?: true;
   transferList?: (input: Input) => readonly Transferable[];
   onRequest?: (value: unknown, context: WorkerTaskRequestContext) => Promise<WorkerTaskResponse>;
   /** Task-scoped observations; these do not settle work or renew its deadline. */

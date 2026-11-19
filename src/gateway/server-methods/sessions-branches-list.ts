@@ -84,7 +84,7 @@ export async function listSessionBranchesForGateway(
               result.status === "failed" ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
               {
                 "missing-session": "session not found",
-                "unsupported-storage": "session transcript storage does not support branch listing",
+                "unsupported-storage": "chat history storage does not support branch listing",
                 failed: "failed to list session branches",
               }[result.status],
             ),

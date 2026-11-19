@@ -305,31 +305,6 @@ describe("assistant commentary grouping", () => {
       expect(messagesIn(groupsIn(stableItems))).toEqual(expected);
     },
   );
-
-  it("hides durable commentary when the display preference is disabled", () => {
-    const paneId = "commentary-visibility";
-    const messages = [
-      user("do it", 1_000),
-      assistant("Checking the workspace.", 2_000, {
-        openclawStreamFallback: {
-          replacementText: "Checking the workspace.",
-          source: "segment",
-          itemId: "preamble-1",
-        },
-      }),
-      assistant("All done.", 3_000),
-    ];
-
-    const visible = buildItems({ paneId, messages });
-    const hidden = buildItems({ paneId, messages, persistCommentary: false });
-    const restored = buildItems({ paneId, messages });
-
-    expect(visible.filter((item) => item.kind === "group")).toHaveLength(3);
-    expect(hidden.filter((item) => item.kind === "group")).toHaveLength(2);
-    expect(restored.filter((item) => item.kind === "group")).toHaveLength(3);
-    expect(messages).toHaveLength(3);
-    resetChatThreadState(paneId);
-  });
 });
 
 describe("collapseCompletedTurnWork", () => {

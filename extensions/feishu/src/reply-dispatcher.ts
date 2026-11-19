@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { toStringifiedError as toFeishuError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   getReplyPayloadTtsSupplement,
@@ -672,6 +673,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           const result = await sendMediaFeishu({
             ...replyTarget,
             mediaUrl,
+            mediaAccess: resolveOutboundMediaAccessForConfig(cfg),
             ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
           });
           results.push(

@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareGithubIssue } from "../infra/github-issue.js";
+import { resolveOsHomeDir } from "../infra/home-dir.js";
 import type { DoctorSessionSqliteIssue } from "../infra/session-sqlite-migration-issues.js";
 import {
   canonicalMigrationFilePath,
@@ -39,13 +40,19 @@ export function writeSessionSqliteMigrationFailureReports(
       ? filterRestoreManifestTargets(manifest, params.trustedTargets)
       : manifest.targets
     : [];
+  const home = resolveOsHomeDir();
   const payload = createFailureReportPayload(
     manifestPath,
     manifest,
     params.reason,
     targets.map((target) =>
-      createFailureReportTarget(target, collectFailureReportIssues(target, params.recoveryTargets)),
+      createFailureReportTarget(
+        target,
+        collectFailureReportIssues(target, home, params.recoveryTargets),
+        home,
+      ),
     ),
+    home,
   );
   fs.writeFileSync(jsonPath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
   fs.writeFileSync(markdownPath, renderFailureMarkdown(payload), { mode: 0o600 });
@@ -61,6 +68,7 @@ export function writeSessionSqliteMigrationFailureReports(
 
 function collectFailureReportIssues(
   target: SessionSqliteMigrationTargetManifest,
+  home: string | undefined,
   recoveryTargets: readonly DoctorSessionSqliteTargetReport[] = [],
 ): { issues: DoctorSessionSqliteIssue[]; recoveryIssues?: DoctorSessionSqliteIssue[] } {
   const recoveryTarget = recoveryTargets.find(
@@ -75,10 +83,10 @@ function collectFailureReportIssues(
   for (const issue of [...target.issues, ...(recoveryTarget?.issues ?? [])]) {
     issues.set(JSON.stringify([issue.code, issue.message, issue.sessionKey]), issue);
   }
-  const replacements = failureReportPathReplacements(target);
+  const replacements = failureReportPathReplacements(target, home);
   const sanitize = (issue: DoctorSessionSqliteIssue): DoctorSessionSqliteIssue => ({
     code: issue.code,
-    message: sanitizeFailureIssueMessage(issue, replacements),
+    message: sanitizeFailureIssueMessage(issue, replacements, home),
     sessionKey: issue.sessionKey ? redactSessionKey(issue.sessionKey) : undefined,
   });
   return {
@@ -108,6 +116,7 @@ export function createSessionSqliteMigrationFailureIssue(
   if (bodyPath && !persistedBody) {
     return undefined;
   }
+  const home = resolveOsHomeDir();
   const reportBody =
     persistedBody ??
     renderFailureMarkdown(
@@ -116,14 +125,19 @@ export function createSessionSqliteMigrationFailureIssue(
         manifest,
         "session SQLite migration failed",
         targets.map((target) => {
-          const replacements = failureReportPathReplacements(target);
-          return createFailureReportTarget(target, {
-            issues: target.issues.map((issue) => ({
-              code: issue.code,
-              message: sanitizeFailureIssueMessage(issue, replacements),
-            })),
-          });
+          const replacements = failureReportPathReplacements(target, home);
+          return createFailureReportTarget(
+            target,
+            {
+              issues: target.issues.map((issue) => ({
+                code: issue.code,
+                message: sanitizeFailureIssueMessage(issue, replacements, home),
+              })),
+            },
+            home,
+          );
         }),
+        home,
       ),
     );
   const body = [
@@ -223,14 +237,15 @@ function createFailureReportTarget(
     issues: DoctorSessionSqliteIssue[];
     recoveryIssues?: DoctorSessionSqliteIssue[];
   },
+  home: string | undefined,
 ) {
   return {
     agentId: sanitizeFailureReportText(target.agentId),
     completedMoves: target.completedMoves.length,
     ...evidence,
     plannedMoves: target.plannedMoves.length,
-    sqlitePath: sanitizeFailureReportText(shortenFailureReportPath(target.sqlitePath)),
-    storePath: sanitizeFailureReportText(shortenFailureReportPath(target.storePath)),
+    sqlitePath: sanitizeFailureReportText(shortenFailureReportPath(target.sqlitePath, home)),
+    storePath: sanitizeFailureReportText(shortenFailureReportPath(target.storePath, home)),
     validationBeforeArchive: target.validationBeforeArchive,
   };
 }
@@ -240,11 +255,12 @@ function createFailureReportPayload(
   manifest: SessionSqliteMigrationManifest | undefined,
   reason: string,
   targets: ReturnType<typeof createFailureReportTarget>[],
+  home: string | undefined,
 ) {
   return {
     failedAt: manifest?.failedAt,
     generatedAt: new Date().toISOString(),
-    manifestPath: sanitizeFailureReportText(shortenFailureReportPath(manifestPath)),
+    manifestPath: sanitizeFailureReportText(shortenFailureReportPath(manifestPath, home)),
     reason,
     recoveryCommand: "openclaw doctor --session-sqlite recover --github-issue",
     restoreStatus: manifest?.restore?.status ?? "not_attempted",
@@ -308,8 +324,7 @@ function sanitizeFailureReportText(value: string): string {
   return truncateUtf16Safe(sanitized, 500);
 }
 
-function shortenFailureReportPath(filePath: string): string {
-  const home = process.env.HOME;
+function shortenFailureReportPath(filePath: string, home: string | undefined): string {
   if (home && filePath.startsWith(`${home}${path.sep}`)) {
     return `~${path.sep}${path.relative(home, filePath)}`;
   }
@@ -325,8 +340,8 @@ function shortenFailureReportPath(filePath: string): string {
  */
 function failureReportPathReplacements(
   target: SessionSqliteMigrationTargetManifest,
+  home: string | undefined,
 ): ReadonlyArray<readonly [string, string]> {
-  const home = process.env.HOME;
   const replacements = new Map<string, string>();
   for (const filePath of [
     target.storePath,
@@ -334,7 +349,7 @@ function failureReportPathReplacements(
     ...target.plannedMoves.flatMap((move) => [move.sourcePath, move.archivePath]),
     ...target.completedMoves.flatMap((move) => [move.sourcePath, move.archivePath]),
   ]) {
-    const shortened = shortenFailureReportPath(filePath);
+    const shortened = shortenFailureReportPath(filePath, home);
     if (shortened !== filePath && (!home || shortened !== `~${filePath.slice(home.length)}`)) {
       replacements.set(filePath, shortened);
     }
@@ -345,6 +360,7 @@ function failureReportPathReplacements(
 function sanitizeFailureIssueMessage(
   issue: DoctorSessionSqliteIssue,
   replacements: ReadonlyArray<readonly [string, string]>,
+  home: string | undefined,
 ): string {
   let message = issue.message;
   for (const [filePath, shortened] of replacements) {
@@ -353,7 +369,7 @@ function sanitizeFailureIssueMessage(
   if (issue.sessionKey) {
     message = message.split(issue.sessionKey).join(redactSessionKey(issue.sessionKey));
   }
-  message = redactAbsoluteHomePaths(message);
+  message = redactAbsoluteHomePaths(message, home);
   return sanitizeFailureReportText(message);
 }
 
@@ -365,10 +381,13 @@ function redactSessionKey(sessionKey: string): string {
   return `[redacted-session-key:${randomUUID().slice(0, 8)}]`;
 }
 
-function redactAbsoluteHomePaths(value: string): string {
-  const home = process.env.HOME;
+function redactAbsoluteHomePaths(value: string, home: string | undefined): string {
   if (!home) {
     return value;
   }
-  return value.split(home).join("~");
+  let redacted = value;
+  for (const prefix of new Set([home, home.replaceAll("\\", "/"), home.replaceAll("/", "\\")])) {
+    redacted = redacted.split(prefix).join("~");
+  }
+  return redacted;
 }

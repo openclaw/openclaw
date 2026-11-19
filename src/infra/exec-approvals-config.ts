@@ -446,36 +446,3 @@ export function normalizeExecApprovalsInternal(file: ExecApprovalsFile): ExecApp
     agents,
   };
 }
-
-/** Socket credentials are local; shared policy retains only unrelated socket metadata. */
-export function stripExecApprovalsSocketCredentials(file: ExecApprovalsFile): ExecApprovalsFile {
-  const { path: _path, token: _token, ...metadata } = file.socket ?? {};
-  return {
-    ...file,
-    socket: Object.keys(metadata).length ? metadata : undefined,
-  };
-}
-
-/** Raw repair preserves invalid policy fields while retiring embedded credentials. */
-export function stripExecApprovalsRawSocketCredentials(raw: string): string {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw) as unknown;
-  } catch {
-    return raw;
-  }
-  if (
-    !isRecord(parsed) ||
-    !isRecord(parsed.socket) ||
-    (!Object.hasOwn(parsed.socket, "path") && !Object.hasOwn(parsed.socket, "token"))
-  ) {
-    return raw;
-  }
-  const { path: _path, token: _token, ...metadata } = parsed.socket;
-  if (Object.keys(metadata).length) {
-    parsed.socket = metadata;
-  } else {
-    delete parsed.socket;
-  }
-  return `${JSON.stringify(parsed, null, 2)}\n`;
-}
