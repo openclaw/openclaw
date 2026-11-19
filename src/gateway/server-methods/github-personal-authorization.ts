@@ -171,7 +171,8 @@ export async function prepareGitHubPublicationOptionsRead(
   };
   try {
     const initialCfg = options.context.getRuntimeConfig();
-    if (operatorSessionCap(eligibleClient, initialCfg) === "invited") {
+    const sessionCap = operatorSessionCap(eligibleClient, initialCfg);
+    if (sessionCap === "invited") {
       const loaded = preparedSession.readCurrent();
       sharing = await prepareSessionSharingRead({
         cfg: initialCfg,
@@ -179,11 +180,6 @@ export async function prepareGitHubPublicationOptionsRead(
         agentId: loaded.agentId,
       });
     }
-    const filter = createSessionListEntryFilter({
-      cfg: initialCfg,
-      client: eligibleClient,
-      membership: sharing?.readCurrent(initialCfg).membership,
-    });
     const readSession = () => {
       assertCurrent();
       const loaded = preparedSession.readCurrent();
@@ -201,6 +197,12 @@ export async function prepareGitHubPublicationOptionsRead(
       ) {
         throw new GitHubPublicationSessionChangedError();
       }
+      // Keep the admitted role ceiling, but consume current invited membership.
+      const filter = createSessionListEntryFilter(
+        { cfg: initialCfg, client: eligibleClient, membership: sharingRead?.membership },
+        undefined,
+        { sessionCap },
+      );
       return loaded.entry && filter?.(loaded.canonicalKey, loaded.entry) !== false
         ? {
             sessionId: loaded.entry.sessionId,
