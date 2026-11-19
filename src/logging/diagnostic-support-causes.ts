@@ -1,4 +1,5 @@
 import { SQLITE_SNAPSHOT_STABILIZATION_DETAILS } from "../infra/sqlite-snapshot-diagnostics.js";
+import { TEMP_WORKSPACE_ANCESTOR_UNSAFE_CAUSE } from "../infra/update-preflight-details.js";
 
 /** Extract closed causes; matches are fixed phrases and bounded numbers, never surrounding text. */
 export function readPublicSupportCauses(value: string): string[] {
@@ -20,5 +21,11 @@ export function readPublicSupportCauses(value: string): string[] {
       value.match(
         /^Update database (?:backup|rollback|capture) volume: needs \d{1,8}(?:\.\d)? (?:MiB|GiB); available \d{1,8}(?:\.\d)? (?:MiB|GiB)$/gmu,
       ) ?? [],
+    )
+    .concat(
+      // The temp-root refusal embeds its ancestor path on the same line; keep the fixed sentence.
+      /\bis group\/world writable without sticky protection\b/u.test(value)
+        ? [TEMP_WORKSPACE_ANCESTOR_UNSAFE_CAUSE]
+        : [],
     );
 }

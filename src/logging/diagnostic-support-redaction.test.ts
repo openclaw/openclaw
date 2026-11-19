@@ -588,3 +588,26 @@ it("preserves exact typed lease guidance without widening maintenance prose", ()
     "Error: Doctor could not enter maintenance. Error: The update parent owns Gateway activation.",
   );
 });
+
+it("publishes the temp workspace ancestor refusal without its private path", () => {
+  const context = { env: {}, stateDir: "/synthetic/state" };
+  const ancestor = "/synthetic/private-owner/.local/lib";
+  const refusal = `Temp workspace ancestor "${ancestor}" is group/world writable without sticky protection; have its owner run chmod +t '${ancestor}' for a shared temp directory or chmod go-w '${ancestor}' for a private ancestor.`;
+  const cause =
+    "temp workspace ancestor is group/world writable without sticky protection; have its owner run chmod +t for a shared temp directory or chmod go-w for a private ancestor";
+
+  const single = redactPublicSupportDiagnosticLine(refusal, context);
+  expect(single).toBe(cause);
+  expect(single).not.toContain(ancestor);
+  // The cause survives worker envelopes where the refusal is one line among progress text.
+  expect(
+    redactPublicSupportDiagnosticLine(
+      `Package update failed: ${refusal}; after 1.204 seconds during update-candidate-state for source scope [x]: ${refusal}. Check access to the reported source.`,
+      context,
+    ),
+  ).toBe(cause);
+  // Text appended after the sentence is dropped instead of published.
+  expect(redactPublicSupportDiagnosticLine(`${refusal} private-customer-text`, context)).toBe(
+    cause,
+  );
+});

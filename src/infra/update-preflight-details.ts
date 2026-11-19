@@ -1,3 +1,8 @@
+// The temp-root refusal embeds the ancestor path on the same line, so public
+// reports publish this fixed sentence instead of dropping the worker failure.
+export const TEMP_WORKSPACE_ANCESTOR_UNSAFE_CAUSE =
+  "temp workspace ancestor is group/world writable without sticky protection; have its owner run chmod +t for a shared temp directory or chmod go-w for a private ancestor";
+
 // Closed producer conditions; captured before long stack traces evict the cause.
 export const UPDATE_CANDIDATE_STARTUP_FAILURES = [
   [/\bInvalid config at |\bOpenClaw config is invalid\b/u, "Invalid configuration field"],
@@ -25,7 +30,7 @@ export const UPDATE_CANDIDATE_STARTUP_FAILURES = [
   ],
   [
     /\bTemp workspace ancestor "[^"\r\n]{1,4096}" is group\/world writable without sticky protection\b/u,
-    "temp workspace ancestor is group/world writable without sticky protection; have its owner run chmod +t for a shared temp directory or chmod go-w for a private ancestor",
+    TEMP_WORKSPACE_ANCESTOR_UNSAFE_CAUSE,
   ],
 ] as const;
 

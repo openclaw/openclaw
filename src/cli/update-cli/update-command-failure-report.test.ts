@@ -4,12 +4,14 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { acquireFileLockSyncWithRetry } from "../../infra/file-lock-sync.js";
+import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import {
   createUpdateRun,
   finishUpdateRun,
   getUpdateRun,
   recordUpdateRunPhase,
+  recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import { getUpdateRunStatusAsync } from "../../infra/update-run-reader.js";
 import type { UpdateRunResult } from "../../infra/update-run-result.js";
@@ -192,4 +194,39 @@ it.each([
   const report = await prepareUpdateFailureReport({ attemptId: reason, result }, { env });
   expect(result).toMatchObject({ status: "error", reason });
   expectReason(report.body, reason);
+});
+
+it("keeps the temp workspace refusal cause in a report read back from saved history", async () => {
+  const { root, env } = checkout();
+  const ancestor = path.join(root, "shared-temp");
+  const refusal = `Temp workspace ancestor "${ancestor}" is group/world writable without sticky protection; have its owner run chmod +t '${ancestor}' for a shared temp directory or chmod go-w '${ancestor}' for a private ancestor.`;
+  const envelope = `State schema inspection failed (exit): temp workspace ancestor is group/world writable without sticky protection; have its owner run chmod +t for a shared temp directory or chmod go-w for a private ancestor; after 0.005 seconds during shared database discovery for ${path.join(env.OPENCLAW_STATE_DIR, "state/openclaw.sqlite")}: ${refusal} Check access to the reported source, free space, and storage performance, then retry the update.`;
+  const fact = createUpdateErrorFact("update-candidate-state", new Error(envelope), env);
+  const step = stepFixture("update-candidate-state", {
+    cwd: root,
+    status: "failed",
+    failureFacts: [fact],
+  });
+  const userEnv = env as NodeJS.ProcessEnv;
+  const runId = createUpdateRun(
+    { trigger: "cli", target: { kind: "git" } },
+    { env: userEnv },
+  ).runId;
+  recordUpdateRunStep(
+    runId,
+    { step: step.name, status: "failed", detail: refusal, failureFacts: [fact] },
+    { env: userEnv },
+  );
+  const report = await prepareUpdateFailureReport(
+    {
+      attemptId: runId,
+      result: makeResult({ mode: "git", root, steps: [step], failedStep: step }),
+      recordedRun: getUpdateRun(runId, { env: userEnv }),
+    },
+    { env: userEnv },
+  );
+  expect(report.body).toContain("is group/world writable without sticky protection");
+  expect(report.body).toContain("chmod +t");
+  expect(report.body).not.toContain(ancestor);
+  expect(report.body).not.toContain("[redacted-diagnostic]");
 });
