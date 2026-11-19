@@ -5,6 +5,7 @@ import {
   errorShape,
   validateCronAddParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { captureCronStreamSandboxTarget } from "../../agents/sandbox/stream-context.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
@@ -18,7 +19,6 @@ import type { CronDeliveryPreview, CronJobCreate } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import {
   applyCronCreateCallerScopeDefault,
   assertCronModelJobAllowed,
@@ -156,6 +156,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     return;
   }
   let creatorOptions: Awaited<ReturnType<typeof captureCronCreatorSession>> | undefined;
+  let namingAuthority: AdmittedRunOperatorAuthority | undefined;
   const commitGuard = () => {
     commandCreation.creation?.assertCurrent();
     assertMutationCurrent?.();
@@ -173,7 +174,15 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     creatorOptions = await captureCronCreatorSession(
       jobCreate,
       callerScope,
-      { client, context, signal, hasCurrentClientAuthority },
+      {
+        client,
+        context,
+        signal,
+        hasCurrentClientAuthority,
+        onOperatorAuthority: (authority) => {
+          namingAuthority = authority;
+        },
+      },
       cfg,
       runtimeAuthority !== undefined,
     );
@@ -207,46 +216,30 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     !callerScope &&
     !jobCreate.declarationKey &&
     namingAgentId &&
-    namingSource
+    namingSource &&
+    namingAuthority
   ) {
+    const operatorAuthority = namingAuthority;
     const timeout = new AbortController();
     const timer = setTimeout(() => timeout.abort(), CRON_ADD_NAMING_TIMEOUT_MS);
     const namingSignal = signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal;
     try {
       const name = await racePromiseWithAbortSignal(async () => {
-        const operator = await captureGatewayOperatorRunAuthority({
-          client,
-          context,
-          hasCurrentClientAuthority,
-          invocationAuthority: { assertCurrent: commitGuard, signal: namingSignal },
+        const { generateAutomationName } = await import("../dashboard-session-title.js");
+        namingSignal.throwIfAborted();
+        return generateAutomationName({
+          cfg,
+          agentId: namingAgentId,
+          message: namingSource,
+          abortSignal: namingSignal,
+          operatorAuthority,
         });
-        if (!operator) {
-          return null;
-        }
-        try {
-          // Release the grant even if the provider ignores cancellation.
-          return await racePromiseWithAbortSignal(async () => {
-            const { generateAutomationName } = await import("../dashboard-session-title.js");
-            namingSignal.throwIfAborted();
-            return generateAutomationName({
-              cfg,
-              agentId: namingAgentId,
-              message: namingSource,
-              abortSignal: namingSignal,
-              assertCurrent: commitGuard,
-              operatorAuthority: operator.authority,
-            });
-          }, namingSignal);
-        } finally {
-          operator.release();
-        }
       }, namingSignal);
       if (name) {
         jobCreate.name = name;
       }
     } catch {
-      // Naming is best effort: the prompt-derived name stays, and the commit guard
-      // below still refuses a request whose authority changed meanwhile.
+      // Naming is best effort: keep the prompt-derived name.
     } finally {
       clearTimeout(timer);
     }

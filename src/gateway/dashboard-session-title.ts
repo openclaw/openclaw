@@ -405,8 +405,7 @@ export async function generateAutomationName(params: {
   agentId: string;
   message: string;
   abortSignal?: AbortSignal;
-  assertCurrent?: () => void;
-  operatorAuthority?: AdmittedRunOperatorAuthority;
+  operatorAuthority: AdmittedRunOperatorAuthority;
 }): Promise<string | null> {
   const sourceText = resolveSessionTitleSource(params.message);
   return sourceText

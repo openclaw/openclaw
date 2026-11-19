@@ -29,7 +29,8 @@ vi.mock("../../cron/inference-binding.runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../cron/inference-binding.runtime.js")>()),
   captureCronInferenceBinding: async () => undefined,
 }));
-vi.mock("../../cron/delivery-preview.js", () => ({
+vi.mock("../../cron/delivery-preview.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../cron/delivery-preview.js")>()),
   resolveCronDeliveryFailurePreview: async () => undefined,
   resolveCronDeliveryPreview: async () => ({ label: "not requested", detail: "not requested" }),
   resolveCronDeliveryPreviews: async () => ({}),
