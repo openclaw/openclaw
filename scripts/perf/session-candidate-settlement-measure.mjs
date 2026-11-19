@@ -68,6 +68,37 @@ const env = {
   OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
   HOME: root,
 };
+const agentIds = ["main", "alpha", "beta", "gamma"];
+const gatewayLog = path.join(root, "gateway.log");
+const config = values.gateway
+  ? {
+      agents: {
+        ownership: "explicit",
+        entries: Object.fromEntries(
+          agentIds.map((agentId) => [
+            agentId,
+            { workspace: path.join(root, "workspace", agentId) },
+          ]),
+        ),
+      },
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: { mode: "none" },
+        tailscale: { mode: "off" },
+        controlUi: { enabled: false },
+      },
+      browser: { enabled: false },
+      plugins: { enabled: false },
+      cron: { enabled: false },
+      update: { checkOnStart: false },
+      discovery: { mdns: { mode: "off" } },
+      logging: { level: "info", consoleLevel: "silent", file: gatewayLog },
+    }
+  : { agents: { list: agentIds.map((id) => ({ id })) } };
+if (values.gateway) {
+  fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH, JSON.stringify(config));
+}
 const owner = new URL(
   "../../src/config/sessions/session-transcript-worker-resources.ts",
   import.meta.url,
@@ -82,7 +113,6 @@ registerHooks({
 });
 const { setRuntimeConfigSnapshot, clearRuntimeConfigSnapshot } =
   await import("../../src/config/runtime-snapshot.ts");
-const config = { agents: { list: ["main", "alpha", "beta", "gamma"].map((id) => ({ id })) } };
 setRuntimeConfigSnapshot(config);
 const { runOpenClawAgentWriteTransaction, closeOpenClawAgentDatabasesAsync } =
   await import("../../src/state/openclaw-agent-db.ts");
@@ -102,7 +132,7 @@ const { withSessionHistoryWorkerDatabase } =
 const { readSessionHistoryPageInWorker } =
   await import("../../src/config/sessions/session-history-worker-runtime.ts");
 const { historyLane, sessionStoreLane, rotateDatabaseWorkers } = await import(owner.href);
-const targets = config.agents.list.map(({ id: agentId }) => ({
+const targets = agentIds.map((agentId) => ({
   agentId,
   path: resolveOpenClawAgentSqlitePath({ agentId }),
 }));
@@ -114,6 +144,7 @@ const scope = (target) => ({
   env,
 });
 if (values.seed) {
+  const seededAt = Date.now();
   for (const target of targets) {
     runOpenClawAgentWriteTransaction(({ db }) => {
       const node = db.prepare(`INSERT INTO session_nodes
@@ -128,10 +159,10 @@ if (values.seed) {
         node.run(
           key,
           id,
-          JSON.stringify({ sessionId: id, updatedAt: i + 1, status: "done" }),
-          i + 1,
+          JSON.stringify({ sessionId: id, updatedAt: seededAt - i, status: "done" }),
+          seededAt - i,
         );
-        window.run(id, key, i + 1, i + 1, i + 1);
+        window.run(id, key, seededAt - i, seededAt - i, seededAt - i);
       }
     }, target);
     replaceTranscriptEventsSync(scope(target), [
@@ -140,7 +171,7 @@ if (values.seed) {
         type: "message",
         id: `message-${i}`,
         parentId: i ? `message-${i - 1}` : null,
-        timestamp: "2026-01-01T00:00:00.000Z",
+        timestamp: new Date(seededAt - 100 + i).toISOString(),
         message: {
           role: i % 2 ? "assistant" : "user",
           content: [{ type: "text", text: `Synthetic ${i}` }],
@@ -216,39 +247,14 @@ const keepAlive = setInterval(() => {}, 1000);
 const inspector = values.allocations ? new Session() : undefined;
 let gateway;
 let client;
+let settleMs = 0;
+const logStart = fs.existsSync(gatewayLog) ? fs.statSync(gatewayLog).size : 0;
 try {
   if (values.gateway) {
     const { getFreePort } = await import("../lib/gateway-bench-probes.ts");
     const { createGatewayWsClient } = await import("../lib/gateway-ws-client.ts");
     const { PROTOCOL_VERSION } = await import("../../packages/gateway-protocol/src/version.ts");
     const port = await getFreePort();
-    fs.writeFileSync(
-      process.env.OPENCLAW_CONFIG_PATH,
-      JSON.stringify({
-        agents: {
-          ownership: "explicit",
-          entries: Object.fromEntries(
-            targets.map(({ agentId }) => [
-              agentId,
-              { workspace: path.join(root, "workspace", agentId) },
-            ]),
-          ),
-        },
-        gateway: {
-          mode: "local",
-          bind: "loopback",
-          auth: { mode: "none" },
-          tailscale: { mode: "off" },
-          controlUi: { enabled: false },
-        },
-        browser: { enabled: false },
-        plugins: { enabled: false },
-        cron: { enabled: false },
-        update: { checkOnStart: false },
-        discovery: { mdns: { mode: "off" } },
-        logging: { level: "error", consoleLevel: "silent", file: path.join(root, "gateway.log") },
-      }),
-    );
     clearRuntimeConfigSnapshot();
     const { ensureCanonicalGatewayOwnerProfile } =
       await import("../../src/state/user-profile-writes.ts");
@@ -293,11 +299,29 @@ try {
   const cold = performance.now();
   await read();
   const coldMs = performance.now() - cold;
-  // Gateway readiness precedes optional post-ready work; measure warm traffic separately.
+  // Keep the post-ready idle interval and join paced facts backfill on every store.
   if (values.gateway) {
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10000);
-    });
+    const settling = performance.now();
+    while (true) {
+      const log = fs.readFileSync(gatewayLog).subarray(logStart).toString();
+      if (
+        performance.now() - settling >= 10000 &&
+        log
+          .split("\n")
+          .filter((line) => line.includes("session: transcript facts backfill pass complete"))
+          .length >= targets.length
+      ) {
+        break;
+      }
+      assert(
+        performance.now() - settling < 180000,
+        "Synthetic transcript facts backfill did not complete",
+      );
+      await new Promise((resolve) => {
+        setTimeout(resolve, 250);
+      });
+    }
+    settleMs = performance.now() - settling;
   }
   for (let i = 0; i < 10; i++) {
     await read();
@@ -353,7 +377,7 @@ try {
         node: process.version,
         iterations,
         transport: values.gateway ? "loopback WebSocket chat.history" : "worker owner",
-        settleMs: values.gateway ? 10000 : 0,
+        settleMs,
         fixture:
           "5000 sessions, four stores, 100 messages per hot transcript; no workspace scan or 35GiB I/O stress",
         pageHash: expected,
