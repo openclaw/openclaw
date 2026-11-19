@@ -7,6 +7,7 @@ import {
   sortUniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import type { ChannelOutboundTargetRef as RouteNoticeTarget } from "../channels/plugins/outbound.types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatHumanList } from "../shared/human-list.js";
 import type {
   ChannelApprovalNativeDeliveryPlan,
@@ -18,6 +19,9 @@ import type {
   ApprovalRequestChannelRouteClass,
   ChannelApprovalKind,
 } from "./approval-types.js";
+import { formatErrorMessage } from "./errors.js";
+
+const log = createSubsystemLogger("gateway/approval-route");
 
 type GatewayRequestFn = <T = unknown>(
   method: string,
@@ -480,8 +484,12 @@ async function maybeFinalizeApprovalRouteNotice(
       message: notice.text,
       idempotencyKey: `approval-route-notice:${approvalId}`,
     });
-  } catch {
-    // The approval delivery already succeeded; the follow-up notice is best-effort.
+  } catch (error) {
+    // Best effort, but recorded: when native delivery reached no one, this notice
+    // carried the only /approve instructions.
+    log.warn(
+      `Approval route notice not delivered (approval ${approvalId}, channel ${notice.target.channel}): ${formatErrorMessage(error)}`,
+    );
   }
 }
 
