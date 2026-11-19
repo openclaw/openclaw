@@ -171,6 +171,8 @@ const repositoryScriptEntries = [
   ".github/workflows/openclaw-stable-main-closeout.yml!",
   // Prepared publication imports its verifier from the frozen release harness.
   ".github/workflows/openclaw-release-publish.yml!",
+  // Release validation imports shared policy from its trusted workflow checkout.
+  ".github/workflows/full-release-validation.yml!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/actions/setup-node-env/seed-bun-from-image.mjs!",
@@ -614,11 +616,13 @@ function compileWorkflowConsumers(source: string, filePath: string): string {
       : path.resolve(filePath) ===
           path.resolve(".github/workflows/openclaw-stable-main-closeout.yml")
         ? ".closeout-tooling"
-        : undefined;
+        : path.resolve(filePath) === path.resolve(".github/workflows/full-release-validation.yml")
+          ? "workflow"
+          : undefined;
   if (stagedToolingRoot) {
     return [
       ...source.matchAll(
-        /\b(?:import|const)\s*\{([^}]+)\}\s*(?:from\s*|=\s*await\s+import\(\s*)["']\.\/(\.(?:release-harness|closeout-tooling))\/(scripts\/[^"'\r\n]+)["']/gu,
+        /\b(?:import|const)\s*\{([^}]+)\}\s*(?:from\s*|=\s*await\s+import\(\s*)["']\.\/(\.(?:release-harness|closeout-tooling)|workflow)\/(scripts\/[^"'\r\n]+)["']/gu,
       ),
     ]
       .filter((match) => match[2] === stagedToolingRoot)
