@@ -338,7 +338,9 @@ export function prepareSessionToolSurface(
       ? params.tools.filter(
           (tool) =>
             !previous.has(tool.name) ||
-            !sameToolParameters(previous.get(tool.name)?.parameters, tool.parameters),
+            // Computer discovery supplies live facts, never a new session definition.
+            (tool.name !== "computer" &&
+              !sameToolParameters(previous.get(tool.name)?.parameters, tool.parameters)),
         )
       : [];
   let pinned = known?.tools;

@@ -652,9 +652,17 @@ describe("session tool surface", () => {
     const replyTurn = admit([changedRead, tool("message")]);
     expect(names(replyTurn)).toEqual(["message", "read"]);
     expect(replyTurn.find((entry) => entry.name === "read")?.description).toBe("read v2");
+    const pinnedComputer = definitions(admit([changedRead, tool("message"), createComputerTool()]));
+    const nodeComputer = createComputerTool({
+      pairedNodeComputerUse: { actions: ["screenshot", "list_windows"] },
+    });
+    // Computer capabilities stay out of the definition on filtering surfaces too.
+    expect(definitions(admit([changedRead, tool("message"), nodeComputer]))).toEqual(
+      pinnedComputer,
+    );
     await persist(entries);
     // A later turn that builds fewer tools keeps the admitted ones listed.
-    expect(names(admit([changedRead]))).toEqual(["message", "read"]);
+    expect(names(admit([changedRead]))).toEqual(["computer", "message", "read"]);
   });
 
   it("starts a pin when neither the session state nor the checkpoint has one", async () => {
