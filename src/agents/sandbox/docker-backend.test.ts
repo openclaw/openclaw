@@ -459,6 +459,8 @@ it.skipIf(process.platform === "win32").each([
 ] as const)(
   "$engine binds the current $host identity at launch without staging its token",
   async ({ engine, host }) => {
+    vi.stubEnv("MALLOC_CONF", "background_thread:true");
+    vi.stubEnv("LD_PRELOAD", "/synthetic/libjemalloc.so.2");
     const requestedPath = "$(touch /tmp/openclaw-path-injection)";
     const root = tempDirs.make("github-sandbox-launch-");
     const profile = path.join(root, "profile");
@@ -525,6 +527,9 @@ process.stdout.write(JSON.stringify({
       expect(result).toMatchObject({ code: 0, stderr: "" });
       const delivered = JSON.parse(result.stdout);
       expect(delivered).toMatchObject({ selected: true, cleared: true });
+      expect(spec.env.MALLOC_CONF).toBeUndefined();
+      expect(spec.env.LD_PRELOAD).toBeUndefined();
+      expect(process.env.MALLOC_CONF).toBe("background_thread:true");
       expect(spec.stdinMode).toBe("pipe-open");
       for (const value of ["configured-value", requestedPath]) {
         expect(spec.argv.join(" ")).not.toContain(value);

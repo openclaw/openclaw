@@ -170,23 +170,20 @@ describe("browser server-context ensureBrowserAvailable", () => {
     },
   );
 
-  it("keeps Chrome across startup and later operations when readiness responses take 750ms", async () => {
+  it("reuses managed Chrome when a later readiness response takes 750ms", async () => {
     const { profile, runtime } = setupEnsureBrowserAvailableHarness();
+    const launched = mockLaunchedChrome(chrome.launch, 124);
+    await profile.ensureBrowserAvailable();
+
     chrome.ready.mockImplementation(
       async (_url, timeoutMs = 0) =>
         await new Promise<boolean>((resolve) => {
           setTimeout(() => resolve(timeoutMs >= 750), Math.min(750, timeoutMs));
         }),
     );
-    const launched = mockLaunchedChrome(chrome.launch, 124);
-
-    const ready = expect(profile.ensureBrowserAvailable()).resolves.toBeUndefined();
-    await vi.advanceTimersByTimeAsync(8100);
-    await ready;
-
     chrome.reachable.mockImplementation(async () => Boolean(runtime.running));
     const reused = expect(profile.ensureBrowserAvailable()).resolves.toBeUndefined();
-    await vi.advanceTimersByTimeAsync(8100);
+    await vi.advanceTimersByTimeAsync(750);
     await reused;
 
     expect(chrome.launch).toHaveBeenCalledTimes(1);
@@ -194,23 +191,23 @@ describe("browser server-context ensureBrowserAvailable", () => {
     expect(chrome.stop).not.toHaveBeenCalled();
   });
 
-  it("stops launched chrome when CDP readiness never arrives", async () => {
-    const { profile, state } = setupEnsureBrowserAvailableHarness();
-    state.resolved.localCdpReadyTimeoutMs = 250;
-    chrome.ready.mockResolvedValue(false);
-    mockLaunchedChrome(chrome.launch, 321);
-
-    const promise = profile.ensureBrowserAvailable();
-    const rejected = expect(promise).rejects.toThrow("not reachable after start");
-    const diagnosticRejected = expect(promise).rejects.toThrow(
-      "CDP diagnostic: websocket_health_command_timeout; mock CDP diagnostic.",
+  it("preserves the launch owner's readiness failure for the caller and retry cooldown", async () => {
+    const { profile, runtime } = setupEnsureBrowserAvailableHarness();
+    const failure = new Error(
+      "Chrome process exited before CDP became ready (code null, signal SIGABRT). " +
+        "GPU process isn't usable. Goodbye. Check browser.extraArgs before retrying.",
     );
-    await vi.advanceTimersByTimeAsync(300);
-    await rejected;
-    await diagnosticRejected;
+    chrome.launch.mockRejectedValueOnce(failure);
+
+    await expect(profile.ensureBrowserAvailable()).rejects.toBe(failure);
 
     expect(chrome.launch).toHaveBeenCalledTimes(1);
-    expect(chrome.stop).toHaveBeenCalledTimes(1);
+    expect(chrome.stop).not.toHaveBeenCalled();
+    expect(runtime.running).toBeNull();
+    expect(runtime.managedLaunchFailure).toMatchObject({
+      consecutiveFailures: 1,
+      lastError: failure.message,
+    });
   });
 
   it("rejects a foreign listener that wins the managed CDP port after spawn", async () => {
@@ -253,7 +250,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
     const { profile, runtime } = setupEnsureBrowserAvailableHarness();
     runtime.running = fakeRunning(111);
     chrome.reachable.mockImplementation(async () => Boolean(runtime.running));
-    chrome.ready.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    chrome.ready.mockResolvedValueOnce(false);
     mockLaunchedChrome(chrome.launch, 987);
 
     await expect(profile.ensureBrowserAvailable({ headless: true })).resolves.toBeUndefined();

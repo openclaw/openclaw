@@ -1,5 +1,6 @@
 import { createContainerEnvFile } from "../../infra/container-env-file.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
+import { stripGatewayAllocatorEnv } from "../../process/child-env.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { buildGitHubExecLaunchArgv } from "../github-exec-launch.js";
 import { CLEARED_GITHUB_CREDENTIALS } from "../github-host.js";
@@ -168,6 +169,8 @@ async function createContainerSandboxBackend(
           : "";
         // Use absolute path for sh to avoid dependency on PATH resolution during exec.
         argv.push(containerId, "/bin/sh", "-lc", `${pathExport}${command}`);
+        const hostEnv = { ...(boundEngine.baseEnv ?? process.env) };
+        stripGatewayAllocatorEnv(hostEnv);
         return {
           argv: githubProfileDir
             ? buildGitHubExecLaunchArgv(argv, githubProfileDir, {
@@ -175,7 +178,7 @@ async function createContainerSandboxBackend(
                 externalCommandShell,
               })
             : argv,
-          env: boundEngine.baseEnv ?? process.env,
+          env: hostEnv,
           stdinMode: usePty || stdin ? "pipe-open" : "pipe-closed",
           finalizeToken: envFile.cleanup satisfies ContainerExecFinalizeToken,
         };

@@ -3,6 +3,7 @@
  */
 import { createAbortError } from "../../infra/abort-signal.js";
 import { toErrorObject } from "../../infra/errors.js";
+import { stripGatewayAllocatorEnv } from "../../process/child-env.js";
 import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
 import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
@@ -57,9 +58,11 @@ export async function execContainerRaw(
 ): Promise<ExecDockerRawResult> {
   let result;
   try {
+    const baseEnv = { ...(engine.baseEnv ?? process.env) };
+    stripGatewayAllocatorEnv(baseEnv);
     opts?.assertCurrent?.();
     result = await spawnCommand([engine.command, ...(engine.globalArgs ?? []), ...args], {
-      baseEnv: engine.baseEnv,
+      baseEnv,
       cancelSignal: opts?.signal,
       encoding: "buffer",
       input: opts?.input ?? Buffer.alloc(0),

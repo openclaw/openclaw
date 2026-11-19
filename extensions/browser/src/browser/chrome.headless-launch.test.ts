@@ -21,6 +21,10 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>()),
   ensurePortAvailable: async () => {},
 }));
+vi.mock("./chrome.diagnostics.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./chrome.diagnostics.js")>()),
+  diagnoseChromeCdp: async () => ({ ok: true }),
+}));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: fixture.spawn,
@@ -39,6 +43,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   fixture.spawn.mockReset();
 });
@@ -46,6 +51,8 @@ afterEach(() => {
 it.each(["linux", "darwin", "win32"] as const)(
   "seeds a fresh headless profile before its only launch on %s",
   async (platform) => {
+    vi.stubEnv("MALLOC_CONF", "background_thread:true");
+    vi.stubEnv("LD_PRELOAD", "/usr/lib/libjemalloc.so.2:/tmp/libother.so");
     const executablePath = path.join(fixture.root, "chrome");
     fs.writeFileSync(executablePath, "");
     const resolved = resolveBrowserConfig({ executablePath });
@@ -60,19 +67,25 @@ it.each(["linux", "darwin", "win32"] as const)(
       stderr: new EventEmitter(),
       kill: vi.fn(),
     });
-    fixture.spawn.mockImplementation((_command, args: string[]) => {
-      expect(args).toContain("--headless=new");
-      expect(args).not.toContain("--no-sandbox");
-      expect(readPrefs()).toMatchObject({
-        download: {
-          default_directory: path.join(fixture.root, "downloads"),
-          prompt_for_download: false,
-        },
-        net: { network_prediction_options: 2 },
-        profile: { name: "openclaw" },
-      });
-      return proc;
-    });
+    fixture.spawn.mockImplementation(
+      (_command, args: string[], options: { env: NodeJS.ProcessEnv }) => {
+        expect(options.env.MALLOC_CONF).toBeUndefined();
+        expect(options.env.LD_PRELOAD).toBe("/tmp/libother.so");
+        expect(process.env.MALLOC_CONF).toBe("background_thread:true");
+        expect(process.env.LD_PRELOAD).toBe("/usr/lib/libjemalloc.so.2:/tmp/libother.so");
+        expect(args).toContain("--headless=new");
+        expect(args).not.toContain("--no-sandbox");
+        expect(readPrefs()).toMatchObject({
+          download: {
+            default_directory: path.join(fixture.root, "downloads"),
+            prompt_for_download: false,
+          },
+          net: { network_prediction_options: 2 },
+          profile: { name: "openclaw" },
+        });
+        return proc;
+      },
+    );
 
     const running = await launchOpenClawChrome(resolved, profile, {
       env: { DISPLAY: ":99" },

@@ -436,3 +436,10 @@ type and `omitNullRequestHeaders`. Runtime headers can contain `null` deletion
 markers; preserve them through header merges and OpenAI SDK calls. Use the helper
 after the final merge when a direct HTTP client needs a string-only header map.
 This entrypoint loads no provider policy, transport host, or credential runtime.
+
+## Child process environment
+
+`openclaw/plugin-sdk/process-runtime` exports `stripGatewayAllocatorEnv`. It
+removes `MALLOC_CONF` and jemalloc entries in `LD_PRELOAD` from a caller-owned
+child environment in place, preserving other preloaded libraries. Copy the
+parent environment before calling it; never pass `process.env` directly.
