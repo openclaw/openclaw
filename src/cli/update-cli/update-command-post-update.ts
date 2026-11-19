@@ -49,6 +49,7 @@ import {
   maybeRestartService,
   maybeRestartServiceAfterFailedMutableUpdate,
 } from "./update-command-service.js";
+import { withUpdateStateReleasedAcrossRestart } from "./update-command-state-handoff.js";
 import * as terminal from "./update-command-terminal-publication.js";
 import {
   captureUpdateCommandTerminalRecord,
@@ -536,9 +537,17 @@ async function finishSettledUpdate(
         await restoreWindowsAutoStart(resultWithPostUpdate);
       }
       let verificationFailure = "restart-unhealthy";
+      // The new build's boot upgrade may replace the shared state database file.
+      // Without a restart nothing replaces it during this update; keep the open handles.
+      const restartService = (restartParams: Parameters<typeof maybeRestartService>[0]) =>
+        restartParams.shouldRestart
+          ? withUpdateStateReleasedAcrossRestart(params.opts.run, () =>
+              maybeRestartService(restartParams),
+            )
+          : maybeRestartService(restartParams);
       const restart = async () => {
         const restarted = await forward(() =>
-          maybeRestartService({
+          restartService({
             onGatewayStartAttempted,
             originalManagedServiceRuntime: params.originalManagedServiceRuntime,
             shouldRestart: shouldRestart && restartContext.serviceMutationAllowed,

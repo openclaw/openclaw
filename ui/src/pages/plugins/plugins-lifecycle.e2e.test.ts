@@ -151,7 +151,10 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
       .locator(".plugin-catalog-detail__actions")
       .getByRole("link", { name: "Settings", exact: true })
       .click();
-    await page.getByRole("searchbox", { name: "Search settings", exact: true }).waitFor();
+    await page
+      .getByRole("main")
+      .getByRole("searchbox", { name: "Search settings", exact: true })
+      .waitFor();
     // Settings open in Settings; going back returns to the catalog detail.
     expect(new URL(page.url())).toMatchObject({
       pathname: "/settings/plugins/calendar-plus",
