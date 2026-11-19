@@ -106,6 +106,10 @@ jobs:
           test -f scripts/lib/ios-release-e2e-native.ts
           test -f test/helpers/openclaw-test-instance.ts
 
+      - name: Probe candidate UID and network isolation
+        if: inputs.client_sha != ''
+        run: python3 scripts/probe-native-candidate-isolation.py
+
       - name: Verify frozen published client before execution
         id: stable-client
         if: inputs.client_sha != ''
