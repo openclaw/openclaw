@@ -4,10 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import {
-  repairPublishedPnpmLaunchers,
-  repairStagedRuntimeLauncher,
-} from "./update-launcher-repair.js";
+import { repairPublishedPnpmLaunchers } from "./update-launcher-repair.js";
 
 const runFile = promisify(execFile);
 const GROUP = "v11/926ea0a51a5e60b563a5c9f5e53c1fda01ec614676ee4355740d8c425a806cdb";
@@ -102,9 +99,12 @@ describe.skipIf(process.platform === "win32")("staged launcher repair", () => {
         expect((await fs.stat(launcher)).mode & 0o777).toBe(0o755);
         expect(await fs.readFile(launcher, "utf8")).not.toContain(STAGE);
         // Repaired once; a second pass finds a current launcher and leaves no staging behind.
-        await expect(repairStagedRuntimeLauncher(launcher, packageRoot)).resolves.toEqual({
-          outcome: "current",
-        });
+        await expect(
+          repairPublishedPnpmLaunchers({
+            root: packageRoot,
+            env: { PNPM_HOME: home, PATH: path.join(base, "fifo-bin") },
+          }),
+        ).resolves.toEqual({ repaired: [], failed: [] });
         expect((await fs.readdir(path.dirname(launcher))).toSorted()).toEqual(["node", "openclaw"]);
       }),
   );
