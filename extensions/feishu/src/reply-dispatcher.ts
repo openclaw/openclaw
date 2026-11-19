@@ -795,91 +795,95 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       return activeIdleSideEffectsPromise;
     }
     const nextIdleSideEffects = idleSideEffectsPromise.then(async () => {
-      do {
-        // Include deliveries appended while CardKit close is in flight; every returned
-        // finalization promise must be owned by this idle pass or a later loop iteration.
-        const completions = pendingStreamingDeliveries.splice(0);
-        const closeOutcome: StreamingCloseOutcome =
-          streaming || inFlightStreamingClose
-            ? await closeStreaming()
-            : completions.length > 0 && lastStreamingSettlement
-              ? lastStreamingSettlement
-              : { disposition: "closed", result: noVisibleFeishuReplyDelivery };
-        for (const completion of completions) {
-          const deliveryError = closeOutcome.error;
-          if (closeOutcome.disposition === "discarded") {
-            const retained = mergeFeishuReplyDeliveryResults(
-              [closeOutcome.result, completion.result],
-              closeOutcome.result.content ?? "",
+      try {
+        do {
+          // Include deliveries appended while CardKit close is in flight; every returned
+          // finalization promise must be owned by this idle pass or a later loop iteration.
+          const completions = pendingStreamingDeliveries.splice(0);
+          const closeOutcome: StreamingCloseOutcome =
+            streaming || inFlightStreamingClose
+              ? await closeStreaming()
+              : completions.length > 0 && lastStreamingSettlement
+                ? lastStreamingSettlement
+                : { disposition: "closed", result: noVisibleFeishuReplyDelivery };
+          for (const completion of completions) {
+            const deliveryError = closeOutcome.error;
+            if (closeOutcome.disposition === "discarded") {
+              const retained = mergeFeishuReplyDeliveryResults(
+                [closeOutcome.result, completion.result],
+                closeOutcome.result.content ?? "",
+              );
+              if (deliveryError !== undefined) {
+                completion.reject(createFeishuPartialReplyDeliveryError(deliveryError, retained));
+              } else {
+                completion.resolve(retained);
+              }
+              continue;
+            }
+            let providerFinalized: FeishuReplyDeliveryResult | undefined = closeOutcome.result;
+            try {
+              providerFinalized = await ensureVisibleStreamingDelivery(
+                providerFinalized,
+                completion.result.content,
+                completion.infoKind,
+              );
+            } catch (fallbackError: unknown) {
+              const fallbackPartial = isChannelPartialDeliveryError(fallbackError)
+                ? fallbackError.deliveryResult
+                : undefined;
+              const fallbackCause =
+                fallbackPartial && fallbackError instanceof Error
+                  ? (fallbackError.cause ?? fallbackError)
+                  : fallbackError;
+              completion.reject(
+                createFeishuPartialReplyDeliveryError(
+                  deliveryError === undefined
+                    ? fallbackCause
+                    : new AggregateError(
+                        [deliveryError, fallbackCause],
+                        "Feishu streaming finalization and static fallback failed",
+                      ),
+                  mergeFeishuReplyDeliveryResults(
+                    [
+                      ...(providerFinalized ? [providerFinalized] : []),
+                      ...(fallbackPartial ? [fallbackPartial] : []),
+                      completion.result,
+                    ],
+                    fallbackPartial?.content ??
+                      providerFinalized?.content ??
+                      completion.result.content,
+                  ),
+                ),
+              );
+              continue;
+            }
+            // The finalized card is the public identity; each logical payload retains its own text.
+            const settledResult = mergeFeishuReplyDeliveryResults(
+              [...(providerFinalized ? [providerFinalized] : []), completion.result],
+              deliveryError === undefined
+                ? (completion.result.content ?? providerFinalized?.content)
+                : (providerFinalized?.content ?? completion.result.content),
             );
             if (deliveryError !== undefined) {
-              completion.reject(createFeishuPartialReplyDeliveryError(deliveryError, retained));
-            } else {
-              completion.resolve(retained);
-            }
-            continue;
-          }
-          let providerFinalized: FeishuReplyDeliveryResult | undefined = closeOutcome.result;
-          try {
-            providerFinalized = await ensureVisibleStreamingDelivery(
-              providerFinalized,
-              completion.result.content,
-              completion.infoKind,
-            );
-          } catch (fallbackError: unknown) {
-            const fallbackPartial = isChannelPartialDeliveryError(fallbackError)
-              ? fallbackError.deliveryResult
-              : undefined;
-            const fallbackCause =
-              fallbackPartial && fallbackError instanceof Error
-                ? (fallbackError.cause ?? fallbackError)
-                : fallbackError;
-            completion.reject(
-              createFeishuPartialReplyDeliveryError(
-                deliveryError === undefined
-                  ? fallbackCause
-                  : new AggregateError(
-                      [deliveryError, fallbackCause],
-                      "Feishu streaming finalization and static fallback failed",
-                    ),
-                mergeFeishuReplyDeliveryResults(
-                  [
-                    ...(providerFinalized ? [providerFinalized] : []),
-                    ...(fallbackPartial ? [fallbackPartial] : []),
-                    completion.result,
-                  ],
-                  fallbackPartial?.content ??
-                    providerFinalized?.content ??
-                    completion.result.content,
+              completion.reject(
+                createFeishuPartialReplyDeliveryError(
+                  isChannelPartialDeliveryError(deliveryError) && deliveryError instanceof Error
+                    ? (deliveryError.cause ?? deliveryError)
+                    : deliveryError,
+                  settledResult,
                 ),
-              ),
-            );
-            continue;
+              );
+            } else {
+              completion.resolve(settledResult);
+            }
           }
-          // The finalized card is the public identity; each logical payload retains its own text.
-          const settledResult = mergeFeishuReplyDeliveryResults(
-            [...(providerFinalized ? [providerFinalized] : []), completion.result],
-            deliveryError === undefined
-              ? (completion.result.content ?? providerFinalized?.content)
-              : (providerFinalized?.content ?? completion.result.content),
-          );
-          if (deliveryError !== undefined) {
-            completion.reject(
-              createFeishuPartialReplyDeliveryError(
-                isChannelPartialDeliveryError(deliveryError) && deliveryError instanceof Error
-                  ? (deliveryError.cause ?? deliveryError)
-                  : deliveryError,
-                settledResult,
-              ),
-            );
-          } else {
-            completion.resolve(settledResult);
+          if (closeOutcome.error !== undefined) {
+            throw toFeishuError(closeOutcome.error);
           }
-        }
-        if (closeOutcome.error !== undefined) {
-          throw toFeishuError(closeOutcome.error);
-        }
-      } while (pendingStreamingDeliveries.length > 0);
+        } while (pendingStreamingDeliveries.length > 0);
+      } finally {
+        typingCallbacks?.onIdle?.();
+      }
     });
     activeIdleSideEffectsPromise = nextIdleSideEffects;
     idleSideEffectsPromise = nextIdleSideEffects.catch(() => {});
@@ -1025,7 +1029,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     },
     onIdle: queueIdleSideEffects,
     onCleanup: () => {
-      // Delivery idle can finalize a queue acknowledgement before its source executes.
       typingCallbacks?.onCleanup?.();
     },
   };

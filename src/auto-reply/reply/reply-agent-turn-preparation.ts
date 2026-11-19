@@ -93,8 +93,6 @@ export type AdmittedFollowupTurn = {
   sessionStore?: Record<string, SessionEntry>;
   sendPolicy: "allow" | "deny";
   preflightCompactionApplied: boolean;
-  /** Deferred while observing; the execution gate must prepare an approved reply. */
-  prepareForExecution?: () => Promise<void>;
   memoryFlushAttempted?: boolean;
   preflightFailurePayload?: ReplyPayload;
   preflightError?: Error;
@@ -148,13 +146,15 @@ export async function prepareReplyAgentTurn<TConfigured>(
     params.queued.readAdmissionConfig?.() ?? selectLiveRuntimeConfig(params.queued.run.config);
   let config = captureRuntimeConfig(params.queued.run.config);
   const existingClaim = params.queued.controllerInput?.claim;
+  const claimQueuedFirst = !params.providedReplyOperation && !params.claimSource;
   let mailboxClaim: SessionControllerMailboxClaim | undefined;
   try {
     // Queued sources become selectable by Stop before asynchronous preparation.
-    if (!params.providedReplyOperation) {
-      mailboxClaim = params.claimSource
-        ? await params.claimSource()
-        : await claimSessionControllerInput(params.queued);
+    if (claimQueuedFirst) {
+      mailboxClaim = await claimSessionControllerInput(params.queued);
+    }
+    if (!claimQueuedFirst && !params.providedReplyOperation) {
+      mailboxClaim = await params.claimSource?.();
     }
     if (!mailboxClaim && !params.providedReplyOperation) {
       return {
@@ -447,7 +447,9 @@ export async function prepareReplyAgentTurn<TConfigured>(
               storePath: params.defaults.storePath,
               sessionKey: replySessionKey,
             })
-          : session.current();
+          : replySessionKey && params.defaults.sessionStore
+            ? params.defaults.sessionStore[replySessionKey]
+            : session.current();
       const refreshTurnSessionState = (
         entry: SessionEntry | undefined,
         previousEntry: SessionEntry | undefined,
@@ -525,26 +527,17 @@ export async function prepareReplyAgentTurn<TConfigured>(
       };
       principalAuthority = undefined;
       turn.releaseSourceAdmission = releaseSourceAdmission;
-      const prepareForExecution = async () => {
-        turn.prepareForExecution = undefined;
-        const preflightEntry = session.current();
-        try {
-          const participation = await prepareGroupParticipationRun({
-            run: () => turn.queued,
-            operation,
-            sessionKey: replySessionKey,
-            storePath: params.defaults.storePath,
-            sessionEntry: activeEntry,
-          });
-          if (participation?.isObserving) {
-            turn.prepareForExecution = prepareForExecution;
-            return;
-          }
-          // Participation can change during preflight. Its execution owner starts
-          // typing only after the final assessment accepts generation.
-          if (!participation || participation.mode === "ordinary") {
-            await params.signalRunStart?.();
-          }
+      const preflightEntry = session.current();
+      try {
+        const participation = await prepareGroupParticipationRun({
+          run: () => turn.queued,
+          operation,
+          sessionKey: replySessionKey,
+          storePath: params.defaults.storePath,
+          sessionEntry: activeEntry,
+        });
+        if (!participation?.isObserving) {
+          await params.signalRunStart?.();
           const resolvedVerboseLevel =
             normalizeVerboseLevel(
               turn.queued.run.verboseLevelOverride ??
@@ -609,52 +602,53 @@ export async function prepareReplyAgentTurn<TConfigured>(
               recorder &&
               buildPreflightCompactionFailureText(formatErrorMessage(error)) !== null
             ) {
-              await retainReplySourceAfterFailedPreflight({
-                operation,
-                followupRun: turn.queued,
-              });
+              await retainReplySourceAfterFailedPreflight({ operation, followupRun: turn.queued });
             }
             throw error;
           }
           if (activeEntry) {
             session.publish(activeEntry);
+            activeEntry = session.current() ?? activeEntry;
           }
           const generationRotated = refreshTurnSessionState(activeEntry, preflightEntry);
           turn.preflightCompactionApplied =
             generationRotated || (activeEntry?.compactionCount ?? 0) > previousCompactionCount;
-        } catch (error) {
-          activeEntry = session.current() ?? activeEntry;
-          refreshTurnSessionState(activeEntry, preflightEntry);
-          turn.preflightError = toErrorObject(error, "Reply preparation failed");
-          const admittedVerboseLevel =
-            turn.queued.run.verboseLevelOverride ??
-            session.current()?.verboseLevel ??
-            turn.queued.run.verboseLevel;
-          const text =
-            renderAgentHarnessPreflightUserMessage(error) ??
-            buildPreflightCompactionFailureText(formatErrorMessage(error), {
-              includeDetails: admittedVerboseLevel === "on" || admittedVerboseLevel === "full",
-            });
-          if (text) {
-            turn.preflightFailurePayload = markReplyPayloadForSourceSuppressionDelivery({ text });
-          }
         }
-        if (
-          pendingTerminalCompactionNotice &&
-          turn.sendPolicy === "allow" &&
-          turn.queued.currentInboundEventKind !== "room_event"
-        ) {
-          const noticeEntry = await readNoticeSessionEntry();
-          if (resolveTurnSendPolicy(noticeEntry, turn.queued) === "allow") {
-            await params.onCompactionNotice?.(
-              pendingTerminalCompactionNotice.phase,
-              pendingTerminalCompactionNotice.text,
-              turn,
-            );
-          }
+      } catch (error) {
+        const failureEntry = session.current();
+        if (failureEntry) {
+          session.publish(failureEntry);
+          activeEntry = session.current() ?? failureEntry;
         }
-      };
-      await prepareForExecution();
+        refreshTurnSessionState(activeEntry, preflightEntry);
+        turn.preflightError = toErrorObject(error, "Reply preparation failed");
+        const admittedVerboseLevel =
+          turn.queued.run.verboseLevelOverride ??
+          session.current()?.verboseLevel ??
+          turn.queued.run.verboseLevel;
+        const text =
+          renderAgentHarnessPreflightUserMessage(error) ??
+          buildPreflightCompactionFailureText(formatErrorMessage(error), {
+            includeDetails: admittedVerboseLevel === "on" || admittedVerboseLevel === "full",
+          });
+        if (text) {
+          turn.preflightFailurePayload = markReplyPayloadForSourceSuppressionDelivery({ text });
+        }
+      }
+      if (
+        pendingTerminalCompactionNotice &&
+        turn.sendPolicy === "allow" &&
+        turn.queued.currentInboundEventKind !== "room_event"
+      ) {
+        const noticeEntry = await readNoticeSessionEntry();
+        if (resolveTurnSendPolicy(noticeEntry, turn.queued) === "allow") {
+          await params.onCompactionNotice?.(
+            pendingTerminalCompactionNotice.phase,
+            pendingTerminalCompactionNotice.text,
+            turn,
+          );
+        }
+      }
       if (goalContinuation) {
         const currentEntry =
           replySessionKey && params.defaults.storePath

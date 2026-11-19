@@ -17,9 +17,7 @@ import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import type { GroupParticipationContext } from "./group-participation-inputs.js";
 import type { FollowupRun } from "./queue.js";
 import type { InternalFollowupRun } from "./queue/types.js";
-import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import type { DirectBlockDelivery } from "./reply-delivery.js";
-import type { UnexecutedReplyTurnCompletion } from "./reply-input-admission.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
@@ -138,17 +136,12 @@ export type ReplyAgentTurnContext = {
 
 /** Inputs shared by direct and queued agent-turn execution. */
 export type AgentTurnParams = ReplyAgentTurnContext & {
-  /** Preparation owner retained when observation defers maintenance until approval. */
-  admittedTurn?: AdmittedFollowupTurn;
   /** Shared by fallback candidates; required preflight already attempted its checkpoint. */
   recoveryMemoryFlushAttempted?: boolean;
   /** The admitted queued delivery owner settles every terminal outcome. */
   completionSource?: "reply-dispatch";
-  /** Input admission terminalizes turns that never start the primary runner. */
-  completeUnexecutedTurn?: (
-    completion: UnexecutedReplyTurnCompletion,
-    entry: SessionEntry | undefined,
-  ) => Promise<void>;
+  /** Input admission owns durable completion when observation skips the runner. */
+  completeObservedTurn?: () => Promise<void>;
   replyThreading?: TemplateContext["ReplyThreading"];
   resolveVisibleReplyDelivery?: () => Promise<boolean>;
   typingSignals: TypingSignaler;

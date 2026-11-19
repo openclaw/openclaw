@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import {
@@ -157,8 +157,6 @@ it.each(["none", "engagement", "opportunity"] as const)(
   "reassesses %s when accepted group input changes before execution",
   async (attention) => {
     fixture.config.agents!.defaults!.model = { primary: "test-provider/test-model" };
-    fixture.config.agents!.defaults!.typingMode = "instant";
-    const onReplyStart = vi.fn();
     models.decision.mockImplementationOnce(async (batch) => judgment(batch, { attention }));
     models.decision.mockImplementation(async (batch) => judgment(batch, { attention: "none" }));
     models.embedded.mockResolvedValue({
@@ -167,7 +165,6 @@ it.each(["none", "engagement", "opportunity"] as const)(
     });
     const groupId = `-10113-${attention}`;
     const reply = await fixture.reply("Chatter", "observed-source", groupId, {
-      onReplyStart,
       onRunVerbosityResolved: () => {
         const operation = getSessionControllerOperation("agent:main:telegram:group:" + groupId);
         if (!operation) {
@@ -192,6 +189,5 @@ it.each(["none", "engagement", "opportunity"] as const)(
     ).toEqual([]);
     expect(models.decision).toHaveBeenCalledTimes(2);
     expect(models.embedded).not.toHaveBeenCalled();
-    expect(onReplyStart).not.toHaveBeenCalled();
   },
 );

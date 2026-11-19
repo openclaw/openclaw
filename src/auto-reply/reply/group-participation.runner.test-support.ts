@@ -1,11 +1,6 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import {
-  readGroupParticipationInputs,
-  recordGroupParticipationInput,
-} from "./group-participation-inputs.js";
 import { createGroupReplyFixture } from "./group-participation.reply.test-support.js";
 
 const models = vi.hoisted(() => ({
@@ -46,19 +41,3 @@ beforeEach(async () => {
   });
   setActivePluginRegistry(registry);
 });
-
-export function acceptGroupInputForActiveReply(groupId: string) {
-  const operation = getSessionControllerOperation(`agent:main:telegram:group:${groupId}`);
-  if (!operation) {
-    throw new Error("The admitted group owner is missing");
-  }
-  const source = readGroupParticipationInputs(operation).sources[0];
-  if (!source) {
-    throw new Error("The admitted group source is missing");
-  }
-  recordGroupParticipationInput(operation, {
-    userTurnTranscriptRecorder: source.recorder,
-    messageId: "accepted-after-initial-assessment",
-    run: { messageProvider: "telegram" },
-  });
-}

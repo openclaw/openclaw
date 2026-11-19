@@ -1,40 +1,11 @@
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { readGroupParticipationRun } from "./group-participation-run.js";
 
-/** Refresh participation and prepare any newly approved reply before generation. */
+/** Refresh participation before generation, committing input when observing instead. */
 export async function prepareGroupParticipationObservation(params: AgentTurnParams) {
-  if (params.admittedTurn) {
-    params.recoveryMemoryFlushAttempted = params.admittedTurn.memoryFlushAttempted;
-  }
   const participation = readGroupParticipationRun(params.replyOperation);
-  if (!participation) {
+  if (!participation || participation.mode === "ordinary") {
     return undefined;
-  }
-  for (;;) {
-    await refreshObservation(params, participation);
-    const turn = params.admittedTurn;
-    if (participation.isObserving || !turn?.prepareForExecution) {
-      return participation;
-    }
-    await turn.prepareForExecution();
-    // Compaction may rotate the session; execution consumes the preparation owner's result.
-    Object.assign(params.followupRun, turn.queued);
-    params.getActiveSessionEntry = turn.session.current;
-    params.activeSessionStore = turn.sessionStore;
-    params.recoveryMemoryFlushAttempted = turn.memoryFlushAttempted;
-    if (turn.preflightError) {
-      return participation;
-    }
-    // Input and consent may have changed while maintenance was running.
-  }
-}
-
-async function refreshObservation(
-  params: AgentTurnParams,
-  participation: NonNullable<ReturnType<typeof readGroupParticipationRun>>,
-) {
-  if (participation.mode === "ordinary") {
-    return;
   }
   // Positive decisions also expire when the accepted conversation or config changes.
   const assessedRevision = participation.snapshot?.revision;
@@ -42,7 +13,7 @@ async function refreshObservation(
     await participation.refresh();
   }
   if (!participation.isObserving) {
-    return;
+    return participation;
   }
   const recorder = params.followupRun.userTurnTranscriptRecorder;
   if (participation.isObserving && recorder && !recorder.hasPersisted()) {
@@ -74,4 +45,5 @@ async function refreshObservation(
     // The owner restores ordinary policy only if assistance is unavailable.
     await participation.refresh();
   }
+  return participation;
 }
