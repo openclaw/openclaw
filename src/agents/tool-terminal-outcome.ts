@@ -84,8 +84,12 @@ export function createToolTerminalObserver(
     } else if (
       !preservesFailure &&
       lastToolError &&
-      normalizeLowercaseStringOrEmpty(lastToolError.toolName) ===
-        normalizeLowercaseStringOrEmpty(observation.toolName)
+      // A call to a missing tool did nothing and has no name a retry could reuse, so the
+      // next successful executed call recovers it. Otherwise only the same tool recovers.
+      (lastToolError.unknownTool
+        ? executionStarted
+        : normalizeLowercaseStringOrEmpty(lastToolError.toolName) ===
+          normalizeLowercaseStringOrEmpty(observation.toolName))
     ) {
       lastToolError = undefined;
     }
