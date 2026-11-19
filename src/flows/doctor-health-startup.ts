@@ -10,6 +10,7 @@ import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.
 import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
 import { isDefaultInstallIdentity, resolveIsNixMode, resolveStateDir } from "../config/paths.js";
 import { formatDoctorProgressPhase, type DoctorProgressMeasure } from "../infra/doctor-progress.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { resolveCommandProcessSignal, withCommandProcessScope } from "../process/exec-spawn.js";
@@ -384,9 +385,15 @@ export async function prepareDoctorRuntimeChecks(
     // The repair touches only this installation's launcher and is verified before it lands.
     if (root) {
       const { repairPublishedPnpmLaunchers } = await import("../infra/update-launcher-repair.js");
-      for (const repair of await repairPublishedPnpmLaunchers({ root }).catch(() => [])) {
+      const { repaired, failed } = await repairPublishedPnpmLaunchers({ root });
+      for (const repair of repaired) {
         runtime.log(
           `Repaired the openclaw launcher ${repair.file}: it still pointed at the removed update stage ${repair.stage}.`,
+        );
+      }
+      for (const { file, error } of failed) {
+        runtime.log(
+          `The openclaw launcher ${file} still points at a removed update stage and could not be repaired (${formatErrorMessage(error)}). Recreate it with \`pnpm add -g openclaw@<installed-version>\` as the account that owns the pnpm install.`,
         );
       }
     }

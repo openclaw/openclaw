@@ -248,9 +248,15 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
         join(stage.binDir, "openclaw"),
         `#!/bin/sh\nexec node "$(dirname "$0")/${target}" "$@"\n`,
       );
+      await fs.mkdir(join(base, "bin"));
+      const snapshot = async () => [await fs.readdir(project), await fs.readdir(packageRoot)];
+      const before = await snapshot();
       await expect(finalizeNativePackageStage(stage, "openclaw")).rejects.toThrow(
         "still points into the update stage",
       );
+      // Refused before activation: the live project and bin directory are untouched.
+      expect(await snapshot()).toEqual(before);
+      expect(await fs.readdir(join(base, "bin"))).toEqual([]);
     });
   });
 });
