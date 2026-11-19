@@ -6,7 +6,6 @@
 // This counts JavaScript sync fs API calls, not kernel syscalls. Git workers retain the
 // metadata work; thread CPU/allocations cover the main thread, process CPU includes workers.
 import assert from "node:assert/strict";
-import fs from "node:fs";
 import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
