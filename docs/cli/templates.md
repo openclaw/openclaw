@@ -182,9 +182,8 @@ continue its existing setup rather than adding another copy.
 proposal in that workspace and returns its unique `draftId` and path. It does
 not copy source files, start a model turn, contact ClawHub, or publish. Each
 invocation creates a distinct proposal; retain the returned ID instead of
-searching for a latest draft. The bundled skill starts the same kind of proposal
-from its inventory step when a chat request did not arrive with a UI-created
-draft.
+searching for a latest draft. The bundled skill runs this command during inventory when a chat request did not
+arrive with a UI-created draft; otherwise it reuses the supplied draft.
 
 Create a minimal project, validate its inputs, preview it without mutation,
 and build an immutable package artifact:
