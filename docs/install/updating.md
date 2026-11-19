@@ -53,6 +53,15 @@ backup.
 
 ## Update implementation contract
 
+A first Git-release conversion whose LaunchAgent rebind is refused from inside
+the running service fails with an external-shell recovery action. The installed
+updater restores its captured previous release selection only while its exact
+trial is still unstarted and its link and fallback identities are unchanged.
+Started or replaced trials keep their existing recovery facts. This compensation
+does not rewrite the LaunchAgent or undo data migrations; Gateway-initiated
+conversion still requires an external service context. The installed updater must
+contain this repair.
+
 Service reconciliation recognizes a deleted pnpm store generation only when it
 belongs to the same global root as a verified active pnpm install. This repairs
 older service definitions without adopting another global installation. The

@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveConfigPath } from "../config/paths.js";
@@ -15,6 +16,8 @@ import {
   readPackageReleaseSlotSync,
 } from "./package-release-slot-path.js";
 import {
+  assertPackageReleaseIdentity,
+  type PackageReleaseIdentity,
   capturePackageReleaseSlot,
   createPackageReleasePrefix,
   packageReleaseLinkTarget,
@@ -22,6 +25,14 @@ import {
   switchPackageReleaseLink,
 } from "./package-release-slot.js";
 import { readBuiltGatewayBuildId } from "./update-git-runtime.js";
+
+/** Publication evidence, usable only under the update's original executor. */
+export type GitReleaseSelectionRollback = {
+  slot: string;
+  selected: { identity: string; target: string };
+  previous: { target: string; release: PackageReleaseIdentity };
+  trial: { path: string; identity: string; contents: string };
+};
 
 /**
  * A new release directory. The worktree is built at `buildDir`, outside
@@ -49,23 +60,27 @@ export async function publishGitRelease(params: {
   /** Leave the link to the next service start, which selects the release on trial. */
   pending?: boolean;
   assertCurrent?: () => void;
-}): Promise<{ previous: string | null; target: string }> {
+}): Promise<{ previous: string | null; target: string; rollback?: GitReleaseSelectionRollback }> {
   const slot = gitReleaseSlot(params.prefix);
   const target = packageReleaseLinkTarget(slot, params.releaseRoot);
   const trialFile = path.join(params.prefix, PACKAGE_RELEASES_DIR, GIT_RELEASE_TRIAL);
   await writeGitReleaseLauncher(params.prefix);
   const existing = await fs.lstat(slot).catch(ignoreMissingPath);
   let previous: string | null = null;
+  let previousRelease: PackageReleaseIdentity | undefined;
+  let selected: GitReleaseSelectionRollback["selected"] | undefined;
+  let rollback: GitReleaseSelectionRollback | undefined;
   if (existing) {
     const capture = await capturePackageReleaseSlot(slot);
     if (capture.kind !== "link") {
       throw new Error(`${slot} is not a release link; the installation was left unchanged.`);
     }
     previous = capture.target;
+    previousRelease = capture.release;
     // A stale trial must not switch the next release back.
     await fs.rm(trialFile, { force: true });
     if (!params.pending) {
-      await switchPackageReleaseLink({
+      selected = await switchPackageReleaseLink({
         slot,
         expected: { identity: capture.identity, target: capture.target },
         target,
@@ -96,10 +111,57 @@ export async function publishGitRelease(params: {
       attempts: 0,
     };
     const temporary = `${trialFile}.${process.pid}`;
-    await fs.writeFile(temporary, JSON.stringify(record));
+    const contents = JSON.stringify(record);
+    await fs.writeFile(temporary, contents);
+    const identity = await fs.lstat(temporary, { bigint: true });
     await fs.rename(temporary, trialFile);
+    if (selected && previousRelease && !params.pending) {
+      rollback = {
+        slot,
+        selected,
+        previous: { target: previous, release: previousRelease },
+        trial: { path: trialFile, identity: `${identity.dev}:${identity.ino}`, contents },
+      };
+    }
   }
-  return { previous, target };
+  return { previous, target, ...(rollback ? { rollback } : {}) };
+}
+
+/**
+ * Compensate only a refused conversion, before its launcher ever starts the target.
+ * No target boot means no startup data migration to undo. Started trials retain
+ * the launcher's state-aware recovery; this operation only restores selection.
+ */
+export async function restoreUnstartedGitReleaseSelection(
+  publication: GitReleaseSelectionRollback,
+  assertCurrent: () => void,
+): Promise<void> {
+  const assertTrial = () => {
+    const entry = fsSync.lstatSync(publication.trial.path, { bigint: true });
+    if (
+      !entry.isFile() ||
+      `${entry.dev}:${entry.ino}` !== publication.trial.identity ||
+      fsSync.readFileSync(publication.trial.path, "utf8") !== publication.trial.contents
+    ) {
+      throw new Error("Git release trial changed or started; selection recovery was withheld.");
+    }
+  };
+  assertCurrent();
+  assertTrial();
+  await switchPackageReleaseLink({
+    slot: publication.slot,
+    expected: publication.selected,
+    target: publication.previous.target,
+    assertCurrent,
+    assertCandidate: async () => {
+      await assertPackageReleaseIdentity(publication.previous.release);
+      assertTrial();
+    },
+  });
+  // Keep a replacement/started trial even if it appeared during link publication.
+  assertTrial();
+  assertCurrent();
+  fsSync.unlinkSync(publication.trial.path);
 }
 
 /** A ready Gateway ends the trial of the release it runs. */

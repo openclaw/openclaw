@@ -272,8 +272,9 @@ export async function updateGitRelease(params: {
     timeoutMs,
     beforeGitMutation: opts.beforeGitMutation,
   });
+  let publication: Awaited<ReturnType<typeof publishGitRelease>> | undefined;
   if (target.status === "ok") {
-    await publishGitRelease({
+    publication = await publishGitRelease({
       prefix,
       releaseRoot,
       trial: true,
@@ -302,6 +303,7 @@ export async function updateGitRelease(params: {
     // The new release's own verdict; the previous runtime's belongs to failure recovery only.
     recovery: await verifyGitUpdateRecovery({ root: releaseRoot, sha: afterSha }),
     root: slot,
+    ...(converting && publication?.rollback ? { gitReleaseConversion: publication.rollback } : {}),
     gitRuntime: await readGitRuntimeArtifactIdentity(releaseRoot),
     after: {
       sha: afterSha,

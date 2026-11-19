@@ -3,6 +3,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { resolveGatewayService, type GatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { restoreUnstartedGitReleaseSelection } from "../../infra/git-release.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
@@ -45,12 +46,16 @@ import {
 } from "./update-command-readiness.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { resolveGatewayRecoverySchemaPaths } from "./update-command-recovery-schema-paths.js";
+import { recordServiceReconciliationWarning } from "./update-command-result.js";
 import {
   GatewayRestartHealthError,
   restartRetainedUpdateGatewayService,
   runUpdatedInstallGatewayCommand,
 } from "./update-command-service-command.js";
-import type { OriginalManagedServiceRuntime } from "./update-command-service-context-types.js";
+import type {
+  OriginalManagedServiceRuntime,
+  UpdateServiceRestartParams,
+} from "./update-command-service-context-types.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
   revalidateManagedGatewayServiceAfterUpdate,
@@ -665,4 +670,49 @@ export async function compensateOriginalManagedService(
     rolledBack: false,
     originalServiceRecovery: healthy ? "healthy" : "failed",
   };
+}
+
+/** A refused native rebind cannot strand a conversion's never-started selection. */
+export async function compensateRefusedGitReleaseConversion(
+  params: Pick<UpdateServiceRestartParams, "result" | "onVerificationFailure"> & {
+    serviceEnv: NodeJS.ProcessEnv;
+    assertCurrent: () => void;
+  },
+  error: unknown,
+): Promise<boolean> {
+  if (
+    !params.result.gitReleaseConversion ||
+    !/Refusing to install LaunchAgent [^\n]+ from inside [^\n]+; run this command from an external shell\./.test(
+      String(error),
+    )
+  ) {
+    return false;
+  }
+  // This native guard runs before definition publication or service stop.
+  // A conversion has no post-core migrations before activation verifies.
+  try {
+    await restoreUnstartedGitReleaseSelection(
+      params.result.gitReleaseConversion,
+      params.assertCurrent,
+    );
+    params.result.rollbackOutcome = {
+      status: "succeeded",
+      reason:
+        "Restored the never-started Git conversion's previous release selection; service and data were unchanged.",
+    };
+  } catch (cause) {
+    params.assertCurrent();
+    params.result.rollbackOutcome = {
+      status: "failed",
+      reason:
+        "Git release selection recovery was withheld; inspect the retained trial before retrying.",
+    };
+    recordServiceReconciliationWarning(
+      params.result,
+      params.serviceEnv,
+      `Git release selection recovery did not complete: ${String(cause)}`,
+    );
+  }
+  params.onVerificationFailure?.("git-release-service-rebind-refused");
+  return true;
 }
