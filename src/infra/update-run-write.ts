@@ -9,7 +9,6 @@ import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { completeUpdateFailureSummary } from "./update-failure-result.js";
 import { claimUpdateResultInTransaction } from "./update-result-claim.js";
 import type { UpdateResultPayload } from "./update-result-payload.js";
-import { isNeverActivatedFailedUpdate } from "./update-run-activation.js";
 import { encodeRun, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import type { UpdateRunPhasePatch } from "./update-run-mutation.types.js";
 import { decodeRun, readUpdateRunRecord } from "./update-run-read.kernel.js";
@@ -88,9 +87,10 @@ export function applyUpdateRunStep(
     record.finishedAtMs !== null &&
     (record.status === "succeeded" ||
       (record.status === "skipped" && record.reason === "already-current") ||
-      isNeverActivatedFailedUpdate(record) ||
-      (record.status === "failed" && record.reason === "handoff-terminated")) &&
-    step.status === "completed" &&
+      record.status === "failed" ||
+      record.status === "rolled-back") &&
+    (step.status === "completed" ||
+      (step.status === "skipped" && step.step === "warning:recovery-artifact-cleanup")) &&
     [
       "recovery-artifact-cleanup",
       "warning:recovery-artifact-cleanup",
