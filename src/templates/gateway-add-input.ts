@@ -80,6 +80,6 @@ export type GatewayTemplateAddInput = Omit<ChatTemplateAddInput, "source"> &
     onAgentAdmitted?: (agent: { agentId: string; sessionKey: string }) => Promise<void>;
     onAgentReady?: StatelessTemplateAddOptions["onAgentReady"];
     onSetupEvent?: StatelessTemplateAddOptions["onSetupEvent"];
-    cronGateway?: Pick<TemplateCronGateway, "add" | "list" | "writeScratch" | "enable"> &
+    cronGateway?: Pick<TemplateCronGateway, "add" | "writeScratch" | "enable"> &
       Partial<Pick<TemplateCronGateway, "get" | "remove">>;
   };

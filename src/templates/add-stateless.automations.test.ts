@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronWithinActiveHours } from "../cron/active-hours.js";
 import { CronService } from "../cron/service.js";
 import { createNoopLogger } from "../cron/service.test-harness.js";
+import type { TemplateInstallEvent } from "../shared/template-install-notice.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
@@ -108,7 +109,15 @@ it.each([false, undefined])(
           declarationKey: "template:watcher:weekly",
           sessionTarget: "isolated",
         });
-        expect(onSetupEvent).toHaveBeenCalledExactlyOnceWith(
+        expect(onSetupEvent).toHaveBeenNthCalledWith(
+          1,
+          expect.objectContaining({
+            kind: "automation-plan",
+            slots: [{ slotId: "weekly", name: "weekly" }],
+          }),
+        );
+        expect(onSetupEvent).toHaveBeenNthCalledWith(
+          2,
           expect.objectContaining({
             kind: "automation-created",
             declarationId: "weekly",
@@ -296,14 +305,24 @@ it.each([false, true])(
             setRuntimeConfigSnapshot(config);
           },
           cronGateway: createTemplateCronAdapter(cron),
+          // The normal Gateway installer retains the new agent before scheduling.
+          waitForAgentRuntime: async () => "applied",
           onSetupEvent: async (event) => {
             notices.push(event);
             // Each result is published before the next scheduler write, not at the end.
-            expect(await cron.list({ includeDisabled: true })).toHaveLength(notices.length);
+            expect(await cron.list({ includeDisabled: true })).toHaveLength(notices.length - 1);
           },
         });
         expect(result.status, result.error?.message).toBe("complete");
-        expect(notices).toHaveLength(3);
+        expect(notices).toHaveLength(4);
+        expect(notices[0]).toMatchObject({
+          kind: "automation-plan",
+          slots: [
+            { slotId: "$portable-heartbeat", name: "Proactive check (portable)" },
+            { slotId: "$portable-heartbeat-task-1", name: "Summary" },
+            { slotId: "daily", name: "daily" },
+          ],
+        });
         expect(notices).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
@@ -316,7 +335,9 @@ it.each([false, true])(
           ]),
         );
         expect(
-          notices.every((event) => (event as { kind: string }).kind === "automation-created"),
+          notices
+            .slice(1)
+            .every((event) => (event as { kind: string }).kind === "automation-created"),
         ).toBe(true);
         const jobs = await cron.list({ includeDisabled: true });
         expect(jobs).toHaveLength(3);
@@ -414,6 +435,7 @@ it.each([
       });
       await cron.start();
       const gateway = createTemplateCronAdapter(cron);
+      const setupEvents: TemplateInstallEvent[] = [];
       try {
         const result = await applyTemplateAddPlanStateless(plan, {
           config,
@@ -424,6 +446,7 @@ it.each([
             setRuntimeConfigSnapshot(config);
           },
           onSetupEvent: async (event) => {
+            setupEvents.push(event);
             if (changed === "rollback-notice" && event.kind === "automation-failed") {
               throw new Error("Fixture notice publication failed");
             }
@@ -494,6 +517,11 @@ it.each([
           return;
         }
         if (definitionChanged || scratchChanged) {
+          // Failed scratch import or activation can leave the new job saved and paused.
+          // The partial installation error must not mislabel that retained slot "Not created".
+          expect(setupEvents.filter((event) => event.kind === "automation-created")).toMatchObject([
+            { declarationId: "$portable-heartbeat", schedulerJobId: jobs[0]?.id },
+          ]);
           expect(result).toMatchObject({
             status: "partial",
             configCommitted: true,
@@ -521,6 +549,98 @@ it.each([
         });
         const monitor = jobs.find((job) => job.name !== "Summary")!;
         expect((await cron.readScratch(monitor.id)).scratch?.content).toBe(checklist);
+      } finally {
+        cron.stop();
+        await cron.waitForIdle();
+      }
+    });
+  },
+);
+
+it.each([true, false])(
+  "settles every declared slot without claiming a converged or rolled-back job (retained=%s)",
+  async (retained) => {
+    await withOpenClawTestState({ label: "template-install-settlement" }, async (fixture) => {
+      const ids = ["created", "existing", "unattempted"];
+      const source = await portableSource(fixture, {
+        workspace: undefined,
+        automations: ids.map((id) => ({
+          id,
+          name: "Same label",
+          enabled: false,
+          schedule: { cron: "0 9 * * *", timezone: "UTC" },
+          session: "isolated",
+          message: "Fixture task.",
+        })),
+      });
+      let config = baseConfig();
+      setRuntimeConfigSnapshot(config);
+      const plan = await buildGatewayTemplateAddPlan(source, { config, sourceMcpServers: {} });
+      const cron = new CronService({
+        storePath: fixture.statePath("cron", "jobs.json"),
+        scheduler: createTestGatewayScheduler(),
+        cronEnabled: false,
+        defaultAgentId: "main",
+        log: createNoopLogger(),
+        enqueueSystemEvent: vi.fn(),
+        runIsolatedAgentJob: vi.fn(),
+        runSessionEvent: vi.fn(),
+      });
+      const gateway = createTemplateCronAdapter(cron);
+      const events: TemplateInstallEvent[] = [];
+      let adds = 0;
+      let firstJobId: string | undefined;
+      try {
+        const result = await applyTemplateAddPlanStateless(plan, {
+          config,
+          consentPlanIntegrity: plan.planIntegrity,
+          getCurrentConfig: () => config,
+          commitConfig: async (transform) => {
+            config = transform(config);
+            setRuntimeConfigSnapshot(config);
+          },
+          ...(retained ? { waitForAgentRuntime: async () => "applied" as const } : {}),
+          onSetupEvent: async (event) => {
+            events.push(event);
+          },
+          cronGateway: {
+            ...gateway,
+            add: async (input, options) => {
+              expect(events[0]).toMatchObject({
+                kind: "automation-plan",
+                slots: ids.map((slotId) => ({ slotId, name: "Same label" })),
+              });
+              if (++adds === 1) {
+                firstJobId = (await gateway.add(input, options)).id;
+                throw new Error("Lost acknowledgement after scheduler commit");
+              }
+              // The second add confirms convergence, not a job owned by this attempt.
+              const job = (await cron.readJob(firstJobId!))!;
+              return { ...job, created: false, updated: false, job };
+            },
+          },
+        });
+        expect(adds).toBe(2);
+        expect(result.status).toBe("partial");
+        expect((await cron.list({ includeDisabled: true })).map((job) => job.id)).toEqual(
+          retained ? [firstJobId] : [],
+        );
+        expect(events).toHaveLength(4);
+        const bySlot = events.flatMap((event) =>
+          "declarationId" in event
+            ? [
+                [
+                  event.declarationId,
+                  event.kind === "automation-created" ? event.schedulerJobId : "failed",
+                ],
+              ]
+            : [],
+        );
+        expect(Object.fromEntries(bySlot)).toEqual({
+          created: retained ? firstJobId : "failed",
+          existing: "failed",
+          unattempted: "failed",
+        });
       } finally {
         cron.stop();
         await cron.waitForIdle();

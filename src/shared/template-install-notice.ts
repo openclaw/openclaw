@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { AutomationCreationSlot } from "./automation-creation.js";
 
 /** Installer facts, not recommendations or model-authored assistant content. */
 export type TemplatePluginInstallNotice = {
@@ -35,6 +36,7 @@ export function readTemplatePluginInstallNotice(
 
 export type TemplateInstallOutcome =
   | { kind: "plugin-install"; plugin: TemplatePluginInstallNotice }
+  | { kind: "automation-plan"; slots: AutomationCreationSlot[] }
   | {
       kind: "automation-created";
       declarationId: string;
@@ -54,6 +56,9 @@ export function formatTemplateInstallOutcome(outcome: TemplateInstallOutcome): s
     return outcome.plugin.status === "installed"
       ? `Plugin installed: ${outcome.plugin.displayName}.`
       : `Plugin installation failed: ${outcome.plugin.displayName}. Continue setup in this agent.`;
+  }
+  if (outcome.kind === "automation-plan") {
+    return `Setting up automations: ${outcome.slots.map((slot) => slot.name).join(", ")}.`;
   }
   return outcome.kind === "automation-created"
     ? `Automation created: ${outcome.name}${outcome.enabled ? "." : " (paused until setup is ready)."}`

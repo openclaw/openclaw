@@ -34,6 +34,7 @@ import {
   prepareTemplateInitializationIntent,
   type TemplateInitializationIntent,
 } from "./add-initialization-intent.js";
+import { createTemplateInstallReceipts } from "./add-install-receipts.js";
 import { TemplateAddMutationError } from "./add-mutation-error.js";
 import { sameCommittedAgent } from "./add-plan-helpers.js";
 import { rollbackWorkspaceBootstrapSeedForAdd } from "./add-state-write.js";
@@ -105,7 +106,7 @@ export type StatelessTemplateAddOptions = TemplateMutationStateOptions & {
   skillConsent?: TemplateSkillInstallConsent;
   reloadPlugins?: PluginInstallBatchReload;
   runtimeBatch?: TemplatePluginRuntimeOptions["runtimeBatch"];
-  cronGateway?: Pick<TemplateCronGateway, "add" | "list" | "writeScratch" | "enable"> &
+  cronGateway?: Pick<TemplateCronGateway, "add" | "writeScratch" | "enable"> &
     Partial<Pick<TemplateCronGateway, "get" | "remove">>;
   commitConfig?: ConfigCommit;
   /** Save ordinary session state before publishing its new agent; returns exact owned cleanup. */
@@ -281,6 +282,7 @@ export async function applyTemplateAddPlanStateless(
     await options.admittedAgent?.assertCurrent();
     assertForwardCurrent("after-agent-commit");
   };
+  const receipts = createTemplateInstallReceipts(plan.agent.finalId, options, () => retained);
   let assertPluginRequirementsCurrent: (() => Promise<void>) | undefined;
   const stageOptions = (phase?: "after-agent-commit") => ({
     ...options,
@@ -291,14 +293,7 @@ export async function applyTemplateAddPlanStateless(
     },
     onSetupOutcome: async (outcome: TemplateInstallOutcome) => {
       assertForwardCurrent(phase);
-      await options.onSetupEvent?.({
-        ...outcome,
-        agentId: plan.agent.finalId,
-        sessionKey: resolveAgentMainSessionKey({
-          cfg: options.getCurrentConfig?.() ?? options.config,
-          agentId: plan.agent.finalId,
-        }),
-      });
+      await receipts.publish(outcome);
       assertForwardCurrent(phase);
     },
     onPluginRuntimeReady: (assertCurrent: () => Promise<void>) => {
@@ -709,7 +704,7 @@ export async function applyTemplateAddPlanStateless(
     if (bootstrap === "seeded") {
       bootstrapSeededAt = new Date(bootstrapNow).toISOString();
     }
-    return result("complete");
+    return await receipts.settle(result("complete"));
   } catch (error) {
     if (error instanceof TemplatePackageInstallError) {
       packages = error.installedPackages;
@@ -718,12 +713,16 @@ export async function applyTemplateAddPlanStateless(
       cronJobs = error.cronJobs;
       if (error.code === "cron_scratch_import_incomplete") {
         // A scratch conflict or lost write acknowledgement may contain user edits.
-        return result("partial", {
-          code: error.code,
-          message: `${error.message} The new agent and its automations were kept. Inspect their scratch and enabled state before retrying.`,
-        });
+        return await receipts.settle(
+          result("partial", {
+            code: error.code,
+            message: `${error.message} The new agent and its automations were kept. Inspect their scratch and enabled state before retrying.`,
+          }),
+        );
       }
     }
-    return await fail(error, error instanceof TemplateAddMutationError ? error.code : "add_failed");
+    return await receipts.settle(
+      await fail(error, error instanceof TemplateAddMutationError ? error.code : "add_failed"),
+    );
   }
 }
