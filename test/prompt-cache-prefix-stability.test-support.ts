@@ -497,9 +497,8 @@ export function usePrefixStabilityJourney() {
           await settle();
           await client.request("cron.remove", { id: first.id });
           await send(CRON_FIRST, "OWNER turn after a scheduled first turn");
-          const [cronTools, ownerTools] = [cronFirstRequests[0]!, cronFirstRequests.at(-1)!].map(
-            (request) => toolNames(request.tools),
-          );
+          const cronTools = toolNames(cronFirstRequests[0]!.tools);
+          const ownerTools = toolNames(cronFirstRequests.at(-1)!.tools);
           const known = (name: string) => !CRON_FIRST_GROWTH.tools.includes(name);
           expect(ownerTools.filter(known), `owner turn tools: ${ownerTools.join(",")}`).toEqual(
             cronTools.filter(known),
