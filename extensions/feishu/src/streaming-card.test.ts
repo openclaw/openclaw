@@ -765,10 +765,14 @@ describe("FeishuStreamingSession", () => {
     windowOpen: () => boolean;
     onSettings: (streamingMode: boolean) => Response;
     fullUpdate?: () => Response;
+    closedCode?: number;
   }): StreamingFetchDeps {
     return createMemoryFetch((url, rawBody) => {
       if (url.pathname.includes("/auth/")) {
         return jsonResponse({ code: 0, msg: "ok", tenant_access_token: "token", expire: 7200 });
+      }
+      if (url.pathname.endsWith("/cardkit/v1/cards")) {
+        return jsonResponse({ code: 0, msg: "ok", data: { card_id: "card_note" } });
       }
       const body = rawBody ? (JSON.parse(rawBody) as Record<string, unknown>) : {};
       const method = url.pathname.endsWith("/settings") ? "PATCH" : "PUT";
@@ -782,7 +786,7 @@ describe("FeishuStreamingSession", () => {
       if (url.pathname.includes("/elements/")) {
         return options.windowOpen()
           ? jsonResponse({ code: 0, msg: "ok" })
-          : jsonResponse({ code: 300309, msg: "streaming mode is closed" });
+          : jsonResponse({ code: options.closedCode ?? 300309, msg: "streaming mode is closed" });
       }
       return (options.fullUpdate ?? (() => jsonResponse({ code: 0, msg: "ok" })))();
     });
@@ -806,7 +810,7 @@ describe("FeishuStreamingSession", () => {
       cardId: "card_window",
       messageId: "om_window",
       text: "hello",
-      streamingOpenedAt: Date.now() - 9 * 60_000,
+      streamingOpenedAt: Date.now() - 8 * 60_000,
       log,
     });
 
@@ -830,45 +834,49 @@ describe("FeishuStreamingSession", () => {
     expect(requests.filter((request) => request.path.endsWith("/settings"))).toHaveLength(2);
   });
 
-  it("re-opens a window Feishu already closed and retries the rejected write once", async () => {
-    const requests: WindowRequest[] = [];
-    let windowOpen = false;
-    const deps = createWindowFetch({
-      requests,
-      windowOpen: () => windowOpen,
-      onSettings: (streamingMode) => {
-        windowOpen = streamingMode;
-        return jsonResponse({ code: 0, msg: "ok" });
-      },
-    });
-    const log = vi.fn();
-    const session = createActiveSession(deps, {
-      cardId: "card_reopen",
-      messageId: "om_reopen",
-      text: "hello",
-      streamingOpenedAt: Date.now(),
-      log,
-    });
+  it.each([200850, 300309])(
+    "re-opens a window closed with %s and retries the rejected write once",
+    async (closedCode) => {
+      const requests: WindowRequest[] = [];
+      let windowOpen = false;
+      const deps = createWindowFetch({
+        requests,
+        closedCode,
+        windowOpen: () => windowOpen,
+        onSettings: (streamingMode) => {
+          windowOpen = streamingMode;
+          return jsonResponse({ code: 0, msg: "ok" });
+        },
+      });
+      const log = vi.fn();
+      const session = createActiveSession(deps, {
+        cardId: "card_reopen",
+        messageId: "om_reopen",
+        text: "hello",
+        streamingOpenedAt: Date.now(),
+        log,
+      });
 
-    const result = await session.closeWithResult("hello final");
+      const result = await session.closeWithResult("hello final");
 
-    expect(result).toMatchObject({
-      visibleReplySent: true,
-      content: "hello final",
-      messageId: "om_reopen",
-    });
-    expect(requests.map(cardPath)).toEqual([
-      "card_reopen/elements/content/content",
-      "card_reopen/settings",
-      "card_reopen/settings",
-      "card_reopen/elements/content/content",
-      "card_reopen/settings",
-    ]);
-    expect(log).toHaveBeenCalledWith(
-      "Renewed streaming window (server-closed): cardId=card_reopen",
-    );
-    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Final update failed"));
-  });
+      expect(result).toMatchObject({
+        visibleReplySent: true,
+        content: "hello final",
+        messageIds: ["om_reopen"],
+      });
+      expect(requests.map(cardPath)).toEqual([
+        "card_reopen/elements/content/content",
+        "card_reopen/settings",
+        "card_reopen/settings",
+        "card_reopen/elements/content/content",
+        "card_reopen/settings",
+      ]);
+      expect(log).toHaveBeenCalledWith(
+        "Renewed streaming window (server-closed): cardId=card_reopen",
+      );
+      expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Final update failed"));
+    },
+  );
 
   it("stops element writes and lands the final text with a full-card update when the window cannot be renewed", async () => {
     const requests: WindowRequest[] = [];
@@ -902,7 +910,7 @@ describe("FeishuStreamingSession", () => {
     expect(result).toMatchObject({
       visibleReplySent: true,
       content: "hello final",
-      messageId: "om_full",
+      messageIds: ["om_full"],
     });
     const fullUpdate = requests.at(-1) as WindowRequest;
     expect(fullUpdate.path).toBe("/open-apis/cardkit/v1/cards/card_full");
@@ -935,10 +943,91 @@ describe("FeishuStreamingSession", () => {
       streamingOpenedAt: Date.now(),
     });
 
-    await expect(session.closeWithResult("hello final")).rejects.toMatchObject({
+    const finalization = session.closeWithResult("hello final");
+    await expect(finalization).rejects.toThrow(
+      "Full card update failed: card too large (code=11310)",
+    );
+    await expect(finalization).rejects.toMatchObject({
       code: "CHANNEL_PARTIAL_DELIVERY",
-      message: "Full card update failed: card too large (code=11310)",
-      deliveryResult: { visibleReplySent: true, content: "hello", messageId: "om_fail", finalTextAccepted: false },
+      deliveryResult: {
+        visibleReplySent: true,
+        content: "hello",
+        messageIds: ["om_fail"],
+        finalTextAccepted: false,
+      },
     });
   });
+
+  it.each([1, 2])(
+    "buffers after proactive renewal PATCH %s fails without retrying",
+    async (failAt) => {
+      const requests: WindowRequest[] = [];
+      let windowOpen = true;
+      let settingsCalls = 0;
+      const deps = createWindowFetch({
+        requests,
+        windowOpen: () => windowOpen,
+        onSettings: (on) => {
+          settingsCalls += 1;
+          if (settingsCalls === failAt) {
+            return jsonResponse({ code: 91400, msg: "renew rejected" });
+          }
+          windowOpen = on;
+          return jsonResponse({ code: 0, msg: "ok" });
+        },
+      });
+      const session = createActiveSession(deps, {
+        cardId: "card_proactive_" + failAt,
+        text: "preview",
+        streamingOpenedAt: Date.now() - 8 * 60_000,
+      });
+      await session.update("updated content!");
+      await session.update("newest content!");
+      expect(settingsCalls).toBe(failAt);
+      expect(requests).toHaveLength(failAt);
+      const result = await session.closeWithResult("final content");
+      expect(result).toMatchObject({ visibleReplySent: true, content: "final content" });
+      expect(requests.at(-1)?.path).toBe("/open-apis/cardkit/v1/cards/card_proactive_" + failAt);
+      expect(settingsCalls).toBe(failAt);
+    },
+  );
+
+  it.each([undefined, "updated note"])(
+    "preserves the initial note or supplied final note %s in full-card fallback",
+    async (finalNote) => {
+      const requests: WindowRequest[] = [];
+      const deps = createWindowFetch({
+        requests,
+        windowOpen: () => false,
+        onSettings: () => jsonResponse({ code: 300309, msg: "streaming mode is closed" }),
+      });
+      const client = {
+        im: {
+          message: { create: vi.fn(async () => ({ code: 0, data: { message_id: "om_note" } })) },
+        },
+      } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
+      const session = createStreamingSession(
+        client,
+        { appId: "note-app", appSecret: "secret" },
+        undefined,
+        deps,
+      );
+      await session.start("chat_id", "chat_id", {
+        note: "initial note",
+        header: { title: "Reply" },
+      });
+      await session.update("visible preview!");
+      await session.closeWithResult(
+        "final content",
+        finalNote === undefined ? undefined : { note: finalNote },
+      );
+      const full = requests.at(-1) as WindowRequest;
+      const card = JSON.parse((full.body.card as { data: string }).data) as {
+        body: { elements: Array<{ element_id?: string; content?: string }> };
+      };
+      expect(card.body.elements.find((element) => element.element_id === "note")?.content).toBe(
+        "<font color='grey'>" + (finalNote ?? "initial note") + "</font>",
+      );
+    },
+  );
 });

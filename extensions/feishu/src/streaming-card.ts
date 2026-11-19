@@ -34,6 +34,7 @@ type CardState = {
   currentText: string;
   sentText: string;
   hasNote: boolean;
+  note?: string;
   header?: CardHeaderConfig;
   /** When streaming_mode was last switched on; Feishu closes it about ten minutes later. */
   streamingOpenedAt?: number;
@@ -299,6 +300,7 @@ export class FeishuStreamingSession {
       currentText: "",
       sentText: "",
       hasNote: Boolean(options?.note),
+      ...(options?.note ? { note: options.note } : {}),
       ...(options?.header ? { header: options.header } : {}),
       streamingOpenedAt: Date.now(),
     };
@@ -389,7 +391,11 @@ export class FeishuStreamingSession {
     }
     const openedAt = this.state.streamingOpenedAt;
     if (openedAt !== undefined && Date.now() - openedAt >= this.windowRenewMs) {
-      await this.renewStreamingWindow("age");
+      if (!(await this.renewStreamingWindow("age"))) {
+        // A failed toggle may have already closed streaming; buffer once instead of retrying each push.
+        this.state.streamingWindowClosed = true;
+        return false;
+      }
     }
     let lastError: unknown;
     const capture = (error: unknown) => {
@@ -566,7 +572,7 @@ export class FeishuStreamingSession {
       // Element writes are rejected once Feishu closed the window; a full-card
       // update lands the final text (and note) without streaming_mode.
       try {
-        await this.replaceFullCard(this.state, text, options?.note);
+        await this.replaceFullCard(this.state, text, options?.note ?? this.state.note);
         finalWriteError = undefined;
         visibleContentSent = Boolean(text.trim());
       } catch (error) {
