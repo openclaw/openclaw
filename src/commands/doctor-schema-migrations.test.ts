@@ -33,6 +33,7 @@ import { restorePreTemplateStateIdentifiersForTest } from "../state/openclaw-sta
 import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-backup-scope.js";
 import { assertSqliteMigrationScopePreserved } from "../state/sqlite-migration-scope.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import { assertDoctorMaintenanceReady } from "./doctor-maintenance-inspection.js";
 
 const settleTrial = vi.hoisted(() => vi.fn(async () => {}));
@@ -718,12 +719,23 @@ it.each([
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       openOpenClawStateDatabase({ env: state.env });
       await closeOpenClawStateDatabaseAsync();
-      // A configured agent directory outside the state is not one the start imaged.
-      const pathname = external
-        ? state.statePath("custom-agents", "main", "openclaw-agent.sqlite")
-        : state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
-      fs.mkdirSync(path.dirname(pathname), { recursive: true });
+      // The start's record names the stores it imaged. One behind a linked agent directory
+      // has the same lexical path but is not one of them.
+      const pathname = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
+      fs.mkdirSync(path.dirname(path.dirname(pathname)), { recursive: true });
+      if (external) {
+        fs.mkdirSync(state.statePath("custom-agents", "main"), { recursive: true });
+        fs.symlinkSync(state.statePath("custom-agents", "main"), path.dirname(pathname));
+      } else {
+        fs.mkdirSync(path.dirname(pathname));
+      }
       openLegacyDatabase(pathname).close();
+      const record = state.statePath(`.upgrade-${resolveRuntimeServiceBuildId() ?? VERSION}-1-1`);
+      fs.mkdirSync(record);
+      fs.writeFileSync(
+        path.join(record, "inventory.json"),
+        JSON.stringify({ started: external ? [] : [pathname] }),
+      );
       const backups = () =>
         listDirectoryTreeStrictSync(state.stateDir)
           .map(({ relativePath }) => relativePath)

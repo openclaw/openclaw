@@ -87,18 +87,6 @@ function writeTrial(record) {
 // the suffix restore covers the rest.
 function plannedAdditions(stateDir, generation) {
   const added = [];
-  // Legacy sources Doctor moved into SQLite: the previous release reads them.
-  const moved = [];
-  const companion = /(-wal|-shm|-journal|\.seal)$/;
-  const read = (ops) => {
-    for (const op of ops ?? []) {
-      if (op.kind === "add") {
-        added.push(op.live);
-      } else if (op.kind === "remove" && !companion.test(op.live) && !fs.existsSync(op.live)) {
-        moved.push(op.live);
-      }
-    }
-  };
   const readJson = (file) => {
     try {
       return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -112,44 +100,16 @@ function plannedAdditions(stateDir, generation) {
   };
   const applied = path.join(stateDir, ".upgraded-" + generation + ".json");
   const record = readJson(applied);
-  read(record?.ops);
-  const interrupted = [];
-  for (const entry of fs.readdirSync(stateDir)) {
-    if (!entry.startsWith(".upgrade-" + generation + "-")) {
-      continue;
-    }
-    const dir = path.join(stateDir, entry);
-    interrupted.push(dir);
-    read(readJson(path.join(dir, "plan.json"))?.ops);
-    // An in-place run stopped before its records: its inventory names what existed before.
-    const inventory = readJson(path.join(dir, "inventory.json"));
-    if (inventory) {
-      const before = new Set(inventory.files);
-      moved.push(...inventory.files.filter((file) => !fs.existsSync(file)));
-      added.push(...collectDatabases(stateDir, 4, []).filter((file) => !before.has(file)));
+  for (const op of record?.ops ?? []) {
+    if (op.kind === "add") {
+      added.push(op.live);
     }
   }
-  return { added, moved, applied: record ? applied : undefined, interrupted };
-}
-
-function collectDatabases(dir, depth, found) {
-  let entries = [];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return found;
-  }
-  for (const entry of entries) {
-    const file = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (depth > 0 && !entry.name.startsWith(".upgrade") && !["git-install", "npm", "node_modules", "tmp", "logs"].includes(entry.name)) {
-        collectDatabases(file, depth - 1, found);
-      }
-    } else if (entry.name.endsWith(".sqlite")) {
-      found.push(file);
-    }
-  }
-  return found;
+  const interrupted = fs
+    .readdirSync(stateDir)
+    .filter((entry) => entry.startsWith(".upgrade-" + generation + "-"))
+    .map((entry) => path.join(stateDir, entry));
+  return { added, applied: record ? applied : undefined, interrupted };
 }
 
 function retirePlans(stateDir, generation) {
@@ -170,8 +130,7 @@ function retirePlans(stateDir, generation) {
 
 // A revert must land only on a build that opens the state it leaves, and only on positive
 // evidence: the previous release names the schemas it opens in its own package.json, and
-// each database the revert leaves (the image it restores, else the live file; never one
-// the revert removes) is read the way that release admits it: the header, and for shared
+// each database the revert leaves (the image it restores, else the live file) is read the way that release admits it: the header, and for shared
 // state also its content version. Anything that cannot be read keeps the service forward.
 async function revertBlockers(stateDir, previous, restoring, generations, config) {
   const restoredFrom = new Map();
@@ -195,21 +154,18 @@ async function revertBlockers(stateDir, previous, restoring, generations, config
   } catch {
     return ["node:sqlite is unavailable to read the state"];
   }
-  const removed = new Set();
-  const moved = [];
   let upgraded = restoredFrom.size > 0;
   try {
     for (const generation of generations) {
       const planned = plannedAdditions(stateDir, generation);
-      planned.added.forEach((file) => removed.add(file));
-      moved.push(...planned.moved);
-      upgraded ||= Boolean(planned.applied) || planned.interrupted.length > 0;
+      upgraded ||= Boolean(planned.applied);
+      // A run that stopped before its record was complete never decided what it covered.
+      if (planned.interrupted.length > 0) {
+        return ["the upgrade to " + generation + " did not finish"];
+      }
     }
   } catch {
     return ["could not read the upgrade records"];
-  }
-  if (moved.length > 0) {
-    return ["Doctor moved legacy files the previous release reads (" + moved.slice(0, 3).map((file) => path.relative(stateDir, file)).join(", ") + ")"];
   }
   const databases = [[path.join(stateDir, "state", "openclaw.sqlite"), supported.state, true]];
   try {
@@ -243,7 +199,7 @@ async function revertBlockers(stateDir, previous, restoring, generations, config
   const blockers = [];
   for (const [live, limit, shared] of databases) {
     const file = restoredFrom.get(live) ?? live;
-    if (removed.has(live) || !fs.existsSync(file)) {
+    if (!fs.existsSync(file)) {
       continue;
     }
     const name = path.relative(stateDir, live);

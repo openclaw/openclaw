@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { copyFileDescriptorSync } from "@openclaw/fs-safe/advanced";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { copySqliteFile } from "../infra/sqlite-file-copy.js";
@@ -375,28 +376,9 @@ export function normalizeSqliteText(db: DatabaseSync): void {
 // The start's pre-migration images: taken under its exclusive custody before a database
 // changes, and put back when the upgraded config is refused.
 
-/** The error and every cause and aggregated error under it, each once. */
-function causes(error: unknown): unknown[] {
-  const found: unknown[] = [];
-  const visit = (value: unknown) => {
-    if (value === undefined || value === null || found.includes(value)) {
-      return;
-    }
-    found.push(value);
-    if (value instanceof AggregateError) {
-      value.errors.forEach(visit);
-    }
-    if (value instanceof Error) {
-      visit(value.cause);
-    }
-  };
-  visit(error);
-  return found;
-}
-
 /** A full disk or I/O failure, also when a copy or SQLite layer wraps it. */
 export function isMachineFailure(error: unknown): boolean {
-  return causes(error).some((cause) => {
+  return [error, ...collectNestedErrorCandidates(error)].some((cause) => {
     // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
     const code = (cause as NodeJS.ErrnoException).code;
     const message = cause instanceof Error ? cause.message : "";
@@ -463,7 +445,9 @@ export async function takeStateUpgradePreImage(
     });
   } catch (error) {
     fs.rmSync(partial, { force: true });
-    const space = causes(error).find((cause) => cause instanceof PreImageSpaceError);
+    const space = [error, ...collectNestedErrorCandidates(error)].find(
+      (cause) => cause instanceof PreImageSpaceError,
+    );
     if (space instanceof PreImageSpaceError) {
       return { skipped: space.message };
     }
@@ -550,7 +534,7 @@ export function foldLiveWal(file: string): void {
   }
 }
 
-export type Restore = { suffix: string; files: string[]; remove: string[] };
+export type Restore = { suffix: string; files: string[] };
 const RESTORE_FILE = "restore.json";
 
 /** Durable before the first image is renamed back, so a stop mid-restore resumes it. */
@@ -563,22 +547,23 @@ export function writeRestore(workDir: string, restore: Restore): void {
 }
 
 export function readRestore(workDir: string): Restore | undefined {
+  let text: string;
   try {
-    // SAFETY: writeRestore in this module is the only writer of the restore record.
-    return JSON.parse(fs.readFileSync(path.join(workDir, RESTORE_FILE), "utf8")) as Restore;
-  } catch {
-    return undefined;
+    text = fs.readFileSync(path.join(workDir, RESTORE_FILE), "utf8");
+  } catch (error) {
+    // Only a missing record means no restore is in progress; anything else stops the start.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
   }
+  // SAFETY: writeRestore in this module is the only writer of the restore record.
+  return JSON.parse(text) as Restore;
 }
 
-/** Idempotent: the images go back, and the databases the run created go with their companions. */
+/** Idempotent: the images go back over their databases and the config. */
 export function finishRestore(restore: Restore): void {
   restorePreImages(restore.files, restore.suffix);
-  for (const file of restore.remove) {
-    for (const companion of ["", "-wal", "-shm", "-journal"]) {
-      fs.rmSync(`${file}${companion}`, { force: true });
-    }
-  }
 }
 
 /** Fold this run's own rebuilt databases into one file each; nothing else holds them. */
@@ -600,3 +585,64 @@ export function checkpointShadowDatabases(files: readonly string[]): void {
     }
   }
 }
+
+/** A change marker of a file and its write-ahead log: size and modification time. */
+function stamp(file: string): string {
+  const main = fs.statSync(file, { throwIfNoEntry: false });
+  const wal = fs.statSync(`${file}-wal`, { throwIfNoEntry: false });
+  return `${main?.size}:${main?.mtimeMs}:${wal?.size}:${wal?.mtimeMs}`;
+}
+
+/** Stamps of every store in the inventory and of the config, taken before Doctor runs. */
+export function stampStores(files: ReadonlySet<string>, configPath: string): Map<string, string> {
+  const stamps = new Map<string, string>();
+  for (const file of [...files].filter((entry) => isSqliteFile(entry))) {
+    stamps.set(file, stamp(file));
+  }
+  if (fs.existsSync(configPath)) {
+    stamps.set(configPath, stamp(configPath));
+  }
+  return stamps;
+}
+
+/**
+ * The state a run changed outside its images, from an explicit allowlist: only the imaged
+ * databases (and the config, if imaged) may change. A file that existed before and is gone
+ * (a legacy source Doctor moved), a store created, or a store or config written without an
+ * image is outside it. Files Doctor changes in place that are not stores stay as they are.
+ */
+export function changedOutsideImages(
+  before: ReadonlySet<string>,
+  now: ReadonlySet<string>,
+  stamps: ReadonlyMap<string, string>,
+  imaged: ReadonlySet<string>,
+  config: { configPath: string; configImaged: boolean },
+): string[] {
+  const changed = [...before].filter(
+    (file) => !now.has(file) && !fs.lstatSync(file, { throwIfNoEntry: false }),
+  );
+  for (const file of now) {
+    if (!before.has(file) && isSqliteFile(file)) {
+      changed.push(file);
+    }
+  }
+  for (const [file, previous] of stamps) {
+    const covered = file === config.configPath ? config.configImaged : imaged.has(file);
+    if (!covered && fs.existsSync(file) && stamp(file) !== previous) {
+      changed.push(file);
+    }
+  }
+  return [...new Set(changed)];
+}
+
+// What existed before Doctor ran, kept in the work directory: the files, the databases the
+// run started on (outdated, and the imaged set), the images it published, and a stamp of
+// each store and the config so a change outside the images is seen.
+export const INVENTORY_FILE = "inventory.json";
+export type Inventory = {
+  files: string[];
+  outdated: string[];
+  started: string[];
+  images: string[];
+  stamps: Record<string, string>;
+};

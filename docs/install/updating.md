@@ -125,30 +125,34 @@ through a durable plan; the images stay the rollback baseline and the generation
 pinned. A database's write-ahead log is folded in through SQLite first; if SQLite cannot
 fold it, the start stops with every file in place and the next start retries.
 
-If the upgraded config is invalid, the start puts the previous state back only as a
-complete set: an image of every database it started on and of an unlinked config, and no
-legacy source that Doctor moved into SQLite (such as `cron/jobs.json`, archived under a
-`.migrated` name). It then removes the databases the run created. Otherwise the databases
-stay migrated and the start says why. A stop during that restore is finished by the next
-start before anything else. A linked config is never imaged or written through.
+The start images the outdated databases, the shared state database (Doctor writes it
+even when it is current) and the config. A revert can put back exactly that set and
+nothing else, so the start ends the Git release trial whenever the run changes anything a
+revert could not put back: a database without an image, a store it created or wrote
+outside the imaged set, the config without an image, or a legacy source Doctor moved into
+SQLite (such as `cron/jobs.json`, archived under a `.migrated` name). After that a failed
+start stays on the new release and is fixed forward (`openclaw triage`).
 
-A failed Git release trial now restores less than before. It restores the outdated
-databases and the config from their images, and removes the databases the run created.
-It reverts only on positive evidence that the previous release opens what the revert
-leaves:
+If the upgraded config is invalid, the start puts the imaged set back only when nothing
+outside it changed; otherwise the databases stay migrated and the start says why. A stop
+during that restore is finished by the next start before anything else. A linked config is
+never imaged or written through.
+
+When a failed Git release trial reverts, exactly the imaged set goes back: each imaged
+database and the config from its `.pre-<buildId>` image, together with the code. Files
+Doctor changes in place that are not databases (for example workspace files it migrated)
+are not restored; the earlier copy-and-swap upgrade restored them too. The launcher
+reverts only on positive evidence that the previous release opens what the revert leaves:
 
 - that release declares its schemas;
 - every remaining database (the image it restores, read with any WAL preserved beside it,
   else the live file) reads at or below them, including the shared state's content version;
 - an upgraded, unlinked config has its image;
-- Doctor moved no legacy source the previous release reads.
+- the trial's upgrade finished (an interrupted run never decided what it covered).
 
-Otherwise it stays forward. When a database the start migrates has no image, the start
-ends the trial before migrating, so no launcher counts failed starts. Files Doctor changes
-in place are not restored (for example workspace files it migrated); the earlier
-copy-and-swap upgrade restored them too. Only the fallback rebuild still replaces a
-database file; a successful start migrates `state/openclaw.sqlite` in place, so a process
-holding it open keeps the same file.
+Otherwise it stays forward. Only the fallback rebuild still replaces a database file; a
+successful start migrates `state/openclaw.sqlite` in place, so a process holding it open
+keeps the same file.
 
 During startup upgrades, Doctor records carried-over scheduled jobs against
 credential databases at their live paths. No environment variable or operator
@@ -1867,9 +1871,9 @@ after an upgrade. Otherwise the service stays on the new release, the launcher s
 and the failure is fixed forward (`openclaw triage`). The launcher is written by the
 installed updater, so this rule applies from the first update after the updater that ships
 it. On the first hop the earlier launcher, which the installed updater wrote, decides. It
-restores the start's `.pre-<buildId>` images like any other preserved file, and when a
-database had no image the start has already ended the trial. It does not check for legacy
-sources Doctor moved. The Git release inspection also does not
+restores the start's `.pre-<buildId>` images like any other preserved file, and whenever the
+run changed something those images do not cover, the start has already ended the trial, so
+the earlier launcher never counts the failed starts. The Git release inspection also does not
 require the new schema before that start: "migration did not finish" applies only to
 installs whose updater runs Doctor before restarting. Installed updaters that run Git
 releases without this change (main builds since the release layout landed) fail

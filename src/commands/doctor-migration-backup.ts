@@ -183,20 +183,14 @@ export async function backupDoctorMigrationDatabases(params: {
   if (!maintenance?.ownsSchemaMaintenance) {
     throw new Error("Pre-migration SQLite backups require Doctor maintenance ownership.");
   }
-  // The start covers the databases its own discovery finds: the shared state and each
-  // agent's default database in this state directory. A store Doctor finds elsewhere
-  // (a configured agent directory, say) gets Doctor's normal backup set.
-  const stateDir = nodePath.resolve(resolveStateDir(params.env));
-  const coveredByStart = (pathname: string) => {
-    const relative = nodePath.relative(stateDir, nodePath.resolve(pathname)).split(nodePath.sep);
-    return (
-      nodePath.resolve(pathname) === nodePath.resolve(sharedPath) ||
-      (relative.length === 4 &&
-        relative[0] === "agents" &&
-        relative[2] === "agent" &&
-        relative[3] === "openclaw-agent.sqlite")
-    );
-  };
+  // The start covers exactly the stores its own record names, resolved; a store Doctor finds
+  // elsewhere (a configured agent directory, or one behind a link) gets Doctor's normal set.
+  const covered =
+    params.preImageOwner === "state-upgrade"
+      ? (await import("./doctor-state-upgrade-owner.js")).readStateUpgradeCoveredStores(params.env)
+      : new Set<string>();
+  const coveredByStart = (pathname: string) =>
+    existsSync(pathname) && covered.has(realpathSync.native(pathname));
   if (params.preImageOwner === "state-upgrade" && ![...pending].every(coveredByStart)) {
     // The start has no image of such a store and no launcher restores Doctor's backup of
     // it, so no Git release trial may revert past its migration.

@@ -516,7 +516,13 @@ describe("startup pre-images", () => {
     const files = databases(stateDir).map(([file]) => file);
     fs.writeFileSync(
       path.join(record, "inventory.json"),
-      JSON.stringify({ files: [], outdated: files, images: files.map(preImage) }),
+      JSON.stringify({
+        files: [],
+        outdated: files,
+        started: files,
+        images: files.map(preImage),
+        stamps: {},
+      }),
     );
     const env = stateEnv(stateDir);
     expect(isStateUpgradePending(env)).toBe(true);
@@ -600,32 +606,51 @@ describe("startup pre-images", () => {
     expect(userVersion(preImage(shared))).toBe(original);
   });
 
-  it("names only the databases it created as trial additions, never moved-source archives", async () => {
-    const { stateDir } = corpus("openclaw-upgrade-additions-");
-    const created = path.join(stateDir, "state", "created.sqlite");
-    const archive = path.join(stateDir, "credentials", "legacy.json.migrated-1");
+  it.each([
+    ["nothing outside its images", undefined],
+    ["a legacy source Doctor moved", "moved"],
+    ["a store it created", "created"],
+    ["a store it wrote without an image", "written"],
+  ] as const)(
+    "ends the trial and keeps the state when the run changes %s",
+    async (_label, change) => {
+      const { stateDir } = corpus("openclaw-upgrade-outside-");
+      const jobs = path.join(stateDir, "cron", "jobs.json");
+      fs.mkdirSync(path.dirname(jobs), { recursive: true });
+      fs.writeFileSync(jobs, "{}");
+      const before = new Map(databases(stateDir).map(([file]) => [file, userVersion(file)]));
+      const endTrial = vi.fn(async () => {});
 
-    await upgradeStateDirectory({
-      env: stateEnv(stateDir),
-      log: quiet,
-      runChain: async (params) => {
-        // Doctor moves a legacy source into SQLite and archives it beside its old place.
-        fs.mkdirSync(path.dirname(archive), { recursive: true });
-        fs.writeFileSync(archive, "the only copy of the legacy credential");
-        {
-          using db = new DatabaseSync(created);
-          db.exec("CREATE TABLE store (value TEXT)");
-        }
-        return await migrate(params);
-      },
-    });
+      const result = await upgradeStateDirectory({
+        env: stateEnv(stateDir),
+        log: quiet,
+        endTrial,
+        runChain: async (params) => {
+          if (change === "moved") {
+            fs.renameSync(jobs, `${jobs}.migrated-20261119-1`);
+          } else if (change) {
+            using db = new DatabaseSync(
+              path.join(
+                stateDir,
+                "state",
+                change === "created" ? "new.sqlite" : "openclaw-quarantine.sqlite",
+              ),
+            );
+            db.exec("CREATE TABLE IF NOT EXISTS e2e_touch (v); INSERT INTO e2e_touch VALUES (1)");
+          }
+          return await migrate(params);
+        },
+        admitConfig: async () => "the upgraded config is invalid (test)",
+      });
 
-    const generation = preImage("").slice(".pre-".length);
-    const applied = JSON.parse(
-      fs.readFileSync(path.join(stateDir, `.upgraded-${generation}.json`), "utf8"),
-    ) as { ops: Array<{ kind: string; live: string }> };
-    expect(applied.ops.filter((op) => op.kind === "add").map((op) => op.live)).toEqual([created]);
-  });
+      // Only a run confined to its images is put back; any other ends the trial instead.
+      expect(result).toMatchObject({ status: "refused" });
+      expect(endTrial).toHaveBeenCalledTimes(change ? 1 : 0);
+      for (const [file, version] of databases(stateDir)) {
+        expect(userVersion(file)).toBe(change ? version : before.get(file));
+      }
+    },
+  );
 
   it.each(["chain", "fallback"] as const)(
     "keeps the update run the updater recorded before the restart (%s)",
@@ -633,6 +658,7 @@ describe("startup pre-images", () => {
       const { stateDir } = corpus("openclaw-upgrade-update-run-");
       const shared = path.join(stateDir, "state/openclaw.sqlite");
       const runId = "11111111-2222-4333-8444-555555555555";
+      const imported = "22222222-3333-4444-8555-666666666666";
       {
         // The updater's own release wrote this row just before restarting the Gateway.
         using db = new DatabaseSync(shared);
@@ -647,46 +673,26 @@ describe("startup pre-images", () => {
           mode === "chain"
             ? migrate
             : async () => {
+                // Doctor imported a record into the live database, then a later step failed:
+                // the rebuild reads the live database, so the import stays too.
+                using db = new DatabaseSync(shared);
+                insertUpdateRun(db, imported);
                 throw new ChainStepError("injected", "force the generic rebuild");
               },
       });
 
       expect(result).toMatchObject({ status: "upgraded", mode });
       using db = new DatabaseSync(shared, { readOnly: true });
-      expect(db.prepare("SELECT run_id, phase, status, steps_json FROM update_runs").all()).toEqual(
-        [
-          {
-            run_id: runId,
-            phase: "restarting",
-            status: "running",
-            steps_json: '[{"step":"git-release-switch"}]',
-          },
-        ],
+      expect(
+        db.prepare("SELECT run_id, steps_json FROM update_runs ORDER BY run_id").all(),
+      ).toEqual(
+        [runId, ...(mode === "fallback" ? [imported] : [])].map((id) => ({
+          run_id: id,
+          steps_json: '[{"step":"git-release-switch"}]',
+        })),
       );
     },
   );
-
-  it("keeps rows Doctor committed before the chain failed in the fallback rebuild", async () => {
-    const { stateDir } = corpus("openclaw-upgrade-fallback-import-");
-    const shared = path.join(stateDir, "state/openclaw.sqlite");
-    const runId = "22222222-3333-4444-8555-666666666666";
-
-    const result = await upgradeStateDirectory({
-      env: stateEnv(stateDir),
-      log: quiet,
-      runChain: async () => {
-        // Doctor imported a record into the live database, then a later step failed.
-        using db = new DatabaseSync(shared);
-        createUpdateRuns(db);
-        insertUpdateRun(db, runId);
-        throw new ChainStepError("injected", "force the generic rebuild");
-      },
-    });
-
-    expect(result).toMatchObject({ status: "upgraded", mode: "fallback" });
-    using db = new DatabaseSync(shared, { readOnly: true });
-    expect(db.prepare("SELECT run_id FROM update_runs").all()).toEqual([{ run_id: runId }]);
-  });
 
   it("stops the fallback with the live WAL intact when SQLite cannot fold it in", async () => {
     const { stateDir } = corpus("openclaw-upgrade-fallback-wal-");
@@ -722,46 +728,6 @@ describe("startup pre-images", () => {
     expect(db.prepare("SELECT run_id FROM update_runs").all()).toEqual([{ run_id: runId }]);
   });
 
-  it("keeps a database it started on without an image in a resumed run", async () => {
-    const { stateDir } = corpus("openclaw-upgrade-resume-skipped-");
-    const shared = path.join(stateDir, "state/openclaw.sqlite");
-    const agents = databases(stateDir).filter(([file]) => file !== shared);
-    // The killed start could not image the shared database, migrated it, and imaged the
-    // agents before it died with them still outdated.
-    for (const [file] of agents) {
-      fs.copyFileSync(file, preImage(file));
-    }
-    {
-      using db = new DatabaseSync(shared);
-      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
-    }
-    const record = path.join(stateDir, `.upgrade-${preImage("").slice(".pre-".length)}-1-1`);
-    fs.mkdirSync(record);
-    fs.writeFileSync(
-      path.join(record, "inventory.json"),
-      JSON.stringify({
-        files: [],
-        outdated: databases(stateDir).map(([file]) => file),
-        images: agents.map(([file]) => preImage(file)),
-      }),
-    );
-    const warn = vi.fn();
-
-    const result = await upgradeStateDirectory({
-      env: stateEnv(stateDir),
-      log: { info: () => {}, warn },
-      runChain: migrate,
-      admitConfig: async () => "the upgraded config is invalid (test)",
-    });
-
-    // A refusal cannot put back a set with a member it has no image of.
-    expect(result).toMatchObject({ status: "refused" });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("no pre-migration image exists"));
-    for (const [file, version] of databases(stateDir)) {
-      expect(userVersion(file)).toBe(version);
-    }
-  });
-
   it.each([false, true])(
     "images a config privately, and never writes through a linked one (linked: %s)",
     async (linked) => {
@@ -794,32 +760,6 @@ describe("startup pre-images", () => {
       }
     },
   );
-
-  it("keeps the state migrated when Doctor moved a legacy source a refusal cannot put back", async () => {
-    const { stateDir } = corpus("openclaw-upgrade-refusal-moved-");
-    const jobs = path.join(stateDir, "cron", "jobs.json");
-    fs.mkdirSync(path.dirname(jobs), { recursive: true });
-    fs.writeFileSync(jobs, '{"jobs":[]}');
-    const warn = vi.fn();
-
-    const result = await upgradeStateDirectory({
-      env: stateEnv(stateDir),
-      log: { info: () => {}, warn },
-      runChain: async (params) => {
-        // Doctor imports the jobs into SQLite and archives the source under its own name.
-        fs.renameSync(jobs, `${jobs}.migrated-20261119-1`);
-        return await migrate(params);
-      },
-      admitConfig: async () => "the upgraded config is invalid (test)",
-    });
-
-    // Restoring the images would hide the imported jobs from the previous release.
-    expect(result).toMatchObject({ status: "refused" });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Doctor moved legacy files"));
-    for (const [file, version] of databases(stateDir)) {
-      expect(userVersion(file)).toBe(version);
-    }
-  });
 
   it("finishes a refusal's restore that a stop interrupted before anything else", async () => {
     const { stateDir } = corpus("openclaw-upgrade-refusal-resume-");
@@ -859,6 +799,23 @@ describe("startup pre-images", () => {
     }
   });
 
+  it("stops instead of resuming when a refusal's restore record cannot be read", async () => {
+    const { stateDir } = corpus("openclaw-upgrade-restore-unreadable-");
+    // A directory in place of the record: present, but not readable as one.
+    fs.mkdirSync(
+      path.join(stateDir, `.upgrade-${preImage("").slice(".pre-".length)}-1-1`, "restore.json"),
+      {
+        recursive: true,
+      },
+    );
+    const chain = vi.fn(migrate);
+
+    await expect(
+      upgradeStateDirectory({ env: stateEnv(stateDir), log: quiet, runChain: chain }),
+    ).rejects.toThrow(/EISDIR/u);
+    expect(chain).not.toHaveBeenCalled();
+  });
+
   it("resumes only with images the interrupted run published, never a leftover", async () => {
     const { stateDir } = corpus("openclaw-upgrade-resume-leftover-");
     const shared = path.join(stateDir, "state/openclaw.sqlite");
@@ -873,58 +830,22 @@ describe("startup pre-images", () => {
     fs.mkdirSync(record);
     fs.writeFileSync(
       path.join(record, "inventory.json"),
-      JSON.stringify({ files: [], outdated: [shared], images: [] }),
+      JSON.stringify({ files: [], outdated: [shared], started: [shared], images: [], stamps: {} }),
     );
-    const onUnimaged = vi.fn(async () => {});
+    const endTrial = vi.fn(async () => {});
 
     const result = await upgradeStateDirectory({
       env: stateEnv(stateDir),
       log: quiet,
       runChain: migrate,
-      onUnimaged,
+      endTrial,
       admitConfig: async () => "the upgraded config is invalid (test)",
     });
 
     // Without its own image the set cannot be restored; the leftover is not used.
     expect(result).toMatchObject({ status: "refused" });
     expect(userVersion(shared)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-    expect(onUnimaged).toHaveBeenCalledTimes(1);
-  });
-
-  it("records the fallback's additions when its swap is interrupted and resumed", async () => {
-    const { stateDir } = corpus("openclaw-upgrade-fallback-adds-");
-    const created = path.join(stateDir, "state", "created.sqlite");
-    const live = path.join(stateDir, "state/openclaw.sqlite");
-    const rename = fs.renameSync;
-    // The process dies at the first rename of the durable swap.
-    const renames = vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
-      if (to === live) {
-        throw Object.assign(new Error("killed"), { code: "EINTR" });
-      }
-      rename(from, to);
-    });
-    await expect(
-      upgradeStateDirectory({
-        env: stateEnv(stateDir),
-        log: quiet,
-        runChain: async () => {
-          using db = new DatabaseSync(created);
-          db.exec("CREATE TABLE store (value TEXT)");
-          throw new ChainStepError("injected", "force the generic rebuild");
-        },
-      }),
-    ).rejects.toThrow("killed");
-    renames.mockRestore();
-
-    expect(await upgradeStateDirectory({ env: stateEnv(stateDir), log: quiet })).toMatchObject({
-      status: "resumed",
-    });
-
-    const generation = preImage("").slice(".pre-".length);
-    const applied = JSON.parse(
-      fs.readFileSync(path.join(stateDir, `.upgraded-${generation}.json`), "utf8"),
-    ) as { ops: Array<{ kind: string; live: string }> };
-    expect(applied.ops.filter((op) => op.kind === "add").map((op) => op.live)).toEqual([created]);
+    expect(endTrial).toHaveBeenCalledWith("a database has no pre-migration image");
   });
 
   it("skips the image when a copy layer wraps a full disk", async () => {

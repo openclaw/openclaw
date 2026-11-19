@@ -83,11 +83,11 @@ export async function upgradeStateOnGatewayStart(
       // On a Git release trial, a migration without an image makes the previous release
       // unreachable: end the trial before it commits, so no launcher (including one an
       // older updater wrote) switches back onto a release that refuses this state.
-      onUnimaged: async () => {
+      endTrial: async (reason) => {
         const { settleRunningGitReleaseTrial } = await import("../infra/git-release.js");
         await settleRunningGitReleaseTrial();
         log.warn(
-          "A Git release trial, if any, has ended: a failed start of this release is fixed forward (openclaw triage).",
+          `A Git release trial, if any, has ended because ${reason}: a failed start of this release stays on it and is fixed forward (openclaw triage).`,
         );
       },
       // Selecting the environment read the config, which can leave a worker on a

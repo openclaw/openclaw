@@ -1,7 +1,0 @@
-# In-place Gateway-start state upgrade (#201716): one regression per row of the upgrade's
-# state machine (images, resume record, fallback fold and rebuild, durable plan, refusal
-# restore, archived sources) and per launcher revert rule (declared schemas, content
-# version, unreadable state, removed additions, preserved WAL, config and archive restore).
-# The copy-and-swap tests this replaces were removed. Exact measured net test-line growth
-# at the head beyond the allowance.
-386

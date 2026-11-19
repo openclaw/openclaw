@@ -57,9 +57,13 @@ import {
   pruneGenerations,
   readPlan,
   finishRestore,
+  changedOutsideImages,
+  INVENTORY_FILE,
+  type Inventory,
   checkpointShadowDatabases,
   foldLiveWal,
   readRestore,
+  stampStores,
   writeRestore,
   takeStateUpgradePreImage,
   withRecoveredSource,
@@ -82,12 +86,15 @@ const UPGRADE_PIN_SCOPE = "upgrade.pin";
 // every build did before; those files stay readable and prunable by the same rules.
 const generation = () => resolveRuntimeServiceBuildId() ?? VERSION;
 // An applied plan is kept as `.upgraded-<generation>.json` until a later upgrade: a failed
-// Git release trial reads it to remove the files that upgrade added (no `.pre-*` to restore).
+// Git release trial reads it to know that upgrade finished.
 
 function retainAppliedPlan(stateDir: string, plan: UpgradePlan): void {
   const file = path.join(stateDir, `${APPLIED_PREFIX}${plan.appVersion}.json`);
   fs.writeFileSync(`${file}.tmp`, JSON.stringify(plan), { mode: 0o600 });
+  fsyncPath(`${file}.tmp`);
   fs.renameSync(`${file}.tmp`, file);
+  // Durable before the work record it outlives is removed.
+  fsyncPath(stateDir, true);
 }
 
 type DatabaseTarget = { kind: "state" | "agent"; agentId?: string; path: string; version: number };
@@ -347,8 +354,8 @@ export async function upgradeStateDirectory(params: {
    * pre-images are restored when every outdated database has one, so the start's own
    * refusal keeps the previous package's state; otherwise the state stays migrated.
    */
-  /** Called once, before any change, when a database the run starts on has no image. */
-  onUnimaged?: () => Promise<void>;
+  /** Ends a Git release trial when the run leaves state no pre-image covers. */
+  endTrial?: (reason: string) => Promise<void>;
   admitConfig?: (live: { configPath: string; stateDir: string }) => Promise<string | undefined>;
 }): Promise<StateUpgradeResult> {
   const env = params.env;
@@ -401,7 +408,9 @@ export async function upgradeStateDirectory(params: {
   const interruptedDirs: string[] = [];
   let priorInventory: Set<string> | undefined;
   const priorOutdated = new Set<string>();
+  const priorStarted = new Set<string>();
   const priorImages = new Set<string>();
+  const priorStamps = new Map<string, string>();
   for (const entry of fs.readdirSync(stateDir)) {
     if (!entry.startsWith(WORK_PREFIX)) {
       continue;
@@ -438,14 +447,12 @@ export async function upgradeStateDirectory(params: {
       try {
         const text = fs.readFileSync(path.join(dir, INVENTORY_FILE), "utf8");
         // SAFETY: only this module writes the inventory.
-        const record = JSON.parse(text) as {
-          files: string[];
-          outdated: string[];
-          images: string[];
-        };
+        const record = JSON.parse(text) as Inventory;
         priorInventory = new Set([...(priorInventory ?? []), ...record.files]);
         record.outdated.forEach((file) => priorOutdated.add(file));
+        record.started.forEach((file) => priorStarted.add(file));
         record.images.forEach((file) => priorImages.add(file));
+        Object.entries(record.stamps).forEach(([file, stamp]) => priorStamps.set(file, stamp));
       } catch {
         // Killed before the inventory was written: nothing had changed yet.
       }
@@ -528,6 +535,12 @@ export async function upgradeStateDirectory(params: {
         return { skipped: (error as Error).message };
       }
     };
+    // A revert is safe only if everything the run changes has an image, so the shared state
+    // (which Doctor writes even when current) is imaged with the outdated databases.
+    const shared = targets.find((target) => target.kind === "state" && target.version > 0);
+    const imageTargets =
+      shared && !outdated.includes(shared) ? [...outdated, shared] : [...outdated];
+    let stamps: Map<string, string> | undefined;
     const before = await inCustody(async () => {
       // A database the interrupted run started on may have changed since: it keeps the
       // image that run published, or none. Any other same-named file is a leftover.
@@ -535,8 +548,8 @@ export async function upgradeStateDirectory(params: {
         priorImages.has(`${file}${suffix}`) && fs.existsSync(`${file}${suffix}`)
           ? { path: `${file}${suffix}`, method: "kept" as const }
           : { skipped: "the interrupted start had not imaged it before it could change" };
-      for (const target of outdated) {
-        const image = priorOutdated.has(target.path)
+      for (const target of imageTargets) {
+        const image = priorStarted.has(target.path)
           ? resumedImage(target.path)
           : await takeStateUpgradePreImage(target.path, suffix);
         if ("skipped" in image) {
@@ -555,20 +568,21 @@ export async function upgradeStateDirectory(params: {
       if (fs.lstatSync(configPath, { throwIfNoEntry: false })?.isSymbolicLink()) {
         params.log.info("The config is a link; the upgrade does not write through it.");
       } else if (fs.existsSync(configPath)) {
-        const taken = priorOutdated.size > 0 ? resumedImage(configPath) : takeConfigImage();
+        const taken = priorStarted.size > 0 ? resumedImage(configPath) : takeConfigImage();
         if ("skipped" in taken) {
           warn(`No pre-migration image of the config: ${taken.skipped}.`);
         } else {
           configImage = taken.path;
         }
       }
-      // Every database the run starts on without an image ends the Git release trial:
-      // once its migration commits, no launcher can return to the previous release.
-      if (images.size < outdated.length) {
-        await params.onUnimaged?.();
+      // A database the run starts on without an image ends the Git release trial: once its
+      // migration commits, no launcher can return to the previous release.
+      if (images.size < imageTargets.length) {
+        await params.endTrial?.("a database has no pre-migration image");
       }
       // The inventory before Doctor runs; a resumed run keeps the interrupted one's.
       const listed = priorInventory ?? listFiles(stateDir, skip);
+      stamps = new Map([...stampStores(listed, configPath), ...priorStamps]);
       // Durable before the interrupted records it replaces are removed.
       const inventory = path.join(workDir, INVENTORY_FILE);
       fs.writeFileSync(
@@ -576,8 +590,10 @@ export async function upgradeStateDirectory(params: {
         JSON.stringify({
           files: [...listed],
           outdated: outdated.map((target) => target.path),
+          started: imageTargets.map((target) => target.path),
           images: [...images.values(), ...(configImage ? [configImage] : [])],
-        }),
+          stamps: Object.fromEntries(stamps),
+        } satisfies Inventory),
         { mode: 0o600 },
       );
       fsyncPath(`${inventory}.tmp`);
@@ -663,23 +679,30 @@ export async function upgradeStateDirectory(params: {
       } finally {
         await closeOpenClawStateDatabaseByPathAsync(liveState);
       }
-      // Databases the run created with no predecessor, which a revert removes, and files
-      // that existed before Doctor and are gone now: legacy sources it moved into SQLite.
-      // The previous release reads those sources, so no revert can bring them back.
+      // What a revert can put back is exactly the imaged set. Anything else the run changed
+      // (a legacy source Doctor moved, a store it created or wrote without an image, the
+      // config without one) ends the Git release trial: the install stays on this release.
       const now = listFiles(stateDir, skip);
-      const added = [...now].filter(
-        (file) =>
-          !before.has(file) && !file.startsWith(`${workDir}${path.sep}`) && isSqliteFile(file),
-      );
-      const moved = [...before].filter(
-        (file) => !fs.lstatSync(file, { throwIfNoEntry: false }) && !now.has(file),
-      );
+      const outside = changedOutsideImages(before, now, stamps!, new Set(images.keys()), {
+        configPath,
+        configImaged: configImage !== undefined,
+      });
+      if (outside.length > 0) {
+        const listedChanges = outside
+          .slice(0, 3)
+          .map((file) => path.relative(stateDir, file))
+          .join(", ");
+        warn(
+          `This upgrade changed state no pre-migration image covers (${listedChanges}); a failed start of this release stays on it and is fixed forward (openclaw triage).`,
+        );
+        await params.endTrial?.(`it changed ${listedChanges}`);
+      }
       if (refusal !== undefined) {
         // Only a complete set can be put back: an image of every database the run started
-        // on and of an unlinked config, and no legacy source Doctor moved away.
+        // on and of an unlinked config, and nothing changed outside them.
         const restorable =
-          moved.length === 0 &&
-          outdated.every((target) => images.has(target.path)) &&
+          outside.length === 0 &&
+          imageTargets.every((target) => images.has(target.path)) &&
           (configImage !== undefined ||
             !fs.existsSync(configPath) ||
             fs.lstatSync(configPath).isSymbolicLink());
@@ -688,7 +711,6 @@ export async function upgradeStateDirectory(params: {
           const restore = {
             suffix,
             files: [...images.keys(), ...(configImage ? [configPath] : [])],
-            remove: added,
           };
           writeRestore(workDir, restore);
           finishRestore(restore);
@@ -699,20 +721,13 @@ export async function upgradeStateDirectory(params: {
           `State upgrade to ${VERSION} not applied: ${refusal}${
             restorable
               ? " The previous databases and config were restored."
-              : moved.length > 0
-                ? ` The databases stay migrated: Doctor moved legacy files the previous release reads (${moved
-                    .slice(0, 3)
-                    .map((file) => path.relative(stateDir, file))
-                    .join(", ")}).`
+              : outside.length > 0
+                ? " The databases stay migrated: the run changed state no pre-migration image covers."
                 : " The databases stay migrated; no pre-migration image exists to restore them."
           }`,
         );
         return { status: "refused", reason: refusal };
       }
-      const additions = added.map((live) => ({ kind: "add" as const, live }));
-      // Recorded so a launcher can tell; removing an absent file is a no-op in the plan.
-      const removals = moved.map((live) => ({ kind: "remove" as const, live }));
-      const applied: UpgradeOp[] = [...ops, ...additions, ...removals];
       recordDiagnostics(
         mode === "fallback" && outdated.some((t) => t.path === liveState)
           ? ops.find((op) => op.live === liveState)!.next!
@@ -737,7 +752,7 @@ export async function upgradeStateDirectory(params: {
         pinned,
       );
       if (ops.length > 0) {
-        ops.push(...companionRemovals(ops), ...additions, ...removals);
+        ops.push(...companionRemovals(ops));
         for (const op of ops) {
           if (op.next && fs.statSync(op.next, { throwIfNoEntry: false })?.isFile()) {
             fsyncPath(op.next);
@@ -748,10 +763,7 @@ export async function upgradeStateDirectory(params: {
         planWritten = true;
         applyPlan({ appVersion: generation(), ops });
       }
-      retainAppliedPlan(stateDir, {
-        appVersion: generation(),
-        ops: ops.length > 0 ? ops : applied,
-      });
+      retainAppliedPlan(stateDir, { appVersion: generation(), ops });
       keepChainLog();
       finish(
         stateDir,
@@ -808,6 +820,3 @@ export function explainMachineFailure(error: unknown, stateDir: string): unknown
 
 /** Another process holds the state when the chain hands custody back; it continues. */
 export class StateUpgradeCustodyLostError extends Error {}
-
-// The file names that existed before Doctor ran, kept in the work directory.
-const INVENTORY_FILE = "inventory.json";
