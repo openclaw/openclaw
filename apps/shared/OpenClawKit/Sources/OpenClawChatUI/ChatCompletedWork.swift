@@ -128,34 +128,48 @@ extension ChatTranscriptRow {
         for index in turns.indices {
             if let previous = predecessors[index], fenced[previous] { fenced[index] = true }
         }
-        var earlierInputRuns = Set<String>()
+        var earlierRuns = Set<String>()
         var finalIndexes: [Int?] = []
         let runIDs = turns.enumerated().map { index, turn -> String? in
             let input = turn.first?.workMessage
-            let steerTarget = predecessors[index].flatMap { _ in input?.steerTargetRunID }
+            let ordinaryReplies = turn.compactMap(\.workMessage).filter {
+                $0.role.lowercased() == "assistant" && !$0.isForwardedTurnBoundary && $0.hasWorkReplyContent
+            }
+            // Bounded history can omit the backing input. Local reply evidence resolves ownership, not a link.
+            let steerTarget = input?.steerTargetRunID.flatMap { target in
+                guard input?.role.lowercased() == "user" else { return nil }
+                return predecessors[index] != nil || ordinaryReplies.contains { $0.workRunID == target } ? target : nil
+            }
             let inputRunID = turn.first.flatMap { row -> String? in
                 guard row.startsTurn, let input = row.workMessage, !input.isNestedToolActivity else { return nil }
                 // A steer request key identifies the input, not the run consuming it.
                 if let explicitRunID = input.transcriptRunID, !explicitRunID.isEmpty { return explicitRunID }
                 return input.workRunID.map { steerTarget ?? $0 }
             }
+            // Explicit reuse or steering may continue an earlier run; an untagged input cannot claim its late reply.
+            let acceptsReply = { (reply: OpenClawChatMessage) in
+                guard let replyRunID = reply.workRunID else { return true }
+                return replyRunID == inputRunID || replyRunID == steerTarget || !earlierRuns.contains(replyRunID)
+            }
+            let replies = ordinaryReplies.filter(acceptsReply)
+            let replyRuns = Set(replies.compactMap(\.workRunID))
             defer {
-                if input?.role.lowercased() == "user", let inputRunID { earlierInputRuns.insert(inputRunID) }
+                if input?.role.lowercased() == "user" {
+                    let reliableInputRunID = inputRunID.flatMap { runID in
+                        input?.steerTargetRunID == nil || input?.transcriptRunID == runID || steerTarget == runID ?
+                            runID : nil
+                    }
+                    // Do not remember a last-final guess after conflicting replies, or an unsupported request key.
+                    if let resolved = reliableInputRunID ?? (replyRuns.count == 1 ? replyRuns.first : nil) {
+                        earlierRuns.insert(resolved)
+                    }
+                }
             }
             guard fenced[index] else {
                 finalIndexes.append(continuations[index] == nil ?
                     turn.lastIndex(where: { $0.workMessage?.isCompletedReply == true }) : nil)
                 return nil
             }
-            // Explicit reuse or steering may continue an earlier run; an untagged input cannot claim its late reply.
-            let acceptsReply = { (reply: OpenClawChatMessage) in
-                guard let replyRunID = reply.workRunID else { return true }
-                return replyRunID == inputRunID || replyRunID == steerTarget || !earlierInputRuns.contains(replyRunID)
-            }
-            let replies = turn.compactMap(\.workMessage).filter {
-                !$0.isNestedToolActivity && $0.hasWorkReplyContent && acceptsReply($0)
-            }
-            let replyRuns = Set(replies.compactMap(\.workRunID))
             let runID = inputRunID ?? replies.last(where: \.isCompletedReply)?.workRunID ??
                 (replyRuns.count == 1 ? replyRuns.first : nil)
             finalIndexes.append(continuations[index] == nil ? turn.lastIndex(where: { row in

@@ -561,41 +561,66 @@ struct ChatSessionsCodingTests {
         #expect(ChatTranscriptRow.collapseCompletedWork(settled, runWorking: false) == settled)
     }
 
-    @Test(arguments: ["backed", "explicit", "untagged", "invalid"])
+    @Test(arguments: [
+        "backed", "explicit", "untagged", "invalid",
+        "suffix", "suffix-loaded", "suffix-explicit", "suffix-untagged", "suffix-no-hint",
+        "suffix-mismatch", "suffix-no-final", "suffix-unsupported", "suffix-mixed",
+    ])
     @MainActor func `ios backed steer request key is not its consuming run identity`(scope: String) async throws {
         let base = try Self.idleWorkWire(scope: "same")
         var earlier = base[4]
         earlier["__openclaw"] = ["id": "earlier-nested", "runId": "run-a"]
         earlier["timestamp"] = 1
-        var current = Array(base.suffix(4))
-        let hasExplicitRun = scope == "explicit"
-        let outputRun = switch scope {
-        case "explicit", "untagged": "run-b"
-        case "invalid": "run-absent"
-        default: "run-a"
+        let isSuffix = scope.hasPrefix("suffix")
+        var prefix = isSuffix ? [] : [base[0], earlier]
+        if scope == "suffix-loaded" {
+            var input = base[0]
+            input["__openclaw"] = ["id": "a-input"]
+            var progress = base[1]
+            progress["__openclaw"] = ["id": "a-progress", "runId": "run-a"]
+            progress["phase"] = "commentary"
+            prefix = [input, progress, earlier]
         }
-        let target = scope == "invalid" ? "run-absent" : "run-a"
-        var inputMetadata = ["id": "b-input", "steerTargetRunId": target]
+        var current = Array(base.suffix(4))
+        let hasExplicitRun = ["explicit", "suffix-explicit"].contains(scope)
+        let outputRun = ["explicit", "untagged", "suffix-explicit", "suffix-no-hint", "suffix-mismatch"]
+            .contains(scope) ? "run-b" : "run-a"
+        let target: String? = scope == "suffix-no-hint" ? nil : scope == "invalid" ? "run-absent" : "run-a"
+        var inputMetadata = ["id": "b-input"]
+        if let target { inputMetadata["steerTargetRunId"] = target }
         if hasExplicitRun { inputMetadata["runId"] = outputRun }
         current[0]["__openclaw"] = inputMetadata
         // chat-send-steering-custody emits a request key independently of the backing target.
-        if scope != "untagged" { current[0]["idempotencyKey"] = "steer:user" }
+        let hasRequestKey = !["untagged", "suffix-untagged", "suffix-no-hint"].contains(scope)
+        if hasRequestKey { current[0]["idempotencyKey"] = "steer:user" }
         for index in 1...3 {
             var metadata = try #require(current[index]["__openclaw"] as? [String: Any])
             metadata["runId"] = outputRun
             current[index]["__openclaw"] = metadata
         }
-        let decoded = try await OpenClawChatViewModel.decodeMessages(([base[0], earlier] + current).map(Self.nestedRaw))
+        if scope == "suffix-no-final" { current[3]["phase"] = "commentary" }
+        if scope == "suffix-unsupported" { current[3]["__openclaw"] = ["id": "b-answer"] }
+        if scope == "suffix-mixed" {
+            var other = base[1]
+            other["__openclaw"] = ["id": "foreign-progress", "runId": "run-b"]
+            other["phase"] = "commentary"
+            other["timestamp"] = 2.5
+            current.insert(other, at: 1)
+        }
+        // A corroborated target with its input outside this window is indistinguishable from a valid suffix.
+        // The invalid control therefore uses a genuinely mismatched target, not merely a missing predecessor.
+        let decoded = try await OpenClawChatViewModel.decodeMessages((prefix + current).map(Self.nestedRaw))
         let input = try #require(decoded.first { $0.transcriptMessageID == "b-input" })
-        #expect(input.idempotencyKey == (scope == "untagged" ? nil : "steer:user"))
+        #expect(input.idempotencyKey == (hasRequestKey ? "steer:user" : nil))
         #expect(input.steerTargetRunID == target)
         #expect(input.transcriptRunID == (hasExplicitRun ? "run-b" : nil))
-        #expect(input.workRunID == (hasExplicitRun ? "run-b" : scope == "untagged" ? nil : "steer"))
+        #expect(input.workRunID == (hasExplicitRun ? "run-b" : hasRequestKey ? "steer" : nil))
         let raw = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: decoded))
         #expect(ChatTranscriptRow.collapseCompletedWork(raw, runWorking: true) == raw)
         #expect(ChatTranscriptRow.collapseCompletedWork(raw, runWorking: false, activeRunIDs: [outputRun]) == raw)
+        #expect(ChatTranscriptRow.collapseCompletedWork(raw, runWorking: false, searchActive: true) == raw)
         let settled = ChatTranscriptRow.collapseCompletedWork(raw, runWorking: false)
-        if scope == "invalid" {
+        if ["invalid", "suffix-mismatch", "suffix-no-final", "suffix-unsupported"].contains(scope) {
             #expect(settled == raw)
             return
         }
@@ -603,11 +628,14 @@ struct ChatSessionsCodingTests {
             if case let .completedWork(work) = row { return work.messages.compactMap(\.transcriptMessageID) }
             return nil
         }
-        #expect(work == [["earlier-nested"], ["b-work", "nested-row"]])
+        #expect(work == (isSuffix ? [["b-work", "nested-row"]] : [["earlier-nested"], ["b-work", "nested-row"]]))
+        if scope == "suffix-loaded" { #expect(Array(settled.prefix(prefix.count)) == Array(raw.prefix(prefix.count))) }
+        let prefixIDs = scope == "suffix-loaded" ? ["a-input", "a-progress", "earlier-nested"] :
+            isSuffix ? [] : ["a-input", "Worked"]
         #expect(settled.map { row -> String in
             if case let .message(message) = row { return message.transcriptMessageID ?? "missing-id" }
             return "Worked"
-        } == ["a-input", "Worked", "b-input", "Worked", "b-answer"])
+        } == prefixIDs + ["b-input"] + (scope == "suffix-mixed" ? ["foreign-progress"] : []) + ["Worked", "b-answer"])
         #expect(ChatTranscriptRow.collapseCompletedWork(settled, runWorking: false) == settled)
     }
 
@@ -842,5 +870,102 @@ struct ChatSessionsCodingTests {
             status: status,
             hideFromChannelProgress: hidden,
             suppressChannelProgress: suppressed)
+    }
+}
+
+extension ChatSessionsCodingTests {
+    @Test(arguments: [
+        "inferred-final", "inferred-commentary", "ordinary-final", "inferred-only",
+        "ambiguous-earlier", "ordinary-ambiguous", "nested-only-earlier", "unknown-earlier",
+        "unscoped-earlier", "known-current",
+    ])
+    @MainActor func `ios earlier reply ownership fences later work without remembering ambiguous guesses`(
+        scope: String) async throws
+    {
+        let base = try Self.idleWorkWire(scope: "same")
+        var first = base[0]
+        first["__openclaw"] = ["id": "a-input"]
+        var earlier = base[4]
+        earlier["__openclaw"] = ["id": "earlier-nested", "runId": "run-a"]
+        earlier["timestamp"] = 0.75
+        var answer = base[1]
+        var prefix = scope == "unscoped-earlier" ? [] : [first]
+        if ["ambiguous-earlier", "ordinary-ambiguous", "known-current"].contains(scope) {
+            var conflicting = answer
+            conflicting["__openclaw"] = ["id": "a-progress", "runId": "run-c"]
+            conflicting["phase"] = "commentary"
+            conflicting["timestamp"] = 0.5
+            prefix.append(conflicting)
+        }
+        if scope == "inferred-commentary" {
+            answer["__openclaw"] = ["id": "a-progress", "runId": "run-a"]
+            answer["phase"] = "commentary"
+            answer["timestamp"] = 0.5
+            prefix.append(answer)
+        }
+        if !["ordinary-final", "ordinary-ambiguous"].contains(scope) { prefix.append(earlier) }
+        if scope == "unknown-earlier" { answer["__openclaw"] = ["id": "a-answer"] }
+        if !["nested-only-earlier", "inferred-commentary"].contains(scope) { prefix.append(answer) }
+        let reusesInferredRun = [
+            "ambiguous-earlier", "ordinary-ambiguous", "nested-only-earlier", "unknown-earlier", "unscoped-earlier",
+        ].contains(scope)
+        var current = Array(base.suffix(4))
+        current[0]["__openclaw"] = scope == "known-current" ? ["id": "b-input", "runId": "run-b"] : ["id": "b-input"]
+        if reusesInferredRun {
+            for index in 1...3 {
+                var metadata = try #require(current[index]["__openclaw"] as? [String: Any])
+                metadata["runId"] = "run-a"
+                current[index]["__openclaw"] = metadata
+            }
+        }
+        let hasNoLocalFinal = scope == "inferred-only"
+        if hasNoLocalFinal {
+            current.removeLast()
+            current[1]["__openclaw"] = ["id": "b-work"]
+        }
+        if scope == "inferred-final" {
+            var foreignNested = earlier
+            foreignNested["__openclaw"] = ["id": "foreign-nested", "runId": "run-a"]
+            foreignNested["timestamp"] = 4.5
+            current.insert(foreignNested, at: 3)
+        }
+        if !reusesInferredRun {
+            var foreign = base[1]
+            foreign["__openclaw"] = ["id": "foreign-answer", "runId": "run-a"]
+            foreign["timestamp"] = 6
+            current.append(foreign)
+        }
+        let decoded = try await OpenClawChatViewModel.decodeMessages((prefix + current).map(Self.nestedRaw))
+        let raw = ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: decoded))
+        let settled = ChatTranscriptRow.collapseCompletedWork(raw, runWorking: false)
+        let foldsEarlier = ["inferred-final", "inferred-only", "ambiguous-earlier", "unscoped-earlier", "known-current"]
+            .contains(scope)
+        let work = settled.compactMap { row -> [String]? in
+            if case let .completedWork(work) = row { return work.messages.compactMap(\.transcriptMessageID) }
+            return nil
+        }
+        #expect(work == (foldsEarlier ? [["earlier-nested"]] : []) +
+            (hasNoLocalFinal ? [] : [["b-work", "nested-row"]]))
+        let prefixIDs = [
+            "inferred-commentary": ["a-input", "a-progress", "earlier-nested"],
+            "ordinary-final": ["a-input", "a-answer"],
+            "ordinary-ambiguous": ["a-input", "a-progress", "a-answer"],
+            "ambiguous-earlier": ["a-input", "a-progress", "Worked", "a-answer"],
+            "known-current": ["a-input", "a-progress", "Worked", "a-answer"],
+            "nested-only-earlier": ["a-input", "earlier-nested"],
+            "unknown-earlier": ["a-input", "earlier-nested", "a-answer"],
+            "unscoped-earlier": ["Worked", "a-answer"],
+        ][scope] ?? ["a-input", "Worked", "a-answer"]
+        let currentIDs = hasNoLocalFinal ? ["b-work", "nested-row"] :
+            ["Worked"] + (scope == "inferred-final" ? ["foreign-nested"] : []) + ["b-answer"]
+        #expect(settled.map { row -> String in
+            if case let .message(message) = row { return message.transcriptMessageID ?? "missing-id" }
+            return "Worked"
+        } == prefixIDs + ["b-input"] + currentIDs + (reusesInferredRun ? [] : ["foreign-answer"]))
+        if !foldsEarlier { #expect(Array(settled.prefix(prefix.count)) == Array(raw.prefix(prefix.count))) }
+        for message in decoded where message.transcriptMessageID?.hasPrefix("foreign-") == true {
+            #expect(settled.contains(.message(message)))
+        }
+        #expect(ChatTranscriptRow.collapseCompletedWork(settled, runWorking: false) == settled)
     }
 }
