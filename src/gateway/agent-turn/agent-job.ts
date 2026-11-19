@@ -670,8 +670,17 @@ export async function waitForAgentJob(params: {
   };
   if (params.timeoutMs <= 0) {
     // A poll may inspect the existing startup record but never waits for a future event.
-    const recovery = readRecovery();
-    return recovery ? currentRecovery(await recovery) : null;
+    let restored: AgentJobObservation | undefined;
+    try {
+      const recovery = readRecovery();
+      if (!recovery) {
+        return null;
+      }
+      restored = await recovery;
+    } catch {
+      // A live completion may have arrived while the historical read was failing.
+    }
+    return currentRecovery(restored);
   }
 
   return await new Promise((resolve) => {

@@ -882,6 +882,20 @@ it.each([" completed-before-restart ", "legacy-run"])(
   },
 );
 
+it("returns a live completion published during a failed recovery poll", async () => {
+  const { runId, complete } = runFixture();
+  const poll = waitForAgentJob({
+    runId,
+    timeoutMs: 0,
+    canRestoreCompletion: () => true,
+    readRestoredCompletion: async () => {
+      complete();
+      throw new Error("Session store discovery failed");
+    },
+  });
+  await expect(poll).resolves.toMatchObject({ status: "ok", startedAt: 100, endedAt: 200 });
+});
+
 it("drops a restored result when another chat reserves the ID during the history read", async () => {
   await withSessionRowProjectionState(async (create) => {
     const runId = "reserved-again";

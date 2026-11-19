@@ -13,6 +13,7 @@ import {
   seedProjectionRow,
   appendProjectionMessages,
 } from "./session-row-projection.test-support.js";
+import * as sharingPolicy from "./session-sharing-policy.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 it("protects a restored draft run across public and plugin waits", async () => {
@@ -74,6 +75,14 @@ it("protects a restored draft run across public and plugin waits", async () => {
         runId: id,
         status: "timeout",
       });
+    }
+    const unavailable = vi
+      .spyOn(sharingPolicy, "withSessionSharingTarget")
+      .mockRejectedValueOnce(new Error("Session store discovery failed"));
+    try {
+      expect(await request(viewer, runId)).toHaveBeenCalledWith(true, { runId, status: "timeout" });
+    } finally {
+      unavailable.mockRestore();
     }
     const runtime = createGatewaySubagentRuntime(() => context);
     const wait = (id: string) =>
