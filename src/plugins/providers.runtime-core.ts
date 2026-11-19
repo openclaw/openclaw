@@ -499,9 +499,6 @@ export function createProviderRegistryResolver(dependencies: {
     let { loadOptions } = prepared;
     const { env, workspaceDir } = inputs;
     const registrationKey = (normalizePluginId: PluginLoadOptions["normalizePluginId"]) => {
-      if (generationRegistry || params.config === undefined) {
-        return undefined;
-      }
       const registrationConfig = loadOptions ?? {
         config: params.config,
         activationSourceConfig: resolvePluginActivationSourceConfig(params),
@@ -515,9 +512,6 @@ export function createProviderRegistryResolver(dependencies: {
         sourceEntries: normalize(registrationConfig.activationSourceConfig).entries,
       });
     };
-    const registrationConfigKey = snapshot
-      ? registrationKey(snapshot.normalizePluginId)
-      : undefined;
     if (params.skipIfLoadInFlight && loadOptions && isPluginRegistryLoadInFlight(loadOptions)) {
       return undefined;
     }
@@ -583,17 +577,14 @@ export function createProviderRegistryResolver(dependencies: {
             return undefined;
           }
         }
-        // Loaded-only calls without metadata use this candidate's captured alias identity,
-        // never a fresh discovery or a resolver borrowed from another registry.
-        const requestedRegistrationKey = snapshot
-          ? registrationConfigKey
-          : registrationKey(context?.normalizePluginId);
         // Exact preparation may learn aliases here, but its owner load must still run.
         if (
           (!generationRegistry && params.registryScope === "exact") ||
           (context &&
-            requestedRegistrationKey !== undefined &&
-            requestedRegistrationKey !== context.registrationConfigKey)
+            !generationRegistry &&
+            params.config !== undefined &&
+            registrationKey(snapshot?.normalizePluginId ?? context.normalizePluginId) !==
+              context.registrationConfigKey)
         ) {
           continue;
         }

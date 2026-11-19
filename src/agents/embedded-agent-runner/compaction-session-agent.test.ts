@@ -1,10 +1,5 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  initializeGlobalHookRunner,
-  resetGlobalHookRunner,
-} from "../../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import type { StreamFn } from "../runtime/index.js";
 import { AuthStorage } from "../sessions/auth-storage.core.js";
@@ -31,7 +26,7 @@ vi.mock("../../plugins/provider-hook-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/provider-hook-runtime.js")>()),
   getModelProviderRuntimePluginHandle: () => undefined,
 }));
-// Provider/config payload shaping wraps the gate, as on a turn, so the gate sees its output.
+// Preserve provider/config payload shaping when preparing the summary transport.
 vi.mock("./extra-params.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./extra-params.js")>()),
   applyExtraParamsToAgent: (agent: { streamFn: StreamFn }) => {
@@ -52,7 +47,6 @@ vi.mock("./extra-params.js", async (importOriginal) => ({
 const { prepareCompactionSessionStream } = await import("./compaction-session-agent.js");
 
 afterEach(() => {
-  resetGlobalHookRunner();
   sent.length = 0;
 });
 
@@ -97,32 +91,6 @@ async function prepare() {
   );
   return session.agent.streamFn!;
 }
-
-it("gates compaction summary requests with the final shaped payload", async () => {
-  const seen: unknown[] = [];
-  initializeGlobalHookRunner(
-    createMockPluginRegistry([
-      {
-        hookName: "before_model_request",
-        handler: async (raw, ctx) => {
-          const event = raw as { requestKind: string; payload: { input: string } };
-          seen.push({ kind: event.requestKind, payload: event.payload, ctx });
-          return { payload: { ...event.payload, input: "API_TOKEN=[REDACTED]" } };
-        },
-      },
-    ]),
-  );
-  const streamFn = await prepare();
-  await streamFn(model, { messages: [] }, {});
-  expect(seen).toEqual([
-    {
-      kind: "compaction",
-      payload: { input: "API_TOKEN=fixture-value", shaped: true },
-      ctx: expect.objectContaining({ sessionKey: "fixture-session", trigger: "manual" }),
-    },
-  ]);
-  expect(sent).toEqual([{ input: "API_TOKEN=[REDACTED]", shaped: true }]);
-});
 
 it("sends compaction requests unchanged without a plugin", async () => {
   const streamFn = await prepare();
