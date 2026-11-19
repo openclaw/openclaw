@@ -101,7 +101,10 @@ The pinned release-tooling **Q** owns grant data in
 it to raw evidence, rather than using grants from P or the candidate **C**.
 Operator-approved entries require exact version, child role, job name, and short
 reason; optional `targetSha` and `evidence: { runId, runAttempt }` restrict the
-candidate and execution. The Q-pinned ledger is authoritative.
+candidate and execution. Each entry also requires an `aggregates` array: use
+`[]` when no failed aggregate depends on the job, otherwise record each aggregate’s
+exact `jobName`, failed `stepName`, and accepted `causes`. Keep `exactCauses` or
+`logSha256` restrictions when present. The Q-pinned ledger is authoritative.
 
 For an authorized grant, commit only the ledger change directly to the selected
 release-tooling Q branch, then pin its new full SHA in a fresh qualification
