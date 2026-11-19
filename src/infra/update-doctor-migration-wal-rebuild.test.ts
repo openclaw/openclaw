@@ -1,6 +1,8 @@
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
@@ -159,4 +161,34 @@ it("keeps a rebuilt WAL index attributable across repeated Doctor admissions", a
   );
   expect(warnings).toEqual([]);
   expect(receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
+});
+
+it("waits for a short-lived outside reader to close before taking migration exclusion", async () => {
+  const { pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
+  const generations = readUpdateDatabaseGenerations([pathname]);
+  // A monitoring-style reader that opens, reads and closes (#197083, #201085).
+  const reader = new Worker(
+    `
+      const { DatabaseSync } = require("node:sqlite");
+      const { parentPort } = require("node:worker_threads");
+      const reader = new DatabaseSync(${JSON.stringify(pathname)}, { readOnly: true });
+      reader.prepare("SELECT value FROM retained").all();
+      parentPort.postMessage("open");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+      reader.close();
+    `,
+    { eval: true, execArgv: [] },
+  );
+  const exited = once(reader, "exit");
+  try {
+    await once(reader, "message");
+    const { receipt, warnings } = await withCapture(env, generations, async () => {
+      using database = new DatabaseSync(pathname);
+      migrate(database, pathname);
+    });
+    expect(warnings).toEqual([]);
+    expect(receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
+  } finally {
+    await exited;
+  }
 });
