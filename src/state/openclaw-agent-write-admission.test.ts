@@ -144,6 +144,23 @@ it.each(["single", "batch"] as const)(
     ),
 );
 
+it("settles a background write nested inside its local foreground owner", async ({ signal }) => {
+  const { options, order, record } = makeFixture();
+  const controller = new AbortController();
+  const outer = write(options, async () => {
+    order.push("foreground");
+    await workerWrite(options, record("nested"), undefined, controller.signal, "background");
+    order.push("settled");
+  });
+  try {
+    await withinTest(outer, signal);
+    expect(order).toEqual(["foreground", "nested", "settled"]);
+  } finally {
+    controller.abort(new Error("test cleanup"));
+    await Promise.allSettled([outer]);
+  }
+});
+
 it.each([false, true])(
   "defers background writes behind later foreground work (abort=%s)",
   async (abort) => {
