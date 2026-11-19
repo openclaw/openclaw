@@ -296,6 +296,9 @@ describe("CI changed Node test plan", () => {
       targets: [
         "src/agents/command/delivery.restart-final.integration.test.ts",
         "src/agents/command/delivery.settle-reset.integration.test.ts",
+        // Continuation (karmaterminal): the operator continue_work wake pins arm the real tool
+        // under this support's channel operator.
+        "src/auto-reply/continuation/work-operator-continuation.producers.test.ts",
         "src/auto-reply/reply/commands-acp.owner.test.ts",
         "src/auto-reply/reply/commands-allowlist.owner.test.ts",
         "src/auto-reply/reply/commands-plugin.channel-native.test.ts",

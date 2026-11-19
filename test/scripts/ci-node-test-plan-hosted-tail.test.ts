@@ -6,6 +6,7 @@ import {
   createNodeTestShards,
   isRuntimeTestFileIncluded,
 } from "../../scripts/lib/ci-node-test-plan.mts";
+import { resolveVitestPretestBuildMode } from "../../scripts/lib/vitest-build-prerequisites.mts";
 
 const options = {
   compact: true,
@@ -155,7 +156,13 @@ it.each(["push", "main", "full"] as const)("bounds hosted groups (%s)", (mode) =
   );
   expect(updateGroups).toHaveLength(1);
   if (full) {
-    expect(updateGroups[0]!.pretestBuildMode).toBe("runtime");
+    // Continuation (karmaterminal): which storage-state files share update-cli's full-dispatch
+    // stripe follows the inventory. Upstream's partner is a runtime consumer; the PR's
+    // storage-state suites move update-cli to a stripe without one. Either way the group
+    // carries the build its members need (update-cli alone needs none).
+    expect(updateGroups[0]!.pretestBuildMode).toBe(
+      resolveVitestPretestBuildMode([{ includePatterns: updateGroups[0]!.includePatterns }]),
+    );
     expect(updateGroups[0]!.includePatterns!.length).toBeGreaterThan(1);
   } else {
     expect(updateGroups[0]!.includePatterns).toEqual(["src/cli/update-cli.test.ts"]);
