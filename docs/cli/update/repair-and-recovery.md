@@ -520,6 +520,12 @@ checks still guard activation and updating is the fix for newer state. Any other
 finding refuses the update before it changes anything and records the finding on the
 refused run.
 
+An `active-mutation` mark records Doctor processes that may still have been
+writing, which a schema check cannot rule out. Repair, and an update whose
+finalization runs Doctor maintenance, check it only after that maintenance has held
+exclusive ownership of the state, so no earlier writer can still be active. Before
+that point the mark is reported as a warning, not resolved.
+
 If the state is inconsistent or cannot be read, repair leaves the Gateway and
 state as they were and reports the finding and the Gateway's current state. Both
 repair and a refused update name `openclaw triage` first, which opens a coding agent

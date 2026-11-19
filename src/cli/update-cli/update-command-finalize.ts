@@ -569,6 +569,8 @@ async function updateFinalizeCommandInternal(
                 json: Boolean(opts.json),
                 phase,
                 timeoutMs: lifecycle.budget("gatewayRestoration"),
+                // Doctor maintenance ran above only with exclusive state ownership.
+                writersExcluded: true,
               }));
             // Inconsistent state keeps every Gateway as it is, whichever run stopped it.
             if (markRefusal) {

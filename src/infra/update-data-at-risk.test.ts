@@ -101,17 +101,19 @@ it("refuses while an interrupted state restore is still on disk", async () => {
   );
 });
 
-it("never resolves a mark that records live Doctor writers from schemas alone", async () => {
+it("resolves a mark that records live Doctor writers only after Doctor held the state", async () => {
   openOpenClawStateDatabase();
+  const check = (writersExcluded?: true) =>
+    verifyUpdateStateConsistency({
+      env: process.env,
+      formatCommand: (command) => command,
+      marks: [{ runId: "run-1", mark: "active-mutation" }],
+      ...(writersExcluded ? { writersExcluded } : {}),
+    });
 
-  const verdict = await verifyUpdateStateConsistency({
-    env: process.env,
-    formatCommand: (command) => command,
-    marks: [{ runId: "run-1", mark: "active-mutation" }],
-  });
-
-  expect(verdict).toMatchObject({ status: "unverifiable" });
-  expect(verdict.status !== "consistent" && verdict.nextAction).toContain("processes have stopped");
+  // Schemas alone cannot show the writers exited; Doctor's maintenance admission settles it.
+  await expect(check()).resolves.toMatchObject({ status: "unverifiable", finishable: true });
+  await expect(check(true)).resolves.toMatchObject({ status: "consistent" });
 });
 
 it.each(["shared", "agent"] as const)(

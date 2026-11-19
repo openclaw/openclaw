@@ -32,7 +32,7 @@ export type UpdateStateVerification =
       nextAction: string;
       /** State is newer than the installed build: an update to a build that supports it is the fix. */
       newerState?: true;
-      /** Only a migration is unfinished, which Doctor finishes. */
+      /** Doctor's maintenance settles it: an unfinished migration or writers it waits out. */
       finishable?: true;
     };
 
@@ -153,15 +153,21 @@ export async function verifyUpdateStateConsistency(params: {
   formatCommand: (command: string) => string;
   /** The recorded marks being checked; some name evidence a schema check cannot see. */
   marks?: readonly { runId: string; mark: string }[];
+  /**
+   * This run's Doctor maintenance has since held exclusive state and agent ownership, so
+   * no writer the marked run left behind can still hold the state.
+   */
+  writersExcluded?: true;
   signal?: AbortSignal;
 }): Promise<UpdateStateVerification> {
-  if (params.marks?.some(({ mark }) => mark === "active-mutation")) {
-    // Doctor process custody owns this mark: schemas cannot show whether writers exited.
+  if (!params.writersExcluded && params.marks?.some(({ mark }) => mark === "active-mutation")) {
+    // Schemas cannot show whether writers exited; Doctor's ownership admission can.
     return {
       status: "unverifiable",
       detail:
         "the mark records Doctor processes that may still be writing, which a state check cannot rule out",
-      nextAction: `once those processes have stopped, run \`${params.formatCommand("openclaw update repair")}\` to settle their custody.`,
+      nextAction: `run \`${params.formatCommand("openclaw update repair")}\`: its Doctor waits for those writers to release the state, then this check runs again.`,
+      finishable: true,
     };
   }
   const databasePath = path.resolve(resolveOpenClawStateSqlitePath(params.env));

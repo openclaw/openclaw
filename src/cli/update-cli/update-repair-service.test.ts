@@ -464,6 +464,24 @@ it("lets Doctor finish an unfinished migration before the mark is checked again"
   );
 });
 
+it("resolves a live-writer mark once Doctor has held the state, without a second repair", async () => {
+  const original = seed(true, {
+    recovery: { ...markedRisk.recovery, dataAtRisk: "active-mutation" },
+  });
+  const verify = vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency");
+
+  await repair(false);
+
+  // Before Doctor the mark is deferred to it; after Doctor's exclusive admission the
+  // writers it named cannot hold the state, so the schema check decides.
+  expect(mocks.doctor).toHaveBeenCalled();
+  expect(verify.mock.calls.map(([params]) => params.writersExcluded)).toEqual([undefined, true]);
+  expect(events).toEqual(["finalized", "start", "verified"]);
+  expect(listUpdateRuns()[0]?.steps).toContainEqual(
+    expect.objectContaining({ step: `finalize:data-at-risk-verified:${original}` }),
+  );
+});
+
 it("reports a serving Gateway as running when a recorded mark is inconsistent", async () => {
   const original = seed(false, markedRisk);
   vi.mocked(service.readRuntime).mockResolvedValue({ status: "running", pid: 4242 });

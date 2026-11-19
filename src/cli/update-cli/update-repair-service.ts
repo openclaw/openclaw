@@ -65,14 +65,17 @@ export async function verifyRecordedDataAtRisk(params: {
   json: boolean;
   phase: UpdateFinalizationPhase;
   timeoutMs: number;
-  /** Before Doctor runs: an unfinished migration is Doctor's to finish, so defer it. */
+  /** Before Doctor runs: what Doctor's maintenance settles is deferred to it. */
   beforeMaintenance?: true;
+  /** After this run's Doctor maintenance held exclusive state ownership. */
+  writersExcluded?: true;
 }): Promise<string | undefined> {
   const { env, phase, marks } = params;
   const verification = await verifyUpdateStateConsistency({
     env,
     formatCommand: (command) => formatCliCommand(command, env),
     marks,
+    writersExcluded: params.writersExcluded,
     signal: phase.signal,
   });
   phase.assertCurrent();
