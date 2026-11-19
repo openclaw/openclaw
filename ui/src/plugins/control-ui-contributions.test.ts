@@ -8,12 +8,12 @@ import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
+import { createComposerTasks } from "../lib/chat/composer-tasks.runtime.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import {
   createGatewayHarness,
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
-import { createComposerTasks } from "../pages/chat/components/chat-composer-task.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import {

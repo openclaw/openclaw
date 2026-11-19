@@ -1,6 +1,6 @@
 import { createRoot, flush } from "solid-js";
 import { describe, expect, it } from "vitest";
-import { createComposerTasks } from "./chat-composer-task.ts";
+import { createComposerTasks } from "./composer-tasks.runtime.ts";
 
 function setup(value: string) {
   return createRoot((dispose) => {

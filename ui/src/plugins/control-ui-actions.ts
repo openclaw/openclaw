@@ -6,8 +6,8 @@ import type {
 } from "../../../src/plugin-sdk/control-ui.js";
 import type { PluginSessionMenuAction } from "../components/session-menu-solid.tsx";
 import { i18n } from "../i18n/lib/translate.ts";
+import type { ComposerTasks } from "../lib/chat/composer-tasks.runtime.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import type { ComposerTasks } from "../pages/chat/components/chat-composer-task.ts";
 import type { ControlUiPluginCapability } from "./control-ui-capability.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
 

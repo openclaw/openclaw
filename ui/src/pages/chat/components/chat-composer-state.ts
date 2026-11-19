@@ -1,5 +1,7 @@
 import { createSignal, createStore } from "solid-js";
 import type { ChatGoalDraftMode, HumanMention } from "../../../lib/chat/chat-types.ts";
+import type { ComposerTasks } from "../../../lib/chat/composer-tasks.runtime.ts";
+import { loadComposerTasksRuntime } from "../../../lib/chat/composer-tasks.ts";
 import {
   adjustTextareaHeight,
   disconnectComposerPopoverAnchorObserver,
@@ -8,7 +10,6 @@ import { createComposerEmojiMenu } from "./chat-composer-emoji-state.ts";
 import { createHumanMentionMenu } from "./chat-composer-mention-menu-state.ts";
 import { createSkillMenu } from "./chat-composer-skill-menu-state.ts";
 import { createSlashMenu } from "./chat-composer-slash-menu-state.ts";
-import type { ComposerTasks } from "./chat-composer-task.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 function createChatComposerState(): ChatComposerState {
@@ -18,7 +19,6 @@ function createChatComposerState(): ChatComposerState {
     queuedSubmit: null,
   });
   const [tasks, setTasks] = createSignal<ComposerTasks | null>(null);
-  let loading: Promise<ComposerTasks> | undefined;
   const state: ChatComposerState = {
     // Admission survives composer remounts while the same goal mode is pending.
     goalPending: createSignal<ChatGoalDraftMode | null>(null),
@@ -46,20 +46,12 @@ function createChatComposerState(): ChatComposerState {
     composerDraftScope: null,
     dictationSelection: null,
     tasks,
-    // The owner loads with the first plugin composer action, outside the chat boot bundle.
-    // A failed fetch is not cached, so the next action tries again.
+    // One owner per pane, created once the runtime has loaded.
     loadTasks: () =>
-      (loading ??= import("./chat-composer-task.ts").then(
-        ({ createComposerTasks }) => {
-          const owner = createComposerTasks(() => state.taskPresenters > 0);
-          setTasks(owner);
-          return owner;
-        },
-        (error: unknown) => {
-          loading = undefined;
-          throw error;
-        },
-      )),
+      loadComposerTasksRuntime().then(
+        ({ createComposerTasks }) =>
+          tasks() ?? setTasks(() => createComposerTasks(() => state.taskPresenters > 0)),
+      ),
     taskPresenters: 0,
   };
   return state;

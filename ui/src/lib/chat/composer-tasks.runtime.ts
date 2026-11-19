@@ -1,7 +1,7 @@
 import { createStore } from "solid-js";
-import { focusComposerInput, readComposerEditor } from "../../../lib/composer-input.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { listen } from "../../../lib/reactive/listener.ts";
+import { focusComposerInput, readComposerEditor } from "../composer-input.ts";
+import { t } from "../reactive/i18n.ts";
+import { listen } from "../reactive/listener.ts";
 
 export type ComposerProposalOutcome = "accepted" | "dismissed";
 export type ComposerTaskStep = { label: string; state: "running" | "done" | "failed" };

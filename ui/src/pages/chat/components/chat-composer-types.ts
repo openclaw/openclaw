@@ -22,6 +22,7 @@ import type {
   HumanMention,
 } from "../../../lib/chat/chat-types.ts";
 import type { ComposerDraftSource } from "../../../lib/chat/composer-draft-changes.ts";
+import type { ComposerTasks } from "../../../lib/chat/composer-tasks.runtime.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import type { PresentationBinding } from "../../../lib/presentation.ts";
@@ -48,7 +49,6 @@ import type {
 import type { ChatComposerCapabilityMenuSource } from "./chat-composer-plus-menu.types.ts";
 import type { SkillMenu } from "./chat-composer-skill-menu-state.ts";
 import type { SlashMenu } from "./chat-composer-slash-menu-state.ts";
-import type { ComposerTasks } from "./chat-composer-task.ts";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.tsx";
 import type { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 

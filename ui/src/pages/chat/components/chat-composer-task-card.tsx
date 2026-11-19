@@ -1,7 +1,7 @@
 import { createMemo, createSignal, For, Match, onSettled, Show, Switch } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import type { ComposerTasks } from "../../../lib/chat/composer-tasks.runtime.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import type { ComposerTasks } from "./chat-composer-task.ts";
 
 function elapsed(startedAt: number, now: number): string {
   const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
