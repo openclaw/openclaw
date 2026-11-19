@@ -27,4 +27,5 @@ export type PreparedCompactionReplayOptions = Omit<
   replayEnabled: boolean;
   historyLimit?: number;
   observedTokenCount?: number;
+  builtinGoogleReplay?: boolean;
 };

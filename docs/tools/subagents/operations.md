@@ -85,12 +85,23 @@ completion delivery and retry. A collector that yields retains its terminal timi
 and reply even if a later turn advances the child session. Retained routing
 metadata does not keep the child running.
 
+When a hidden sub-agent's task ends (it finishes, fails, times out or is stopped),
+OpenClaw stops the processes it still runs: `yieldMs` commands, `background: true`
+services and processes its commands left running. A sub-agent waiting in
+`sessions_yield` keeps the commands it waits on. Use `durable: true`, or start the
+service from the parent session, to keep a service after the sub-agent ends.
+Visible spawned sessions keep their processes until reset, delete or archive.
+
 A graceful Gateway shutdown records the top-level requesters of running children,
-then cancels the children through the ordinary abort path. They settle terminally
-and quietly, without completion announcements or failure notices to their parents
-during shutdown. Only the root requester receives the standard resume input at
-startup. Children are not independently resumed, and the Gateway does not adopt
-old child tasks or reconstruct requester completion turns.
+then cancels the children through the ordinary abort path. Children that owe a
+completion retain their error outcome for delivery after startup, including when
+their requester has already finished its turn. A shutdown interruption does not count as
+an intentional cancellation by the requester. Root requesters with interrupted work
+receive the standard resume input; children are not independently resumed.
+
+Completion turns retain processing receipts so a transient failure before the
+requester consumes the outcome can retry. An intentional Stop or a completed
+receipt still prevents replay.
 
 The parent uses its transcript and the existing sub-agent tools to inspect prior
 work, then can send a fresh instruction to a retained child or spawn a replacement.

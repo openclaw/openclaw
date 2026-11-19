@@ -3869,7 +3869,11 @@ function splitOversizedCompactGroup(
   const isCliProcess = group.shard_name === "agentic-cli-process";
   const isTooling = isParallelToolingGroup(group);
   const hostedFileLimit =
-    (hostedMain || (runnerBackend === "github" && fullInventory)
+    // Full inventories retain the main file bounds. Gateway methods also keep
+    // their incident-backed bound in ordinary hosted compact PR layouts.
+    (hostedMain ||
+    (runnerBackend === "github" &&
+      (fullInventory || group.shard_name === "agentic-gateway-methods"))
       ? COMPACT_HOSTED_MAIN_MAX_FILES.get(group.shard_name)
       : undefined) ??
     (runnerBackend === "github" && group.shard_name === "core-runtime-infra-storage-state"
@@ -5272,19 +5276,21 @@ function createCompactNodeTestShardBundles(
         !planned.group.requiresDist &&
         !isExclusiveCompactGroup(planned.group) &&
         runnerRank(planned.group) >= 0;
-      const dedicatedHostedMainGroup =
-        compactMode === "push" &&
+      const dedicatedHostedGroup =
         options.runnerBackend === "github" &&
-        (/^agentic-control-plane-agent-chat(?:-hosted-\d+)?$/u.test(planned.group.shard_name) ||
-          (/^agentic-gateway-methods(?:-hosted-\d+)?$/u.test(planned.group.shard_name) &&
-            (planned.group.includePatterns?.length ?? 0) > 32) ||
-          planned.group.includePatterns?.includes(HOSTED_MAIN_UPDATE_TEST));
+        // Hourly main validation keeps its separately bounded 77-row packing.
+        (((compactMode === "push" || !options.mainValidation) &&
+          /^agentic-gateway-methods(?:-hosted-\d+)?$/u.test(planned.group.shard_name) &&
+          (planned.group.includePatterns?.length ?? 0) > 32) ||
+          (compactMode === "push" &&
+            (/^agentic-control-plane-agent-chat(?:-hosted-\d+)?$/u.test(planned.group.shard_name) ||
+              planned.group.includePatterns?.includes(HOSTED_MAIN_UPDATE_TEST))));
       const key = JSON.stringify([
         sharesOrdinaryCapacity ? "ordinary" : planned.group.runner,
         shard.requiresDist,
         // Keep measured heavy children alone despite their stale packing estimates.
         // Small Gateway tails and its runtime prerequisite keep ordinary packing.
-        dedicatedHostedMainGroup ? planned.group.shard_name : undefined,
+        dedicatedHostedGroup ? planned.group.shard_name : undefined,
       ]);
       const groups = groupsByRunner.get(key);
       if (groups) {

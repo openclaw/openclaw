@@ -20,6 +20,8 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
   assertCurrent: SessionSourceAssertion;
+  /** Check current admission once when queued/replayed work starts; never revokes other holders. */
+  reauthorize?: () => void;
   signal?: AbortSignal;
   /** Opaque authenticated source identity, independent of per-invocation restrictions. */
   source?: object;

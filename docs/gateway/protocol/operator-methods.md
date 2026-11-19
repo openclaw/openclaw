@@ -261,6 +261,10 @@ compatible rows remain usable; recovery clears it. A successful empty catalog
 remains empty.
 
 The Gateway advertises `session-scoped-model-catalog` for this contract.
+Before the first prepared metadata publication, `chat.metadata` and passive
+`models.list` reads return `UNAVAILABLE` with `retryable: true` and a starting
+message. Retry after startup progresses. Publication failures and retired metadata
+owners remain errors; conversation startup still omits unavailable optional metadata.
 `chat.metadata` remains available to legacy clients. Clients that read models
 directly can pass `includeModels: false` to skip the duplicate catalog, account
 selection, and runtime-selection projection. Commands and swarm availability

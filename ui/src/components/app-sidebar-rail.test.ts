@@ -691,7 +691,8 @@ describe("personal navigation rail", () => {
   });
 
   it("reorders a descriptor-only personal pin without requiring a loaded roster row", async () => {
-    const { sidebar, gateway, sessions, result, key, pending, read, dom } = await pinLookup();
+    const { sidebar, gateway, sessions, result, key, pending, read, dom } =
+      await pinLookup("agent:main:unloaded");
     gateway.publish({
       hello: gatewayHelloForMethods(["sessions.describe"], ["operator.sessions.read"]),
     });

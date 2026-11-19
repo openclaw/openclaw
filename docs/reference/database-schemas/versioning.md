@@ -231,9 +231,16 @@ column through the startup-additive owner. A value of `1` keeps package bootstra
 seeding with the initializer across restarts and failed dependency setup; normal
 workspace preparation does not seed defaults or mark setup complete. Successful
 package seeding clears the flag. Existing milestones and attestation hashes are
-unchanged, and existing rows need no backfill. Older builds ignore the column and
-do not resume this new Template setup flow; downgrading is not a setup retry.
-The numeric schema version and backup policy are unchanged.
+unchanged, and existing rows need no backfill. Older SQLite builds ignore the
+column and do not resume this new Template setup flow.
+
+PostgreSQL stores created by v2026.11.5 start at schema 36 without the column.
+Predecessor verification expects the column to be absent through schema 38 and recognizes both
+historical layouts at schema 39. Inspection and backups keep the exact source
+layout. The existing migration to schema 40 adds the nullable `bigint` column
+when needed and seals the destination in the migration transaction. Existing
+deferral values are preserved. To return to a build that predates the migration,
+restore its matching PostgreSQL schema and anchor from before the upgrade.
 
 Session-window preview caching adds bare nullable `row_transcript_json TEXT` and
 `row_transcript_updated_at INTEGER` columns without a numeric version bump.
