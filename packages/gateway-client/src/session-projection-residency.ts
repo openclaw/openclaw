@@ -27,16 +27,14 @@ export function retainSessionProjectionResidency(
   );
   const existing = new Map(state.entries.map((entry) => [entry.message, entry]));
   const incoming = createSessionProjectionEntries(event.messages);
-  const retainedIndexes = new Set<number>();
   // Residency grants occurrences, not every copy of an object. Consume from
   // the tail so ordinary admission and newest-output selection agree.
-  for (let index = state.entries.length - 1; index >= 0; index--) {
-    const entry = state.entries[index]!;
+  const retainedIndexes = state.entries.reduceRight((indexes, entry, index) => {
     const count = admitted.get(entry.message) ?? 0;
     if (count) {
       admitted.set(entry.message, count - 1);
-      retainedIndexes.add(index);
-      continue;
+      indexes.add(index);
+      return indexes;
     }
     const run = entry.identity?.runId ? state.runs[entry.identity.runId] : undefined;
     const provisional =
@@ -66,9 +64,10 @@ export function retainSessionProjectionResidency(
         )
       )
     ) {
-      retainedIndexes.add(index);
+      indexes.add(index);
     }
-  }
+    return indexes;
+  }, new Set<number>());
   // Retirement changes residency, never the canonical relative order of
   // retained live/pending rows around durable sequence boundaries.
   let entries: readonly SessionProjectionEntry[] = state.entries.filter((_, index) =>

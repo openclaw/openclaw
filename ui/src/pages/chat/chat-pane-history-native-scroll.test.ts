@@ -212,7 +212,7 @@ it.each(["nested control", "prevented input"] as const)(
 
 it("preserves the end anchor when downward input has no newer history", async () => {
   const { pane, state, thread, newer, older, correctRange } = await nativeHistoryPane();
-  state.chatHistoryPagination.hasNewer = false;
+  state.chatHistoryPagination = { hasMore: true, olderCursor: "before-395" };
   state.chatScrollElement = () => thread;
   correctRange(60_879, 1_200, 1_946);
   const cancel = vi.spyOn(pane.transcript, "cancelScroll");
