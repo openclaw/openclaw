@@ -1,6 +1,11 @@
 import { expect, it } from "vitest";
 import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import { createDirectChatContext } from "../../../gateway/server-chat.agent-events.test-helpers.js";
+import {
+  claimAgentRunContext,
+  hasLiveAgentRunContext,
+  releaseAgentRunContext,
+} from "../../../infra/agent-run-registry.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
@@ -61,6 +66,7 @@ it.each(["recorded failure", "shutdown"] as const)(
           ensureListener() {},
           warn() {},
         }).activate();
+      const executionClaims: Array<{ runId: string; claim: string | undefined }> = [];
       try {
         saveSubagentRegistryToSqlite(new Map(entries.map((entry) => [entry.runId, entry])));
         await restore();
@@ -69,8 +75,25 @@ it.each(["recorded failure", "shutdown"] as const)(
           const resolveGatewayContext = () => gateway;
           for (const entry of subagentRuns.values()) {
             bindGatewayContextResolver(entry, resolveGatewayContext);
+            if (entry.execution.status === "running") {
+              const claim = claimAgentRunContext(
+                entry.runId,
+                { sessionKey: entry.childSessionKey },
+                { trackOwner: true, ownsContext: true },
+              );
+              executionClaims.push({ runId: entry.runId, claim });
+              expect(hasLiveAgentRunContext(entry.runId)).toBe(true);
+            }
           }
           await terminateLiveSubagentsForShutdown(resolveGatewayContext);
+          for (const { runId, claim } of executionClaims) {
+            expect(subagentRuns.get(runId)?.execution).toMatchObject({
+              status: "terminal",
+              outcome: { status: "error", error: "Gateway stopped" },
+            });
+            expect(subagentRuns.get(runId)?.killReconciliation).toBeUndefined();
+            releaseAgentRunContext(runId, claim);
+          }
           await resetSubagentRegistryForTests({ persist: false });
           await restore();
         }
@@ -103,6 +126,9 @@ it.each(["recorded failure", "shutdown"] as const)(
           );
         }
       } finally {
+        for (const { runId, claim } of executionClaims) {
+          releaseAgentRunContext(runId, claim);
+        }
         await resetSubagentRegistryForTests({ persist: false });
       }
     });
