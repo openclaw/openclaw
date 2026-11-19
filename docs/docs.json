@@ -2261,6 +2261,7 @@
                       "providers/google-vertex",
                       "providers/groq",
                       "providers/huggingface",
+                      "providers/jzstoken",
                       "providers/levanto",
                       "providers/longcat",
                       "providers/meta",
