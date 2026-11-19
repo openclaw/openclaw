@@ -350,11 +350,12 @@ it("names a Git release launcher service as unconfirmed, not as another installa
     mockProcessPlatform("linux");
     const prefix = path.join(home, ".openclaw", "git-install");
     const launcher = path.join(prefix, "openclaw-launcher.mjs");
-    // The release the launcher starts: an OpenClaw package outside this checkout.
-    const release = path.join(prefix, "lib", "node_modules", "openclaw");
+    // The release the launcher starts through its link: a package outside this checkout.
+    const release = path.join(prefix, "releases", "r1", "openclaw");
     await fs.mkdir(path.join(release, "dist"), { recursive: true });
     await fs.writeFile(path.join(release, "package.json"), '{"name":"openclaw"}');
     await fs.writeFile(path.join(release, "dist", "index.js"), "gateway");
+    await fs.symlink(path.join("releases", "r1", "openclaw"), path.join(prefix, "openclaw"));
     await fs.writeFile(launcher, "launcher");
     const service = mockMaintenanceService(home, {
       readCommand: async () => ({

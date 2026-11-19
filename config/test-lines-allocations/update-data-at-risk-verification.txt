@@ -9,4 +9,4 @@
 # interrupted managed handoff past an earlier verified mark) with exact rendered text per
 # outcome, the Git release-launcher refusal message, and Doctor's skipped and unconfirmed
 # stale-Gateway stops. Exact net growth.
-472
+473
