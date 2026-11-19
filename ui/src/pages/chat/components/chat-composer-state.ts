@@ -63,7 +63,8 @@ export function presentComposerTasks(state: ChatComposerState) {
   return () => {
     state.taskPresenters -= 1;
     if (state.taskPresenters === 0) {
-      state.tasks()?.cancel();
+      // The next editor has fresh history, so the Undo receipt cannot restore anything.
+      state.tasks()?.dismiss();
     }
   };
 }

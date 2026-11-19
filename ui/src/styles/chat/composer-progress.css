@@ -699,8 +699,12 @@
   block-size: 96px;
 }
 
+/* Metadata shrinks before the actions do, so Undo, Dismiss and Use stay inside the card. */
 .agent-chat__composer-task-meta {
+  min-inline-size: 0;
   margin-inline-end: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .agent-chat__composer-task > :last-child {
