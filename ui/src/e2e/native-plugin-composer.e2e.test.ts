@@ -247,6 +247,20 @@ suite.define(() => {
     });
   });
 
+  it("keeps the Undo receipt when the action fails after the user accepts", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const { textarea } = await open(page);
+      await page.getByRole("button", { name: "Propose then break", exact: true }).click();
+      await page.getByRole("region", { name: "Fixture proposal" }).waitFor();
+      await textarea.focus();
+      await textarea.press("Tab");
+      await expect.poll(() => textarea.inputValue()).toBe("Proposed text");
+      await page.getByRole("alert").filter({ hasText: "Follow-up failed" }).waitFor();
+      await page.getByRole("button", { name: "Undo" }).waitFor();
+      expect(await page.locator('.agent-chat__composer-task[data-state="failed"]').count()).toBe(0);
+    });
+  });
+
   it("does not let a late toolbar failure take over another action's task", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       await open(page);

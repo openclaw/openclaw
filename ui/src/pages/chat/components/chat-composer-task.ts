@@ -208,11 +208,10 @@ export function createComposerTasks() {
     cancel: () => settle(),
     /** Show a failure that has no task of its own, such as a toolbar action that threw. */
     report(title: string, message: string): boolean {
-      // Never take over a live card: it belongs to another task.
-      if (presenters === 0 || current) {
+      // Never take over a live card (another task) or an Undo receipt (a draft already replaced).
+      if (presenters === 0 || current || state.accepted) {
         return false;
       }
-      clearAccepted();
       setState((draft) => {
         draft.card = { kind: "failed", title, message, retry: null };
       });
