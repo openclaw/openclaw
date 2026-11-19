@@ -10,6 +10,7 @@ import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build
 import {
   isInlineUpdateCompatibilityExport,
   readUpdateCompatibilityInventory,
+  resolveUpdateCompatibilityOrigin,
 } from "../scripts/lib/update-compat-chunks.mts";
 import { ModuleGraph } from "../scripts/lib/update-compat-module-graph.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
@@ -1660,9 +1661,8 @@ function compileUpdateCompatibilityConsumers(rootDir: string): string[] {
       );
       continue;
     }
-    const currentOrigin = graph.localOrigin(sourceFile, origin.symbol);
+    const currentOrigin = resolveUpdateCompatibilityOrigin(origin, rootDir, graph);
     if (
-      !currentOrigin ||
       (currentOrigin.module === origin.module && currentOrigin.symbol === origin.symbol) ||
       !graph.names(path.join(rootDir, currentOrigin.module)).includes(currentOrigin.symbol)
     ) {
@@ -1670,6 +1670,9 @@ function compileUpdateCompatibilityConsumers(rootDir: string): string[] {
         `Recorded updater binding ${origin.module}:${origin.symbol} is neither a named export nor an imported named binding`,
       );
     }
+    imports.push(
+      `import { ${currentOrigin.symbol} as __updateCompatibilityConsumer${index} } from ${JSON.stringify(`./${currentOrigin.module}`)};`,
+    );
   }
   return imports;
 }

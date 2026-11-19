@@ -817,6 +817,9 @@ const unrelatedArgs = [
     const compiled = compile(manifest, "package.json");
     expect(compiled).not.toContain("import { isImmutableManagedServiceUpdateHandoffProcess");
     expect(compiled).toMatch(
+      /import \{ runWithOpenClawStateLeaseWorker as __updateCompatibilityConsumer\d+ \} from "\.\/src\/state\/openclaw-state-lease-worker-operation\.ts";/u,
+    );
+    expect(compiled).toMatch(
       /import \{ isPackageManagerUpdateMode as __updateCompatibilityConsumer\d+ \} from "\.\/src\/cli\/update-cli\/update-command-service-recovery\.ts";/u,
     );
     for (const [module, symbol] of [
