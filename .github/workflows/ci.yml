@@ -6087,6 +6087,7 @@ jobs:
             -only-testing:OpenClawTests/CloudflareAccessSessionStoreTests
             -only-testing:OpenClawTests/ChatTypingFocusTests
             -only-testing:OpenClawTests/ChatSendHydrationTests
+            -only-testing:OpenClawTests/ChatSessionsCodingTests
             -only-testing:OpenClawTests/SettingsHubTests
             -only-testing:OpenClawTests/SettingsHubVisualProofTests/testIngressAuthorizedDashboardEntryPointsLoadTheSelectedGatewayPage
             -only-testing:OpenClawTests/ChatComposerTextViewIOSTests
@@ -6145,6 +6146,7 @@ jobs:
               -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.xcresult \
               -parallel-testing-enabled NO \
               -only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings \
+              -only-testing:OpenClawUITests/OpenClawSnapshotUITests/testNestedCustomToolsExposeResultsQuietDetailsAndPendingAuthority \
               -only-testing:OpenClawUITests/BootstrapSetupFailureUITests \
               "$test_action"
           fi

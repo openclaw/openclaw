@@ -312,6 +312,49 @@ describe("Gateway automatic inference setup", () => {
     });
   });
 
+  it.each([
+    { status: "unavailable", error: "The local model needs more memory. Load a smaller model." },
+    { status: "timeout", error: "The local model did not respond. Check the server and retry." },
+  ] as const)(
+    "keeps a $status candidate failure when Codex needs a login",
+    async ({ status, error }) => {
+      fixture.detect.mockResolvedValueOnce(detection([ollama])).mockResolvedValueOnce(detection());
+      fixture.activate.mockResolvedValueOnce({ ok: false, status, error });
+      fixture.prepare.mockResolvedValue({ ok: true, config: {} });
+
+      expect(await runSetup()).toMatchObject({
+        status: "unavailable",
+        signIn: separateSignIn,
+        attempts: [{ kind: ollama.kind, label: ollama.label, error }],
+      });
+    },
+  );
+
+  it("preserves mixed credential and capacity failures without making sign-in the diagnosis", async () => {
+    fixture.detect
+      .mockResolvedValueOnce(detection([openai, ollama]))
+      .mockResolvedValueOnce(detection([codex]));
+    fixture.activate
+      .mockResolvedValueOnce({ ok: false, status: "auth", error: "API key is missing." })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: "unavailable",
+        error: "Not enough memory to load the local model.",
+      })
+      .mockResolvedValueOnce({ ok: false, status: "auth", error: "ChatGPT login expired." });
+    fixture.prepare.mockResolvedValue({ ok: true, config: {} });
+
+    expect(await runSetup()).toMatchObject({
+      status: "unavailable",
+      signIn: separateSignIn,
+      attempts: [
+        { kind: openai.kind, error: "API key is missing." },
+        { kind: ollama.kind, error: "Not enough memory to load the local model." },
+        { kind: codex.kind, error: "ChatGPT login expired." },
+      ],
+    });
+  });
+
   it("joins concurrent callers before activation and holds admission against an independent context", async () => {
     const { started, discovered } = pauseDiscovery();
     const gateway = context();

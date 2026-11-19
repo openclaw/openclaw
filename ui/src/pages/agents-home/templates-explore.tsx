@@ -9,7 +9,6 @@ import {
   Repeat,
   Show,
 } from "solid-js";
-import type { IconName } from "../../components/icon-data.ts";
 import {
   CatalogDiscoveryChip,
   CatalogDiscoveryChips,
@@ -27,6 +26,7 @@ import { createPageRequestDelay } from "../../lib/page-request.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { templateCategories } from "../../lib/template-categories.ts";
 import { PluginsHubHeader } from "../plugins/plugins-hub-header.tsx";
 import { pluginsHubPanel } from "../plugins/plugins-hub.ts";
 import { preloadTemplateArtwork, TemplateArtwork } from "./template-artwork.tsx";
@@ -42,23 +42,6 @@ import {
 
 registerEnglishCatalog(registerTemplatesEnglish);
 
-// ClawHub's current Template taxonomy. The "other" bucket is assigned by ClawHub.
-const templateCategories = [
-  ["", "templatesCatalog.categoryAll", "layoutGrid"],
-  ["personal", "templatesCatalog.categoryPersonal", "home"],
-  ["health", "templatesCatalog.categoryHealth", "heartPulse"],
-  ["travel", "templatesCatalog.categoryTravel", "plane"],
-  ["productivity", "templatesCatalog.categoryProductivity", "listTodo"],
-  ["research", "templatesCatalog.categoryResearch", "search"],
-  ["engineering", "templatesCatalog.categoryEngineering", "codeXml"],
-  ["governance", "templatesCatalog.categoryGovernance", "scale"],
-  ["operations", "templatesCatalog.categoryOperations", "workflow"],
-  ["finance", "templatesCatalog.categoryFinance", "coins"],
-  ["sales", "templatesCatalog.categorySales", "handshake"],
-  ["product", "templatesCatalog.categoryProduct", "lightbulb"],
-  ["people", "templatesCatalog.categoryPeople", "users"],
-  ["other", "templatesCatalog.categoryOther", "shapes"],
-] as const satisfies readonly (readonly [string, string, IconName])[];
 const SECTION_SIZE = 4;
 // Enough placeholders and decoded artwork to cover a tall first screen.
 const SKELETON_SECTIONS = 4;
