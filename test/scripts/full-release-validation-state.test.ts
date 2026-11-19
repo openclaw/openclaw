@@ -3,7 +3,17 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, afterEach, assert, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  assert,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import { publicationIntentInputs } from "../../scripts/full-release-publication-contract.mjs";
 import {
@@ -63,6 +73,31 @@ import {
   sourceFact,
   registryRecord,
 } from "./full-release-validation-state.test-support.js";
+
+// These policy-composition fixtures own their immutable input; the release ledger
+// is intentionally empty once a candidate closes and is not fixture data.
+vi.mock("../../scripts/lib/release-validation-waivers.json", () => ({
+  default: {
+    schema: "openclaw.release-validation-waivers/v1",
+    waivers: [
+      {
+        targetVersion: "2026.11.4",
+        targetSha: "5eb2d8052ddc363245bea3ca4ec0833815ab6e93",
+        childRole: "normalCi",
+        jobName: "macos-swift (tests)",
+        reason: "Synthetic candidate-bound approval",
+        aggregates: [
+          {
+            jobName: "openclaw/ci-gate",
+            stepName: "Verify selected CI lanes",
+            causes: ["macos-swift finished with failure (selected=true)"],
+            exactCauses: true,
+          },
+        ],
+      },
+    ],
+  },
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
