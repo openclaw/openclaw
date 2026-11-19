@@ -16,14 +16,9 @@ import {
   readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
-import {
-  gateAgentToolExecution,
-  markAgentToolExecutionUnavailable,
-} from "../../agent-tool-availability.js";
-import { copyAgentToolMetadata } from "../../agent-tool-metadata.js";
 import { createOpenClawCodingToolsInternalAsync } from "../../agent-tools.async.js";
 import { assertMemoryFlushPersistenceToolAvailable } from "../../agent-tools.memory-flush.js";
-import { formatRunToolRefusal } from "../../agent-tools.turn-authority.js";
+import { refuseRunAllowlistTool } from "../../agent-tools.turn-authority.js";
 import { getChannelAgentToolMeta } from "../../channel-tool-metadata.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
@@ -51,7 +46,6 @@ import { toolPolicyRestrictsTools } from "../../tool-policy.js";
 import { listsFixedToolSet } from "../../tool-search-config.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-protocol.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
-import type { AnyAgentTool } from "../../tools/common.js";
 import type { ComputerContextEpoch } from "../../tools/computer-tool.js";
 import type {
   CronCreatorToolAllowlistEntry,
@@ -457,14 +451,8 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         constructedToolsRaw.some((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name))
       ) {
         const allowed = new Set(constructedToolsRaw);
-        // The refusal is also an execution wrapper, so a catalog rewrap of the hook layer
-        // (dispatch_action) cannot restore the source executor. Provenance is kept too.
-        const refuse = (tool: AnyAgentTool) =>
-          gateAgentToolExecution(tool, formatRunToolRefusal(tool.name));
         constructedToolsRaw = boundTools.map((tool) =>
-          allowed.has(tool)
-            ? tool
-            : markAgentToolExecutionUnavailable(copyAgentToolMetadata(tool, refuse(tool), refuse)),
+          allowed.has(tool) ? tool : refuseRunAllowlistTool(tool),
         );
       }
       params.markCoreToolStage("attempt:tools-allow");

@@ -29,6 +29,17 @@ export function formatRunToolRefusal(toolName: string): string {
 }
 
 /**
+ * Keeps a tool listed but refuses its calls under a run allowlist. The refusal is also an
+ * execution wrapper, so a catalog rewrap of the hook layer (dispatch_action) cannot restore
+ * the source executor; plugin and MCP provenance is kept for catalog classification.
+ */
+export function refuseRunAllowlistTool(tool: AnyAgentTool): AnyAgentTool {
+  const refuse = (target: AnyAgentTool) =>
+    gateAgentToolExecution(target, formatRunToolRefusal(target.name));
+  return markAgentToolExecutionUnavailable(copyAgentToolMetadata(tool, refuse(tool), refuse));
+}
+
+/**
  * Offers the session's tool surface on every turn, so the provider prompt prefix
  * stays cacheable, and gates the calls this turn's authority does not cover.
  * Owner-only tools and a completion handoff's replayed requester policy are

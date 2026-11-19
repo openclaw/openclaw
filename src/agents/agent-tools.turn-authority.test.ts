@@ -3,7 +3,15 @@ import {
   bindAgentToolAvailability,
   finalizeAgentToolAvailability,
 } from "./agent-tool-availability.js";
-import { isHostSystemTurn, resolveTurnToolSurface } from "./agent-tools.turn-authority.js";
+import {
+  rewrapToolWithBeforeToolCallHook,
+  wrapToolWithBeforeToolCallHook,
+} from "./agent-tools.before-tool-call.wrapper.js";
+import {
+  isHostSystemTurn,
+  refuseRunAllowlistTool,
+  resolveTurnToolSurface,
+} from "./agent-tools.turn-authority.js";
 import { expectOwnerGated } from "./agent-tools.turn-authority.test-support.js";
 import { fakeTool } from "./test-helpers/fake-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -134,4 +142,19 @@ describe("resolveTurnToolSurface on a system turn", () => {
     const result = await run(tools, "automations", { action: "get", jobId: "job-1" });
     expect(result.details).toMatchObject({ gated: true });
   });
+});
+
+it("keeps a run allowlist refusal when dispatch rewraps the hook layer", async () => {
+  let ran = false;
+  const source = fakeTool("exec");
+  source.execute = async () => {
+    ran = true;
+    return { content: [{ type: "text", text: "ran" }], details: {} };
+  };
+  const refused = refuseRunAllowlistTool(wrapToolWithBeforeToolCallHook(source));
+  // dispatch_action rebuilds the hook wrapper around the canonical source tool.
+  const result = await rewrapToolWithBeforeToolCallHook(refused).execute("call", {});
+  expect(ran).toBe(false);
+  expect(result.details).toMatchObject({ gated: true });
+  expect(JSON.stringify(result.content)).toContain("exec is outside the tools this run allows");
 });
