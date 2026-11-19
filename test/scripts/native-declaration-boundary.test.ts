@@ -236,28 +236,29 @@ it("emits identical declarations in fresh processes and goes parallel only on th
       }`,
     });
   }
-  const compile = (stableTypeOrdering: boolean, heapMb: number) => {
+  const compile = (stableTypeOrdering: boolean, budgetMb: number | undefined, nodeOptions = "") => {
     fs.rmSync(configs, { force: true });
-    // Node, not the test runtime: the heap limit is a V8 fact.
+    const env: NodeJS.ProcessEnv = { ...process.env, NODE_OPTIONS: nodeOptions };
+    delete env.OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB;
+    if (budgetMb !== undefined) {
+      // build-all hands every build child its frozen heap budget in this variable.
+      env.OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB = String(budgetMb);
+    }
     const result = spawnSync(
       resolveTestNodeExecPath(),
-      [
-        `--max-old-space-size=${heapMb}`,
-        ...createNodeEvalArgs(
-          `import path from "node:path";
-          import { emitNativeDeclarations } from ${JSON.stringify(new URL("../../scripts/lib/native-declaration-emitter.mts", import.meta.url).href)};
-          const root = ${JSON.stringify(root)};
-          const emitted = await emitNativeDeclarations({
-            cwd: root, compilerRoot: root, configFile: path.join(root, "tsconfig.json"),
-            roots: [path.join(root, "src/index.ts")],
-            compilerOptions: ${JSON.stringify(stableTypeOrdering ? { stableTypeOrdering } : {})},
-          });
-          console.log(JSON.stringify({ declarations: [...emitted.declarations], inputs: emitted.inputs }));`,
-          { imports: [import.meta.resolve("tsx")] },
-        ),
-      ],
-      // The heap flag on the command line is the only budget this child sees.
-      { encoding: "utf8", timeout: 60_000, env: { ...process.env, NODE_OPTIONS: "" } },
+      createNodeEvalArgs(
+        `import path from "node:path";
+        import { emitNativeDeclarations } from ${JSON.stringify(new URL("../../scripts/lib/native-declaration-emitter.mts", import.meta.url).href)};
+        const root = ${JSON.stringify(root)};
+        const emitted = await emitNativeDeclarations({
+          cwd: root, compilerRoot: root, configFile: path.join(root, "tsconfig.json"),
+          roots: [path.join(root, "src/index.ts")],
+          compilerOptions: ${JSON.stringify(stableTypeOrdering ? { stableTypeOrdering } : {})},
+        });
+        console.log(JSON.stringify({ declarations: [...emitted.declarations], inputs: emitted.inputs }));`,
+        { imports: [import.meta.resolve("tsx")] },
+      ),
+      { encoding: "utf8", timeout: 60_000, env },
     );
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
@@ -281,8 +282,17 @@ it("emits identical declarations in fresh processes and goes parallel only on th
   const capped = compile(true, 7_424);
   expect(capped).toMatchObject(threaded(true));
   expect(compile(true, 7_424)).toEqual(capped);
-  // V8's total heap limit adds its young generation; one MB below the uncapped budget is capped.
-  expect(compile(true, 12_287)).toMatchObject({ emitted: capped.emitted, ...threaded(true) });
+  // The planned budget decides, not a heap flag the planner did not rewrite or a bare run.
+  for (const [budgetMb, nodeOptions] of [
+    [7_424, "--max_old_space_size=12288"],
+    [12_287, ""],
+    [undefined, "--max-old-space-size=12288"],
+  ] as const) {
+    expect(compile(true, budgetMb, nodeOptions)).toMatchObject({
+      emitted: capped.emitted,
+      ...threaded(true),
+    });
+  }
   const uncapped = compile(true, 12_288);
   expect(uncapped).toMatchObject(threaded(false));
   expect(compile(true, 12_288)).toEqual(uncapped);
