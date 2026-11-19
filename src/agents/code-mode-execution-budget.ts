@@ -10,6 +10,7 @@ import {
 import {
   pendingBridgeStatesForSettlement,
   waitForPendingBridgeSettlement,
+  type CodeModeRunOwner,
   type PendingBridgeState,
 } from "./code-mode-state.js";
 

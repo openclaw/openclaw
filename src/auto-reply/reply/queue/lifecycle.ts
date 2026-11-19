@@ -167,7 +167,7 @@ export async function admitFollowupRunLifecycle(
           const recorder = run.userTurnTranscriptRecorder;
           try {
             recorder?.markBlocked();
-            recorder?.finishPendingInput?.("cancelled", "policy-refused");
+            recorder?.finishPendingInput?.("cancelled");
             await recorder?.waitForPendingInputSettlement?.();
           } finally {
             retireSessionControllerInput(input);

@@ -75,7 +75,9 @@ for (const policy of [
   { entries: { "openclaw-id-access": { enabled: false } } },
   { enabled: false },
 ]) {
-  it(`Doctor never overrides explicit Access policy ${JSON.stringify(policy)}`, async ({ state }) => {
+  it(`Doctor never overrides explicit Access policy ${JSON.stringify(policy)}`, async ({
+    state,
+  }) => {
     state.applyEnv();
     const config = { ...cfg(), plugins: { allow: ["browser"], ...policy } };
     const ctx = createDoctorHealthFlowContext({
