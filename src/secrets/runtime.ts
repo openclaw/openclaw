@@ -669,8 +669,11 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
   }
 }
 
+// Bind the post-login republish hook at module scope so it exists before any
+// external-file event: registration only stores the callback, it does not run it.
+bindExternalAuthRuntimeRefresh(refreshActiveProviderAuthRuntimeSnapshot);
+
 registerRuntimeAuthProfileExternalRefresh(async (paths) => {
-  bindExternalAuthRuntimeRefresh(refreshActiveProviderAuthRuntimeSnapshot);
   if (!paths.some(hasActiveSecretsRuntimeAuthStorePath)) {
     return false;
   }

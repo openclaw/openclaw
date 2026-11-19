@@ -41,13 +41,10 @@ beforeAll(async () => {
 });
 beforeEach(() => {
   prepareSharedAuthStoreOwnershipForNative();
-  // No secrets activation in this unit: the republish hook is the boundary under test.
-  bindExternalAuthRuntimeRefresh(async () => {
-    snapshots.setRuntimeAuthProfileStoreSnapshot(
-      storeOf({ [defaultId]: { ...refToken("GITHUB_TOKEN"), token: "materialized-after-login" } }),
-    );
-    return true;
-  });
+  // No secrets activation in this unit: leave the republish hook unbound so the
+  // post-login path reflects a fresh process that never fired an external-file
+  // event. Production binding is exercised in the secrets runtime observation test.
+  bindExternalAuthRuntimeRefresh(undefined);
   resolveProviderOAuthCredentialWithPlugin.mockClear();
   snapshots.clearRuntimeAuthProfileStoreSnapshots();
   setActiveDegradedSecretOwners([]);
@@ -146,16 +143,13 @@ it("reads published token SecretRefs without an inline source secret", async () 
   );
 });
 
-it("re-reads the persisted store before reporting a post-login token SecretRef unmaterialized", async () => {
+it("does not fabricate a published generation when no secrets runtime bound the republish hook", async () => {
   publishProfiles({});
-  await expect(refreshRuntimeAuthProfileStoreAfterLogin()).resolves.toBe(true);
-  await expect(
-    resolveCredential({ ...refToken("GITHUB_TOKEN"), createdAt: Date.now() }),
-  ).resolves.toEqual({
-    apiKey: "materialized-after-login",
-    provider: "github-copilot",
-    email: undefined,
-  });
+  // A fresh process has not fired an external-file event, so the secrets runtime
+  // binding is absent; the post-login refresh must report no republish instead of
+  // inventing one, and the unmaterialized SecretRef stays surfaced.
+  await expect(refreshRuntimeAuthProfileStoreAfterLogin()).resolves.toBe(false);
+  await unavailable(resolveCredential({ ...refToken("GITHUB_TOKEN"), createdAt: Date.now() }));
 });
 
 it("hard-fails when oauth mode is combined with token SecretRef input", async () => {

@@ -3,6 +3,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { refreshRuntimeAuthProfileStoreAfterLogin } from "../agents/auth-profiles.js";
 import { refreshAuthProfileFileState } from "../agents/auth-profiles/file-state.js";
 import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import {
@@ -98,6 +99,33 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
   vi.unstubAllEnvs();
+});
+
+// This case runs first so the secrets runtime is loaded with no external-file
+// event having fired yet: the post-login refresh must republish through the hook
+// the secrets runtime bound at module scope. A binding that only initializes
+// inside the external-file callback reports no republish here.
+it("republishes the persisted store through the production-bound refresh hook without a file event", async () => {
+  const { root, agentDir } = fixture();
+  vi.stubEnv("OPENCLAW_TEST_AUTH_KEY", "synthetic-before");
+  saveOwnedAuthProfiles(profileStore("synthetic-before", true), agentDir);
+  const snapshot = await prepareSecretsRuntimeSnapshot({
+    config: {
+      agents: { ownership: "explicit", entries: { main: { agentDir, workspace: root } } },
+      plugins: { enabled: false },
+    },
+    env: { HOME: root, OPENCLAW_STATE_DIR: root, OPENCLAW_TEST_AUTH_KEY: "synthetic-before" },
+    includeConfigRefs: false,
+  });
+  activateSecretsRuntimeSnapshot(snapshot);
+  await loadRuntimeStore(agentDir, readOptions);
+
+  await expect(refreshRuntimeAuthProfileStoreAfterLogin()).resolves.toBe(true);
+
+  expect(getRuntimeStore(agentDir)?.profiles.example).toMatchObject({
+    type: "api_key",
+    keyRef: { source: "env", provider: "default", id: "OPENCLAW_TEST_AUTH_KEY" },
+  });
 });
 
 it("preserves auth facts through first-file session admission after empty startup", async () => {
