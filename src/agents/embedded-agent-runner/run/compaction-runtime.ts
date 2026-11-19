@@ -36,7 +36,6 @@ import {
   resolveContextEngineCompactionSuccessor,
   type AcceptedCompactionSuccessor,
 } from "../compaction-successor.js";
-import { withCompactionWatchdogAllowance } from "../compaction-watchdog-allowance.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
 import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
@@ -256,51 +255,45 @@ async function executeRecoveryCompaction(
     runtimeSettings,
   };
   let result: CompactionResult & Pick<EmbeddedAgentCompactResult, "failure">;
-  const compactionTimeoutMs = resolveCompactionTimeoutMs(runParams.config);
   try {
-    // The reply stall floor is 360s. Hold the watchdog open for this budget
-    // so a quiet overflow compaction is not aborted early. Caller abort still
-    // arrives through runParams.abortSignal.
-    result = await withCompactionWatchdogAllowance(compactionTimeoutMs, runParams.abortSignal, () =>
-      compactContextEngineWithSafetyTimeout(
-        {
-          info: input.contextEngine.info,
-          compact: (backendParams) =>
-            owner.withTranscriptWrites(backendParams.abortSignal, () => {
-              if (backendParams.runtimeContext) {
-                attachCompactionAccountingRecorder(backendParams.runtimeContext, {
-                  requestBudget: input.state.compactionRequestBudget,
-                  requestFromEntryId,
-                  pendingRequestState:
-                    recovery.trigger === "timeout_recovery" ? undefined : "unresolved",
-                  memoryTranscript: owner.sessionManager
-                    ? {
-                        sessionManager: owner.sessionManager,
-                        sessionTarget: activeSession.target,
-                        assertActive: () => {
-                          backendParams.abortSignal?.throwIfAborted();
-                          owner.assertActive();
-                        },
-                      }
-                    : undefined,
-                  recordUsage: (usage) => mergeUsageIntoAccumulator(input.usageAccumulator, usage),
-                  recordCompaction: ({ tokensAfter }) => {
-                    declarePromptHistoryRewrite({ ...promptCacheIdentity, reason: "compaction" });
-                    observedCompactions += 1;
-                    input.state.observeContextAccounting({ kind: "compaction", tokensAfter });
-                  },
-                  recordFailure: (recorded) => {
-                    failure = recorded;
-                  },
-                });
-              }
-              return input.contextEngine.compact(backendParams);
-            }),
-        },
-        compactParams,
-        compactionTimeoutMs,
-        runParams.abortSignal,
-      ),
+    result = await compactContextEngineWithSafetyTimeout(
+      {
+        info: input.contextEngine.info,
+        compact: (backendParams) =>
+          owner.withTranscriptWrites(backendParams.abortSignal, () => {
+            if (backendParams.runtimeContext) {
+              attachCompactionAccountingRecorder(backendParams.runtimeContext, {
+                requestBudget: input.state.compactionRequestBudget,
+                requestFromEntryId,
+                pendingRequestState:
+                  recovery.trigger === "timeout_recovery" ? undefined : "unresolved",
+                memoryTranscript: owner.sessionManager
+                  ? {
+                      sessionManager: owner.sessionManager,
+                      sessionTarget: activeSession.target,
+                      assertActive: () => {
+                        backendParams.abortSignal?.throwIfAborted();
+                        owner.assertActive();
+                      },
+                    }
+                  : undefined,
+                recordUsage: (usage) => mergeUsageIntoAccumulator(input.usageAccumulator, usage),
+                recordCompaction: ({ tokensAfter }) => {
+                  declarePromptHistoryRewrite({ ...promptCacheIdentity, reason: "compaction" });
+                  observedCompactions += 1;
+                  input.state.observeContextAccounting({ kind: "compaction", tokensAfter });
+                },
+                recordFailure: (recorded) => {
+                  failure = recorded;
+                },
+              });
+            }
+            return input.contextEngine.compact(backendParams);
+          }),
+      },
+      compactParams,
+      resolveCompactionTimeoutMs(runParams.config),
+      runParams.abortSignal,
     );
   } catch (error) {
     // Only a live owner's backend failure is recoverable. Caller cancellation,
