@@ -103,12 +103,13 @@ export function renderSidebarSessionGroupMenuForMenus(
     action: SidebarSessionGroupMenuAction,
     label: string,
     icon: JSX.Element,
+    destructive = false,
   ): MenuItem => ({
     id: action,
     label,
     icon,
-    class: `session-menu__item${action === "delete-group" ? " session-menu__item--destructive" : ""}`,
-    variant: action === "delete-group" ? "danger" : undefined,
+    class: `session-menu__item${destructive ? " session-menu__item--destructive" : ""}`,
+    variant: destructive ? "danger" : undefined,
     disabled: !host.connected || Boolean(actionDisabledReasons()[action]),
     attributes: { title: actionDisabledReasons()[action] },
     content: <span class="session-menu__text">{label}</span>,
@@ -123,13 +124,18 @@ export function renderSidebarSessionGroupMenuForMenus(
     ),
     renderAction("rename-group", t("sessionsView.renameGroupMenu"), <Icon name="edit" />),
     renderAction("new-group", t("sessionsView.newGroup"), <Icon name="folder" />),
-    renderAction("archive-group", t("sessionsView.archiveGroupMenu"), <Icon name="archive" />),
     {
       kind: "content",
       id: "separator",
       content: <div class="session-menu__separator" role="separator" />,
     },
-    renderAction("delete-group", t("sessionsView.deleteGroupMenu"), <Icon name="trash" />),
+    renderAction(
+      "archive-group",
+      t("sessionsView.archiveGroupMenu"),
+      <Icon name="archive" />,
+      true,
+    ),
+    renderAction("delete-group", t("sessionsView.deleteGroupMenu"), <Icon name="trash" />, true),
   ]);
   return (
     <SidebarDropdown
