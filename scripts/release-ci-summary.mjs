@@ -3356,6 +3356,7 @@ function parseReleaseCiSummaryArgs(argv) {
     trustedWorkflowRef: "main",
     trustedWorkflowSha: undefined,
     validate: false,
+    acquirePublicationManifest: false,
     verifierSourceFile: undefined,
     verifierSourceSha: undefined,
     watch: false,
@@ -3364,6 +3365,9 @@ function parseReleaseCiSummaryArgs(argv) {
     const argument = argv[index];
     if (Object.hasOwn(stringFlags, argument)) {
       options[stringFlags[argument]] = argv[++index];
+    } else if (argument === "--acquire-publication-manifest") {
+      options.acquirePublicationManifest = true;
+      options.runId = argv[++index];
     } else if (argument === "--validate-run") {
       options.validate = true;
       options.runId = argv[++index];
@@ -3426,8 +3430,15 @@ function parseReleaseCiSummaryArgs(argv) {
   if (!options.validate && options.qualificationReuse !== undefined) {
     throw new Error("--qualification-reuse-json requires --validate-run");
   }
-  if (!options.validate && options.expectedRunAttempts !== undefined) {
+  if (
+    !options.validate &&
+    !options.acquirePublicationManifest &&
+    options.expectedRunAttempts !== undefined
+  ) {
     throw new Error("--expected-run-attempts-json requires --validate-run");
+  }
+  if (options.acquirePublicationManifest && (options.validate || options.watch)) {
+    throw new Error("publication acquisition cannot be combined with validation or watching");
   }
   if (options.validate && options.watch) {
     throw new Error("--watch cannot be combined with --validate-run");
@@ -3446,6 +3457,7 @@ function printUsage() {
     [
       "usage: release-ci-summary.mjs <full-release-run-id>",
       "       release-ci-summary.mjs <full-release-run-id> --watch [--interval seconds]",
+      "       release-ci-summary.mjs --acquire-publication-manifest <id> [--repo owner/name] [--expected-run-attempts-json json]",
       "       release-ci-summary.mjs --validate-run <id> [--repo owner/name] [--trusted-workflow-ref main --trusted-workflow-full-ref refs/heads/main] [--trusted-workflow-sha sha] [--manifest path] [--verifier-source-sha sha --verifier-source-file path] [--expected-target-sha sha --expected-evidence-sha sha --expected-evidence-policy policy --expected-root-run-id id --expected-selected-run-id id --expected-changed-paths-json json] [--expected-run-attempts-json json] [--reuse-request-json json] --json",
     ].join("\n"),
   );
@@ -3627,6 +3639,19 @@ async function main() {
     process.exit(2);
   }
   const { repository, runId } = options;
+
+  if (options.acquirePublicationManifest) {
+    // Acquisition is not a qualification verdict. Every publisher still runs
+    // the strict validation owner and its existing approval/consumption gates.
+    const evidence = await loadValidatedParentEvidence({
+      client: createReleaseEvidenceClient(repository),
+      repository,
+      runId,
+      expectedRunAttempts: normalizeExpectedRunAttempts(options.expectedRunAttempts),
+    });
+    console.log(JSON.stringify(evidence.manifestJson, null, 2));
+    return;
+  }
 
   if (options.validate) {
     try {
