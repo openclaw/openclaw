@@ -439,9 +439,6 @@ This entrypoint loads no provider policy, transport host, or credential runtime.
 
 ## Child process environment
 
-`openclaw/plugin-sdk/process-runtime` exports `AGENT_GIT_CONFIG_PARAMETERS` for host-owned agent Git maintenance defaults. Native adapters append these after resolving inherited Git configuration and environment filtering.
-
-`openclaw/plugin-sdk/process-runtime` exports `stripGatewayAllocatorEnv`. It
-removes `MALLOC_CONF` and jemalloc entries in `LD_PRELOAD` from a caller-owned
-child environment in place, preserving other preloaded libraries. Copy the
-parent environment before calling it; never pass `process.env` directly.
+Agent Git maintenance defaults and Gateway allocator environment filtering are
+host-owned implementation details used by bundled native adapters. Their
+internal process helpers are not typed public Plugin SDK entry points.
