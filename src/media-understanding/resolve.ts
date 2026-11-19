@@ -227,24 +227,17 @@ export function resolveModelEntries(params: {
     );
   }
   if (params.modelOverride) {
+    // An explicit model is a pin (docs/cli/infer.md): it is the only attempt, and it reuses a
+    // configured descriptor (credential owner, transport) only for the same provider/model.
     const provider = normalizeMediaExecutionProviderId(params.modelOverride.provider);
     const model = params.modelOverride.model.trim();
-    const matchesProvider = ({ entry }: ResolvedMediaModelEntry) =>
-      (entry.type ?? (entry.command ? "cli" : "provider")) === "provider" &&
-      normalizeMediaExecutionProviderId(entry.provider ?? "") === provider;
     const exact = entries.find(
-      (candidate) => matchesProvider(candidate) && candidate.entry.model?.trim() === model,
+      ({ entry }) =>
+        (entry.type ?? (entry.command ? "cli" : "provider")) === "provider" &&
+        normalizeMediaExecutionProviderId(entry.provider ?? "") === provider &&
+        entry.model?.trim() === model,
     );
-    const providerWide = entries.find(
-      (candidate) => matchesProvider(candidate) && !candidate.entry.model?.trim(),
-    );
-    // Reorder owned descriptors, not configuration: their secret owners retain original indices.
-    const primary: ResolvedMediaModelEntry =
-      exact ??
-      (providerWide
-        ? { ...providerWide, entry: { ...providerWide.entry, model } }
-        : { entry: { provider, model } });
-    return [primary, ...entries.filter((candidate) => candidate !== exact)];
+    return [exact ?? { entry: { provider, model } }];
   }
   return entries;
 }

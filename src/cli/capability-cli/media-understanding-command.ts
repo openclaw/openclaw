@@ -26,7 +26,7 @@ export function registerMediaUnderstandingCommand(parent: Command, kind: "audio"
     command.option("--language <code>", "Language hint").option("--prompt <text>", "Prompt hint");
   }
   command
-    .option("--model <provider/model>", "Model to try first; configured fallbacks remain")
+    .option("--model <provider/model>", "Model override")
     .option("--json", "Output JSON", false)
     .action((opts: MediaUnderstandingOptions, actionCommand: Command) =>
       runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
@@ -38,7 +38,7 @@ export function registerMediaUnderstandingCommand(parent: Command, kind: "audio"
         const file = opts.file;
         const agent = resolveCapabilityAgentOption(actionCommand, opts.agent);
         const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
-        const { transcribeAudioFile, describeVideoFile } =
+        const { describeVideoFile, runMediaFileWithModel, transcribeAudioFile } =
           await import("../../media-understanding/runtime.js");
         const { cfg, agentId, agentDir } = await resolveLocalCapabilityAgent({
           commandName: audio ? "infer audio transcribe" : "infer video.describe",
@@ -48,21 +48,24 @@ export function registerMediaUnderstandingCommand(parent: Command, kind: "audio"
         });
         const modelOverride = requireProviderModelOverride(opts.model);
         const filePath = resolveFilesystemPath(file);
-        const input = { filePath, cfg, agentId, agentDir, modelOverride };
+        // Video registers no --language/--prompt, so these stay undefined there.
+        const input = {
+          filePath,
+          cfg,
+          agentId,
+          agentDir,
+          language: opts.language,
+          prompt: opts.prompt,
+        };
         const signal = getAsyncWorkSignal();
         const execution = signal
           ? { signal, assertCurrent: () => signal.throwIfAborted() }
           : undefined;
-        const result = audio
-          ? await transcribeAudioFile(
-              {
-                ...input,
-                language: opts.language,
-                prompt: opts.prompt,
-              },
-              execution,
-            )
-          : await describeVideoFile(input, execution);
+        const result = modelOverride
+          ? await runMediaFileWithModel({ ...input, capability: kind, modelOverride }, execution)
+          : audio
+            ? await transcribeAudioFile(input, execution)
+            : await describeVideoFile(input, execution);
         if (!result.text) {
           if (audio && isMissingMediaUnderstandingProvider(result)) {
             throw new Error(
