@@ -267,11 +267,17 @@ describe("operator access cancellation", () => {
           agentToolCaller: { agentId: "main", sessionKey: sender },
           scopes: ["operator.write"],
         });
-        const beforeRevocation = await f.register("before-device-revocation");
+        const beforeRevocation = await f.register(
+          "before-device-revocation",
+          undefined,
+          {},
+          false,
+          true,
+        );
         const admittedChild = await beforeRevocation.retain(undefined, continuationClient);
         // Revocation refuses the next start without canceling already-admitted work.
         invalidateGatewayDeviceRevocation(occurrence.context, "recovery-device", "operator");
-        const next = await f.register("after-device-revocation");
+        const next = await f.register("after-device-revocation", undefined, {}, false, true);
         await expect(next.retain(undefined, continuationClient)).rejects.toThrow(
           "Restart recovery operator source policy changed.",
         );
