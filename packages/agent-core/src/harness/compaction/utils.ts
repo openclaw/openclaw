@@ -157,14 +157,34 @@ const OMISSION_OVERFLOW = "[More image/non-text data omitted from summary input]
 // Serialized entries start with role labels ("[User]:", "[Tool result of …]:"). Content
 // that carries the same line-initial shape would read as a genuine turn boundary, so
 // tool output could launder provenance into the summarizer input; neutralize it.
-const IN_BAND_LABEL_LINE = /^\[[^\]\n]*\]:/;
+// Genuine labels balance brackets across sender JSON (e.g. "Alex [ops]"), so scan for
+// the matching close bracket instead of stopping at the first one.
+function isLineInitialTurnLabel(line: string): boolean {
+  if (!line.startsWith("[")) {
+    return false;
+  }
+  let depth = 0;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === "[") {
+      depth += 1;
+    } else if (char === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        return line[index + 1] === ":";
+      }
+    }
+  }
+  return false;
+}
+
 function escapeInBandLabelLines(text: string): string {
   if (!text.includes("[") || !text.includes("]:")) {
     return text;
   }
   return text
     .split("\n")
-    .map((line) => (IN_BAND_LABEL_LINE.test(line) ? `\\${line}` : line))
+    .map((line) => (isLineInitialTurnLabel(line) ? `\\${line}` : line))
     .join("\n");
 }
 
