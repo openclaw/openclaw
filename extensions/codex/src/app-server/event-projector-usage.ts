@@ -5,6 +5,26 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 
+/** Billing is additive across responses and tier retries; context is not. */
+export function addCodexUsageTokens(
+  target: NonNullable<ReturnType<typeof normalizeUsage>>,
+  usage: ReturnType<typeof normalizeUsage>,
+): void {
+  for (const field of [
+    "input",
+    "output",
+    "cacheRead",
+    "cacheWrite",
+    "cacheWrite1h",
+    "reasoningTokens",
+    "total",
+  ] as const) {
+    if (usage?.[field] !== undefined) {
+      target[field] = (target[field] ?? 0) + usage[field];
+    }
+  }
+}
+
 function readTokenCount(record: JsonObject, key: string): number | undefined {
   return asSafeIntegerInRange(record[key], { min: 0 });
 }
@@ -131,18 +151,7 @@ export class CodexUsageProjection {
     // Missing usage or a retry invalidates context without erasing paid work.
     this.contextUsage = usage?.contextUsage ?? { state: "unavailable" };
     this.responseUsage ??= {};
-    for (const field of [
-      "input",
-      "output",
-      "cacheRead",
-      "cacheWrite",
-      "reasoningTokens",
-      "total",
-    ] as const) {
-      if (usage?.[field] !== undefined) {
-        this.responseUsage[field] = (this.responseUsage[field] ?? 0) + usage[field];
-      }
-    }
+    addCodexUsageTokens(this.responseUsage, usage);
     const outputTokens = usage?.output;
     if (outputTokens !== undefined) {
       reportOutputTokens?.(outputTokens);

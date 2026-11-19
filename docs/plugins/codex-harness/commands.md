@@ -117,6 +117,14 @@ the baseline tier. Standard and inactive Auto remain off.
 See [app-server transport](/plugins/codex-harness-reference/app-server-transport)
 for catalog checks and fallback behavior.
 
+If a premium-speed turn is rejected for a usage limit or overload before it
+produces output or performs work, OpenClaw retries the same model at Fast and then
+standard speed. A Fast turn retries at standard speed. These overrides apply to
+that turn only; the saved model and speed preference do not change. Normal
+model fallback is considered after those speeds are exhausted. Authentication,
+approval and policy denials, canceled turns, and turns that may have performed
+work are not replayed through this path.
+
 `/codex fast status` and `/codex binding` report native preference state, not
 the upstream tier that processed a completed provider request.
 

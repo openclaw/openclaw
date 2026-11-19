@@ -6,6 +6,16 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { CodexAppServerBindingStore } from "./session-binding.js";
 import type { CodexAppServerClientFactory } from "./shared-client.js";
 
+/** Private to a single harness attempt; never persisted as a session preference. */
+export type CodexTierAttemptState = {
+  override?: "priority" | "default";
+  requested?: string | null;
+  supportsTurnOverride?: boolean;
+  /** A native rejection, not a lost acknowledgement or local timeout. */
+  turnStartRejected?: boolean;
+  commitUsageLimit?: () => Promise<void>;
+};
+
 export type CodexRunAttemptOptions = {
   bindingStore: CodexAppServerBindingStore;
   runtime?: PluginRuntime;
@@ -21,6 +31,7 @@ export type CodexRunAttemptOptions = {
     hookTimeoutSec?: number;
   };
   clientFactory?: CodexAppServerClientFactory;
+  tierAttempt?: CodexTierAttemptState;
 };
 
 export type CodexRunAttemptInput = {

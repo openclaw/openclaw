@@ -28,6 +28,7 @@ import {
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { supportsCodexTurnTierOverride } from "./service-tier-fallback.js";
 import { resolveCodexUltrafastServiceTier } from "./service-tier.js";
 import { buildTurnStartParams } from "./thread-lifecycle.js";
 import { recordCodexAcceptedTurn } from "./thread-orphan-recovery.js";
@@ -223,6 +224,11 @@ export async function prepareCodexAttemptTurnRequest(
     });
     assertTurnCurrent();
     turnStartParams.serviceTier = serviceTier;
+    if (connection.options.tierAttempt?.override) {
+      // Codex keeps serviceTier as the thread preference. Retries must override
+      // only this turn so the next request can still use the selected speed.
+      turnStartParams.serviceTierForTurn = connection.options.tierAttempt.override;
+    }
     connection.mutable.pluginAppServer = { ...turnAppServer, serviceTier };
     // Prepared runtime mappings retain catalog authorization; a retry must
     // authorize the model actually encoded for the substituted turn.
@@ -319,7 +325,7 @@ export async function prepareCodexAttemptTurnRequest(
         model: params.modelId,
         effort: turnStartParams.effort,
         collaborationEffort: turnStartParams.collaborationMode?.settings.reasoning_effort,
-        serviceTier: turnStartParams.serviceTier,
+        serviceTier: turnStartParams.serviceTierForTurn ?? turnStartParams.serviceTier,
       },
     });
     let acceptedTurnId: string | undefined;
@@ -327,6 +333,13 @@ export async function prepareCodexAttemptTurnRequest(
       .flatMap((item) => (item.type === "text" ? [item.text] : []))
       .join("\n");
     try {
+      if (connection.options.tierAttempt) {
+        connection.options.tierAttempt.requested =
+          turnStartParams.serviceTierForTurn ?? turnStartParams.serviceTier;
+        connection.options.tierAttempt.supportsTurnOverride = supportsCodexTurnTierOverride(
+          turnClient.getServerVersion(),
+        );
+      }
       const startedTurn = assertCodexTurnStartResponse(
         await turnClient.request("turn/start", turnStartParams, {
           timeoutMs: params.timeoutMs,

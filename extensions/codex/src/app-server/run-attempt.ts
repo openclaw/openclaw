@@ -1,6 +1,7 @@
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createCodexAttemptPreparationTiming } from "./attempt-preparation-timing.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { addCodexUsageTokens } from "./event-projector-usage.js";
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
 import { activateCodexAttemptTurn } from "./run-attempt-active-turn.js";
 import { cleanupCodexAttempt } from "./run-attempt-cleanup.js";
@@ -19,9 +20,73 @@ import { prepareCodexAttemptTools } from "./run-attempt-tool-setup.js";
 import { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import { startCodexAttemptTurn } from "./run-attempt-turn-start.js";
 import { createCodexAttemptTurnState } from "./run-attempt-turn-state.js";
-import type { CodexRunAttemptOptions } from "./run-attempt-types.js";
+import type { CodexRunAttemptOptions, CodexTierAttemptState } from "./run-attempt-types.js";
+import { nextCodexServiceTier, type CodexTierFallback } from "./service-tier-fallback.js";
 
 export async function runCodexAppServerAttempt(
+  params: EmbeddedRunAttemptParamsV2,
+  options: CodexRunAttemptOptions,
+): Promise<EmbeddedRunAttemptResult> {
+  const startedAt = Date.now();
+  let override: CodexTierFallback | undefined;
+  let userMessagePersisted = params.suppressNextUserMessagePersistence === true;
+  let priorUsage: EmbeddedRunAttemptResult["attemptUsage"];
+  let priorIterations = 0;
+  let priorAssistantTurns = 0;
+  for (;;) {
+    const tierAttempt: CodexTierAttemptState = { override };
+    const remaining = params.timeoutMs - (Date.now() - startedAt);
+    const attemptParams = override
+      ? {
+          ...params,
+          timeoutMs: Math.max(1, remaining),
+          suppressNextUserMessagePersistence: userMessagePersisted,
+        }
+      : params;
+    let result: EmbeddedRunAttemptResult;
+    try {
+      result = await runCodexAppServerAttemptOnce(attemptParams, { ...options, tierAttempt });
+    } catch (error) {
+      await tierAttempt.commitUsageLimit?.();
+      throw error;
+    }
+    const next =
+      tierAttempt.supportsTurnOverride &&
+      !params.providerReviewAcknowledgment &&
+      !params.abortSignal?.aborted &&
+      remaining > 0
+        ? nextCodexServiceTier(tierAttempt.requested, result, tierAttempt.turnStartRejected)
+        : undefined;
+    if (!next || Date.now() - startedAt >= params.timeoutMs) {
+      await tierAttempt.commitUsageLimit?.();
+      if (priorUsage) {
+        const finalUsage = result.attemptUsage;
+        result.attemptUsage = {
+          ...finalUsage,
+          contextUsage: finalUsage?.contextUsage ?? { state: "unavailable" },
+        };
+        addCodexUsageTokens(result.attemptUsage, priorUsage);
+      }
+      if (priorIterations > 0) {
+        result.modelIterations = (result.modelIterations ?? 0) + priorIterations;
+      }
+      if (priorAssistantTurns > 0) {
+        result.assistantTurns = (result.assistantTurns ?? 0) + priorAssistantTurns;
+      }
+      return result;
+    }
+    if (result.attemptUsage) {
+      priorUsage ??= {};
+      addCodexUsageTokens(priorUsage, result.attemptUsage);
+    }
+    priorIterations += result.modelIterations ?? 0;
+    priorAssistantTurns += result.assistantTurns ?? 0;
+    userMessagePersisted ||= result.terminalTurnId !== undefined;
+    override = next;
+  }
+}
+
+async function runCodexAppServerAttemptOnce(
   params: EmbeddedRunAttemptParamsV2,
   options: CodexRunAttemptOptions,
 ): Promise<EmbeddedRunAttemptResult> {

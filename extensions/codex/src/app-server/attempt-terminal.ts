@@ -7,6 +7,8 @@ import type { TranscriptEntryAnchor } from "openclaw/plugin-sdk/session-transcri
 export type EmbeddedRunAttemptResult = Extract<AgentHarnessAttemptResult, { terminal: unknown }> & {
   /** Host-private terminal identity returned to the harness selection boundary. */
   contextEngineTerminalAnchor?: TranscriptEntryAnchor;
+  /** Present only after the native app-server accepted and settled a turn. */
+  terminalTurnId?: string;
 };
 export type AttemptFailureSource = Extract<
   EmbeddedRunAttemptResult["terminal"],

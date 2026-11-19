@@ -18,6 +18,7 @@ import {
   resolveCodexUsageLimitResetAtMs,
   shouldRefreshCodexRateLimitsForUsageLimitMessage,
 } from "./rate-limits.js";
+import type { CodexTierAttemptState } from "./run-attempt-types.js";
 
 const CODEX_USAGE_LIMIT_RATE_LIMIT_REFRESH_TIMEOUT_MS = 5_000;
 
@@ -78,11 +79,33 @@ export function resolveCodexPromptError(
       });
 }
 
+/** Keep provider status on a definite native turn/start rejection. */
+export function resolveCodexTurnStartPromptError(
+  error: unknown,
+  notification?: CodexServerNotification,
+): string | Error | undefined {
+  const nativeError = readCodexErrorNotification(notification);
+  const payload = readCodexErrorPayload(error);
+  return resolveCodexPromptError({
+    message: nativeError?.message ?? payload.message,
+    codexErrorInfo: nativeError?.codexErrorInfo ?? payload.codexErrorInfo,
+    rateLimits: payload.rateLimits,
+  });
+}
+
 export async function markCodexAuthProfileBlockedFromRateLimits(params: {
   params: EmbeddedRunAttemptParams;
   authProfileId?: string;
   rateLimits?: JsonValue;
+  tierAttempt?: CodexTierAttemptState;
 }): Promise<void> {
+  if (params.tierAttempt) {
+    const { tierAttempt, ...block } = params;
+    // A premium tier can be exhausted while ordinary usage remains available.
+    // Commit an account-wide cooldown only after tier recovery has finished.
+    tierAttempt.commitUsageLimit = () => markCodexAuthProfileBlockedFromRateLimits(block);
+    return;
+  }
   const authProfileId = params.authProfileId?.trim();
   if (!authProfileId || !params.params.authProfileStore) {
     return;

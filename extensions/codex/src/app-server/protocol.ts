@@ -315,6 +315,8 @@ export type CodexTurnStartParams = JsonObject & {
   approvalsReviewer?: CodexApprovalsReviewer | null;
   sandboxPolicy?: CodexSandboxPolicy;
   serviceTier?: CodexServiceTier | null;
+  /** Override this turn only; "default" selects standard speed without changing the thread. */
+  serviceTierForTurn?: CodexServiceTier | null;
   effort?: string | null;
   personality?: CodexPersonality | null;
   environments?: CodexTurnEnvironmentParams[] | null;
