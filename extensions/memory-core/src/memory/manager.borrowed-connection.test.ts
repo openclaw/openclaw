@@ -24,7 +24,10 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { seedMemoryForgetTombstones } from "../test-helpers.js";
+import {
+  seedMemoryForgetTombstones,
+  verifyMemoryDatabaseCorruptionForTest,
+} from "../test-helpers.js";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
@@ -146,7 +149,7 @@ describe("memory manager agent database lifecycle", () => {
 
   it("rejects shared integrity failure before exposing a manager", async () => {
     const shared = sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" });
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync();
     {
       using damaged = new DatabaseSync(shared.path);
       damaged.exec(`
@@ -155,15 +158,11 @@ describe("memory manager agent database lifecycle", () => {
         CREATE TABLE fixture_child (parent_id INTEGER REFERENCES fixture_parent(id));
         INSERT INTO fixture_child VALUES (1);
       `);
+      expect(damaged.prepare("PRAGMA foreign_key_check").all()).toEqual([
+        { table: "fixture_child", rowid: 1, parent: "fixture_parent", fkid: 0 },
+      ]);
     }
-    // Replaced files cannot reuse the original connection's clean integrity receipt.
-    const replacementPath = `${shared.path}.replacement`;
-    await fs.copyFile(shared.path, replacementPath);
-    await fs.rename(replacementPath, shared.path);
-
-    expect(() => sqliteRuntime.openOpenClawAgentDatabase({ agentId: "main" })).toThrow(
-      /foreign_key_check/,
-    );
+    await verifyMemoryDatabaseCorruptionForTest(shared.path);
     const result = await memoryIndex.getMemorySearchManager({
       runInBackgroundContext: runInMemoryTestBackgroundContext,
       cfg: createConfig(),
@@ -257,16 +256,24 @@ describe("memory manager agent database lifecycle", () => {
     const sourcePath = source.status().dbPath;
     const queued = createDeferred<void>();
     const writer = await reservePublishedWriter(() => closeOpenClawAgentDatabasesForTest());
+    const terminalSignals = new Set<AbortSignal>();
     const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
     vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2").mockImplementation(
       async (...args) => {
         const store = await open(...args);
-        const prepare = store.prepare.bind(store);
-        vi.spyOn(store, "prepare").mockImplementation((...prepareArgs) => {
-          const result = prepare(...prepareArgs);
-          queued.resolve();
-          return result;
-        });
+        if (
+          args[0].path === sourcePath &&
+          args[2].moduleUrl.href ===
+            resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication).href
+        ) {
+          const prepare = store.prepare.bind(store);
+          vi.spyOn(store, "prepare").mockImplementation((...prepareArgs) => {
+            const result = prepare(...prepareArgs);
+            terminalSignals.add(store.terminalSignal);
+            queued.resolve();
+            return result;
+          });
+        }
         return store;
       },
     );
@@ -282,7 +289,7 @@ describe("memory manager agent database lifecycle", () => {
     try {
       await Promise.race([queued.promise, creating]);
       writer.release();
-      await expect(creating).rejects.toThrow(/^Agent database execution admission is closed$/);
+      await creating.catch(() => undefined);
       expect(
         prepare.mock.contexts.filter(
           (database) =>
@@ -291,6 +298,11 @@ describe("memory manager agent database lifecycle", () => {
             database.location() === sourcePath,
         ),
       ).toEqual([]);
+      expect(terminalSignals.size).toBe(1);
+      const [terminalSignal] = terminalSignals;
+      expect(terminalSignal?.aborted).toBe(true);
+      expect(terminalSignal?.reason).toBeInstanceOf(Error);
+      await expect(creating).rejects.toBe(terminalSignal?.reason);
     } finally {
       writer.release();
       await Promise.allSettled([writer.done, creating]);

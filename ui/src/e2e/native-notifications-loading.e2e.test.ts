@@ -174,9 +174,12 @@ suite.define(() => {
         await composer.fill("Prepare a garden plan in the background.");
         await composer.press("Control+Shift+Enter");
         await gateway.waitForRequest("agent.wait");
+        // Dismiss the creation notice before releasing the separate completion notice.
+        await page.getByRole("button", { name: "Dismiss", exact: true }).click();
+        await expect.poll(() => page.locator(".app-toast").count()).toBe(0);
         await composer.fill("Keep this unsent draft in the current tab.");
         await gateway.resolveDeferred("agent.wait", { status: "ok", endedAt: Date.now() });
-        const action = page.locator(".app-toast__action");
+        const action = page.getByRole("link", { name: "Open session", exact: true });
         await action.waitFor();
         await action.hover();
         if (captureUiProof) {

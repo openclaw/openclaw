@@ -48,7 +48,7 @@ import {
   beginUpdateSqliteCompanion,
   getDoctorMigrationBackup,
   getUpdateDoctorMigrationSource,
-} from "./update-doctor-migration-attribution.js";
+} from "./update-doctor-migration-context.js";
 
 export type ClientCredentialMigrationCapture = {
   path: string;

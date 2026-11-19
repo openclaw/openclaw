@@ -62,7 +62,7 @@ import type {
 } from "./thread-lifecycle-types.js";
 import { resolveCodexAppServerModelProvider } from "./thread-model-selection.js";
 import { CodexThreadPolicyHandoffError, refreshCodexThreadPolicy } from "./thread-policy.js";
-import { buildThreadStartParams } from "./thread-requests.js";
+import { buildCodexThreadGenericInstructions, buildThreadStartParams } from "./thread-requests.js";
 import {
   buildRestrictedThreadConfigFingerprint,
   isRestrictedThreadConfigCompatible,
@@ -292,6 +292,8 @@ export async function resumeExistingCodexThread(
       client: params.client,
       threadId: resumeBinding.threadId,
       developerInstructions: resumeParams.developerInstructions,
+      managedCollaboration:
+        resumeBinding.connectionScope !== "supervision" && params.params.trigger !== "cron",
       timeoutMs: params.appServer.requestTimeoutMs,
       signal: params.signal,
       assertCurrent: assertHandoffCurrent,
@@ -703,7 +705,15 @@ export async function startFreshCodexThread(
     // Restricted ephemeral threads also need creation policy for fenced warm reuse.
     liveThreadEphemeralPolicy: startParams.ephemeral
       ? createCodexEphemeralThreadPolicy(
-          { ...params, baseInstructions, config: startParams.config },
+          {
+            ...params,
+            baseInstructions,
+            config: startParams.config,
+            developerInstructions: buildCodexThreadGenericInstructions(params.params, {
+              ...params,
+              config: startParams.config,
+            }),
+          },
           context.effectiveConfig.config,
         )
       : undefined,

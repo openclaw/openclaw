@@ -1769,9 +1769,13 @@ describe("publication status real CLI", () => {
     },
   );
 
-  it.each([false, true])(
-    "keeps blocked Decision and active Diagnostic Drain distinct (json=%s)",
-    async (json) => {
+  it.each([
+    [false, "Diagnostic Drain"],
+    [true, "Diagnostic Drain"],
+    [true, "Diagnostic Drain / Watch"],
+  ] as const)(
+    "keeps blocked Decision and active Diagnostic Drain distinct (json=%s, job=%s)",
+    async (json, drainName) => {
       const fixture = publicationFixture();
       fixture.root.status = "in_progress";
       const result = await runPublicationCli(
@@ -1781,7 +1785,7 @@ describe("publication status real CLI", () => {
           responses[`repos/${REPOSITORY}/actions/runs/77/jobs?filter=all&per_page=100`] = {
             jobs: [
               {
-                ...job("Diagnostic Drain"),
+                ...job(drainName),
                 status: "in_progress",
                 conclusion: null,
                 run_attempt: 2,
@@ -1860,6 +1864,55 @@ describe("publication status real CLI", () => {
     ]);
     expect(result.stderr).toContain("stopped on blocker");
     expect(result.stderr).toContain("continue --failed --dry-run --run 77");
+    expect(result.calls.flat()).not.toContain("POST");
+  });
+
+  it.each([false, true])("shows the current job step and its age (json=%s)", async (json) => {
+    const fixture = publicationFixture();
+    fixture.root.conclusion = "failure";
+    const result = await runPublicationCli(
+      fixture,
+      ["status", "--run", "77", ...(json ? ["--json"] : [])],
+      (responses) => {
+        const active = `repos/${REPOSITORY}/actions/runs/202`;
+        responses[active] = {
+          ...(responses[active] as object),
+          status: "in_progress",
+          conclusion: null,
+        };
+        responses[`${active}/attempts/1/jobs?per_page=100&page=1`] = {
+          jobs: [
+            {
+              ...job("slow build"),
+              status: "in_progress",
+              conclusion: null,
+              completed_at: null,
+              steps: [
+                { name: "already done", status: "completed" },
+                {
+                  name: "Compile native app",
+                  status: "in_progress",
+                  started_at: new Date(Date.now() - 90_000).toISOString(),
+                },
+              ],
+            },
+          ],
+        };
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    if (json) {
+      const active = JSON.parse(result.stdout).children.find(
+        (child: { key: string }) => child.key === "pluginPrerelease",
+      );
+      expect(active.activeJobs).toEqual([
+        { name: "slow build", step: { name: "Compile native app", startedAt: expect.any(String) } },
+      ]);
+      expect(active.jobs[0]).not.toHaveProperty("steps");
+    } else {
+      expect(result.stdout).toMatch(/"slow build": step="Compile native app" age=9[0-9]+s/);
+    }
+    expect(result.stdout).not.toContain("already done");
     expect(result.calls.flat()).not.toContain("POST");
   });
 

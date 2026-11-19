@@ -1,2 +1,0 @@
-# Real plugin producer -> adapter approval/refresh/reload/detach regressions and ownership negative controls.
-167

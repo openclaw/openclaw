@@ -1,4 +1,4 @@
-import { readdirSync } from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { ignoreMissingPath } from "../../infra/errno.js";
@@ -60,7 +60,7 @@ export function listSqliteTargetCandidatePathsForSessionStorePath(
   const prefix = agentId ? `${baseName}.${normalizeAgentId(agentId)}` : undefined;
   const candidateNames = new Set([path.basename(unsuffixedTarget.path)]);
   try {
-    for (const fileName of readdirSync(directory)) {
+    for (const fileName of fs.readdirSync(directory)) {
       const databaseName = fileName.replace(/-(?:wal|shm|journal)$/u, "");
       if (
         databaseName.startsWith(`${baseName}.`) &&

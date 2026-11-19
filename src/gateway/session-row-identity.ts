@@ -77,5 +77,9 @@ export function sessionRowsRevision(rows: GatewaySessionRow[]): string {
 
 export function captureSessionRowGeneration(rows: GatewaySessionRow[]): SessionRowGeneration {
   // Float64 preserves integer identities past 2^32 without retaining their row objects.
-  return { revision: sessionRowsRevision(rows), ids: Float64Array.from(rows, sessionRowId) };
+  const ids = new Float64Array(rows.length);
+  for (let index = 0; index < rows.length; index++) {
+    ids[index] = sessionRowId(rows[index]!);
+  }
+  return { revision: sessionRowsRevision(rows), ids };
 }

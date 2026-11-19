@@ -194,13 +194,15 @@ Tools affect context in two ways:
 
 ## Commands, directives, and "inline shortcuts"
 
-Slash commands are handled by the Gateway. There are a few different behaviors:
+Slash commands are handled by the Gateway. Text commands, directives, and shortcuts
+require sender text starting with `/` (leading whitespace and channel-owned bot
+addressing are allowed). There are a few different behaviors:
 
 - **Standalone commands**: a message that is only `/...` runs as a command.
 - **Directives**: `/think`, `/fast`, `/verbose`, `/trace`, `/reasoning`, `/elevated`, `/exec`, `/model`, `/queue` are stripped before the model sees the message.
   - Directive-only messages persist session settings.
-  - Inline directives in a normal message act as per-message hints.
-- **Inline shortcuts** (allowlisted senders only): certain `/...` tokens inside a normal message can run immediately (example: "hey /status"), and are stripped before the model sees the remaining text.
+  - In slash-starting messages with task text, most directives act as per-message hints; model selections can still persist to the session.
+- **Inline shortcuts** (allowlisted senders only): certain `/...` tokens can accompany task text in slash-starting messages (example: `/status check this`), run immediately, and are stripped before the model sees the remaining text.
 
 Details: [Slash commands](/tools/slash-commands).
 
@@ -211,6 +213,10 @@ What persists across messages depends on the mechanism:
 - **Normal history** persists in the session transcript until compacted/pruned by policy.
 - **Compaction** persists a summary into the transcript and keeps recent messages intact.
 - **Pruning** drops old tool results from the _in-memory_ prompt to free context-window space, but does not rewrite the session transcript - the full history is still inspectable on disk.
+
+Reduced tool results preserve previously disclosed paths to saved output. Context
+assembly does not check whether those files still exist; if temporary-file cleanup
+has removed one, a later read reports that it is unavailable.
 
 ### Runtime context and provider roles
 

@@ -1,4 +1,6 @@
-import type { Api } from "../types.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Api, ToolCall } from "../types.js";
+import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import type { ReplayableResponseReasoningItem } from "./openai-responses-contracts.js";
 
 export function normalizeOpenAIResponsesReasoningReplayItem(
@@ -17,4 +19,30 @@ export function normalizeOpenAIResponsesReasoningReplayItem(
     status: item.status,
     encrypted_content: item.encrypted_content,
   };
+}
+
+/** Replay original bytes only while the normalized arguments still match the saved call. */
+export function replayOpenAIResponsesToolArguments(
+  block: ToolCall,
+  providerStyle: boolean,
+  sameModel: boolean,
+): string {
+  const value = providerStyle
+    ? JSON.stringify(block.arguments)
+    : typeof block.arguments === "string"
+      ? block.arguments
+      : JSON.stringify(block.arguments ?? {});
+  const signature = sameModel && block.argumentsSignature;
+  return signature && signature.value === value && typeof signature.raw === "string"
+    ? signature.raw
+    : value;
+}
+
+/** New transcripts retain exact bytes; legacy callers may still replay normalized values. */
+export function normalizeOpenAIResponsesToolArguments(value: unknown, replayed: unknown): unknown {
+  if (isRecord(replayed) && replayed.arguments === value) {
+    return value;
+  }
+  const args = parseJsonObjectPreservingUnsafeIntegers(value);
+  return args ? JSON.stringify(args) : value;
 }

@@ -282,6 +282,7 @@ it.each([
           agentPreflightMs: expect.any(Number),
           stateIntegrityCheckCount: 1,
           stateIntegrityMs: expect.any(Number),
+          stateIntegrityReason: "maintenance",
           stateSealCount: 0,
         });
       }

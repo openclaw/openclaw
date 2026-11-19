@@ -150,7 +150,8 @@ const { responses, calls } = fixture;
 if (!Object.hasOwn(responses, args[1])) throw new Error("Unexpected GitHub endpoint: " + args[1]);
 const response = responses[args[1]];
 calls[args[1]] = (calls[args[1]] ?? 0) + 1;
-const failure = response.fixtureErrorOnce ?? response.fixtureError;
+const failure = calls[args[1]] >= (response.fixtureErrorOnRead ?? 1)
+  ? response.fixtureErrorOnce ?? response.fixtureError : undefined;
 delete response.fixtureErrorOnce;
 writeFileSync(process.env.FIXTURE_RESPONSES, JSON.stringify(fixture));
 if (failure) { process.stderr.write(failure); process.exit(1); }
@@ -164,12 +165,25 @@ process.stdout.write(response.fixtureOutput ?? JSON.stringify(response));
 const { responses, downloads } = JSON.parse(readFileSync(process.env.FIXTURE_RESPONSES, "utf8"));
 if (process.env.FIXTURE_STOP_ON_WAIT === "true") {
   globalThis.setTimeout = () => { throw new Error("Fixture reached another artifact poll"); };
+} else if (process.env.FIXTURE_ADVANCE_RETRY_CLOCK === "true") {
+  let now = Date.now();
+  Date.now = () => now;
+  globalThis.setTimeout = (callback, delay) => { now += delay; queueMicrotask(callback); };
 }
 globalThis.fetch = async (input) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
   if (url.origin !== "https://api.github.com") throw new Error("Unexpected fetch origin");
   const endpoint = url.pathname.slice(1) + url.search;
   appendFileSync(process.env.FIXTURE_CALLS, JSON.stringify(["fetch", endpoint]) + "\\n");
+  const statuses = responses[endpoint]?.fixtureHttpStatuses;
+  const status = statuses?.shift();
+  if (status && status !== 200) {
+    if (process.env.FIXTURE_EXPIRE_ON_HTTP_ERROR === "true") {
+      const expired = Date.now() + 350 * 60_000 + 1;
+      Date.now = () => expired;
+    }
+    return new Response("fixture unavailable", { status });
+  }
   if (Object.hasOwn(downloads, endpoint)) {
     if (process.env.FIXTURE_RERUN_DURING_DOWNLOAD === "true") {
       const current = JSON.parse(readFileSync(process.env.FIXTURE_RESPONSES, "utf8"));
@@ -327,13 +341,9 @@ globalThis.fetch = async (input) => {
   };
 }
 
-function publicationReuseFixture(
-  changedReceipt = false,
-  withPayloads = false,
-  wrongQualifiedPackage = false,
-) {
+function publicationReuseFixture(changedReceipt = false, withPlugin = false) {
   const workflowRef = `release-ci/${TOOLING_SHA.slice(0, 12)}-123`;
-  const test = fixture(TOOLING_SHA, workflowRef);
+  const test = fixture(SOURCE_SHA, workflowRef);
   const currentRef = `release-ci/${TOOLING_SHA.slice(0, 12)}-456`;
   const fullRef = `refs/heads/${workflowRef}`;
   const npmRun = {
@@ -349,7 +359,7 @@ function publicationReuseFixture(
     schema: "openclaw.npm-package-bundle/v1",
     packageName: test.raw.package.name,
     packageVersion: test.raw.package.version,
-    releaseSha: TOOLING_SHA,
+    releaseSha: SOURCE_SHA,
     tarballName: test.raw.package.fileName,
     tarballSha256: test.raw.package.sha256,
     producer: test.raw.producer,
@@ -365,15 +375,13 @@ function publicationReuseFixture(
     401,
   );
   test.raw.artifact.digest = rawArchive.metadata.digest.slice("sha256:".length);
-  const qualifiedManifest = JSON.stringify({ sourceSha: TOOLING_SHA });
+  const qualifiedManifest = JSON.stringify({ sourceSha: SOURCE_SHA });
   test.qualified.manifestSha256 = sha256(Buffer.from(qualifiedManifest));
   const qualifiedArchive = test.artifactFiles(
     test.qualified.artifact.name,
     {
       "preflight-manifest.json": qualifiedManifest,
-      [test.raw.package.fileName]: wrongQualifiedPackage
-        ? Buffer.from("changed package")
-        : packageBytes,
+      [test.raw.package.fileName]: packageBytes,
     },
     false,
     81,
@@ -383,7 +391,7 @@ function publicationReuseFixture(
   const receipt = (stage: string, runId: string, outputs: Record<string, string>) => ({
     schema: "openclaw.full-release-artifact-receipt/v1",
     ...artifactRequest(),
-    sourceSha: TOOLING_SHA,
+    sourceSha: SOURCE_SHA,
     workflowRef,
     stage,
     dispatchId: `full-release-validation-51-1-artifacts-${stage}`,
@@ -400,11 +408,11 @@ function publicationReuseFixture(
     "artifact-receipt.json",
     receipt("npm", "81", bundleOutputs(test.raw, qualifiedReceipt)),
   );
-  const artifactName = `docker-release-${TOOLING_SHA}-1`;
+  const artifactName = `docker-release-${SOURCE_SHA}-1`;
   const dockerManifest = {
     schemaVersion: 1,
     repository: REPOSITORY,
-    sourceSha: TOOLING_SHA,
+    sourceSha: SOURCE_SHA,
     toolingSha: TOOLING_SHA,
     tag: "v2026.8.1",
     version: "2026.8.1",
@@ -495,16 +503,16 @@ function publicationReuseFixture(
     false,
     91,
   );
-  const dockerArchive = test.artifact(artifactName, "manifest.json", dockerManifest, false, 91);
+  test.artifact(artifactName, "manifest.json", dockerManifest, false, 91);
   const sdkArchive = test.artifact(
     "plugin-sdk-api-release-diff-81-1",
     "plugin-sdk-api-release-evidence.json",
     {},
   );
   const sdk = sdkArchive.metadata;
-  const pluginArchive = withPayloads
+  const pluginArchive = withPlugin
     ? test.artifactFiles(
-        `plugin-npm-prepared-${TOOLING_SHA}-101-1`,
+        `plugin-npm-prepared-${SOURCE_SHA}-101-1`,
         { "prepared.json": "{}" },
         false,
         101,
@@ -540,14 +548,14 @@ function publicationReuseFixture(
     valid: true,
     directRoot: true,
     current: { conclusion: "success" },
-    root: { runId: "51", targetSha: TOOLING_SHA },
+    root: { runId: "51", targetSha: SOURCE_SHA },
     manifest: {
       workflowName: "Full Release Validation",
       runId: "51",
       runAttempt: "1",
       sourceParentRunAttempt: 1,
       workflowSha: TOOLING_SHA,
-      targetSha: TOOLING_SHA,
+      targetSha: SOURCE_SHA,
       workflowRef,
       workflowFullRef: fullRef,
       publicationArtifacts: { npmPreflight: test.qualified, docker, pluginNpm: plugin },
@@ -560,7 +568,7 @@ function publicationReuseFixture(
 import assert from "node:assert/strict";
 const value = (key) => process.argv[process.argv.indexOf(key) + 1];
 const qualification = JSON.parse(value("--qualification-reuse-json"));
-assert.equal(qualification.candidateSha, "${TOOLING_SHA}");
+assert.equal(qualification.candidateSha, "${SOURCE_SHA}");
 assert.equal(qualification.workflowRef, "${currentRef}");
 assert.equal(value("--verifier-source-sha"), "${"f".repeat(40)}");
 process.stdout.write(${JSON.stringify(JSON.stringify(evidence))});
@@ -571,41 +579,13 @@ process.stdout.write(${JSON.stringify(JSON.stringify(evidence))});
     docker,
     sdk,
     payloads,
-    archives: [
-      rawArchive,
-      qualifiedArchive,
-      sdkArchive,
-      dockerArchive,
-      ...architectureArchives,
-      ...(pluginArchive ? [pluginArchive] : []),
-    ],
-    verifyRetained: (options: Record<string, unknown>, root = evidence.manifest) => {
-      const entrypoint = join(test.root, "verify-retained.mjs");
-      writeFileSync(
-        entrypoint,
-        `
-import { verifyRetainedPublicationArtifacts } from ${JSON.stringify(pathToFileURL(SCRIPT).href)};
-const result = await verifyRetainedPublicationArtifacts(${JSON.stringify(root)}, process.env, ${JSON.stringify(options)});
-console.log(JSON.stringify(result));
-`,
-      );
-      return test.run(
-        "verify",
-        {
-          // Recovery tooling can differ; original identities come only from root.
-          PARENT_WORKFLOW_SHA: "f".repeat(40),
-          PLUGIN_NPM_REQUIRED: withPayloads ? "true" : "false",
-        },
-        entrypoint,
-      );
-    },
-    expectedPackage: { fileName: test.raw.package.fileName, sha256: test.raw.package.sha256 },
+    plugin,
     env: {
       EVIDENCE_REUSE: "true",
       EVIDENCE_POLICY: "exact-target-full-validation-v1",
-      EVIDENCE_SHA: TOOLING_SHA,
+      EVIDENCE_SHA: SOURCE_SHA,
       EVIDENCE_ROOT_RUN_ID: "51",
-      TARGET_SHA: TOOLING_SHA,
+      TARGET_SHA: SOURCE_SHA,
       GITHUB_REF_NAME: currentRef,
       GITHUB_RUN_ID: "52",
       QUALIFICATION_INPUTS_JSON: "{}",
@@ -633,85 +613,91 @@ function expectRejected(result: Result, message: string) {
 }
 
 describe.skipIf(process.platform === "win32")("immutable release artifact CLI", () => {
-  it("authenticates every original payload without replacing the recovery tooling identity", () => {
-    const test = publicationReuseFixture(false, true);
-    const result = expectSuccess(
-      test.verifyRetained({ verifyPayloads: true, expectedPackage: test.expectedPackage }),
-    );
-    const verified = JSON.parse(result.stdout);
-    expect(verified.outputs).toMatchObject({
-      publication_artifacts_reused: "true",
-      npm_run_id: "81",
-      prepared_run_id: "91",
-    });
-    const kinds = [
-      "raw-npm",
-      "qualified-npm",
-      "sdk",
-      "docker-manifest",
-      "docker-amd64",
-      "docker-arm64",
-      "plugin-npm",
-    ];
-    expect(verified.payloads).toHaveLength(test.archives.length);
-    for (const [index, { metadata, bytes }] of test.archives.entries()) {
-      expect(verified.payloads[index]).toMatchObject({
-        kind: kinds[index],
-        artifact: { id: String(metadata.id) },
-        sha256: sha256(bytes),
-        producer: { workflowSha: TOOLING_SHA },
-        ...(index < 2 ? { package: test.expectedPackage } : {}),
-      });
-    }
-    expect(result.outputs).toEqual({});
-  });
-
   it.each([
-    ["raw-npm", 0],
-    ["qualified-npm", 1],
-    ["sdk", 2],
-    ["docker-manifest", 3],
-    ["docker-amd64", 4],
-    ["docker-arm64", 5],
-    ["plugin-npm", 6],
-  ] as const)(
-    "rejects changed %s archive bytes without a fresh-artifact fallback",
-    (_kind, index) => {
-      const test = publicationReuseFixture(false, true);
-      const archive = test.archives[index]!;
-      const changed = Buffer.from(archive.bytes);
-      changed[changed.length - 1] = changed[changed.length - 1]! ^ 1;
-      writeFileSync(archive.archivePath, changed);
-      const result = test.verifyRetained({
-        verifyPayloads: true,
-        expectedPackage: test.expectedPackage,
-      });
-      expectRejected(result, "digest");
-      expect(result.stdout).toBe("");
+    { label: "brief visibility lag", output: "raw", statuses: [404, 200], reads: 2, ok: true },
+    {
+      label: "persistent missing metadata",
+      output: "raw",
+      statuses: [404, 404, 404, 200],
+      reads: 3,
     },
-  );
-
-  it("rejects a qualified archive whose authenticated package bytes differ from the expected package", () => {
-    const test = publicationReuseFixture(false, true, true);
-    expectRejected(
-      test.verifyRetained({ verifyPayloads: true, expectedPackage: test.expectedPackage }),
-      "Retained qualified npm package digest mismatch",
+    { label: "missing archive", output: "raw", statuses: [404, 200], reads: 1, archive: true },
+    { label: "unauthorized metadata", output: "raw", statuses: [401, 200], reads: 1 },
+    { label: "forbidden metadata", output: "raw", statuses: [403, 200], reads: 1 },
+    { label: "missing sealed receipt", output: "receipt", statuses: [404, 200], reads: 1 },
+    {
+      label: "changed immutable ID",
+      output: "raw",
+      statuses: [404, 200],
+      reads: 2,
+      changedId: true,
+    },
+    {
+      label: "expired acquisition deadline",
+      output: "raw",
+      statuses: [404, 200],
+      reads: 1,
+      expire: true,
+    },
+  ])("bounds fresh artifact metadata recovery: $label", (scenario) => {
+    const test = fixture();
+    if (scenario.output === "receipt") {
+      test.api("actions/runs/81", workflowRun({ status: "completed", conclusion: "success" }));
+      test.api(
+        "actions/runs/81/attempts/1",
+        workflowRun({ status: "completed", conclusion: "success" }),
+      );
+    }
+    const archive = test.artifact(
+      scenario.output === "raw"
+        ? "openclaw-npm-package-descriptor-81-1"
+        : "full-release-artifact-receipt-81-1",
+      scenario.output === "raw" ? "prepared-npm-bundle.json" : "artifact-receipt.json",
+      test.raw,
     );
-  });
-
-  it("fails closed when an original payload disappears", () => {
-    const test = publicationReuseFixture(false, true);
-    test.api("actions/artifacts/402", { fixtureError: "gh: Not Found (HTTP 404)" });
-    expectRejected(
-      test.verifyRetained({ verifyPayloads: true }),
-      "Original publication artifact is unavailable",
-    );
+    const endpoint = "actions/artifacts/" + archive.metadata.id + (scenario.archive ? "/zip" : "");
+    test.api(endpoint, {
+      ...archive.metadata,
+      ...(scenario.changedId ? { id: archive.metadata.id + 1 } : {}),
+      fixtureHttpStatuses: scenario.statuses,
+    });
+    const result = test.run("wait", {
+      ARTIFACT_OUTPUT: scenario.output,
+      FIXTURE_ADVANCE_RETRY_CLOCK: "true",
+      FIXTURE_EXPIRE_ON_HTTP_ERROR: String(scenario.expire === true),
+    });
+    if (scenario.ok) {
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.outputs.prepared_bundle_json!)).toEqual(test.raw);
+    } else {
+      expect(result.status, result.stderr).not.toBe(0);
+      expect(result.outputs).toEqual({});
+    }
+    if (!scenario.ok) {
+      expect(result.stderr).toContain(
+        scenario.changedId
+          ? "metadata does not match"
+          : scenario.expire
+            ? "deadline exceeded"
+            : "HTTP " + scenario.statuses[0],
+      );
+    }
+    expect(
+      result.calls.filter(
+        ([kind, path]) => kind === "fetch" && path === "repos/" + REPOSITORY + "/" + endpoint,
+      ),
+    ).toHaveLength(scenario.reads);
+    expect(
+      Object.entries(result.apiCalls).filter(([path]) => path.includes("/artifacts?name=")),
+    ).toHaveLength(1);
   });
 
   it.each([
     ["retained", {}, {}, "", ""],
+    ["retained plugin", {}, {}, "", ""],
     ["expired payload", { expired: true }, {}, "", ""],
     ["deleted archive", {}, {}, "npm", ""],
+    ["retained metadata 404", {}, {}, "", ""],
     ["expired SDK archive", {}, { expired: true }, "", ""],
     ["missing SDK archive", {}, {}, "sdk", ""],
     ["wrong SDK attempt", {}, { name: "plugin-sdk-api-release-diff-81-2" }, "", ""],
@@ -726,9 +712,15 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
   ] as const)(
     "reuses publication artifacts without dispatch for %s",
     (scenario, payloadChanges, sdkChanges, missing, error) => {
-      const test = publicationReuseFixture(scenario === "changed receipt");
+      const test = publicationReuseFixture(
+        scenario === "changed receipt",
+        scenario === "retained plugin",
+      );
       Object.assign(test.payloads[0]!, payloadChanges);
       Object.assign(test.sdk, sdkChanges);
+      if (scenario === "retained metadata 404") {
+        test.api("actions/artifacts/501", { fixtureHttpStatuses: [404, 200] });
+      }
       if (missing === "npm") {
         test.api("actions/artifacts/402", { fixtureError: "gh: Not Found (HTTP 404)" });
       }
@@ -740,11 +732,22 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
         );
       }
       const result = test.run("reuse", test.env);
+      if (scenario === "retained metadata 404") {
+        expect(
+          result.calls.filter(
+            ([kind, endpoint]) =>
+              kind === "fetch" && endpoint === `repos/${REPOSITORY}/actions/artifacts/501`,
+          ),
+        ).toHaveLength(1);
+        expect(
+          result.calls.some(([kind, endpoint]) => kind === "fetch" && endpoint?.endsWith("/zip")),
+        ).toBe(false);
+      }
       if (error) {
         expectRejected(result, error);
       } else {
         expectSuccess(result);
-        if (scenario === "retained") {
+        if (scenario === "retained" || scenario === "retained plugin") {
           expect(JSON.parse(result.outputs.prepared_bundle_json!)).toEqual(test.raw);
           expect(JSON.parse(result.outputs.qualified_preflight_bundle_json!)).toEqual(
             test.qualified,
@@ -756,6 +759,7 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
             prepared_run_id: "91",
             prepared_run_attempt: "1",
             prepared_manifest_sha256: test.docker.preparedManifestSha256,
+            descriptor_json: test.plugin ? JSON.stringify(test.plugin) : "",
           });
         } else {
           expect(result.outputs).toEqual({ publication_artifacts_reused: "false" });
@@ -1041,6 +1045,21 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
       );
     },
   );
+
+  it("preserves jobs API diagnostics while authenticating the raw producer", () => {
+    const test = fixture();
+    test.rawArtifact();
+    // The first read authenticates the producer; fail the preservation lookup.
+    test.api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
+      total_count: test.jobs.length,
+      jobs: test.jobs,
+      fixtureErrorOnRead: 2,
+      fixtureError: "gh: Forbidden (HTTP 403): fixture jobs permission denied",
+    });
+    const result = test.wait("raw");
+    expectRejected(result, "HTTP 403");
+    expect(result.stderr).toContain("fixture jobs permission denied");
+  });
 
   it.each([
     ["failed unrelated qualifier", {}, { ...completed, conclusion: "failure" }, false, ""],

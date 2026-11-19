@@ -39,6 +39,11 @@ export function isMigrationsMemoryApplyParams(
 ): value is import("typebox").Static<
   typeof import("../../schema/migrations.js").MigrationsMemoryApplyParamsSchema
 >;
+export function isDiagnosticsCpuProfileParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema/diagnostics-schemas.js").DiagnosticsCpuProfileParamsSchema
+>;
 export function isDiagnosticsHeapProfileParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -461,6 +466,21 @@ export function isModelsProbeParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ModelsProbeParamsSchema
+>;
+export function isToolUsageStatusParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ToolUsageStatusParamsSchema
+>;
+export function isToolUsageImportParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ToolUsageImportParamsSchema
+>;
+export function isToolUsageResetParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ToolUsageResetParamsSchema
 >;
 export function isConversationListParams(
   value: unknown,

@@ -93,22 +93,24 @@ function isUnsupportedOptionalTimeoutConfigRejection(key: string, error: unknown
   );
 }
 
-function isRejectedThinkingConfigOption(key: string, error: unknown): boolean {
-  if (!isThinkingConfigKey(key)) {
-    return false;
-  }
-  if (isUnsupportedControlRejection(error)) {
-    return true;
-  }
+/** The adapter named the config option and refused its value, as claude-agent-acp does for `effort`. */
+export function isRejectedConfigOptionValue(error: unknown, key?: string): boolean {
   const description = describeConfigOptionRejection(error);
   const describesConfigOption =
     description.includes("session/set_config_option") ||
     (description.includes("config option") &&
-      description.includes(normalizeLowercaseStringOrEmpty(key)));
+      (!key || description.includes(normalizeLowercaseStringOrEmpty(key))));
   return (
     describesConfigOption &&
     ACP_CONFIG_REJECTION_CODE_RE.test(description) &&
     CONFIG_OPTION_REJECTION_RE.test(description)
+  );
+}
+
+function isRejectedThinkingConfigOption(key: string, error: unknown): boolean {
+  return (
+    isThinkingConfigKey(key) &&
+    (isUnsupportedControlRejection(error) || isRejectedConfigOptionValue(error, key))
   );
 }
 

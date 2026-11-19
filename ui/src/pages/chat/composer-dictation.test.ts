@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createComponent } from "solid-js";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -9,8 +10,8 @@ import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { renderComposerVoiceButtonSolid } from "./components/chat-composer-controls.tsx";
-import { ComposerDictationSession } from "./composer-dictation-session.ts";
-import { ComposerDictationOwner, insertComposerDictation } from "./composer-dictation.ts";
+import { ComposerDictationSession, placeComposerDictation } from "./composer-dictation-session.ts";
+import { ComposerDictationOwner } from "./composer-dictation.ts";
 import { MockDictationAudioContext, type MockAudioProcessor } from "./talk/input.test-support.ts";
 
 type GatewayListener = (event: GatewayEventFrame) => void;
@@ -310,32 +311,26 @@ describe("ComposerDictationOwner", () => {
     },
   );
 
-  it.each(["draft replacement", "Escape", "hidden"])(
-    "discards active capture on %s",
-    async (action) => {
-      const { controller, options, onCommit } = createHarness({ draftKey: "first" });
-      const stopTrack = captureStop();
-      await startDirect(controller);
-      expect(getUserMedia).toHaveBeenCalledOnce();
-      expect(controller.active).toBe(true);
-      emit({ type: "partial", text: "discard me" });
-      const nextCommit = vi.fn();
-      if (action === "draft replacement") {
-        controller.update({ ...options, draftKey: "next", onCommit: nextCommit });
-      } else if (action === "Escape") {
-        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      } else {
-        vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
-        document.dispatchEvent(new Event("visibilitychange"));
-      }
-      transcript("Old draft final words");
-      expect(controller.active).toBe(false);
-      expect(stopTrack).toHaveBeenCalledOnce();
-      expect(onCommit).not.toHaveBeenCalled();
-      expect(nextCommit).not.toHaveBeenCalled();
-      await waitForFast(() => expectClosed("dictation-1", true));
-    },
-  );
+  it.each(["draft replacement", "Escape"])("discards active capture on %s", async (action) => {
+    const { controller, options, onCommit } = createHarness({ draftKey: "first" });
+    const stopTrack = captureStop();
+    await startDirect(controller);
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(controller.active).toBe(true);
+    emit({ type: "partial", text: "discard me" });
+    const nextCommit = vi.fn();
+    if (action === "draft replacement") {
+      controller.update({ ...options, draftKey: "next", onCommit: nextCommit });
+    } else {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    }
+    transcript("Old draft final words");
+    expect(controller.active).toBe(false);
+    expect(stopTrack).toHaveBeenCalledOnce();
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(nextCommit).not.toHaveBeenCalled();
+    await waitForFast(() => expectClosed("dictation-1", true));
+  });
 
   it.each([false, true])("Read aloud replaces dictation (finalizing: %s)", async (finalizing) => {
     const stopTrack = captureStop();
@@ -407,7 +402,7 @@ describe("ComposerDictationOwner", () => {
     await waitForFast(() => expectClosed());
   });
 
-  it("Escape discards startup finalization after capture ends before session creation", async () => {
+  it("Escape discards startup finalization after Stop during session creation", async () => {
     const createStarted = createDeferred();
     const releaseCreate = createDeferred();
     const closeStarted = createDeferred();
@@ -427,11 +422,10 @@ describe("ComposerDictationOwner", () => {
     const h = createHarness();
     expect(h.controller.startDirect()).toBe(true);
     await createStarted.promise;
-    captureAudio();
     const finishing = h.controller.finishActive();
     releaseCreate.resolve();
     await closeStarted.promise;
-    expectAppended();
+    expect(getUserMedia).not.toHaveBeenCalled();
     try {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       await vi.advanceTimersByTimeAsync(0);
@@ -447,7 +441,7 @@ describe("ComposerDictationOwner", () => {
     }
   });
 
-  it.each(["new capture", "draft switch", "session switch", "client switch"])(
+  it.each(["draft switch", "session switch", "client switch"])(
     "unlocks immediately and rejects a pending result after %s",
     async (transition) => {
       const { promise: close, resolve: resolveClose } = createDeferred();
@@ -482,14 +476,8 @@ describe("ComposerDictationOwner", () => {
         } else if (transition === "client switch") {
           controller.update({ ...options, client: createClient() });
         }
-        if (transition !== "new capture") {
-          controller.update(options);
-        } else {
-          expect(controller.startDirect()).toBe(true);
-          await waitForFast(() => expect(sessionsCreated).toBe(2));
-          emit({ transcriptionSessionId: "dictation-2", type: "partial", text: "new preview" });
-        }
-        const currentPreview = transition === "new capture" ? "new preview" : "";
+        controller.update(options);
+        const currentPreview = "";
         expect(controller.transcript).toBe(currentPreview);
         emit({ type: "partial", text: "stale preview" });
         expect(controller.transcript).toBe(currentPreview);
@@ -505,6 +493,90 @@ describe("ComposerDictationOwner", () => {
         controller.dispose();
         await Promise.resolve();
       }
+    },
+  );
+
+  it.each([false, true])(
+    "keeps stopped dictation when a newer capture stops first: %s",
+    async (stopNewer) => {
+      let created = 0;
+      request.mockImplementation(async (method) =>
+        method === "talk.session.create" ? sessionResult(`dictation-${++created}`) : { ok: true },
+      );
+      const { controller, onCommit, options } = createHarness();
+      await startDirect(controller);
+      const first = controller.finishActive();
+      await startDirect(controller);
+      emit({ transcriptionSessionId: "dictation-2", type: "partial", text: "new preview" });
+      const second = stopNewer ? controller.finishActive() : null;
+      if (second) {
+        transcript("Second words", "dictation-2");
+        emit({ transcriptionSessionId: "dictation-2", type: "close", reason: "completed" });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(onCommit).not.toHaveBeenCalled();
+      }
+      transcript("First words");
+      emit({ type: "close", reason: "completed" });
+      await expect(first).resolves.toBe(true);
+      if (second) {
+        await expect(second).resolves.toBe(true);
+        expect(onCommit.mock.calls.map(([text]) => text)).toEqual(["First words", "Second words"]);
+        expect(controller.transcribing).toBe(false);
+      } else {
+        expect(controller.active).toBe(true);
+        expect(controller.transcript).toBe("new preview");
+        expect(onCommit).toHaveBeenCalledExactlyOnceWith("First words", true, true);
+        const otherVoice = new GatewaySpeechPlayback();
+        otherVoice.prepare(options.client);
+        expect(controller.active).toBe(false);
+        otherVoice.stop();
+      }
+      expect(request).not.toHaveBeenCalledWith(
+        "talk.session.close",
+        { sessionId: "dictation-1", discard: true },
+        expect.anything(),
+      );
+    },
+  );
+
+  it("keeps stopped text when the next recording cannot open its microphone", async () => {
+    const { controller, onCommit } = createHarness();
+    await startDirect(controller);
+    const first = controller.finishActive();
+    getUserMedia.mockRejectedValueOnce(new DOMException("blocked", "NotAllowedError"));
+    expect(controller.startDirect()).toBe(true);
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(0);
+    transcript("Keep the earlier recording");
+    emit({ type: "close", reason: "completed" });
+    await expect(first).resolves.toBe(true);
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith("Keep the earlier recording", true);
+  });
+
+  it.each(["draft switch", "Escape", "dispose"])(
+    "retires all pending recordings on %s",
+    async (reason) => {
+      let created = 0;
+      request.mockImplementation(async (method) =>
+        method === "talk.session.create" ? sessionResult("dictation-" + ++created) : { ok: true },
+      );
+      const { controller, onCommit, options } = createHarness();
+      await startDirect(controller);
+      const first = controller.finishActive();
+      await startDirect(controller);
+      const second = controller.finishActive();
+      if (reason === "draft switch") {
+        controller.update({ ...options, draftKey: "next" });
+      } else if (reason === "dispose") {
+        controller.dispose();
+      } else {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      }
+      transcript("Stale first");
+      transcript("Stale second", "dictation-2");
+      await expect(Promise.all([first, second])).resolves.toEqual([false, false]);
+      expect(controller.transcribing).toBe(false);
+      expect(onCommit).not.toHaveBeenCalled();
     },
   );
 
@@ -552,13 +624,47 @@ describe("ComposerDictationOwner", () => {
       );
       expect(controller).toMatchObject({ active: false, locksComposer: false });
       expect(getUserMedia).toHaveBeenCalledOnce();
-      expect(request).not.toHaveBeenCalledWith("talk.session.create", expect.anything());
+      await waitForFast(() => expectClosed("dictation-1", true));
       expect(loadSettings().realtimeTalkInputDeviceId).toBe(device);
     } finally {
       controller.dispose();
       patchSettings({ realtimeTalkInputDeviceId: settings.realtimeTalkInputDeviceId });
     }
   });
+
+  it.each(["allow", "deny"])(
+    "waits through a permission prompt that takes window focus (%s)",
+    async (answer) => {
+      const permission = createDeferred<ReturnType<typeof microphone>>();
+      getUserMedia.mockReturnValueOnce(permission.promise);
+      const { controller, onError } = createHarness();
+      expect(controller.startDirect()).toBe(true);
+      await waitForFast(() => expect(getUserMedia).toHaveBeenCalledOnce());
+
+      // The permission prompt blurs the page while the microphone is still opening.
+      window.dispatchEvent(new Event("blur"));
+      expect(controller.connecting).toBe(true);
+
+      if (answer === "allow") {
+        permission.resolve(microphone());
+        await waitForFast(() =>
+          expect(controller).toMatchObject({ active: true, connecting: false }),
+        );
+        expect(onError).not.toHaveBeenCalled();
+        window.dispatchEvent(new Event("blur"));
+        expect(controller.active).toBe(false);
+      } else {
+        permission.reject(new DOMException("denied", "NotAllowedError"));
+        await waitForFast(() =>
+          expect(onError).toHaveBeenCalledWith(
+            "Microphone access is blocked. Allow it in browser site settings to list inputs.",
+            { kind: "start", preservesText: false },
+          ),
+        );
+        expect(controller.active).toBe(false);
+      }
+    },
+  );
 
   it("does not swallow the next click after a hold is cancelled by blur", async () => {
     const { controller, onTap, target } = createHarness();
@@ -572,11 +678,12 @@ describe("ComposerDictationOwner", () => {
     expect(controller.locksComposer).toBe(false);
   });
 
-  it("streams g711_ulaw audio and drains the final transcript after latched Stop", async () => {
+  it.each(["click", "blur", "visibilitychange"])("commits once after latched %s", async (type) => {
     const order = recordRequests();
+    const stopTrack = vi.fn();
     getUserMedia.mockImplementation(async () => {
       order.push("microphone");
-      return microphone();
+      return microphone(stopTrack);
     });
     const { controller, onCommit, target } = createHarness({
       sessionKey: "agent:researcher:conversation",
@@ -589,7 +696,10 @@ describe("ComposerDictationOwner", () => {
       transport: "gateway-relay",
       brain: "none",
     });
-    expect(order.slice(0, 2)).toEqual(["microphone", "talk.session.create"]);
+    await waitForFast(() =>
+      expect(order.slice(0, 2)).toEqual(["talk.session.create", "microphone"]),
+    );
+    await waitForFast(() => expect(controller).toMatchObject({ active: true, connecting: false }));
     captureAudio();
     await waitForFast(() => expectAppended());
     emit({ type: "partial", text: "hello wor" });
@@ -597,18 +707,66 @@ describe("ComposerDictationOwner", () => {
     transcript("hello world");
     emit({ type: "partial", text: "next wor" });
     await releaseLatched(target);
-    const finished = controller.finishActive();
+    // A tab switch fires blur then visibilitychange; the second interruption keeps the commit.
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    (type === "click" ? target : type === "blur" ? window : document).dispatchEvent(
+      new Event(type),
+    );
+    document.dispatchEvent(new Event("visibilitychange"));
     expect(controller).toMatchObject({ finalizing: false, locksComposer: false });
+    expect(stopTrack).toHaveBeenCalledOnce();
     expect(onCommit).not.toHaveBeenCalled();
     transcript("next words");
     emit({ type: "close", reason: "completed" });
-    await expect(finished).resolves.toBe(true);
-    expect(onCommit).toHaveBeenCalledExactlyOnceWith("hello world next words", true);
     await waitForFast(() => expectClosed());
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith("hello world next words", true);
     expect(order.indexOf("talk.session.appendAudio")).toBeLessThan(
       order.indexOf("talk.session.close"),
     );
   });
+
+  it("publishes pending transcription without locking the composer", async () => {
+    const { controller, onCommit } = createHarness();
+    await startDirect(controller);
+    const changed = vi.fn();
+    const unsubscribe = controller.subscribe(changed);
+    const finished = controller.finishActive();
+    expect(controller).toMatchObject({ active: false, locksComposer: false, transcribing: true });
+    expect(changed).toHaveBeenCalled();
+    changed.mockClear();
+    transcript("Final words");
+    emit({ type: "close", reason: "completed" });
+    await expect(finished).resolves.toBe(true);
+    expect(controller).toMatchObject({ transcribing: false });
+    expect(changed).toHaveBeenCalled();
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith("Final words", true);
+    unsubscribe();
+  });
+
+  it.each(["completed", "timeout", "disconnect"])(
+    "reports an empty %s drain once",
+    async (outcome) => {
+      const { controller, options, onError, onCommit } = createHarness();
+      await startDirect(controller);
+      const finished = controller.finishActive();
+      await vi.advanceTimersByTimeAsync(0);
+      if (outcome === "completed") {
+        emit({ type: "close", reason: "completed" });
+      } else if (outcome === "disconnect") {
+        controller.update({ ...options, connected: false });
+      } else {
+        await vi.advanceTimersByTimeAsync(10_000);
+      }
+      await expect(finished).resolves.toBe(false);
+      expect(onCommit).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledExactlyOnceWith(
+        outcome === "disconnect"
+          ? "Dictation stopped because the Gateway disconnected."
+          : "Couldn’t transcribe your voice.",
+        { kind: "interrupted", preservesText: false },
+      );
+    },
+  );
 
   it.each([
     ["", "error"],
@@ -650,26 +808,62 @@ describe("ComposerDictationOwner", () => {
     unsubscribe();
   });
 
-  it("buffers microphone audio while the transcription session is being created", async () => {
-    const { promise: createResult, resolve: resolveCreate } =
-      createDeferred<ReturnType<typeof sessionResult>>();
-    const order = recordRequests(() => createResult);
-    const { controller, onCommit, onError, target } = createHarness();
+  it("opens the microphone only after the Gateway admits the session", async () => {
+    const created = createDeferred<ReturnType<typeof sessionResult>>();
+    recordRequests(() => created.promise);
+    const { controller, target } = createHarness();
     await startHold(target);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(controller.connecting).toBe(true);
+
+    created.resolve(sessionResult());
+    await waitForFast(() => expect(controller).toMatchObject({ active: true, connecting: false }));
+    expect(getUserMedia).toHaveBeenCalledOnce();
     captureAudio();
-    expect(request).not.toHaveBeenCalledWith("talk.session.appendAudio", expect.anything());
+    await waitForFast(() => expectAppended());
+  });
 
-    await releaseLatched(target);
-    void controller.finishActive();
-    resolveCreate(sessionResult("late-session"));
+  it("stops startup when the admitted session fails during the permission prompt", async () => {
+    const permission = createDeferred<ReturnType<typeof microphone>>();
+    getUserMedia.mockReturnValueOnce(permission.promise);
+    recordRequests();
+    const { controller, onError, target } = createHarness();
+    await startHold(target);
+    await waitForFast(() => expect(getUserMedia).toHaveBeenCalledOnce());
 
-    await waitForFast(() => expectAppended("late-session"));
-    await waitForFast(() => expectClosed("late-session"));
-    expect(order.indexOf("talk.session.appendAudio")).toBeLessThan(
-      order.indexOf("talk.session.close"),
+    emit({ type: "error", message: "Provider connection failed" });
+    await waitForFast(() =>
+      expect(onError).toHaveBeenCalledWith(
+        "Provider connection failed",
+        expect.objectContaining({ kind: "interrupted" }),
+      ),
     );
-    expect(onCommit).not.toHaveBeenCalled();
-    expect(onError).not.toHaveBeenCalled();
+    permission.resolve(microphone());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(processors).toHaveLength(0);
+    expect(controller.active).toBe(false);
+  });
+
+  it("reports busy without opening the microphone when no Gateway session is free", async () => {
+    recordRequests(async () => {
+      throw new GatewayProtocolRequestError({
+        code: "UNAVAILABLE",
+        message: "Too many active transcription Talk sessions for this connection",
+        retryable: true,
+        details: { code: "TALK_SESSION_CAPACITY" },
+      });
+    });
+    const { controller, onError, target } = createHarness();
+    await startHold(target);
+    await waitForFast(() =>
+      expect(onError).toHaveBeenCalledExactlyOnceWith(
+        "Dictation is busy finishing earlier recordings. Try again in a moment.",
+        { kind: "busy", preservesText: false },
+      ),
+    );
+    expect(getUserMedia).not.toHaveBeenCalled();
+    expect(controller).toMatchObject({ active: false, locksComposer: false });
   });
 
   it("closes late session creation after the bounded Stop wait", async () => {
@@ -761,15 +955,11 @@ describe("composer microphone button", () => {
   });
 });
 
-it("insertComposerDictation spaces inserted and replaced selections", () => {
-  expect(insertComposerDictation("hello world", "brave new", 6, 6)).toEqual({
-    value: "hello brave new world",
-    caret: 16,
-  });
-  expect(insertComposerDictation("hello world", "there", 6, 11)).toEqual({
-    value: "hello there",
-    caret: 11,
-  });
+it("placeComposerDictation spaces inserted and replaced selections", () => {
+  const place = (start: number, end: number, spoken: string) =>
+    placeComposerDictation(spoken, null, { start, end, value: "hello world" });
+  expect(place(6, 6, "brave new")).toMatchObject({ value: "hello brave new world", caret: 16 });
+  expect(place(6, 11, "there")).toMatchObject({ value: "hello there", caret: 11 });
 });
 
 it.each([false, true])(

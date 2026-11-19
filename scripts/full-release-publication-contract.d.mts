@@ -17,6 +17,10 @@ export interface PublicationSelection {
   windowsNodeTag?: string;
   windowsNodeInstallerDigests?: Record<string, string>;
 }
+export function validatePublicationVersionSelection(
+  version: string,
+  selection: PublicationSelection,
+): NonNullable<ReturnType<typeof import("./lib/release-version.mjs").parseReleaseVersion>>;
 export interface PublicationIntent {
   validationPurpose: ValidationPurpose;
   publicationSelection: PublicationSelection | null;
@@ -195,9 +199,6 @@ export function createPublicationAdmission(
   observations: PublicationObservations,
   artifact: PublicationObservationArtifact,
   admittedAt: string,
-  options?: {
-    workflowPath?: string;
-  },
 ): PublicationAdmission;
 export function validatePublicationAdmissionBinding(
   record: Record<string, unknown>,

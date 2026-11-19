@@ -14,7 +14,6 @@ import {
   ImageFormat,
   type Message,
   StopReason as BedrockStopReason,
-  type SystemContentBlock,
   type Tool as BedrockTool,
   type ToolChoice,
   type ToolConfiguration,
@@ -36,7 +35,6 @@ import {
   sanitizeSurrogates,
   transformMessages,
   type AssistantMessageEvent,
-  type CacheRetention,
   type Context,
   type Model,
   type SimpleStreamOptions,
@@ -74,8 +72,6 @@ import {
   finalizeTerminalToolCallArguments,
   notifyProviderHttpMetadata,
   sortPromptCacheToolsByName,
-  splitSystemPromptCacheBoundary,
-  stripSystemPromptCacheBoundary,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import {
   asOptionalRecord,
@@ -88,6 +84,7 @@ import {
   resolveBedrockPromptCachePolicy,
   type BedrockOptions,
 } from "./bedrock-options.js";
+import { buildBedrockSystemPrompt } from "./prompt-cache.runtime.js";
 import {
   isClaude5BedrockModel,
   resolveBedrockClaudeThinkingProfile,
@@ -422,7 +419,7 @@ const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
       let commandInput = {
         modelId: model.id,
         messages: convertMessages(context, model, cachePoint, toolConfig !== undefined),
-        system: buildSystemPrompt(context.systemPrompt, cacheRetention, cachePoint),
+        system: buildBedrockSystemPrompt(context.systemPrompt, cacheRetention, cachePoint),
         inferenceConfig: {
           ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
           // Grok 4.6 Converse profiles reject temperature rather than ignoring it.
@@ -774,34 +771,6 @@ function isAnthropicClaudeModel(model: Model<"bedrock-converse-stream">): boolea
     name.includes("anthropic/claude") ||
     name.includes("claude")
   );
-}
-
-function buildSystemPrompt(
-  systemPrompt: string | undefined,
-  cacheRetention: CacheRetention,
-  cachePoint: CachePointBlock | undefined,
-): SystemContentBlock[] | undefined {
-  if (!systemPrompt) {
-    return undefined;
-  }
-
-  if (cacheRetention === "none") {
-    return [{ text: sanitizeSurrogates(stripSystemPromptCacheBoundary(systemPrompt)) }];
-  }
-  const split = splitSystemPromptCacheBoundary(systemPrompt);
-  const stablePrefix = split?.stablePrefix ?? systemPrompt;
-  const blocks: SystemContentBlock[] = stablePrefix
-    ? [{ text: sanitizeSurrogates(stripSystemPromptCacheBoundary(stablePrefix)) }]
-    : [];
-
-  if (stablePrefix && cachePoint) {
-    blocks.push({ cachePoint });
-  }
-
-  if (split?.dynamicSuffix) {
-    blocks.push({ text: sanitizeSurrogates(stripSystemPromptCacheBoundary(split.dynamicSuffix)) });
-  }
-  return blocks.length > 0 ? blocks : undefined;
 }
 
 function normalizeToolCallId(id: string): string {

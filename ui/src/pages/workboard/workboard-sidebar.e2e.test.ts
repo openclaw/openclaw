@@ -63,7 +63,7 @@ suite.define(() => {
         const rail = sidebar.locator(".sidebar-rail__pins");
         const workboard = rail.getByRole("link", { name: "Workboard", exact: true });
         await workboard.waitFor();
-        await button(sidebar, "Sessions").click();
+        await sidebar.locator('[data-navigation-view="sessions"]').click();
         expect(await page.locator(".sidebar-session-group-status:empty").count()).toBe(0);
         await workboard.hover();
         await workboard.click();
@@ -79,7 +79,7 @@ suite.define(() => {
           exact: true,
         });
         if (!(await sidebar.locator(".sidebar-session-toolbar").isVisible())) {
-          await button(sidebar, "Sessions").click();
+          await sidebar.locator('[data-navigation-view="sessions"]').click();
         }
         await newConversation.click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/new");

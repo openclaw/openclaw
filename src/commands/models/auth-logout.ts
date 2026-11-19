@@ -87,6 +87,12 @@ export async function removeModelAuthCredentials(params: {
   apiKeyProvider?: string;
   provider?: string;
 }): Promise<string | undefined> {
+  if (params.provider !== undefined) {
+    // A rebuildable cache: losing it to a logout that later fails only costs one discovery.
+    const { forgetSignedOutPluginModelCatalogRows } =
+      await import("../../agents/plugin-model-catalog-save.js");
+    await forgetSignedOutPluginModelCatalogRows(params.agentDir, params.provider);
+  }
   const apiKeyProvider = params.apiKeyProvider;
   const keyBindings = (cfg: OpenClawConfig, sourceConfig?: OpenClawConfig) => {
     const owner =

@@ -1,10 +1,28 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MigrationPlan, MigrationProviderPlugin } from "../../plugins/types.js";
-import { planProviderMemoryImport } from "./memory-import.js";
+import { planProviderMemoryImport, withMemoryMigrationOffers } from "./memory-import.js";
+
+const mocks = vi.hoisted(() => ({
+  providers: [] as MigrationProviderPlugin[],
+  runMigrationApply: vi.fn(),
+}));
+// Offer shaping is under test; owner selection, plugin loading and the apply writer
+// are covered by the wizard owner test and the migrate apply tests.
+vi.mock("../../plugins/migration-provider-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/migration-provider-runtime.js")>()),
+  withPluginMigrationProviders: async (
+    _params: unknown,
+    run: (providers: MigrationProviderPlugin[]) => Promise<unknown>,
+  ) => await run(mocks.providers),
+}));
+vi.mock("./apply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./apply.js")>()),
+  runMigrationApply: mocks.runMigrationApply,
+}));
 
 const tempRoots: string[] = [];
 
@@ -84,5 +102,44 @@ describe("planProviderMemoryImport memory-only shaping", () => {
       agentId: "main",
     });
     expect(plan.items.map((item) => item.id)).toEqual(["memory-a", "memory-b"]);
+  });
+});
+
+describe("withMemoryMigrationOffers", () => {
+  it("offers only planned items, skips sources with only imported items, and applies exact ids", async () => {
+    const dir = await makeSourceDir();
+    const codexPlan = await memoryPlan(dir, ["memory:one", "memory:two", "memory:old"]);
+    codexPlan.items[2] = { ...codexPlan.items[2]!, status: "conflict" };
+    const claudePlan = await memoryPlan(dir, ["memory:imported"]);
+    claudePlan.items[0] = { ...claudePlan.items[0]!, status: "conflict" };
+    mocks.providers = [
+      { ...stubProvider(codexPlan), id: "codex", label: "Codex" },
+      { ...stubProvider(claudePlan), id: "claude", label: "Claude" },
+    ];
+    mocks.runMigrationApply.mockResolvedValue({ ...codexPlan, summary: codexPlan.summary });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() as never };
+
+    const offers = await withMemoryMigrationOffers(
+      { config, agentId: "main", runtime },
+      async (planned) => planned,
+    );
+
+    expect(
+      offers.map(({ providerId, plannedIds, conflicts }) => ({
+        providerId,
+        plannedIds,
+        conflicts,
+      })),
+    ).toEqual([{ providerId: "codex", plannedIds: ["memory:one", "memory:two"], conflicts: 1 }]);
+    await offers[0]!.apply();
+    expect(mocks.runMigrationApply).toHaveBeenCalledOnce();
+    const [{ providerId, opts }] = mocks.runMigrationApply.mock.calls[0]!;
+    expect(providerId).toBe("codex");
+    expect(opts).toMatchObject({ itemIds: ["memory:one", "memory:two"], targetAgentId: "main" });
+    expect(opts.preflightPlan.items.map((item: { id: string }) => item.id)).toEqual([
+      "memory:one",
+      "memory:two",
+      "memory:old",
+    ]);
   });
 });

@@ -39,6 +39,11 @@ dependency bumps, so the check fails while every shipped updater can still insta
 the candidate. Bytes are far from the cap but vary more with platform native
 prebuilds, so the byte budget keeps roughly 12% in reserve.
 
+The CI published-driver update cell, which runs on scheduled main validation,
+applies the same budget to the tree its published driver installed. That driver
+is newer than the frozen caps and does not refuse oversized trees itself, so this
+check is what turns main red when a change pushes the installed tree over budget.
+
 Newer updaters allow **500,000 entries / 8 GiB** and continue candidate activation
 and publication with directory identity, version, and launcher checks if a scan
 reaches those resource limits, warning that full package contents are unverified.

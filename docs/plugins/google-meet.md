@@ -52,7 +52,13 @@ command -v pactl pacat parec
 
 OpenClaw provisions an `OpenClaw Meeting Audio` null sink and matching source in that desktop user's audio session. Run the Gateway or paired node as the same user that runs Chrome.
 
-The plugin is enabled by default after installation. Add an entry only to customize it:
+Installing the plugin enables it through the normal install flow. Unconfigured
+bundled copies in source checkouts or custom distributions are off by default;
+use `openclaw plugins enable google-meet` to enable one. Existing enabled entries
+and Gateway configuration-driven auto-enable retain their activation behavior.
+For `openclaw agent --local`, enable the entry explicitly. See
+[Enable bundled meeting plugins](/plugins/meeting-plugins#enable-bundled-meeting-plugins).
+Add an entry to customize it:
 
 ```json5
 {

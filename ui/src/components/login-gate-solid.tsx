@@ -21,8 +21,8 @@ import { retryStaleChunkReloadWhenReachable } from "../app/stale-chunk-reload.ts
 import { currentThemeBranding } from "../app/theme-branding.ts";
 import { registerLoginEnglish } from "../i18n/locales/en-login.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
-import "../lib/toast-host.tsx";
 import { formatGatewayHost } from "../lib/gateway-host.ts";
+import "../lib/toast-host.tsx";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
 import { clearCompositionEnd, isComposingKeyboardEvent, recordCompositionEnd } from "../lib/ime.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
@@ -36,6 +36,7 @@ import {
   type LoginFailureStep,
   resolveLoginFailureFeedback,
 } from "./login-gate-feedback.ts";
+import { ReportIssueLink } from "./report-issue-link.tsx";
 import { ConnectCommand } from "./solid/connect-command.tsx";
 import { Icon, type IconName } from "./solid/icon.tsx";
 import { LazyViewError } from "./solid/lazy-view-error.tsx";
@@ -160,6 +161,7 @@ function FailureFooter(props: { feedback: LoginFailureFeedback }) {
       >
         {t("common.learnMore")}
       </a>
+      <ReportIssueLink />
     </footer>
   );
 }
@@ -229,21 +231,15 @@ function LoginForm(
             onKeyDown={submitOnEnter}
             placeholder={t("login.secretPlaceholder")}
           />
-          <openclaw-tooltip
-            prop:content={t(
-              props.model.showGatewaySecret ? "login.hideSecret" : "login.showSecret",
-            )}
+          <button
+            type="button"
+            class="settings-secret__toggle"
+            aria-label={t("login.toggleSecretVisibility")}
+            aria-pressed={props.model.showGatewaySecret ? "true" : "false"}
+            onClick={() => props.model.onToggleGatewaySecret()}
           >
-            <button
-              type="button"
-              class="settings-secret__toggle"
-              aria-label={t("login.toggleSecretVisibility")}
-              aria-pressed={props.model.showGatewaySecret ? "true" : "false"}
-              onClick={() => props.model.onToggleGatewaySecret()}
-            >
-              <Icon name={props.model.showGatewaySecret ? "eye" : "eyeOff"} />
-            </button>
-          </openclaw-tooltip>
+            <Icon name={props.model.showGatewaySecret ? "eye" : "eyeOff"} />
+          </button>
         </span>
         {setupCode() && (
           <p id="login-gate-secret-hint" class="muted" role="status">

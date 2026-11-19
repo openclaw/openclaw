@@ -149,6 +149,7 @@ async function recordCapturedPredecessorStop(
         assertDatabaseAccess: owner.assertDatabaseAccess,
       });
       const scope = resources;
+      await owner.run(() => scope.run(() => capture.admit("predecessor-stop")));
       result = owner.run(() =>
         withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () =>
           scope.run(() =>

@@ -155,12 +155,9 @@ it.each([true, false])("routes full publication=%s to its owning verifier", (ful
   const argsLog = join(root, "args");
   const script = `set -euo pipefail
 source "$HELPER"
-write_clawhub_runtime_state() { printf '%s\\n' '{"verifierArgs":["--skip-clawhub"]}' > "$1"; }
 node() { printf '%s\\n' "$@" > "$ARGS_LOG"; return 79; }
 plugin_npm_run_id=200
 openclaw_npm_run_id=""
-clawhub_workflow_ref=main
-bootstrap_plugins=""
 verify_published_release
 `;
   const result = fixtureIO.runProcess("bash", ["-c", script], {

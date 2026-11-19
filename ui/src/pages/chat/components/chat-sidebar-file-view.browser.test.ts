@@ -380,17 +380,17 @@ describe.runIf(browserMode)("chat file editor", () => {
   });
 
   it.each([
-    { name: "mixed CRLF first", content: "first\r\nneedle\rlast\r\nneedle", matchLines: [1, 3] },
+    { name: "mixed CRLF first", content: "first\r\nnéedle\rlast\r\nnéedle", matchLines: [1, 3] },
     {
       name: "editable mixed LF first",
-      content: "first\nneedle\rlast\r\nneedle",
+      content: "first\nnéedle\rlast\r\nnéedle",
       matchLines: [1, 3],
       editable: true,
     },
   ])("searches the displayed lines in $name files", async ({ content, matchLines, editable }) => {
     const panel = await mountFile(editable ? editableFile(content) : file(content));
     await click(panel, "Search in file");
-    await userEvent.fill(panel.querySelector<HTMLInputElement>('input[type="search"]')!, "needle");
+    await userEvent.fill(panel.querySelector<HTMLInputElement>('input[type="search"]')!, "e\u0301");
     const lineIndexes = (selector: string) => {
       const lines = Array.from(panel.querySelectorAll(".cm-line"));
       return Array.from(panel.querySelectorAll(selector), (line) => lines.indexOf(line));

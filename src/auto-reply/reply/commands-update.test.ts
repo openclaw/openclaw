@@ -180,7 +180,7 @@ it("acknowledges an accepted OCM webchat update without waiting for readback", a
   );
 
   await expectStopped(
-    "⬆️ OpenClaw is updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+    "⬆️ OpenClaw is updating.\nFor details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.",
   );
   expect(dispatch).toHaveBeenCalledTimes(1);
 });
@@ -220,7 +220,7 @@ it("reports skipped with the exact manual command", async () => {
   });
 
   await expectStopped(
-    `ℹ️ OpenClaw wasn't updated.\nOpen Settings → Updates in the Control UI for details. To continue, run \`${command}\` in your terminal.`,
+    `ℹ️ OpenClaw wasn't updated.\nOpen Settings → Updates in the OpenClaw app for details. To continue, run \`${command}\` in your terminal.`,
   );
   expect(dispatch.mock.calls[1]?.slice(0, 2)).toEqual(["update.runs.get", { runId }]);
 });
@@ -229,6 +229,6 @@ it("turns a gateway transport error into a visible failure reply", async () => {
   dispatch.mockRejectedValueOnce(new Error("gateway connection refused"));
 
   await expectStopped(
-    "⚠️ Couldn't confirm the update. Open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+    "⚠️ Couldn't confirm the update. Open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.",
   );
 });

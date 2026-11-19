@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import {
   baselineProofContinuation,
@@ -367,8 +368,7 @@ function bindingAt(anchor, suppliedBytes) {
   ]);
   if (
     ![1, 2].includes(record.version) ||
-    (record.version === 2 &&
-      (record.purpose !== "proof" || record.incomingSource || record.sourceAdmission)) ||
+    (record.version === 2 && (record.purpose !== "proof" || record.incomingSource)) ||
     (Object.hasOwn(record, "incomingSource") &&
       (record.incomingSource !== true ||
         Object.hasOwn(record, "sourceAdmission") ||
@@ -514,13 +514,13 @@ function publicationLineage(pr, head, anchor, bindingOid, retained) {
   );
 }
 
-function incomingSourceAuthority(pr, source, reviewOid, contextPath) {
-  const { prMeta } = incomingReview(pr, source, reviewOid);
+function incomingSourceAuthority(pr, source, reviewOid, contextPath, directory = ".local") {
+  const { prMeta } = incomingReview(pr, source, reviewOid, directory);
   // Preparation env files belong to the shell owner, including its quoting rules.
   execFileSync("bash", [
     "-c",
     `set -euo pipefail
-source .local/pr-meta.env
+source "$6/pr-meta.env"
 [ "$PR_NUMBER" = "$2" ] && [ "$PR_HEAD_SHA" = "$3" ] && [ "$PR_HEAD" = "$5" ] || exit 1
 source "$1"
 [ "$PR_NUMBER" = "$2" ] && [ "$PR_HEAD_SHA_BEFORE" = "$3" ] && [ "$PR_HEAD" = "$5" ] || exit 1
@@ -533,6 +533,7 @@ source "$1"
     source,
     reviewOid,
     prMeta.headRefName,
+    directory,
   ]);
 }
 
@@ -581,7 +582,31 @@ function requireProofMain(record, main) {
   git(["merge-base", "--is-ancestor", record.baselineHead, main]);
 }
 
-function validateProofSource(record) {
+function proofHostedHead(pr, source, archive) {
+  // Replay the publication owner's native receipt contract. prep.env alone
+  // cannot advance the lease once baseline installation retires that file.
+  return execFileSync(
+    "/bin/bash",
+    [
+      "-c",
+      `set -euo pipefail
+source "$1/prepare-core.sh"
+source "$1/push.sh"
+pr_git() { "\${OPENCLAW_PR_GIT:-\${GIT_EXEC:-git}}" "$@"; }
+source "$2/prep-context.env"
+resolve_baseline_publication_target "$3" "$4" "$2"
+printf '%s' "$PREP_PUBLICATION_LEASE_SHA"`,
+      "baseline-proof-publication",
+      dirname(fileURLToPath(import.meta.url)),
+      archive,
+      String(pr),
+      source,
+    ],
+    { encoding: "utf8" },
+  );
+}
+
+function validateProofSource(record, scope) {
   const proof = record.proofSource;
   exactKeys(proof, [
     "sourceTree",
@@ -600,7 +625,11 @@ function validateProofSource(record) {
       proof.expectedHostedHead,
     ].every((value) => oidPattern.test(value)) ||
     proof.sourceTree !== text("rev-parse", record.sourceHead + "^{tree}") ||
-    proof.expectedHostedHead !== record.incomingHead ||
+    (record.sourceAdmission && proof.continuation) ||
+    proof.expectedHostedHead !==
+      (record.sourceAdmission
+        ? proofHostedHead(record.pr, record.sourceHead, record.archive)
+        : record.incomingHead) ||
     hash(readRegular(join(record.archive, "baseline-source-review.json"))) !== proof.sourceReviewOid
   ) {
     throw new Error("Proof baseline source identity changed.");
@@ -617,12 +646,9 @@ function validateProofSource(record) {
     prMeta: {
       ...prMeta,
       headRefOid: record.sourceHead,
-      files: [
-        ...new Set([
-          ...prMeta.files.map((file) => file.path),
-          ...paths(record.incomingHead, record.sourceHead),
-        ]),
-      ].map((path) => ({ path })),
+      files: [...new Set([...prMeta.files.map((file) => file.path), ...scope])].map((path) => ({
+        path,
+      })),
     },
     findings,
     incoming: record.incomingHead,
@@ -660,13 +686,15 @@ function validateProofSource(record) {
     context = readRegular(join(record.archive, "prep-context.env"));
     execFileSync("bash", [
       "-c",
-      'set -eu; source "$1"; [ "$PR_NUMBER" = "$2" ] && [ "$PREP_BRANCH" = "pr-$2-prep" ] && [ "$PREP_REVIEW_MODE" = correction ] && [ "$PR_HEAD_SHA_BEFORE" = "$3" ] && [ "$PREP_INCOMING_JSON_OID" = "$4" ] && [ "$PR_HEAD" = "$5" ] && [ -z "${PREP_BASELINE_REFRESH_HEAD:-}${PREP_BASELINE_REFRESH_OID:-}" ]',
+      'set -eu; source "$1"; [ "$PR_NUMBER" = "$2" ] && [ "$PREP_BRANCH" = "pr-$2-prep" ] && [ "$PREP_REVIEW_MODE" = correction ] && [ "$PR_HEAD_SHA_BEFORE" = "$3" ] && [ "$PREP_INCOMING_JSON_OID" = "$4" ] && [ "$PR_HEAD" = "$5" ] && [ "${PREP_BASELINE_REFRESH_HEAD:-}" = "$6" ] && [ "${PREP_BASELINE_REFRESH_OID:-}" = "$7" ]',
       "proof-baseline-context",
       join(record.archive, "prep-context.env"),
       String(record.pr),
       record.incomingHead,
       record.incomingReviewOid,
       prMeta.headRefName,
+      record.sourceAdmission?.predecessorHead ?? "",
+      record.sourceAdmission?.predecessorBinding ?? "",
     ]);
     const commits = text(
       "rev-list",
@@ -689,12 +717,14 @@ function completedProof(
   continuationJson,
   main,
   coauthorsJson,
+  predecessorJson,
 ) {
   const anchor = text("rev-parse", "HEAD");
   const binding = { ...bindingAt(anchor), anchor };
   const { record } = binding;
   const request = JSON.parse(continuationJson);
   const selected = record.proofSource?.continuation;
+  const predecessor = JSON.parse(predecessorJson);
   if (
     record.version !== 2 ||
     record.pr !== pr ||
@@ -703,6 +733,10 @@ function completedProof(
     record.proofSource.sourceTree !== sourceTree ||
     record.proofSource.sourceReviewOid !== sourceReviewOid ||
     JSON.stringify(record.coauthors ?? []) !== coauthorsJson ||
+    (predecessor === null
+      ? record.sourceAdmission !== undefined
+      : record.sourceAdmission?.predecessorHead !== predecessor.head ||
+        record.sourceAdmission?.predecessorBinding !== predecessor.binding) ||
     (request === null
       ? selected !== null
       : !selected ||
@@ -756,10 +790,12 @@ function prepareProofSource(
   workflowSource,
   workflowBinding,
   continuationJson,
+  predecessorJson,
 ) {
-  if (present(bindingPath) || present(".local/review-transition.json")) {
+  const predecessor = JSON.parse(predecessorJson);
+  if (present(bindingPath) !== Boolean(predecessor) || present(".local/review-transition.json")) {
     throw new Error(
-      "Proof baseline admission requires an unbound source and no retained transition.",
+      "Proof baseline admission requires its exact predecessor selection and no retained transition.",
     );
   }
   const bytes = readRegular(reviewPath);
@@ -799,22 +835,44 @@ function prepareProofSource(
     sourceReviewOid: reviewOid,
     workflowSource,
     workflowBinding,
-    expectedHostedHead: meta.headRefOid,
+    expectedHostedHead: predecessor ? proofHostedHead(pr, source, archive) : meta.headRefOid,
     continuation,
   };
   const authority = Object.fromEntries(
     authorityPaths.map((path) => [path, present(path) ? hash(readRegular(path)) : "absent"]),
   );
-  validateProofSource({
+  // Reconstructed product and fixup scope excludes main changes already
+  // admitted by the predecessor; those changes do not belong to this review.
+  const scope = baselineRefreshCandidate({
     pr,
-    sourceHead: source,
-    baselineHead: baseline,
-    capturedMain: main,
-    archive,
-    incomingHead: meta.headRefOid,
+    incoming: meta.headRefOid,
     incomingReviewOid,
-    proofSource,
-  });
+    head: source,
+    anchor: predecessor?.head,
+    bindingOid: predecessor?.binding,
+    main,
+  }).paths;
+  validateProofSource(
+    {
+      pr,
+      sourceHead: source,
+      baselineHead: baseline,
+      capturedMain: main,
+      archive,
+      incomingHead: meta.headRefOid,
+      incomingReviewOid,
+      proofSource,
+      ...(predecessor
+        ? {
+            sourceAdmission: {
+              predecessorHead: predecessor.head,
+              predecessorBinding: predecessor.binding,
+            },
+          }
+        : {}),
+    },
+    scope,
+  );
   git(["verify-commit", source]);
   git(["merge-base", "--is-ancestor", baseline, main]);
   process.stdout.write(
@@ -827,7 +885,7 @@ function prepareProofSource(
   );
 }
 
-function retainedAuthority(binding) {
+function retainedAuthority(binding, metadataDirectory = ".local") {
   const { record, oid } = binding;
   exactKeys(record.authority, authorityPaths);
   if (!fs.lstatSync(record.archive).isDirectory()) {
@@ -854,7 +912,10 @@ function retainedAuthority(binding) {
         admission.sourceTree,
       ].every((value) => oidPattern.test(value)) ||
       admission.predecessorBinding !== record.authority[bindingPath] ||
-      admission.sourceReviewOid !== record.authority[".local/correction-review.json"] ||
+      admission.sourceReviewOid !==
+        (record.version === 2
+          ? record.proofSource.sourceReviewOid
+          : record.authority[".local/correction-review.json"]) ||
       admission.sourceTree !== text("rev-parse", `${record.sourceHead}^{tree}`)
     ) {
       throw new Error("Successor source admission identity changed.");
@@ -872,7 +933,12 @@ function retainedAuthority(binding) {
     ) {
       throw new Error("Successor predecessor authority changed.");
     }
-    prior = retainedAuthority(predecessor);
+    // A proof successor inventories the original incoming metadata beside its
+    // predecessor. Later continuation must replay that parent, not live metadata.
+    prior = retainedAuthority(
+      predecessor,
+      record.version === 2 ? record.archive : metadataDirectory,
+    );
     if (!context.equals(prior.boundContext)) {
       throw new Error("Successor source context does not retain its predecessor binding.");
     }
@@ -902,7 +968,13 @@ function retainedAuthority(binding) {
       }
     }
     if ([".local/pr-meta.json", ".local/pr-meta.env", ".local/review.json"].includes(path)) {
-      if (hash(record.version === 2 ? retained(path) : readRegular(path)) !== expected) {
+      if (
+        hash(
+          record.version === 2
+            ? retained(path)
+            : readRegular(join(metadataDirectory, path.slice(".local/".length))),
+        ) !== expected
+      ) {
         throw new Error(`Incoming authority changed: ${path}`);
       }
     } else if (expected !== "absent" && hash(retained(path)) !== expected) {
@@ -910,10 +982,14 @@ function retainedAuthority(binding) {
     }
   }
   const meta = JSON.parse(
-    record.version === 2 ? retained(".local/pr-meta.json") : readRegular(".local/pr-meta.json"),
+    record.version === 2
+      ? retained(".local/pr-meta.json")
+      : readRegular(join(metadataDirectory, "pr-meta.json")),
   );
   const incoming = JSON.parse(
-    record.version === 2 ? retained(".local/review.json") : readRegular(".local/review.json"),
+    record.version === 2
+      ? retained(".local/review.json")
+      : readRegular(join(metadataDirectory, "review.json")),
   );
   const required = incoming.findings.filter((finding) =>
     ["BLOCKER", "IMPORTANT"].includes(finding.severity),
@@ -926,13 +1002,14 @@ function retainedAuthority(binding) {
   ]);
   let proofContext;
   if (record.version === 2) {
-    proofContext = validateProofSource(record);
+    proofContext = validateProofSource(record, scope);
   } else if (record.incomingSource) {
     incomingSourceAuthority(
       record.pr,
       record.sourceHead,
       record.incomingReviewOid,
       join(record.archive, "prep-context.env"),
+      metadataDirectory,
     );
   } else {
     const review = JSON.parse(retained(".local/correction-review.json"));
@@ -1260,6 +1337,12 @@ export function baselineRefreshCandidate({
   return {
     paths: [...retained.scope, ...paths(anchor, head)],
     baselineHead: binding.record.baselineHead,
+    pendingFindings:
+      binding.record.version === 2
+        ? JSON.parse(
+            readRegular(join(binding.record.archive, "baseline-source-review.json")),
+          ).findings.filter(({ severity }) => severity === "IMPORTANT")
+        : [],
   };
 }
 
@@ -1368,7 +1451,8 @@ function create(
     if (
       predecessor.oid !== predecessorBinding ||
       authority[bindingPath] !== predecessorBinding ||
-      authority[".local/correction-review.json"] !== sourceReviewOid ||
+      (proofSource ? proofSource.sourceReviewOid : authority[".local/correction-review.json"]) !==
+        sourceReviewOid ||
       text("rev-parse", `${source}^{tree}`) !== sourceTree ||
       !readRegular(".local/prep-context.env").equals(prior.boundContext)
     ) {
@@ -1653,17 +1737,21 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
       publicationLineage(Number(args[0]), ...args.slice(1));
     } else if (command === "incoming-source-snapshot" && args.length === 3) {
       incomingSourceSnapshot(Number(args[0]), ...args.slice(1));
-    } else if (command === "completed-proof" && args.length === 8) {
+    } else if (command === "completed-proof" && args.length === 9) {
       completedProof(Number(args[0]), ...args.slice(1));
-    } else if (command === "proof-source" && args.length === 10) {
+    } else if (command === "proof-source" && args.length === 11) {
       prepareProofSource(Number(args[0]), ...args.slice(1));
-    } else if (command === "create-proof" && args.length === 9) {
+    } else if (command === "create-proof" && args.length === 10) {
+      const predecessor = JSON.parse(args[9]);
+      const proof = JSON.parse(args[7]);
       create(
         Number(args[0]),
         ...args.slice(1, 7),
+        predecessor
+          ? [predecessor.head, predecessor.binding, proof.sourceReviewOid, proof.sourceTree]
+          : undefined,
         undefined,
-        undefined,
-        JSON.parse(args[7]),
+        proof,
         JSON.parse(args[8]),
       );
     } else if (command === "create" && args.length === 7) {

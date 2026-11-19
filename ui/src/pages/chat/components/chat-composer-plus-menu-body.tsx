@@ -62,9 +62,9 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
   const entries: MenuEntry[] = [];
   const attachments = composerAttachmentMenuItems(menu);
   const finish = () => [
-    ...entries,
-    ...(entries.length && attachments.length ? [menuDivider("attachment-divider")] : []),
     ...attachments,
+    ...(entries.length && attachments.length ? [menuDivider("attachment-divider")] : []),
+    ...entries,
   ];
   if (menu.showCapabilities || menu.rootToggles?.length) {
     entries.push(...(menu.rootToggles ?? []).map(renderCapabilityToggleRow));

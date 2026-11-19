@@ -2,13 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as checkoutConfig from "../../agents/worktrees/checkout-git-config.js";
 import * as worktreeGit from "../../agents/worktrees/git.js";
+import * as execution from "../../process/exec.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { prepareLocalWorkspaceCheckout } from "./local-workspace-checkout.js";
-import * as inventory from "./workspace-sync-inventory.js";
+import * as packOwner from "./workspace-git-base.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -113,7 +114,9 @@ it.each([
       vi.stubEnv(key, "synthetic-host-only");
     }
     // Observe the process boundary without executing Windows Git on a POSIX host.
-    vi.spyOn(checkoutConfig, "withWorktreeGitConfig").mockResolvedValue("fixture.pack");
+    const pack = path.join(root, "fixture.pack");
+    await fs.writeFile(pack, "fixture");
+    vi.spyOn(checkoutConfig, "withWorktreeGitConfig").mockResolvedValue(pack);
     const git = vi.spyOn(worktreeGit, "requireGit").mockResolvedValue("");
     const origin = vi.spyOn(worktreeGit, "runGit").mockResolvedValue({
       code: 0,
@@ -124,7 +127,14 @@ it.each([
       killed: false,
       timeoutMs: 30_000,
     });
-    const stream = vi.spyOn(inventory, "runWorkspaceInventoryCommandToFile").mockResolvedValue();
+    const stream = vi.spyOn(execution, "runCommandWithTimeout").mockResolvedValue({
+      stdout: "",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
     mockProcessPlatform(platform);
     await prepareLocalWorkspaceCheckout({
       source: path.join(root, "source"),
@@ -151,7 +161,9 @@ it.each([
       expect(options?.baseEnv).toEqual(cleanEnv);
       expect(options?.env).toEqual(cleanEnv);
     }
-    const streamedEnv = stream.mock.calls[0]?.[0].baseEnv;
+    const streamedOptions = stream.mock.calls[0]?.[1];
+    assert(streamedOptions && typeof streamedOptions !== "number");
+    const streamedEnv = streamedOptions.baseEnv;
     expect(
       Object.fromEntries(
         Object.entries(streamedEnv!).filter(
@@ -259,3 +271,72 @@ it("filters URL and named-remote fetches without sharing host objects or credent
     );
   }
 });
+
+it.for(["mkdir", "index-pack"] as const)(
+  "refuses a retargeted state selection before checkout %s effects",
+  async (phase, { signal }) => {
+    const root = dirs.make("local-checkout-authority-");
+    const source = path.join(root, "source");
+    const destination = path.join(root, "workspace");
+    const state = path.join(root, "state");
+    const replacement = path.join(root, "replacement");
+    const alias = path.join(root, "state-alias");
+    await Promise.all([source, state, replacement].map((dir) => fs.mkdir(dir)));
+    await fs.symlink(state, alias, "dir");
+    const git = (...args: string[]) => worktreeGit.requireGit(source, args);
+    await git("init", "--quiet", "--template=");
+    await fs.writeFile(path.join(source, "payload"), "original");
+    await git("add", ".");
+    await git(
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit",
+      "--quiet",
+      "-m",
+      "base",
+    );
+    const baseCommit = await git("rev-parse", "HEAD");
+    const retarget = async () => {
+      await fs.unlink(alias);
+      await fs.symlink(replacement, alias, "dir");
+    };
+    let pack: string | undefined;
+    const preparePack = packOwner.prepareWorkerWorkspaceGitPack;
+    vi.spyOn(packOwner, "prepareWorkerWorkspaceGitPack").mockImplementation(async (params) => {
+      pack = await preparePack(params);
+      if (phase === "mkdir") {
+        await retarget();
+      }
+      return pack;
+    });
+    const open = fs.open;
+    vi.spyOn(fs, "open").mockImplementation(async (filename, flags, mode) => {
+      const handle = await open(filename, flags, mode);
+      if (phase === "index-pack" && filename === pack) {
+        await retarget();
+      }
+      return handle;
+    });
+    await expect(
+      prepareLocalWorkspaceCheckout({
+        source,
+        destination,
+        temporaryRoot: root,
+        baseCommit,
+        branch: "fixture",
+        signal,
+        assertCurrent: () => signal.throwIfAborted(),
+        workerAuthority: { stateOwnerPath: { path: alias, canonicalPath: state } },
+      }),
+    ).rejects.toThrow(/ownership cannot be verified/);
+    if (phase === "mkdir") {
+      await expect(fs.stat(destination)).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      expect((await worktreeGit.runGit(destination, ["cat-file", "-e", baseCommit])).code).not.toBe(
+        0,
+      );
+    }
+  },
+);

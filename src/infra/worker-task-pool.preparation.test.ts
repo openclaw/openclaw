@@ -12,6 +12,10 @@ import {
   type DiagnosticEventPayload,
 } from "./diagnostic-events.js";
 import type { WorkerPoolClass } from "./worker-pool-sizing.js";
+import {
+  DEFAULT_WORKER_PENDING_BYTES,
+  DEFAULT_WORKER_PENDING_TASKS,
+} from "./worker-task-capacity.js";
 import { createOwnedWorkerTaskPool, WorkerTaskError, WorkerTaskPool } from "./worker-task-pool.js";
 import { expectCalls, holdExit, type MockWorker } from "./worker-task-pool.owned.test-support.js";
 import type { WorkerTaskOptions, WorkerTaskPoolOptions } from "./worker-task-pool.types.js";
@@ -66,6 +70,72 @@ function createPool(options: Partial<WorkerTaskPoolOptions<string>> = {}) {
   pools.push(pool);
   return pool;
 }
+
+it.each([
+  {
+    budget: "pool pending tasks",
+    count: 1,
+    bytes: 8,
+    maxPendingTasks: 1,
+    maxPendingBytes: 32,
+    detail: "pendingTasks=1 maxPendingTasks=1",
+  },
+  {
+    budget: "pool pending bytes",
+    count: 1,
+    bytes: 8,
+    maxPendingTasks: 4,
+    maxPendingBytes: 8,
+    detail: "pendingBytes=8 maxPendingBytes=8",
+  },
+  {
+    budget: "shared compute pending tasks",
+    count: DEFAULT_WORKER_PENDING_TASKS,
+    bytes: 0,
+    detail: "pendingTasks=128 maxPendingTasks=128",
+  },
+  {
+    budget: "shared compute pending bytes",
+    count: 1,
+    bytes: DEFAULT_WORKER_PENDING_BYTES,
+    detail: "pendingBytes=268435456 maxPendingBytes=268435456",
+  },
+])("diagnoses $budget without changing admission or release", async (fixture) => {
+  const sharedCompute = fixture.budget.startsWith("shared");
+  const holder = createPool({
+    sharedCompute,
+    maxPendingTasks: fixture.maxPendingTasks ?? DEFAULT_WORKER_PENDING_TASKS + 1,
+    maxPendingBytes: fixture.maxPendingBytes,
+  });
+  const target = sharedCompute ? createPool({ sharedCompute }) : holder;
+  const gate = createDeferredCore<string>();
+  const held = Array.from({ length: fixture.count }, () =>
+    holder.run(() => gate.promise, { inputBytes: fixture.bytes }),
+  );
+  const input = vi.fn(() => "synthetic-private-payload");
+  try {
+    const error = await target.run(input, { inputBytes: 1 }).catch((failure: unknown) => failure);
+    assert(error instanceof WorkerTaskError);
+    expect(error.code).toBe("overloaded");
+    expect(error.message).toContain(`${fixture.budget}: ${fixture.detail} inputBytes=1`);
+    expect(input).not.toHaveBeenCalled();
+    expect(holder.getSnapshot().pendingTasks).toBe(fixture.count);
+    const available = vi.fn();
+    expect(error.capacityAvailable).toBeInstanceOf(Promise);
+    const notified = error.capacityAvailable?.then(available);
+    await Promise.resolve();
+    expect(available).not.toHaveBeenCalled();
+    gate.resolve("released");
+    await Promise.all(held);
+    await notified;
+    expect(available).toHaveBeenCalledOnce();
+    expect(holder.getSnapshot().pendingTasks).toBe(0);
+    await expect(target.run(input, { inputBytes: 1 })).resolves.toBe("synthetic-private-payload");
+  } finally {
+    gate.resolve("released");
+    await Promise.allSettled(held);
+  }
+});
 beforeEach(() => {
   workers.splice(0);
   cleanup.mockReset().mockResolvedValue();
@@ -764,4 +834,47 @@ it("settles a public failure before dispatching its queued successor", async () 
   expect(order).toEqual(["settled:false", "successor", "settled:false"]);
   expect(workers).toHaveLength(1);
   expect(worker.terminate).not.toHaveBeenCalled();
+});
+
+it("serves point reads on a reserved worker ahead of bulk work that fills the pool", async () => {
+  const pool = createPool({ maxPendingTasks: 2 });
+  const bulkGate = createDeferredCore<string>();
+  const order: string[] = [];
+  const bulk = [pool.run(() => bulkGate.promise, {}), pool.run(() => bulkGate.promise, {})];
+  const queuedBulk = bulk[1]!.then(() => order.push("queued bulk"));
+  try {
+    await nextTurn();
+    await expect(pool.run("late bulk", {})).rejects.toMatchObject({
+      code: "overloaded",
+      message: expect.stringContaining("worker task capacity reached"),
+    });
+    // The reserved worker is busy too: a later point read still runs before queued bulk work.
+    const accessGate = createDeferredCore<string>();
+    const first = pool.run(() => accessGate.promise, { pointRead: true, timeoutMs: 1_000 });
+    await nextTurn();
+    const second = pool.run("second access check", { pointRead: true, timeoutMs: 1_000 });
+    accessGate.resolve("first access check");
+    await expect(first).resolves.toBe("first access check");
+    await expect(second).resolves.toBe("second access check");
+    order.push("access checks");
+    expect(pool.getSnapshot()).toMatchObject({ maxWorkers: 1, activeTasks: 1, pendingTasks: 2 });
+    bulkGate.resolve("bulk");
+    await expect(Promise.all(bulk)).resolves.toEqual(["bulk", "bulk"]);
+    await queuedBulk;
+    expect(order).toEqual(["access checks", "queued bulk"]);
+  } finally {
+    bulkGate.resolve("bulk");
+    await Promise.allSettled([...bulk, queuedBulk]);
+  }
+});
+
+it("refuses point reads that would call back into the host", async () => {
+  const input = vi.fn(() => "private input");
+  await expect(
+    createPool().run(input, {
+      pointRead: true,
+      onRequest: async () => ({ input: null, timeoutMs: 1 }),
+    }),
+  ).rejects.toThrow("Point reads carry their facts and cannot call back into the host");
+  expect(input).not.toHaveBeenCalled();
 });

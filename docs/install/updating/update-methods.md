@@ -122,10 +122,15 @@ For the default profile, run these commands from the source checkout:
 
 ```bash
 openclaw gateway stop &&
+git pull --ff-only &&
+pnpm install --frozen-lockfile &&
 pnpm build &&
 openclaw doctor --fix &&
 openclaw gateway start
 ```
+
+The `git pull` and `pnpm install` steps move the checkout to new upstream source
+and its dependencies. Omit them when rebuilding local source changes only.
 
 Stop every listed sibling before building and start each one afterward. Preserve
 its profile and custom service overrides, or use the matching native service
@@ -428,9 +433,13 @@ Check `openclaw update status` for unfinished plugin upgrades and their repair
 commands. Normal CLI commands and Gateway startup do not apply deferred plugin
 migrations.
 
-OpenClaw 2026.10.10 and 2026.11.1 can report `spawnSync node ETIMEDOUT` while
+OpenClaw 2026.10.10 through 2026.11.2 can report `spawnSync node ETIMEDOUT` while
 probing SQLite headers in a large state directory, because they check every path
-in one child with a 10-second deadline. Candidate safety checks do not replace the
+in one child with a 10-second deadline. When the path list is too large to send to
+that child, the same probe instead fails with `Could not determine whether backup
+files are SQLite databases` and `Invalid string length`; warming the file cache does
+not help that form, so remove regenerable directories or go straight to the manual
+first hop described below. Candidate safety checks do not replace the
 installed updater's backup implementation: its original-state capture and update
 backup discovery still use the installed code, including its retained runtime.
 Selecting a candidate with the batched probe does not repair that running updater.
@@ -456,8 +465,9 @@ configured agent and workspace directories before replacing the package. Do not
 copy only the main file of a live SQLite database or edit installed distribution
 files to bypass the probe.
 
-The batched probe first shipped in 2026.11.5-beta.1. A release without it, including
-2026.11.1, can hit this timeout again on its own next update.
+The batched probe first shipped in 2026.11.5-beta.1 and stable 2026.11.3. A release
+without it, including 2026.11.1 and 2026.11.2, can hit this failure again on its own
+next update.
 
 On any platform, the published OpenClaw 2026.9.3 and 2026.9.4 updaters can exhaust
 their fixed 30-second baseline package-fingerprint budget before replacing any
@@ -678,7 +688,7 @@ needs attention.
 
     Before staging a replacement, a read-only snapshot check measures the known SQLite database families, including WAL, SHM, and journal files. Its non-warning diagnostic entries in `openclaw update status --json` record each family's size, largest first. Current candidate copies need the total family bytes plus the largest family and 64 MiB for metadata. Separately, the activation backup and rollback check uses the same calculation as activation: twice the total family bytes plus three times the largest family and 64 MiB at the backup destination, with total family bytes plus the largest family and 64 MiB on each separate source volume. Plugin copies and registered external databases remain unknown until the complete check after staging.
 
-    Snapshot space is checked at the existing destinations: `TMPDIR`, the capture directory beside the state directory, and the system temporary directory. Git and package updates refuse before staging when every candidate destination has known free space below the snapshot requirement, or when the activation backup or a separate rollback volume has known insufficient space. Refusals report the required and free bytes and the database families that dominate the requirement. Free space on the reported backup or source volume; changing `TMPDIR` only helps a candidate-copy shortfall. Database sizes are inventory for the temporary snapshot, not database-health or growth warnings. A successful check needs no database cleanup. If measurement fails, the updater warns that it will check again after staging. A usable candidate alternative or unknown free-space reading does not itself stop the update. This is an early check of known database sizes, not a reservation: builds, retained runtimes, plugin copies, and concurrent disk use can consume space afterward, so activation still checks its complete inventory before migration. Package and Git targets that are already current need no candidate snapshot. The updater preserves a config copy, not a full-state backup.
+    Snapshot space is checked at the existing destinations: `TMPDIR`, the capture directory beside the state directory, and the system temporary directory. Git and package updates refuse before staging when every candidate destination has known free space below the snapshot requirement, or when the activation backup or a separate rollback volume has known insufficient space. Refusals report the required and free bytes and the database families that dominate the requirement. When recovery copies from earlier updates are already retirable, an interactive update offers to remove them and checks again; other updates name their size in the refusal ([details](/cli/update/how-updates-run)). Free space on the reported backup or source volume; changing `TMPDIR` only helps a candidate-copy shortfall. Database sizes are inventory for the temporary snapshot, not database-health or growth warnings. A successful check needs no database cleanup. If measurement fails, the updater warns that it will check again after staging. A usable candidate alternative or unknown free-space reading does not itself stop the update. This is an early check of known database sizes, not a reservation: builds, retained runtimes, plugin copies, and concurrent disk use can consume space afterward, so activation still checks its complete inventory before migration. Package and Git targets that are already current need no candidate snapshot. The updater preserves a config copy, not a full-state backup.
 
     For a direct CLI update, scratch variables set by the invoking operator (`TMPDIR`, `TMP`, and `TEMP`) take precedence over managed-service defaults. For example, `TMPDIR="$HOME/.cache" openclaw update` checks that directory first and labels it `explicit-tmpdir` in snapshot capacity reports. The service still owns installation, profile, state, and runtime-path selection. This precedence fix belongs to the installed updater and takes effect for updates it performs after installation; a newer candidate cannot change an older updater's environment merge.
 

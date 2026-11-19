@@ -2,6 +2,7 @@
 import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
 import { randomUUID, X509Certificate } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
@@ -16,6 +17,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import * as execRequest from "../infra/exec-request-context.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
+import { getRpcSource } from "../sessions/session-controller.rpc-sources.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -49,11 +51,8 @@ it(
     }> = [];
     const terminals = new Map<string, ReturnType<typeof createDeferred<string>>>();
     const terminal = (runId: string) => {
-      let value = terminals.get(runId);
-      if (!value) {
-        value = createDeferred<string>();
-        terminals.set(runId, value);
-      }
+      const value = terminals.get(runId) ?? createDeferred<string>();
+      terminals.set(runId, value);
       return value.promise;
     };
     const onEvent = ({ event, payload }: { event?: string; payload?: unknown }) => {
@@ -200,11 +199,10 @@ it(
       expect(await profile(second)).toBe(aliceId);
       expect(bobId).not.toBe(aliceId);
       const sessionKey = `agent:main:abort-initiator-${randomUUID()}`;
-      const sessionId = randomUUID();
       await replaceSessionEntry(
         { agentId: "main", sessionKey },
         {
-          sessionId,
+          sessionId: randomUUID(),
           updatedAt: Date.now(),
           visibility: "shared",
           createdActor: { type: "human", source: "profile", id: aliceId },
@@ -320,6 +318,7 @@ it(
       const reconnected = await connect("alice", firstDevice);
       const sessionHold = holdNext();
       const sessionRun = await send(second);
+      const sessionSource = expectDefined(getRpcSource(sessionRun.runId), "active source");
       await wait(
         awaitGateBeforeSettlement(
           sessionHold.entered.promise,
@@ -347,8 +346,7 @@ it(
       // Retired Bob custody also exercises a foreign native owner in this same writable chat.
       const nativeRunIds = [sessionRun.runId, foreignRun.runId, bobQueued.runId];
       const children = nativeRunIds.map((runId) => {
-        const requestCustody = custody.get(runId);
-        expect(requestCustody).toBeDefined();
+        const requestCustody = expectDefined(custody.get(runId), "native request custody");
         return { runId, requestCustody, cancel: vi.fn() };
       });
       const hooks = requireActivePluginRegistry().agentHarnesses;
@@ -383,6 +381,8 @@ it(
         await reconnected.request("sessions.abort", { key: sessionKey, clearQueued: true }),
       ).toMatchObject({ status: "aborted" });
       expect(await wait(terminal(sessionRun.runId))).toBe("aborted");
+      // Stop acknowledges cancellation before raw source cleanup removes its foreign-owner fence.
+      await wait(sessionSource.input.settlement.promise);
       expect(children[0]?.cancel).toHaveBeenCalledOnce();
       expect(children[1]?.cancel).not.toHaveBeenCalled();
       expect(children[2]?.cancel).not.toHaveBeenCalled();

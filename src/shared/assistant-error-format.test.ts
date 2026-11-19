@@ -102,7 +102,7 @@ it("extracts the final upstream rejection from a proxy failure envelope", () => 
 it("does not return raw HTML after an HTTP reason phrase", () => {
   const raw = "HTTP 502 Bad Gateway\n\n<!doctype html><html><body><h1>502</h1></body></html>";
   expect(formatError(raw)).toBe(
-    "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+    "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
   );
 });
 

@@ -90,7 +90,7 @@ def validate_skill(skill_path):
 
     try:
         content = skill_md.read_text(encoding="utf-8-sig")
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         return False, f"Could not read SKILL.md: {e}"
 
     frontmatter_text = _extract_frontmatter(content)
@@ -128,7 +128,7 @@ def validate_skill(skill_path):
     unexpected_keys = set(frontmatter.keys()) - allowed_properties
     if unexpected_keys:
         allowed = ", ".join(sorted(allowed_properties))
-        unexpected = ", ".join(sorted(unexpected_keys))
+        unexpected = ", ".join(sorted(str(key) for key in unexpected_keys))
         return (
             False,
             f"Unexpected key(s) in SKILL.md frontmatter: {unexpected}. Allowed properties are: {allowed}",

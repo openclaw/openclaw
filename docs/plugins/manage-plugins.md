@@ -87,9 +87,9 @@ pauses new plugin calls, and waits up to 60 seconds for in-flight work while the
 previous generation stays active. If the work does not finish, the reload fails
 once, resumes calls, and leaves services and channels running. Otherwise, it stops
 services and channels, drains remaining work, and completes shutdown and disposal
-before registering the replacement. Other plugin instances remain active. If
-registration or pre-publication activation fails, the Gateway attempts
-a fresh registration using the captured previous code and config automatically.
+before registering the replacement. Other plugin instances remain active.
+Once services and channels begin stopping, a failure before publication can trigger
+an automatic attempt to register the captured previous code with its previous config.
 Recovery restores the active runtime; it does not rewrite externally edited config files.
 If cleanup or recovery also fails, the error reports that recovery could not
 complete. Failures after publication remain visible on the accepted generation.
@@ -204,7 +204,14 @@ Doctor uses the same source checks and review before installing or adopting a re
 noninteractive repair, review and install the plugin with the explicit flag
 above, then rerun doctor.
 
-Chat installs and enablement use the same capability consent. When consent is
+You can also ask your regular agent to install a plugin in Telegram or another
+messaging channel. The `openclaw` setup tool keeps non-ClawHub source review and
+any required capability approval in that chat, then uses the Gateway's plugin
+lifecycle to install and apply the change. This does not require enabling the
+`/plugins` command. Conversation-access grants are separate config changes;
+accepting declared capabilities does not grant conversation access.
+
+The optional `/plugins` chat commands use the same capability consent. When consent is
 required, review the capabilities in the reply, then rerun the same command
 with `--accept-capabilities`:
 

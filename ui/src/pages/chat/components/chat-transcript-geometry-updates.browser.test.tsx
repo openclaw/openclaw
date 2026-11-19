@@ -278,20 +278,15 @@ it.each([30, "estimate", "oversized"] as const)(
       await Promise.resolve();
       flush();
       const predecessor = requireElement(host, '.chat-virtual-row[data-index="2"]');
-      const item = expectDefined(
-        virtualizer.getVirtualItems().find((row) => row.index === 2),
-        "measuring predecessor slot",
-      );
-      const sizer = requireElement(host, ".chat-virtual-sizer");
-      const expectedTop =
-        sizer.getBoundingClientRect().top + item.start - virtualizer.options.scrollMargin;
-      expect(Math.abs(predecessor.getBoundingClientRect().top - expectedTop)).toBeLessThanOrEqual(
-        1,
-      );
+      const flow = requireElement(host, ".chat-virtual-row:not([data-prepared-row])");
+      // It hangs at its real height directly above the flow, where it will land.
+      expect(
+        Math.abs(predecessor.getBoundingClientRect().bottom - flow.getBoundingClientRect().top),
+      ).toBeLessThanOrEqual(1);
       expect(predecessor.getBoundingClientRect().height).toBe(height);
       expect(getComputedStyle(predecessor).opacity).toBe("1");
       expect(getComputedStyle(predecessor).position).toBe("absolute");
-      expect(getComputedStyle(predecessor).clip).toBe(`rect(0px, auto, ${item.size}px, auto)`);
+      expect(getComputedStyle(predecessor).clip).toBe("auto");
       expect(predecessor.hasAttribute("inert")).toBe(true);
       expect(requireElement(host, '.chat-virtual-row[data-index="4"]')).toBe(retained);
       expect(painted).not.toHaveBeenCalled();
@@ -307,11 +302,15 @@ it.each([30, "estimate", "oversized"] as const)(
   },
 );
 
-it("keeps ordinary incoming rows in normal flow", async () => {
+it("admits an incoming row above the reader once it is measured", async () => {
   const { host, viewport } = await mountPane(false, 120, undefined, 500);
   scrollReader(viewport, 499);
   await Promise.resolve();
   flush();
+  expect(
+    requireElement(host, '.chat-virtual-row[data-index="2"]').hasAttribute("data-prepared-row"),
+  ).toBe(true);
+  await settleLayout();
   expect(
     requireElement(host, '.chat-virtual-row[data-index="2"]').hasAttribute("data-prepared-row"),
   ).toBe(false);
@@ -333,7 +332,9 @@ it.each([
   const slot = document.body.appendChild(document.createElement("div"));
   const viewport = slot.appendChild(document.createElement("div"));
   viewport.style.cssText = "width: 600px; height: 400px; overflow: auto; overflow-anchor: none";
-  const content = viewport.appendChild(document.createElement("div"));
+  const column = viewport.appendChild(document.createElement("div"));
+  column.className = "chat-thread-content";
+  const content = column.appendChild(document.createElement("div"));
   const changed = vi.fn();
   const layout = new TranscriptLayoutOwner(changed);
   layout.connect(viewport);
@@ -520,7 +521,7 @@ it.each([120, 360, 1200])(
   },
 );
 
-it("parks retained rows without layout and restores their resized geometry and nested scroll", async () => {
+it("parks retained rows at zero size and restores their resized geometry and nested scroll", async () => {
   const prose = "A retained paragraph wraps to the current conversation width. ".repeat(20);
   const source = [prose, "```text", "wide".repeat(160), "```"].join("\n\n");
   // Only split completed runs retain DOM. The ordinary tail crosses the
@@ -567,7 +568,7 @@ it("parks retained rows without layout and restores their resized geometry and n
   await settleLayout();
   // Other fixture rows have fixed heights. This row uses its real Markdown
   // height so the narrower pane must produce a new browser measurement.
-  row.style.height = "auto";
+  row.style.setProperty("--geometry-row-height", "auto");
   await settleLayout();
   const key = expectDefined(row.dataset.virtualRowKey, "retained row key");
   const code = requireElement(row, ".code-block-viewport");
@@ -598,9 +599,9 @@ it("parks retained rows without layout and restores their resized geometry and n
     await expect.poll(() => row.hasAttribute("data-prepared-row")).toBe(true);
     await settleLayout();
     expect(row.isConnected).toBe(true);
-    // Parked DOM must create no layout box, while its cached height still
-    // contributes to the native scroll extent after the real zero-size receipt.
-    expect(row.getClientRects()).toHaveLength(0);
+    // Parked DOM retains its cached extent even when WebKit releases its box.
+    expect(row.getClientRects().length).toBe(CSS.supports("-webkit-nbsp-mode", "space") ? 0 : 1);
+    expect(row.getBoundingClientRect().height).toBe(0);
     expect(deliveredHeights).toContain(0);
     expect(virtualizer.itemSizeCache.get(key)).toBeCloseTo(height, 1);
     expect(Math.abs(viewport.scrollHeight - extent)).toBeLessThanOrEqual(1);
@@ -608,7 +609,7 @@ it("parks retained rows without layout and restores their resized geometry and n
     host.style.width = "480px";
     session.syncViewportGeometry();
     await settleLayout();
-    expect(row.getClientRects()).toHaveLength(0);
+    expect(row.getBoundingClientRect().height).toBe(0);
     expect(virtualizer.itemSizeCache.get(key)).toBeCloseTo(height, 1);
     expect(Math.abs(viewport.scrollHeight - extent)).toBeLessThanOrEqual(1);
 

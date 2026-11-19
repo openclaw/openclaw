@@ -282,6 +282,34 @@ describe("native CLI login owner", () => {
     });
   });
 
+  it("keeps a long session's /new boundary bound to its native login", async () => {
+    const { f, backend, prepared } = await setupNative(true);
+    const appendAsync = (content: string) =>
+      f.manager().appendMessageAsync({ role: "user", content, timestamp: 2 });
+    for (let index = 0; index < 120; index += 1) {
+      await appendAsync(`pre-reset history ${index}`);
+    }
+    f.manager().appendResetBoundary("reset");
+    await f.run(
+      undefined,
+      async (allowed) => {
+        expect(allowed).toBe(true);
+        await appendAsync("post-reset canary");
+      },
+      native,
+      undefined,
+      prepared,
+    );
+    expect((await prepareWith(f, prepared)).seeded).toContain("post-reset canary");
+    // Reassigned, then revoked, then restored: the saved text never reaches the CLI input again.
+    for (const account of ["uuid:account-b", undefined, "uuid:account-a"]) {
+      loginIn(backend, account);
+      const { allowed, seeded } = await prepareWith(f, prepared);
+      expect(allowed).toBe(false);
+      expect(seeded ?? "").not.toContain("canary");
+    }
+  });
+
   it("refuses private input at the readable boundary once the login is reassigned", async () => {
     const { f, backend } = await setupNative(true);
     await withWriter(f, "boundary-native-readable", backendUsing(backend), async (writer) => {

@@ -1,2 +1,0 @@
-# Regression coverage for unsupported Git in update inspections (issue #194191).
-51

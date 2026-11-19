@@ -1,9 +1,11 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
 import { readSkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../../src/shared/transcript-only-openclaw-assistant.js";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { registerChatSystemNoticeEnglish } from "../../i18n/locales/en-chat-system-notice.ts";
 import type { ChatItem, NormalizedMessage } from "../../lib/chat/chat-types.ts";
 import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
@@ -17,6 +19,7 @@ import {
 } from "./system-notice-kinds.ts";
 
 registerChatSessionEnglish();
+registerChatSystemNoticeEnglish();
 
 type SubmittedModel = { provider: string; model: string };
 
@@ -98,7 +101,7 @@ export function projectChatSystemNotice(
     status: PendingInputStatus;
     key: string;
     timestamp: number;
-    cancelledByUser?: true;
+    endCause?: ChatPendingInputsPage["items"][number]["endCause"];
     retired?: NonNullable<Extract<ChatItem, { kind: "notice" }>["retiredPendingInput"]>;
   },
 ): ChatItem[] {
@@ -121,14 +124,25 @@ export function projectChatSystemNotice(
   }
   const provenance = asRecord(raw?.provenance);
   const agentUpdate = provenance?.kind === "inter_session";
+  const cancelled = pending?.status === "cancelled";
+  const causeKey =
+    cancelled &&
+    pending.endCause &&
+    Object.hasOwn(
+      registerChatSystemNoticeEnglish.catalog.chat.pendingInputs.endCause,
+      pending.endCause,
+    )
+      ? `chat.pendingInputs.endCause.${pending.endCause}`
+      : undefined;
   const pendingText =
-    pending?.status === "cancelled" && pending.cancelledByUser
-      ? undefined
-      : pending && agentUpdate && pending.status === "cancelled"
-        ? t(`chat.pendingInputs.agentUpdate.${pending.status}`)
-        : pending && pending.status !== "queued"
-          ? t(`chat.pendingInputs.${pending.status}`)
-          : undefined;
+    pending && pending.status !== "queued" && !(cancelled && pending.endCause === "user-stop")
+      ? t(
+          causeKey ??
+            (agentUpdate && cancelled
+              ? "chat.pendingInputs.agentUpdate.cancelled"
+              : `chat.pendingInputs.${pending.status}`),
+        )
+      : undefined;
   const pendingItems: ChatItem[] =
     pending && pendingText
       ? [
@@ -209,7 +223,11 @@ export function projectChatSystemNotice(
     return pendingItems;
   }
   const summary = projectSystemNoticeSummary({
-    label: noticeKind ? t(noticeKind.labelKey, { plugin: pluginName ?? "" }) : t("common.system"),
+    label: !noticeKind
+      ? t("common.system")
+      : noticeKind.labelKey
+        ? t(noticeKind.labelKey)
+        : (pluginName ?? ""),
     text,
     detailed: Boolean(noticeKind?.collapsedBody),
     statusOnly: Boolean(summaryKey),
@@ -218,7 +236,7 @@ export function projectChatSystemNotice(
     {
       kind: "notice",
       key: item.key,
-      icon: "cpu",
+      icon: noticeKind?.icon ?? "cpu",
       ...(pending ? {} : { systemEvent: "info" as const }),
       label: summary.label,
       ...(noticeKind?.startsTurn === false ? {} : { startsTurn: true }),

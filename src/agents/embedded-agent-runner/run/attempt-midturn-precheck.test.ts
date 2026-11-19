@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../../../../packages/ai/src/host.js";
 import { createOpenAICompletionsTransportStreamFn } from "../../../../packages/ai/src/transports/openai-completions-transport.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
@@ -23,6 +23,15 @@ import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { createBaseInput } from "./attempt-prompt-submit.test-support.js";
 import { installEmbeddedAttemptContextGuards } from "./attempt-setup.js";
 
+// Admission cases change the system prompt or tool definitions between requests on purpose;
+// they exercise request admission, not the session prefix invariant.
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_PROMPT_CACHE_ASSERT", "0");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 const { createFixture } = await vi.hoisted(
   async () => await import("./attempt-execution-phase.test-support.js"),
 );
@@ -45,9 +54,77 @@ type AdmissionOptions = Partial<{
   compatibleBudget: boolean;
   strictReplay: boolean;
   responseSchema: boolean;
+  boundarySafe: boolean;
+  pressure: "maintenance" | "overflow";
 }>;
 
 describe("provider request admission", () => {
+  it("compacts instead of trimming already-sent results at the request guard", async () => {
+    const fixture = await createFixture({ exerciseTerminalMerges: false });
+    const model = { ...testModel, contextWindow: 40_000 };
+    const settingsManager = SettingsManager.inMemory({ compaction: { reserveTokens: 0 } });
+    const { session, sessionManager } = await createTestSession({ model, settingsManager });
+    const call = { type: "toolCall" as const, id: "read-history", name: "read", arguments: {} };
+    await sessionManager.appendMessageAsync(createAssistant(model, [call], "toolUse", 0));
+    await sessionManager.appendMessageAsync({
+      role: "toolResult",
+      toolCallId: call.id,
+      toolName: call.name,
+      content: [{ type: "text", text: "alpha beta gamma delta epsilon ".repeat(4_000) }],
+      isError: false,
+      timestamp: 1,
+    });
+    await sessionManager.appendMessageAsync(
+      createAssistant(model, [{ type: "text", text: "Report received." }], "stop", 0),
+    );
+    Object.assign(fixture.input.attempt, {
+      contextTokenBudget: model.contextWindow,
+      model,
+      modelId: model.id,
+      provider: model.provider,
+      sessionId: session.sessionId,
+    });
+    const guards = installEmbeddedAttemptContextGuards({
+      activeContextEngine: undefined,
+      activeSession: session,
+      agentDir: "/fixture/agent",
+      attempt: fixture.input.attempt,
+      computerContextEpoch: { value: 0 },
+      dropThinkingBlocksForEstimate: false,
+      effectiveCwd: "/fixture",
+      effectiveFsWorkspaceOnly: true,
+      effectiveWorkspace: "/fixture",
+      getPrePromptMessageCount: () => 0,
+      getPromptCache: () => undefined,
+      getPromptCacheRetention: () => "none",
+      getCompactionReplayEnabled: () => false,
+      getServerToolClearingEnabled: () => false,
+      toolResultPromptProjectionState: createToolResultPromptProjectionState(),
+      getSystemPrompt: () => session.agent.state.systemPrompt,
+      isOpenAIResponsesApi: false,
+      repairToolUseResultPairing: false,
+      sessionAgentId: "main",
+      sessionManager,
+      settingsManager,
+    });
+    onTestFinished(() => guards.remove());
+    const messages = await session.agent.convertToLlm(
+      sessionManager.buildSessionContext().messages,
+    );
+    expect(messages.map(({ role }) => role)).toEqual(["assistant", "toolResult", "assistant"]);
+    await expect(
+      guards.checkMidTurnPrecheck({
+        context: { messages },
+        previousRequest: { requestIndex: 1, messageCount: messages.length, contextTokens: 41_000 },
+      }),
+    ).rejects.toBeInstanceOf(Error);
+    expect(guards.takePendingMidTurnPrecheckRequest()).toMatchObject({
+      pressure: "overflow",
+      route: "compact_only",
+      toolResultReducibleChars: 0,
+    });
+  });
+
   const visible = { completionTokens: 5_000, assistantChars: 20_000 };
   const largerVisible = { completionTokens: 6_000, assistantChars: 24_000 };
   type AdmissionCase = {
@@ -64,21 +141,23 @@ describe("provider request admission", () => {
     ${"unchanged schema"}                  | ${24_000} | ${100}     | ${16_000} | ${true}  | ${{ compatibleBudget: true, responseSchema: true }}
     ${"oversized engine assembly"}         | ${15_000} | ${12_000}  | ${16_000} | ${false} | ${{ ownsCompaction: true, oversizedAssembly: true }}
     ${"exaggerated engine estimate"}       | ${15_000} | ${12_000}  | ${16_000} | ${true}  | ${{ ownsCompaction: true }}
-    ${"oversized engine continuation"}     | ${23_000} | ${12_000}  | ${16_000} | ${false} | ${{ ownsCompaction: true }}
+    ${"oversized engine continuation"}     | ${23_000} | ${12_000}  | ${16_000} | ${false} | ${{ ownsCompaction: true, boundarySafe: true, pressure: "maintenance" }}
     ${"unchanged measured prefix"}         | ${15_000} | ${12_000}  | ${16_000} | ${true}  | ${{}}
     ${"visible completion"}                | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${largerVisible}
     ${"system tweak"}                      | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...visible, tweakSystem: true }}
     ${"tool definitions tweak"}            | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...visible, tweakTools: true }}
     ${"split completion + system tweak"}   | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...visible, asyncFragments: true, tweakSystem: true }}
     ${"late response identity"}            | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...largerVisible, asyncFragments: true }}
-    ${"synthetic assistant tail"}          | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ syntheticAssistant: true }}
+    ${"synthetic assistant tail"}          | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ syntheticAssistant: true, boundarySafe: true, pressure: "maintenance" }}
     ${"opaque reasoning"}                  | ${15_000} | ${12_000}  | ${16_000} | ${false} | ${{ opaque: true, completionTokens: 16_000 }}
-    ${"opaque reasoning + system tweak"}   | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ opaque: true, completionTokens: 16_000, tweakSystem: true }}
+    ${"opaque reasoning + system tweak"}   | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ opaque: true, completionTokens: 16_000, tweakSystem: true, boundarySafe: true, pressure: "maintenance" }}
     ${"projected measured tail"}           | ${14_000} | ${100_000} | ${16_000} | ${true}  | ${{}}
     ${"projected unavailable usage"}       | ${0}      | ${100_000} | ${2_000}  | ${true}  | ${{}}
-    ${"oversized measured tail"}           | ${23_000} | ${12_000}  | ${16_000} | ${false} | ${{}}
+    ${"oversized measured tail"}           | ${23_000} | ${12_000}  | ${16_000} | ${false} | ${{ boundarySafe: true, pressure: "maintenance" }}
     ${"oversized prompt without usage"}    | ${0}      | ${12_000}  | ${16_000} | ${false} | ${{ growSystem: true }}
     ${"changed system invalidates prefix"} | ${1_000}  | ${12_000}  | ${16_000} | ${false} | ${{ growSystem: true }}
+    ${"soft pressure, open tool batch"}    | ${23_000} | ${12_000}  | ${16_000} | ${true}  | ${{ boundarySafe: false }}
+    ${"over window, open tool batch"}      | ${33_000} | ${2_000}   | ${16_000} | ${false} | ${{ boundarySafe: false, pressure: "overflow" }}
   `(
     "admits only fitting provider requests: $name",
     async ({
@@ -100,6 +179,8 @@ describe("provider request admission", () => {
         compatibleBudget,
         strictReplay,
         responseSchema,
+        boundarySafe,
+        pressure,
       },
     }: AdmissionCase) => {
       const fixture = await createFixture({ exerciseTerminalMerges: false });
@@ -189,7 +270,20 @@ describe("provider request admission", () => {
             ingest: async () => ({ ingested: true }),
             assemble: async ({ messages }) => ({
               messages: oversizedAssembly
-                ? [{ role: "user", content: "history ".repeat(40_000), timestamp: 1 }, ...messages]
+                ? [
+                    { role: "user", content: "history ".repeat(40_000), timestamp: 1 },
+                    ...Array.from({ length: 6 }, (_, index) => ({
+                      role: "toolResult" as const,
+                      toolName: "read",
+                      toolCallId: `engine-only-${index}`,
+                      content: [
+                        { type: "text" as const, text: "synthetic projection ".repeat(600) },
+                      ],
+                      isError: false,
+                      timestamp: 1,
+                    })),
+                    ...messages,
+                  ]
                 : messages,
               estimatedTokens: oversizedAssembly ? 1 : 1_000_000,
             }),
@@ -375,6 +469,7 @@ describe("provider request admission", () => {
       }
       const streamGuards = installEmbeddedAttemptStreamGuards(fixture.input, {
         onRejectedProviderReplayRepaired: vi.fn(),
+        isToolBoundarySafe: () => boundarySafe === true,
         onIdleTimeout: vi.fn(),
         diagnosticOwner: createDiagnosticEmbeddedRunOwner({
           runId: fixture.input.attempt.runId,
@@ -422,6 +517,15 @@ describe("provider request admission", () => {
           oversizedAssembly ? 0 : fits ? 2 : 1,
         );
         expect(pendingPrecheck !== null).toBe(!fits);
+        if (pressure) {
+          expect(pendingPrecheck?.pressure).toBe(pressure);
+        }
+        if (oversizedAssembly) {
+          expect(pendingPrecheck).toMatchObject({
+            route: "compact_only",
+            toolResultReducibleChars: 0,
+          });
+        }
         if (compatibleBudget) {
           if (responseSchema) {
             expect(wireRequests[0]?.response_format).toMatchObject({ type: "json_schema" });

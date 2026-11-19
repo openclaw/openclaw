@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { createChatProps, renderChatPropsInto } from "./chat-view.test-helpers.ts";
@@ -16,7 +17,7 @@ afterEach(() => {
 
 it.each([false, true])(
   "retains the pending transcript across pane publications (cached rows: %s)",
-  (cached) => {
+  async (cached) => {
     const messages = [{ role: "assistant", content: "Saved conversation", timestamp: 1 }];
     const props = createChatProps({
       loading: true,
@@ -25,12 +26,12 @@ it.each([false, true])(
       mobileComposer: false,
     });
     const container = createComposerContainer();
-    const observer = new MutationObserver(() => {});
+    const observer = new MutationObserver(countMounts);
     observer.observe(container, { childList: true, subtree: true });
     onTestFinished(() => observer.disconnect());
     const loaders = new Set<Element>();
-    const countMounts = () => {
-      for (const mutation of observer.takeRecords()) {
+    function countMounts(records = observer.takeRecords()) {
+      for (const mutation of records) {
         for (const node of mutation.addedNodes) {
           if (node instanceof Element) {
             if (node.matches(".lazy-view-state--loading")) {
@@ -42,8 +43,13 @@ it.each([false, true])(
           }
         }
       }
-    };
+    }
     renderChatPropsInto(container, props);
+    await waitForSolid(() =>
+      expect(
+        container.querySelector(cached ? ".chat-virtual-row" : ".lazy-view-state--loading"),
+      ).not.toBeNull(),
+    );
     countMounts();
     const thread = container.querySelector(".chat-thread");
     const skeleton = container.querySelector(".lazy-view-state--loading");

@@ -61,6 +61,7 @@ import {
   resolveMessageActionTurnAuthorization,
   revokeMessageActionTurnCapability,
 } from "../message-action-turn-capability.js";
+import * as repositoryDispatch from "../repository-dispatch.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { gatewayProfile } from "../server/client-fixtures.test-support.js";
@@ -154,6 +155,7 @@ const admissionScenarios = [
   "narrow-first-send",
   "dashboard",
   "dashboard-writer",
+  "dashboard-handed-off",
   "dashboard-credential-revoked",
   "dashboard-member-revoked",
   "dashboard-unattested",
@@ -167,7 +169,10 @@ it.each(admissionScenarios)(
     const directDashboard = dashboard && scenario !== "dashboard-internal";
     const dashboardReadAllowed = directDashboard && scenario !== "dashboard-unattested";
     const membershipRequired = scenario === "dashboard-member-revoked";
-    const createsSession = (dashboardReadAllowed && !membershipRequired) || scenario === "queued";
+    const handedOff = scenario === "dashboard-handed-off";
+    const writer = scenario === "dashboard-writer" || handedOff;
+    const createsSession =
+      (dashboardReadAllowed && !membershipRequired && !handedOff) || scenario === "queued";
     const closure =
       scenario === "narrow-first-send"
         ? "rotated"
@@ -180,7 +185,11 @@ it.each(admissionScenarios)(
       await loadOrCreateProcessDeviceIdentityAsync();
       setRuntimeConfigSnapshot({});
       const runId = "retained-preparation";
-      const sessionKey = scenario === "dashboard" ? "agent:main:main" : "agent:main:binding";
+      const sessionKey = handedOff
+        ? "agent:main:dashboard:binding"
+        : scenario === "dashboard"
+          ? "agent:main:main"
+          : "agent:main:binding";
       const scope = { agentId: "main", sessionKey };
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:unrelated" },
@@ -201,6 +210,17 @@ it.each(admissionScenarios)(
         : profile;
       const initialSessionId = membershipRequired ? "member-session" : runId;
       const createdActor = { type: "human", source: "profile", id: owner.id } as const;
+      if (handedOff) {
+        await upsertSessionEntryCore(scope, {
+          sessionId: initialSessionId,
+          updatedAt: Date.now(),
+          createdActor,
+          createdVia: "spawn",
+          spawnedBy: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+          spawnDepth: 1,
+        });
+      }
       if (membershipRequired) {
         await upsertSessionEntryCore(scope, {
           sessionId: initialSessionId,
@@ -217,11 +237,11 @@ it.each(admissionScenarios)(
         signal: connection.signal,
         dashboard,
         attested: scenario !== "dashboard-unattested",
-        admin: scenario !== "dashboard-writer" && !membershipRequired,
+        admin: !writer && !membershipRequired,
         scopes:
           scenario === "narrow-first-send"
             ? ["operator.sessions.write"]
-            : scenario === "dashboard-writer" || membershipRequired
+            : writer || membershipRequired
               ? ["operator.write"]
               : dashboard
                 ? ["operator.admin"]
@@ -235,6 +255,7 @@ it.each(admissionScenarios)(
         hold: holdDispatch,
       } = holdProjectedChatDispatch();
       const context = createBindingContext();
+      const repositoryScope = vi.spyOn(repositoryDispatch, "withRepositoryChatDispatch");
       let owned: Parameters<typeof chatDispatch.startChatDispatch>[0] | undefined;
       let reply: ReturnType<typeof createReplyOperation> | undefined;
       let options: DispatchOptions | undefined;
@@ -273,6 +294,7 @@ it.each(admissionScenarios)(
         options = await entered.promise;
         const dashboardRead = options.replyOptions?.dashboardReadAdmission;
         expect(Boolean(dashboardRead)).toBe(dashboardReadAllowed);
+        expect(repositoryScope).toHaveBeenCalledTimes(dashboardReadAllowed ? 1 : 0);
         owned = observeDispatch.mock.calls.at(-1)?.[0];
         expect(Boolean(readUserTurnPromptReactionSource(owned?.userTurn.recorder))).toBe(
           dashboardReadAllowed,
@@ -432,7 +454,11 @@ it.each(admissionScenarios)(
               message: { role: "user", content: "Keep this user turn in its session" },
             });
           } else if (closure === "released") {
-            await expect(userTurn.persist()).rejects.toThrow("Chat input actor admission ended");
+            await expect(userTurn.persist()).rejects.toThrow(
+              handedOff
+                ? "Chat admission ended or was cancelled"
+                : "Chat input actor admission ended",
+            );
           } else {
             await userTurn.persist();
           }
@@ -462,6 +488,7 @@ it.each(admissionScenarios)(
         releaseAuthorization?.();
         holdDispatch.mockRestore();
         observeDispatch.mockRestore();
+        repositoryScope.mockRestore();
         clone.mockRestore();
       }
     });

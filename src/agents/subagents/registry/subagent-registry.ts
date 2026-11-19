@@ -1,6 +1,5 @@
 import { getRuntimeConfig } from "../../../config/config.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
-import { registerSystemEventStoreOwner } from "../../../infra/system-event-ownership.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -22,11 +21,11 @@ import {
   loadSubagentAnnounceModule,
   loadSubagentBrowserCleanupModule,
 } from "./subagent-registry-deps.js";
+import { stopEndedSubagentProcesses } from "./subagent-registry-execution-cleanup.js";
 import {
   ANNOUNCE_EXPIRY_MS,
   GATEWAY_ADMISSION_RETRY_DELAY_MS,
 } from "./subagent-registry-helpers.js";
-import { suspendReplacedStoreNotifications } from "./subagent-registry-lifecycle-cleanup.js";
 import { subagentRegistryLog as log } from "./subagent-registry-lifecycle-log.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
@@ -38,6 +37,7 @@ import {
 } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { createSubagentRegistryPublicApi } from "./subagent-registry-public-api.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
@@ -154,17 +154,6 @@ const {
   settleRequesterTurnAfterSessionSpawns,
   startSubagentAnnounceCleanupFlow,
 } = subagentLifecycleController;
-function suspendReplacedNotificationsInBackground(): void {
-  void suspendReplacedStoreNotifications(subagentLifecycleController.options).catch(
-    (error: unknown) => {
-      log.warn("subagent notification retirement is deferred", { error });
-    },
-  );
-}
-registerSystemEventStoreOwner(
-  Symbol.for("openclaw.subagentNotifications"),
-  suspendReplacedNotificationsInBackground,
-);
 
 export function resumeSubagentRun(runId: string) {
   if (!runId) {
@@ -570,8 +559,7 @@ const publicApi = createSubagentRegistryPublicApi({
 
 export const getSubagentRunByRunId = publicApi.getSubagentRunByRunId;
 export const prepareSubagentRunsByRunIds = publicApi.prepareSubagentRunsByRunIds;
-export const listCollectorRunsForRequesterIncarnation =
-  publicApi.listCollectorRunsForRequesterIncarnation;
+export const listCollectorRunsForRequester = publicApi.listCollectorRunsForRequester;
 export const completeCollectorLaunchCleanup = publicApi.completeCollectorLaunchCleanup;
 export const recordSwarmStructuredOutput = publicApi.recordSwarmStructuredOutput;
 export const listSwarmRunsForGroup = publicApi.listSwarmRunsForGroup;
@@ -638,3 +626,5 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 
 // Register the subagent maintenance preserve-key provider as a module side effect.
 import "./subagent-registry-maintenance.js";
+
+subscribeSubagentRunChanges("persistence", stopEndedSubagentProcesses);

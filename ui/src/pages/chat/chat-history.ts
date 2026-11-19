@@ -28,7 +28,8 @@ import { readChatHistoryCursor, readChatHistoryState } from "./session-message-c
 
 type LoadChatHistoryOptions = {
   deferBranches?: boolean;
-  supersedeInFlight?: boolean;
+  /** `append`: a transcript append that the first publication may precede. */
+  supersedeInFlight?: boolean | "append";
   startup?: boolean;
 };
 
@@ -121,20 +122,30 @@ export async function loadChatHistory(
     if (inFlight.refresh) {
       inFlight.refresh.startup ||= startup;
       inFlight.refresh.deferBranches &&= opts.deferBranches === true;
+      // A queued append refresh may have kept the read; stronger changes retire it.
+      if (opts.supersedeInFlight === true) {
+        inFlight.refresh.version = ++requests.historyVersion;
+      }
       return inFlight.refresh.promise;
     }
-    if (opts.supersedeInFlight !== true && inFlight.key === requestKey) {
+    if (!opts.supersedeInFlight && inFlight.key === requestKey) {
       return inFlight.promise;
     }
-    const version = ++requests.historyVersion;
+    // An append cannot be erased before any transcript is shown, and the refresh
+    // still follows. Retiring the first read anyway lets a busy run's appends keep
+    // the chat loading forever.
+    if (opts.supersedeInFlight !== "append" || requests.acceptedHistory) {
+      requests.historyVersion++;
+    }
     const refresh = {
       startup: startup || inFlight.startup,
       deferBranches: opts.deferBranches === true,
+      version: requests.historyVersion,
       promise: Promise.resolve<ObservedChatHistoryResult | undefined>(undefined),
     };
     refresh.promise = inFlight.request.then(() => {
       if (
-        requests.historyVersion !== version ||
+        requests.historyVersion !== refresh.version ||
         !connectionIsCurrent() ||
         state.sessionKey !== sessionKey ||
         !agentIsCurrent()

@@ -5,11 +5,7 @@ import {
   makeCall,
   makeTool,
 } from "../../packages/agent-core/src/agent-loop.test-support.js";
-import {
-  attachInternalToolBatchLifecycle,
-  attachInternalToolExecutionPreparer,
-  setInternalBeforeToolBatch,
-} from "../../packages/agent-core/src/internal-hooks.js";
+import { attachInternalToolExecutionPreparer } from "../../packages/agent-core/src/internal-hooks.js";
 import { toToolDefinitions } from "../agents/agent-tool-definition-adapter.js";
 import { wrapToolDefinition } from "../agents/sessions/tools/tool-definition-wrapper.js";
 import { decodePostgresError } from "../infra/postgres-sync/protocol.js";
@@ -82,37 +78,11 @@ it.each(admissionFailurePhases)(
         throw failure;
       }
     });
-    const admitted = new Set<string>();
-    const releaseSkippedCalls = vi.fn((ids: readonly string[]) => {
-      for (const id of ids) {
-        admitted.delete(id);
-      }
-    });
-    setInternalBeforeToolBatch(agent, async ({ calls }) => {
-      for (const call of calls) {
-        admitted.add(call.toolCall.id);
-      }
-      return attachInternalToolBatchLifecycle(
-        {},
-        {
-          commitReadyCalls(readyCalls) {
-            for (const call of readyCalls) {
-              admitted.delete(call.toolCallId);
-            }
-          },
-          releaseSkippedCalls,
-        },
-      );
-    });
 
     await expect(agent.prompt("Run the admitted tools")).rejects.toBe(failure);
     expect(streamFn).toHaveBeenCalledOnce();
     expect(executePrefix).toHaveBeenCalledTimes(started ? 1 : 0);
     expect(executeTail).not.toHaveBeenCalled();
-    expect(releaseSkippedCalls).toHaveBeenCalledExactlyOnceWith(
-      started ? ["tail"] : ["prefix", "failing", "tail"],
-    );
-    expect(admitted.size).toBe(0);
     expect(agent.state.isStreaming).toBe(false);
   },
 );

@@ -1,0 +1,14 @@
+{
+  "id": "gbrain",
+  "categories": ["memory"],
+  "name": "GBrain",
+  "description": "Connects OpenClaw to a GBrain brain: sets up GBrain's own service when needed and adds it as the gbrain MCP server.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
