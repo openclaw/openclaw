@@ -592,14 +592,11 @@ before a process effect. The lease and invocation own its lifetime; saved copies
 do not survive release or cancellation. Use `redactOutput` at diagnostic egress.
 This capability is host-local and is never a wire environment override.
 
-`process-runtime` exports `AGENT_GIT_CONFIG_PARAMETERS` for the host-owned agent Git
-maintenance defaults. Native execution adapters append these parameters after
-resolving their own inherited Git configuration and environment filtering.
+Agent Git maintenance defaults and Gateway allocator environment filtering are
+host-owned implementation details used by bundled native adapters. Their
+internal process helpers are not typed public Plugin SDK entry points.
 
 `process-runtime` exports `createBoundedLineFramer` for bounded LF-delimited byte
 streams. It preserves incomplete lines and leaves CR handling to the consumer.
-`stripGatewayAllocatorEnv` removes `MALLOC_CONF` and jemalloc `LD_PRELOAD`
-entries in place from a caller-owned child environment. Copy inherited values
-first; never pass `process.env`. Other preload libraries remain available.
 Node duplex calls may supply `assertCurrent` to compose caller-owned liveness with
 the runtime's existing dispatch and delivery authority.
