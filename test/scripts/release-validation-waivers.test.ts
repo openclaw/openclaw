@@ -731,21 +731,31 @@ describe("beta.1 exact FRV11 test failures", () => {
   });
 });
 
-// FRV16 grants follow the frozen release/candidate, not a run or attempt.
-describe("beta.1 release-scoped FRV16 grants", () => {
+// Accepted FRV16/17 jobs follow the frozen release/candidate, not a run or attempt.
+describe("beta.1 release-scoped FRV16/17 grants", () => {
   const targetVersion = "2026.11.10-beta.1";
   const candidateSha = "995f9059b6e6fe3ba0865a3354924fd2bcbfceea";
   const ciNames = [
     "checks-ui-e2e (2/13)",
     "checks-node-compact-small-38 (node)",
-    ...[15, 23, 3, 32, 11, 41, 18, 30].map((n) => "checks-node-compact-large-" + n + " (node)"),
+    ...[15, 23, 3, 32, 11, 41, 18, 30, 17, 21, 43, 20, 19].map(
+      (n) => "checks-node-compact-large-" + n + " (node)",
+    ),
+    "checks-node-compact-small-12 (node)",
+    "checks-node-compact-large-39 (bun)",
+    "checks-ui-e2e (4/13)",
   ];
   const ci = {
     ...child,
     runId: "44465881623",
     runAttempt: 1,
     jobs: [
-      ...ciNames.map((name, id) => ({ status: "completed", conclusion: "failure", id, name })),
+      ...ciNames.map((name, id) => ({
+        status: "completed",
+        conclusion: "failure",
+        id: 100 + id,
+        name,
+      })),
       gate,
     ],
   };
