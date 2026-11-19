@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { create as createTar } from "tar";
+import { create as createTar } from "tar/raw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { templatesAddHandlers } from "../gateway/server-methods/templates-add.js";
 import { defaultRuntime } from "../runtime.js";

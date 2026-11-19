@@ -186,6 +186,7 @@ export type TalkMutationHarnessOptions = {
   transports?: TalkCatalogResult["transports"];
   voicesByModel?: Record<string, string[]>;
   navigate?: ReturnType<typeof vi.fn>;
+  modelAuthStatus?: Record<string, unknown> | Promise<Record<string, unknown>>;
 };
 
 export function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
@@ -259,7 +260,9 @@ export function createTalkMutationHarness(options: TalkMutationHarnessOptions = 
       request: (method: string, params: Record<string, unknown>) =>
         method.startsWith("voicewake.")
           ? (options.voiceWakeRequest?.(method, params) ?? Promise.resolve({ triggers: [] }))
-          : request(method, params),
+          : method === "models.authStatus"
+            ? Promise.resolve(options.modelAuthStatus ?? { ts: 0, providers: [] })
+            : request(method, params),
     } as unknown as GatewayBrowserClient,
     phase: "connected",
     hello,

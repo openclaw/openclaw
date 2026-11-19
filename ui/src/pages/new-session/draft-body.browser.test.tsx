@@ -1,4 +1,4 @@
-import { afterEach, expect, it, onTestFinished } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
 import { syncControlUiSystemChrome } from "../../app/control-ui-presentation.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -63,7 +63,12 @@ it.each([
     ),
     { container },
   ));
+  // The lightweight pending preview already names the file; wait for its interactive card.
   await expect.element(page.getByText("notes.md", { exact: true })).toBeVisible();
+  await vi.dynamicImportSettled();
+  await expect
+    .poll(() => container.querySelector(".chat-assistant-attachment-card"))
+    .not.toBeNull();
   const bubble = container.querySelector<HTMLElement>(".chat-group.user .chat-bubble")!;
   const card = bubble.querySelector<HTMLElement>(".chat-assistant-attachment-card")!;
   expect(getComputedStyle(bubble).backgroundColor).toBe("rgba(0, 0, 0, 0)");

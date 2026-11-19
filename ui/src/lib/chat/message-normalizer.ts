@@ -20,7 +20,7 @@ import {
   resolveToolBlockArgs,
 } from "../../../../src/chat/tool-content.js";
 import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-context.js";
-import { splitMediaFromOutput } from "../../../../src/media/parse.js";
+import { splitMediaOutput } from "../../../../src/media/parse-output.js";
 import { readClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import { readPluginInlineViewBlock } from "../../../../src/shared/plugin-inline-view.js";
 import { readTemplatePluginInstallNotice } from "../../../../src/shared/template-install-notice.js";
@@ -433,7 +433,8 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     }
     audioAsVoice = delivery?.audioAsVoice === true;
     const extracted = extractCanvasShortcodes(text);
-    const parsed = splitMediaFromOutput(extracted.text, { extractAudioDirectives: false });
+    // Leave Markdown images to the renderer; only lift explicit MEDIA directives here.
+    const parsed = splitMediaOutput(extracted.text, { extractAudioDirectives: false });
     const parts: MessageContentItem[] = [];
     const segments = parsed.segments ?? [{ type: "text" as const, text: parsed.text }];
 

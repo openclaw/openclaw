@@ -1,9 +1,5 @@
 import type { ProviderCatalogOutcome } from "openclaw/plugin-sdk/provider-catalog-shared";
-import {
-  OPENAI_API_BASE_URL,
-  resolveOpenAICodexModelsEndpoint,
-  type OpenAICodexModelsEndpointContext,
-} from "./base-url.js";
+import { OPENAI_API_BASE_URL, resolveOpenAICodexModelsEndpoint } from "./base-url.js";
 import { readCodexModelRows } from "./codex-model-rows.js";
 import { readOpenAIModelAccessPrograms } from "./model-service-tiers.js";
 
@@ -13,13 +9,12 @@ import { readOpenAIModelAccessPrograms } from "./model-service-tiers.js";
  */
 export async function discoverOpenAIPlatformAccessPrograms(params: {
   apiKey: string;
-  catalogContext?: OpenAICodexModelsEndpointContext;
 }): Promise<ProviderCatalogOutcome["modelAccessPrograms"]> {
   const { getCachedLiveCatalogValue } = await import("openclaw/plugin-sdk/provider-catalog-shared");
   const { fetchLiveProviderModelRows } =
     await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
   try {
-    const endpoint = await resolveOpenAICodexModelsEndpoint(params.catalogContext);
+    const endpoint = await resolveOpenAICodexModelsEndpoint();
     return await getCachedLiveCatalogValue({
       keyParts: ["openai", "platform-access-programs", endpoint, params.apiKey],
       ttlMs: 60_000,

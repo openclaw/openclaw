@@ -279,6 +279,7 @@ describe("talk.catalog handler", () => {
             ],
           },
           transcription: {
+            source: "streaming",
             ready: true,
             activeProvider: "openai",
             providers: [
@@ -567,6 +568,7 @@ describe("talk.catalog handler", () => {
 
       expect(mockCallArg(respond, 0, 1)).toMatchObject({
         transcription: {
+          source: "voice-model",
           ready: true,
           activeProvider: "transcription-fast",
           providers: [
@@ -612,8 +614,10 @@ describe("talk.catalog handler", () => {
       }) as OpenClawConfig,
     });
 
+    // Options for xAI name no provider: the runtime still picks by order and readiness.
     expect(mockCallArg(respond, 0, 1)).toMatchObject({
       transcription: {
+        source: "streaming-auto",
         ready: true,
         activeProvider: "xai",
         providers: [
@@ -678,7 +682,7 @@ describe("talk.catalog handler", () => {
     });
 
     expect(mockCallArg(respond, 0, 1)).toMatchObject({
-      transcription: { ready: true, activeProvider: "transcription-alias" },
+      transcription: { source: "streaming", ready: true, activeProvider: "transcription-alias" },
       realtime: { ready: true, activeProvider: "realtime-alias" },
     });
   });
@@ -715,6 +719,10 @@ describe("talk.catalog handler", () => {
           : {},
       });
       const catalog = mockCallArg(respond, 0, 1) as Record<string, Record<string, unknown>>;
+      // Without a named provider the runtime picks one automatically.
+      expect(catalog.transcription).toMatchObject({
+        source: explicit ? "streaming" : "streaming-auto",
+      });
       for (const kind of ["transcription", "realtime"]) {
         expect(catalog[kind]).toMatchObject({ ready: false });
         if (explicit) {

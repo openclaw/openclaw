@@ -737,6 +737,19 @@ function installControlUiMockGateway(
       rows: canonicalSessionRows,
       mainKey: scenario.mainSessionKey,
       models: scenario.models,
+      hasMessages: (row) => {
+        if (typeof row.key !== "string") {
+          return undefined;
+        }
+        // Inspect the configured initial read without advancing wire-response sequences.
+        for (const method of ["chat.startup", "chat.history"]) {
+          const { value } = responseFixtures.select(method, { sessionKey: row.key }, false);
+          if (isRecord(value) && Array.isArray(value.messages)) {
+            return value.messages.length > 0 || value.hasMore === true;
+          }
+        }
+        return chatHistoryMessages(row.key).length > 0;
+      },
     },
     isRecord,
   );

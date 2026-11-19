@@ -16,7 +16,6 @@ import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { resolvePackageReleaseSlotForRootSync } from "../../infra/package-release-slot-path.js";
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
-import { parseSemver } from "../../infra/runtime-guard.js";
 import { resolveExternalPackageRuntimeEntrypointUrl } from "../../infra/runtime-process-url.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { fetchNpmTagVersion } from "../../infra/update-check.js";
@@ -25,6 +24,7 @@ import {
   createGlobalInstallEnv,
   detectGlobalInstallManagerByPresence,
   detectGlobalInstallManagerForRoot,
+  resolveExpectedInstalledVersionFromSpec,
   type GlobalInstallManager,
 } from "../../infra/update-global.js";
 import { cleanupUpdateTemporaryDirectory } from "../../infra/update-maintenance.js";
@@ -177,9 +177,11 @@ export async function resolveTargetVersion(
   if (!canResolveRegistryVersionForPackageTarget(tag)) {
     return { version: null };
   }
-  const trimmed = tag.trim();
-  const direct = trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
-  if (parseSemver(direct)) {
+  const direct = resolveExpectedInstalledVersionFromSpec(
+    DEFAULT_PACKAGE_NAME,
+    `${DEFAULT_PACKAGE_NAME}@${tag}`,
+  );
+  if (direct) {
     return { version: direct };
   }
   return await fetchNpmTagVersion({

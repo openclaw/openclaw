@@ -36,7 +36,6 @@ import {
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
 import { readResidentUserProfileId } from "../../state/user-profile-list.js";
-import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { publishUserPreferencesChanged } from "./user-preference-events.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
@@ -45,7 +44,7 @@ const DEFINITION_PREFIX = "ui.themeDefinition.";
 type ThemeRequest = Omit<GatewayRequestHandlerOptions, "params">;
 
 function requestOwner(options: ThemeRequest) {
-  const { client, context } = options;
+  const { client } = options;
   const runtimeIdentity = client?.internal?.agentRuntimeIdentity;
   const caller = getGatewayToolCallerIdentity();
   const participant = resolveGatewayPersonalToolParticipant(runtimeIdentity);
@@ -63,7 +62,7 @@ function requestOwner(options: ThemeRequest) {
     options.signal?.throwIfAborted();
     options.sessionMutationCommitGuard?.();
     options.sessionMutationAuthorization?.assertCurrent();
-    assertActiveAgentRuntimeAuthority(client, context, assertCaller);
+    assertCaller?.();
     if (options.hasCurrentClientAuthority?.() === false || client?.invalidated) {
       throw new Error("Theme request authority is no longer active.");
     }

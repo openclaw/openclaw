@@ -569,11 +569,25 @@ export function readSessionActorRowFacts(params: {
   if (summary && !projection.activitySummaryWatermark) {
     return undefined;
   }
+  const transcript = current?.cell.snapshot?.transcript.projection;
+  // Raw active counts include pre-reset messages; only complete, unreset actors can answer here.
+  const transcriptHasMessages =
+    transcript && !transcript.cold && transcript.latestSeq === null
+      ? false
+      : transcript?.state &&
+          !transcript.cold &&
+          !transcript.hasUnindexedPrefix &&
+          !transcript.latestIndexedReset &&
+          !transcript.state.needsRebuild &&
+          transcript.state.indexedSeq === transcript.latestSeq
+        ? transcript.state.activeMessageCount > 0
+        : undefined;
   // The row owns its mutable shell; nested facts already belong to the frozen replica.
   return {
     sessionKey: params.sessionKey,
     entry: attachSessionEntrySnapshots({ ...state.entry }, {}, "list"),
     hasBoard: projection.hasBoard,
+    transcriptHasMessages,
     transcriptAssistantMessage: "unknown",
     ...(summary ? { activitySummaryWatermark: projection.activitySummaryWatermark } : {}),
   };

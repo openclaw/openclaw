@@ -252,6 +252,45 @@ it("keeps synchronous and asynchronous token cleanup in separate snapshot flight
   }
 });
 
+it.skipIf(process.platform !== "linux")(
+  "releases closed readers' descriptors before removing an awaited snapshot",
+  async () => {
+    const root = tempDirs.make("sqlite-closed-reader-");
+    const source = path.join(root, "source.sqlite");
+    const original = createDatabase(
+      source,
+      "CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');",
+    );
+    vi.stubEnv("XDG_CACHE_HOME", root);
+    const snapshot = await startSqliteReadOnlyLocationAsync(source, {
+      preserveSourceArtifacts: true,
+    }).result;
+    try {
+      let descriptorPath: string;
+      {
+        using reader = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
+        admitSqliteSchema(reader);
+        expect(reader.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
+        const admission = captureSqliteDatabaseAdmissions().find(
+          ({ location }) => location === snapshot.location,
+        );
+        expect(admission).toBeDefined();
+        descriptorPath = `/proc/self/fd/${admission!.descriptor}`;
+      }
+      expect(fs.realpathSync(descriptorPath)).toBe(snapshot.location);
+      expect(await snapshot.cleanupAsync()).toBe(true);
+      expect(fs.existsSync(snapshot.location)).toBe(false);
+      const remainingTarget = fs.existsSync(descriptorPath)
+        ? fs.readlinkSync(descriptorPath)
+        : undefined;
+      expect(remainingTarget).not.toBe(`${snapshot.location} (deleted)`);
+      expect(fs.readFileSync(source)).toEqual(original);
+    } finally {
+      await snapshot.cleanupAsync();
+    }
+  },
+);
+
 it("does not throw when the onCleanupFailure callback itself throws", async () => {
   const log = path.join(tempDirs.make("snapshot-cleanup-log-"), "cleanup.log");
   fs.writeFileSync(log, "");

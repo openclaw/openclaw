@@ -35,6 +35,8 @@ import {
 } from "./compaction-safeguard-context.js";
 import type {
   CompactionSafeguardResult,
+  CompactionSafeguardContext,
+  CompactionSafeguardEvent,
   PreparedCompactionSafeguardExecution,
   RunCompactionSafeguard,
 } from "./compaction-safeguard-execution.types.js";
@@ -79,7 +81,7 @@ type CompactionLoss =
   | "quality-retention";
 
 async function resolveModelAuth(
-  ctx: Pick<ExtensionContext, "model" | "modelRegistry" | "sessionManager">,
+  ctx: Pick<ExtensionContext, "model" | "modelRegistry">,
   model: NonNullable<ExtensionContext["model"]>,
 ): Promise<
   { ok: true; apiKey?: string; headers?: typeof model.headers } | { ok: false; reason: string }
@@ -133,15 +135,35 @@ function buildCompactionSummaryHeaders(params: {
   };
 }
 
+function requireFullPreparation(ctx: CompactionSafeguardContext) {
+  if (!ctx.fullPreparation) {
+    throw new Error("Prepared safeguard facts are required for a transcript view");
+  }
+  return ctx.fullPreparation;
+}
+
 /** Registers compaction hooks that summarize, preserve recent turns, and audit output quality. */
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", runCompactionSafeguard);
 }
 
-/** @internal The private default compactor can supply worker-prepared facts and host effects. */
-export async function runCompactionSafeguard(
+/** Public extensions retain their complete mutable SDK contract. */
+export function runCompactionSafeguard(
   event: Parameters<RunCompactionSafeguard>[0],
   ctx: Parameters<RunCompactionSafeguard>[1],
+): Promise<CompactionSafeguardResult> {
+  return executeCompactionSafeguard(event, {
+    model: ctx.model,
+    modelRegistry: ctx.modelRegistry,
+    identity: ctx.sessionManager,
+    fullPreparation: event.preparation,
+    readBranch: () => ctx.sessionManager.getBranch() as SessionTreeEntry[],
+  });
+}
+
+export async function executeCompactionSafeguard(
+  event: Parameters<RunCompactionSafeguard>[0] | CompactionSafeguardEvent,
+  ctx: CompactionSafeguardContext,
   prepared?: PreparedCompactionSafeguardExecution,
 ): Promise<CompactionSafeguardResult> {
   const {
@@ -159,13 +181,13 @@ export async function runCompactionSafeguard(
         messagesToSummarize: [],
         turnPrefixMessages: [],
       }
-    : prepareCompactionSafeguardMessages(preparation);
+    : prepareCompactionSafeguardMessages(requireFullPreparation(ctx));
   const { requestSelection, latestUnresolvedUserRequest } = preparation;
   const reconcileRequestSelection = (summary: string) =>
     requestSelection?.state === "none" ? clearCompactionPendingAskSection(summary) : summary;
-  setCompactionSafeguardCancellation(ctx.sessionManager, undefined);
+  setCompactionSafeguardCancellation(ctx.identity, undefined);
   const cancelCompaction = (reason: string, error?: unknown) => {
-    setCompactionSafeguardCancellation(ctx.sessionManager, reason, error);
+    setCompactionSafeguardCancellation(ctx.identity, reason, error);
     return { cancel: true as const };
   };
   let history: CompactionSafeguardHistory;
@@ -175,7 +197,7 @@ export async function runCompactionSafeguard(
       : prepareCompactionSafeguardHistory({
           messages: preparedMessages,
           firstKeptEntryId: preparation.firstKeptEntryId,
-          readBranch: () => ctx.sessionManager.getBranch() as SessionTreeEntry[],
+          readBranch: () => ctx.readBranch!(),
         });
     if (history.usedPreparationRange) {
       log.info(
@@ -214,7 +236,7 @@ export async function runCompactionSafeguard(
 
   // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
   // Fall back to runtime.model which is explicitly passed when building extension paths.
-  const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
+  const runtime = getCompactionSafeguardRuntime(ctx.identity);
   const customInstructions = resolveCompactionInstructions(
     eventInstructions,
     runtime?.customInstructions,
@@ -351,14 +373,14 @@ export async function runCompactionSafeguard(
       },
     },
   });
-  if (prepared && providerId) {
-    return cancelCompaction(
-      "Prepared compaction cannot invoke a custom provider without its full history.",
-    );
-  }
   if (providerId) {
     const compactionProvider: CompactionProvider | undefined = getCompactionProvider(providerId);
     if (compactionProvider) {
+      if (prepared) {
+        return cancelCompaction(
+          "Prepared compaction cannot invoke a custom provider without its full history.",
+        );
+      }
       try {
         // Give the provider ALL messages — no pruning, no chunking, no split-turn splitting.
         const providerResult = await compactionProvider.summarize({
@@ -401,8 +423,8 @@ export async function runCompactionSafeguard(
 
   const model = ctx.model ?? runtime?.model;
   if (!model) {
-    if (!missedModelWarningSessions.has(ctx.sessionManager)) {
-      missedModelWarningSessions.add(ctx.sessionManager);
+    if (!missedModelWarningSessions.has(ctx.identity)) {
+      missedModelWarningSessions.add(ctx.identity);
       log.warn(
         "[compaction-safeguard] Both ctx.model and runtime.model are undefined. " +
           "Compaction summarization will not run. This indicates extensionRunner.initialize() " +
@@ -426,7 +448,7 @@ export async function runCompactionSafeguard(
       headers: authResult.headers,
     });
     const usageSink: SessionModelUsageSink = (usage) =>
-      recordSessionModelUsage(ctx.sessionManager, usage);
+      recordSessionModelUsage(ctx.identity, usage);
     const llmSummaryParams = {
       model,
       apiKey: authResult.apiKey ?? "",
@@ -444,7 +466,7 @@ export async function runCompactionSafeguard(
       ? { ...prepared.facts.summary, reconciliationMessages: [] }
       : prepareCompactionSafeguardSummary({
           history,
-          preparation,
+          preparation: requireFullPreparation(ctx),
           recentTurnsPreserve,
           splitTurnContextChars,
           qualityGuardEnabled,
@@ -645,7 +667,7 @@ export async function runCompactionSafeguard(
     signal.throwIfAborted();
     return prepared
       ? prepared.recover(error)
-      : recoverCompactionSafeguardFailure(error, preparation, signal, ctx.sessionManager);
+      : recoverCompactionSafeguardFailure(error, preparation, signal, ctx.identity);
   }
 }
 

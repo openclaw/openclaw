@@ -66,6 +66,26 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
 
+  it("explains why Install is disabled while plugin inventory is loading", async () => {
+    const { page, gateway } = await setup(
+      {},
+      { heldMethods: ["plugins.list"], awaitInitialRoster: false },
+    );
+    await page.goto(`${server.baseUrl}plugins/${matrixDiscoveryPlugin.id}`);
+    await gateway.waitForRequest("plugins.list");
+
+    const install = role(page, "button", "Install");
+    const loading = page.getByText("Loading plugins…", { exact: true });
+    await install.waitFor();
+    expect(await install.isDisabled()).toBe(true);
+    await loading.waitFor({ timeout: 1_500 });
+    await captureScreenshot(page, "catalog-detail-inventory-pending.png", "viewport");
+
+    await gateway.resolveDeferred("plugins.list");
+    await expect.poll(() => install.isEnabled()).toBe(true);
+    await loading.waitFor({ state: "detached" });
+  });
+
   it("keeps category navigation while a search replaces pending category results", async () => {
     const { context, page, gateway } = await setup(
       {},

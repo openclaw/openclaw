@@ -37,6 +37,7 @@ async function startDriver(
   options: Partial<Parameters<typeof TelegramUserbotDriver.start>[0]> = {},
 ) {
   const driver = await TelegramUserbotDriver.start({
+    role: "primary",
     chatId: "-1001",
     driverEnv: {},
     leaseHealth: { assertHealthy() {}, whenUnhealthy: new Promise<Error>(() => {}) },
