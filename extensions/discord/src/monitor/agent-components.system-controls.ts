@@ -38,12 +38,14 @@ function withoutAgentControls<T extends MessageComponent>(components: readonly T
     if ("custom_id" in component && isDiscordAgentControlCustomId(component.custom_id)) {
       return [];
     }
+    // Discord rejects empty rows and containers.
     if (component.type === ComponentType.ActionRow) {
       const controls = withoutAgentControls(component.components);
       return controls.length > 0 ? [{ ...component, components: controls }] : [];
     }
     if (component.type === ComponentType.Container) {
-      return [{ ...component, components: withoutAgentControls(component.components) }];
+      const children = withoutAgentControls(component.components);
+      return children.length > 0 ? [{ ...component, components: children }] : [];
     }
     return [component];
   });
@@ -91,12 +93,16 @@ async function runAgentControlInteraction(params: {
   if (pluginDispatch === "handled") {
     return;
   }
-  const components = interaction.rawData.message?.components;
+  // A message with only agent controls cannot become empty, so its controls stay. Accepted:
+  // agent messages carry text.
+  const remaining = params.reusable
+    ? []
+    : withoutAgentControls(interaction.rawData.message?.components ?? []);
   try {
-    if (params.reusable || !components) {
-      await interaction.acknowledge();
+    if (remaining.length > 0) {
+      await interaction.update({ components: remaining });
     } else {
-      await interaction.update({ components: withoutAgentControls(components) });
+      await interaction.acknowledge();
     }
   } catch (err) {
     logError(`${label}: failed to answer the interaction: ${String(err)}`);

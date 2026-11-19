@@ -126,7 +126,10 @@ it.each([
   ["typed callback", { label: "Pick", action: { type: "callback", value: "pick:a" } }, "pick:a"],
   ["legacy value", { label: "Pick", value: "/pick a" }, "/pick a"],
 ])("delivers a %s button after the component registry is gone", async (_name, button, value) => {
-  const components = sendMarked([{ type: "buttons", buttons: [button] }]);
+  const components = sendMarked([
+    { type: "text", text: "Pick one" },
+    { type: "buttons", buttons: [button] },
+  ]);
   const [customId] = controlIds(components);
   clearDiscordComponentEntriesForTest();
 
@@ -140,7 +143,12 @@ it.each([
   expect(lastBody).toBe(`callback_data: ${value}`);
   // Single use: the tap consumes the controls and keeps the rest of the message.
   expect(update).toHaveBeenCalledExactlyOnceWith({
-    components: [expect.objectContaining({ type: ComponentType.Container, components: [] })],
+    components: [
+      expect.objectContaining({
+        type: ComponentType.Container,
+        components: [expect.objectContaining({ type: ComponentType.TextDisplay })],
+      }),
+    ],
   });
   expect(dispatchPluginInteractiveHandlerMock.mock.calls[0]?.[0]).toMatchObject({
     data: `::${value}`,
@@ -196,6 +204,20 @@ it("consumes only the agent's controls and keeps reusable ones", async () => {
   const refresh = await tap({ components, customId: refreshId!, type: ComponentType.Button });
   expect(refresh.update).not.toHaveBeenCalled();
   expect(lastBody).toBe("callback_data: refresh");
+});
+
+it("never sends an empty message when the controls were all it had", async () => {
+  const components = sendMarked([{ type: "buttons", buttons: [{ label: "Pick", value: "pick" }] }]);
+  const [customId] = controlIds(components);
+
+  const { update, interaction } = await tap({
+    components,
+    customId: customId!,
+    type: ComponentType.Button,
+  });
+  expect(update).not.toHaveBeenCalled();
+  expect(interaction.acknowledge).toHaveBeenCalledOnce();
+  expect(lastBody).toBe("callback_data: pick");
 });
 
 it("keeps duplicate agent values distinct in one message", () => {
