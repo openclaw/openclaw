@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -133,6 +134,45 @@ describe("remote shell command cancellation", () => {
       }
     },
   );
+});
+
+describe("remote skills refresh", () => {
+  it("serializes clear and upload across handles sharing one remote runtime", async () => {
+    const workspaceDir = tempDirs.make("remote-shell-skills-refresh-");
+    const events: string[] = [];
+    const firstUpload = createEnteredGate();
+    let uploads = 0;
+    const createSession = async () =>
+      ({
+        runCommand: async ({ remoteCommand }) => {
+          if (remoteCommand.includes("openclaw-sandbox-clear")) {
+            events.push("clear");
+          }
+          return { ...emptyResult(), stdout: Buffer.from("1\n") };
+        },
+        uploadDirectory: async () => {
+          const upload = ++uploads;
+          events.push(`upload-${upload}`);
+          if (upload === 1) {
+            await firstUpload.wait();
+          }
+          events.push(`uploaded-${upload}`);
+        },
+        prepareExec: async () => {
+          throw new Error("unexpected exec preparation");
+        },
+        dispose: async () => {},
+      }) satisfies RemoteShellSandboxSession;
+    // Sessions sharing an agent-scoped sandbox each get their own backend handle.
+    const first = await createBackend(workspaceDir, createSession);
+    const second = await createBackend(workspaceDir, createSession);
+    const runs = Promise.all([run(first), run(second)]);
+    await firstUpload.entered;
+    await setImmediate();
+    firstUpload.release();
+    await runs;
+    expect(events).toEqual(["clear", "upload-1", "uploaded-1", "clear", "upload-2", "uploaded-2"]);
+  });
 });
 
 async function createFixture() {

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
 import type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
@@ -24,6 +25,8 @@ import {
 import type { RemoteShellSandboxSession } from "./remote-shell-transport.js";
 
 type PendingExec = { session: RemoteShellSandboxSession; cleanup: () => Promise<void> };
+
+const remoteSkillsRefreshTails = new Map<string, Promise<void>>();
 
 type PreprovisionedRemoteWorkdir = { runtimeId: string; remoteWorkspaceDir: string };
 type ResolvedRemoteRuntimePaths = {
@@ -334,26 +337,46 @@ class RemoteShellSandboxBackendImpl {
     session: RemoteShellSandboxSession,
     signal?: AbortSignal,
   ): Promise<void> {
+    const skillsWorkspaceDir = this.params.createParams.skillsWorkspaceDir;
     if (
       this.params.preprovisionedWorkdir ||
       this.params.createParams.cfg.workspaceAccess !== "rw" ||
-      !this.params.createParams.skillsWorkspaceDir
+      !skillsWorkspaceDir
     ) {
       return;
     }
+    // Clear + extract is not atomic: overlapping refreshes of one remote tree delete
+    // each other's files mid-extract (tar "File exists" / "Failed to restore metadata").
+    // Backend handles are per session, so serialize per remote runtime process-wide.
+    await enqueueKeyedTask({
+      tails: remoteSkillsRefreshTails,
+      key: [
+        this.params.backendId,
+        this.params.configLabel ?? "",
+        this.params.runtimePaths.remoteSkillsWorkspaceDir,
+      ].join("\0"),
+      task: () => this.replaceRemoteSkillsWorkspace(session, skillsWorkspaceDir, signal),
+    });
+  }
+
+  private async replaceRemoteSkillsWorkspace(
+    session: RemoteShellSandboxSession,
+    skillsWorkspaceDir: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
     await this.clearRemoteDirectory(
       session,
       this.params.runtimePaths.remoteSkillsWorkspaceDir,
       signal,
     );
-    const hasSkills = await isExistingDirectory(this.params.createParams.skillsWorkspaceDir);
+    const hasSkills = await isExistingDirectory(skillsWorkspaceDir);
     signal?.throwIfAborted();
     if (!hasSkills) {
       return;
     }
     this.params.createParams.assertRuntimeCurrent?.();
     await session.uploadDirectory({
-      localDir: this.params.createParams.skillsWorkspaceDir,
+      localDir: skillsWorkspaceDir,
       remoteDir: this.params.runtimePaths.remoteSkillsWorkspaceDir,
       remoteRootDir: this.params.runtimePaths.runtimeRootDir,
       signal,
