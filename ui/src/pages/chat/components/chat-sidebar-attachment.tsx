@@ -6,7 +6,11 @@ import type { EmbedSandboxMode } from "../../../lib/chat/canvas-embed-policy.ts"
 import { formatUiError } from "../../../lib/format-error.ts";
 import { isSvgImageMediaPath, isTextAttachment } from "../../../lib/media-file-extension.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
-import { AttachmentStateCard, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
+import {
+  AttachmentPreviewSkeleton,
+  AttachmentStateCard,
+  CompactAttachmentCard,
+} from "./chat-attachment-card-solid.tsx";
 import "./chat-audio-player.tsx";
 import "./chat-video-player.tsx";
 import type { AttachmentDownload } from "./chat-attachment-download.ts";
@@ -196,6 +200,18 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
     "prop:authToken": model().source?.authToken ?? null,
     "prop:sizeBytes": model().source?.sizeBytes ?? props.content.sizeBytes,
   });
+  // Workspace links retain their scoped download callback, not an expiring URL in the tab.
+  const audioSource = createMemo(() => {
+    const { file, src, resolveSource } = props.content;
+    if (model().kind !== "audio" || src || resolveSource || !file) {
+      return model().src;
+    }
+    const controller = new AbortController();
+    onCleanup(() => controller.abort());
+    return file
+      .download(controller.signal)
+      .then((grant) => (grant && "url" in grant ? safeMediaAttachmentHref(grant.url) : undefined));
+  });
   const preview = (
     <Switch
       fallback={
@@ -257,6 +273,30 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
           prop:mediaHeight={model().source?.height ?? props.content.height}
         />
       </Match>
+      <Match
+        when={
+          model().kind === "audio" &&
+          (model().src || (!props.content.resolveSource && props.content.file))
+        }
+      >
+        <Loading fallback={<AttachmentPreviewSkeleton />}>
+          <Errored fallback={(error) => <div role="alert">{formatUiError(error())}</div>}>
+            <Show
+              when={audioSource()}
+              fallback={<div role="status">{t("chat.attachments.previewUnavailable")}</div>}
+            >
+              {(url) => (
+                <openclaw-chat-audio-player
+                  prop:src={url()}
+                  {...mediaProps()}
+                  prop:serverDurationMs={model().source?.durationMs ?? props.content.durationMs}
+                  prop:voiceNote={props.content.voiceNote === true}
+                />
+              )}
+            </Show>
+          </Errored>
+        </Loading>
+      </Match>
       <Match when={!model().src || model().imagePreview}>
         <AttachmentStateCard
           kind={model().kind}
@@ -279,14 +319,6 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
             />
           </Show>
         </AttachmentStateCard>
-      </Match>
-      <Match when={model().kind === "audio"}>
-        <openclaw-chat-audio-player
-          prop:src={model().src ?? ""}
-          {...mediaProps()}
-          prop:serverDurationMs={model().source?.durationMs ?? props.content.durationMs}
-          prop:voiceNote={props.content.voiceNote === true}
-        />
       </Match>
     </Switch>
   );
