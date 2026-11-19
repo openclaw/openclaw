@@ -1,19 +1,24 @@
-import { createApiRegistry, createLlmRuntime } from "@openclaw/ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
+import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import type { StreamFn } from "../runtime/index.js";
-import type { SettingsManager } from "../sessions/settings-manager.js";
+import { AuthStorage } from "../sessions/auth-storage.js";
+import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
+import { ModelRegistry } from "../sessions/model-registry.js";
+import { SettingsManager } from "../sessions/settings-manager.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { executeBoundedCompactionSession } from "./bounded-compaction-execution.js";
+import { createEmptyPreparedModelRuntimeFixture } from "./model.fixture.test-support.js";
 import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js";
 import type { prepareEmbeddedCompactionSession } from "./prepared-compaction-session.js";
 
 const mocks = vi.hoisted(() => ({
   prepare: vi.fn(),
   registerProviderStream: vi.fn(),
-  registryRuntime: vi.fn(),
 }));
 
 // mock-isolation: replace transcript I/O; the bounded execution/retry owner stays real.
@@ -23,10 +28,6 @@ vi.mock("./prepared-compaction-session.js", () => ({
 // mock-isolation: supply deterministic provider registration without plugin discovery.
 vi.mock("../provider-stream.js", () => ({
   registerProviderStreamForModel: mocks.registerProviderStream,
-}));
-// mock-isolation: supply an admitted registry runtime without building a full agent.
-vi.mock("../sessions/model-registry-runtime.js", () => ({
-  getModelRegistryRuntime: mocks.registryRuntime,
 }));
 // mock-isolation: preserve the transport while excluding diagnostic event storage.
 vi.mock("./run/attempt.model-diagnostic-events.js", () => ({
@@ -52,6 +53,7 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
 // mock-isolation: provider-specific parameter wrappers are orthogonal to base-stream ownership.
 vi.mock("./extra-params.js", () => ({
   applyExtraParamsToAgent: () => ({ effectiveExtraParams: {} }),
+  resolvePreparedExtraParams: () => ({}),
 }));
 // mock-isolation: importing the real base-stream resolver must not install a global transport host.
 vi.mock("../ai-transport-runtime-host.js", () => ({}));
@@ -74,10 +76,10 @@ describe("executeBoundedCompactionSession", () => {
   it.each(["provider", "runtime"] as const)(
     "preserves the foreground watchdog and %s stream across a thinking retry",
     async (transport) => {
-      const apiRegistry = createApiRegistry();
-      const llmRuntime = createLlmRuntime(apiRegistry);
+      const authStorage = AuthStorage.inMemory();
+      const modelRegistry = ModelRegistry.inMemory(authStorage);
+      const { llmRuntime } = getModelRegistryRuntime(modelRegistry);
       const providerStream = vi.fn<StreamFn>();
-      mocks.registryRuntime.mockReturnValue({ apiRegistry, llmRuntime });
       mocks.registerProviderStream.mockReturnValue(
         transport === "provider" ? providerStream : undefined,
       );
@@ -124,26 +126,80 @@ describe("executeBoundedCompactionSession", () => {
         compacted: false as const,
         reason,
       }));
-      // Admission, tools, and transcript storage are replaced above; only the
-      // already-prepared facts consumed by the real execution owner are needed.
-      const runtime = {
-        params: { sessionId: "session", config: {} },
+      const agentDir = "/synthetic/agent";
+      const workspaceDir = "/synthetic/workspace";
+      const runtimePlan = buildAgentRuntimePlan({
+        provider: model.provider,
+        modelId: model.id,
+        model,
+        workspaceDir,
+        preparedAuthPlan: {
+          providerForAuth: model.provider,
+          authProfileProviderForAuth: model.provider,
+        },
+        providerRuntimeHandle: {
+          provider: model.provider,
+          modelId: model.id,
+          workspaceDir,
+          prepared: true,
+        },
+      });
+      // Keep the admitted fixture complete so changes to the runtime contract
+      // are checked even though transcript I/O and plugin discovery are mocked.
+      const runtime: PreparedCompactionRuntime = {
+        params: {
+          sessionId: "session",
+          workspaceDir,
+          sessionFile: "/synthetic/session.jsonl",
+          config: {},
+          skillsSnapshot: undefined,
+          preparedModelRuntime: createEmptyPreparedModelRuntimeFixture({
+            agentDir,
+            config: {},
+            metadataSnapshot: createEmptyPluginMetadataSnapshot(),
+            createStores: () => ({ authStorage, modelRegistry }),
+          }),
+        },
+        diagId: "compaction-test",
+        attempt: 1,
+        maxAttempts: 1,
+        runId: "compaction-test",
+        compactionModelCallTrace: createDiagnosticTraceContext(),
+        contextConfigProvider: model.provider,
+        preparedHarnessRuntime: "openclaw",
+        authStorage,
+        runtimeModel: model,
+        apiKeyInfo: { source: "synthetic", mode: "api-key" },
+        runtimeApiKey: undefined,
+        resolvedRuntimeAuthPlan: runtimePlan.auth,
+        hasRuntimeAuthExchange: false,
+        resolvedWorkspace: workspaceDir,
+        sandboxSessionKey: "agent:main:test",
+        sandboxAgentId: "main",
+        sandbox: null,
+        effectiveCwd: workspaceDir,
+        releaseSandbox: () => {},
+        runtimePlan,
+        runtimePlanModelContext: { workspaceDir, modelApi: model.api, model },
+        effectiveTools: [],
+        allowedToolNames: new Set(),
+        resolvedMessageProvider: undefined,
         provider: model.provider,
         modelId: model.id,
         effectiveModel: model,
-        modelRegistry: {},
+        modelRegistry,
         trigger: "manual",
         thinkLevel: "high",
         attemptedThinking: new Set(),
-        agentDir: "/synthetic/agent",
-        effectiveWorkspace: "/synthetic/workspace",
+        agentDir,
+        effectiveWorkspace: workspaceDir,
         sessionAgentId: "main",
         diagnosticCompactionRunId: "compaction-test",
         nextDiagnosticModelCallId: () => "call-test",
         contextTokenBudget: 16000,
         buildSystemPromptText: () => "Summarize the synthetic conversation.",
         fail,
-      } as PreparedCompactionRuntime;
+      };
       const target = {
         agentId: "main",
         sessionId: "session",
@@ -154,7 +210,7 @@ describe("executeBoundedCompactionSession", () => {
         executeBoundedCompactionSession(
           runtime,
           target,
-          {} as SettingsManager,
+          SettingsManager.inMemory(),
           () => {},
           vi.fn(),
           undefined,

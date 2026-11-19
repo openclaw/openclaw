@@ -253,19 +253,15 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       }),
     });
 
-    const customTools = toToolDefinitions(
-      effectiveTools,
-      {
-        agentId: sessionAgentId,
-        config: params.config,
-        cwd: effectiveCwd,
-        sessionKey: sandboxSessionKey,
-        sessionId: params.sessionId,
-        runId: params.runId,
-        channelId: params.currentChannelId,
-      },
-      undefined,
-    );
+    const customTools = toToolDefinitions(effectiveTools, {
+      agentId: sessionAgentId,
+      config: params.config,
+      cwd: effectiveCwd,
+      sessionKey: sandboxSessionKey,
+      sessionId: params.sessionId,
+      runId: params.runId,
+      channelId: params.currentChannelId,
+    });
     // Pass registered tool names so custom tools survive the session allowlist.
     const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(customTools));
 
