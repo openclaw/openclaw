@@ -719,8 +719,11 @@ it("writes a display-only row while the producing turn holds the session", async
       }),
     ).resolves.toEqual({ ok: true });
   });
-  const rows = (await loadTranscriptEvents(target.scope)).map((event) => {
+  const rows = (await loadTranscriptEvents(target.scope)).flatMap((event) => {
     const message = readTranscriptEventMessage(event) as Record<string, unknown> | undefined;
+    if (!message) {
+      return [];
+    }
     return {
       key: message?.idempotencyKey,
       excludeFromContext: message?.excludeFromContext,
