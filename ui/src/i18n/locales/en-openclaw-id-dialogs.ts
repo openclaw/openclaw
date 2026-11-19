@@ -163,6 +163,8 @@ const enOpenClawIdDialogs = {
     unlinkDone: "{host} is unlinked from OpenClaw ID.",
     unlinkPending:
       "OpenClaw ID couldn't be reached. This computer sends the unlink as soon as it can.",
+    unlinkRefused:
+      "OpenClaw ID refused the unlink, so the address may still be listed. This computer no longer lets anyone in through it.",
     unlinkFollowUpFailed:
       "The claw is unlinked. Restart the Gateway to finish closing remote sessions.",
     regenExpiry: "End this device's owner access after (days)",

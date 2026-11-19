@@ -79,9 +79,15 @@ describe("unlink", () => {
   it("is refused over the tunnel, and changes nothing", async () => {
     const { claw, service } = await clawWithMember();
     const fetch = vi.spyOn(globalThis, "fetch");
-    for (const step of [service.unlink.preview, service.unlink.run]) {
-      expect(await step("tunnel")).toMatchObject({ ok: false, code: "not_local_operator" });
-      expect(await step(undefined)).toMatchObject({ ok: false, code: "not_local_operator" });
+    for (const channel of ["tunnel", undefined] as const) {
+      expect(await service.unlink.preview(channel)).toMatchObject({
+        ok: false,
+        code: "not_local_operator",
+      });
+      expect(await service.unlink.run(channel, claw.clawId)).toMatchObject({
+        ok: false,
+        code: "not_local_operator",
+      });
     }
     expect(fetch).not.toHaveBeenCalled();
     expect(claw.authority.current()?.authority?.members.member).toBeDefined();
@@ -101,7 +107,7 @@ describe("unlink", () => {
         memberDevices: 2,
         nodes: 0,
       });
-      expect(await service.unlink.run("local_operator")).toMatchObject({
+      expect(await service.unlink.run("local_operator", claw.clawId)).toMatchObject({
         ok: true,
         unlinked: true,
         hostname: "studio-k7x2q.claws.example.test",
@@ -143,14 +149,14 @@ describe("unlink", () => {
       return confirmed();
     });
     try {
-      expect(await service.unlink.run("local_operator")).toMatchObject({
+      expect(await service.unlink.run("local_operator", claw.clawId)).toMatchObject({
         ok: true,
         discovery: "pending",
       });
       expect(claw.authority.current()?.authority).toBeNull();
       expect(await service.linkSummary()).toEqual({
         linked: false,
-        pendingUnlinks: ["studio-k7x2q.claws.example.test"],
+        pendingUnlinks: [{ hostname: "studio-k7x2q.claws.example.test" }],
       });
       // A restart: a new service over the same stored record sends it at start.
       await service.stop();
@@ -174,10 +180,105 @@ describe("unlink", () => {
       Response.json({ error: { code: "unlinked", message: "unlinked" } }, { status: 410 }),
     );
     try {
-      expect(await service.unlink.run("local_operator")).toMatchObject({
+      expect(await service.unlink.run("local_operator", claw.clawId)).toMatchObject({
         discovery: "confirmed",
       });
       expect(claw.authority.current()?.pending_unlinks).toBeUndefined();
+    } finally {
+      await service.stop();
+    }
+  });
+
+  it("unlinks only the claw whose warning was confirmed", async () => {
+    const { claw, service } = await clawWithMember();
+    const fetch = vi.spyOn(globalThis, "fetch");
+    try {
+      expect(await service.unlink.run("local_operator", "f".repeat(32))).toMatchObject({
+        ok: false,
+        code: "claw_changed",
+      });
+      expect(fetch).not.toHaveBeenCalled();
+      expect(claw.authority.current()?.authority?.members.member).toBeDefined();
+    } finally {
+      await service.stop();
+    }
+  });
+
+  it("keeps a refused unlink, reports it, and never sends it again", async () => {
+    const { claw, service } = await clawWithMember();
+    const { fetch } = discovery(() =>
+      Response.json({ error: { code: "invalid_statement", message: "x" } }, { status: 400 }),
+    );
+    try {
+      expect(await service.unlink.run("local_operator", claw.clawId)).toMatchObject({
+        ok: true,
+        discovery: "refused",
+        discoveryCode: "invalid_statement",
+      });
+      expect(await service.linkSummary()).toEqual({
+        linked: false,
+        pendingUnlinks: [
+          { hostname: "studio-k7x2q.claws.example.test", refused: "invalid_statement" },
+        ],
+      });
+      const sent = fetch.mock.calls.length;
+      await service.reconcileRuntimePolicy();
+      expect(fetch.mock.calls.length).toBe(sent);
+    } finally {
+      await service.stop();
+    }
+  });
+
+  it("still sends the unlink and restarts remote access when removing someone fails", async () => {
+    const { claw, service, effects } = await clawWithMember();
+    vi.mocked(effects.cancelRuns).mockRejectedValue(new Error("runs stuck"));
+    const { received } = discovery(confirmed);
+    try {
+      expect(await service.unlink.run("local_operator", claw.clawId)).toMatchObject({
+        ok: true,
+        discovery: "confirmed",
+        followUpError: expect.stringContaining("runs stuck"),
+      });
+      expect(received).toHaveLength(1);
+      expect(service.status()).toMatchObject({ state: "unconfigured" });
+    } finally {
+      await service.stop();
+    }
+  });
+
+  it("drops publication progress for the unlinked claw that lands afterwards", async () => {
+    const { claw, service } = await clawWithMember();
+    discovery(confirmed);
+    try {
+      await service.unlink.run("local_operator", claw.clawId);
+      await claw.authority.recordDiscovery(
+        { owner_account_id: "owner", published_binding_seq: 1 },
+        claw.clawId,
+      );
+      expect(claw.authority.current()?.discovery.owner_account_id).toBeNull();
+    } finally {
+      await service.stop();
+    }
+  });
+
+  it("still shows an unconfirmed unlink after this computer is linked again", async () => {
+    const { claw, service } = await clawWithMember();
+    discovery(() => {
+      throw new TypeError("fetch failed");
+    });
+    try {
+      await service.unlink.run("local_operator", claw.clawId);
+      const pending = claw.authority.current()!.pending_unlinks!;
+      await service.stop();
+      // A later link: a linked record that still carries the earlier pending unlink.
+      const relinked = await linkedClaw();
+      await relinked.store.write({ ...relinked.authority.current()!, pending_unlinks: pending });
+      const next = serviceFor(createOpenClawIdAuthority(relinked.store), { enabled: true });
+      expect(await next.service.linkSummary()).toMatchObject({
+        linked: true,
+        pendingUnlinks: [{ hostname: "studio-k7x2q.claws.example.test" }],
+      });
+      await next.service.stop();
     } finally {
       await service.stop();
     }
@@ -194,7 +295,7 @@ describe("unlink", () => {
     });
     const moved = serviceFor(createOpenClawIdAuthority(claw.store), config, claw.stateDir);
     try {
-      expect(await moved.service.unlink.run("local_operator")).toMatchObject({
+      expect(await moved.service.unlink.run("local_operator", claw.clawId)).toMatchObject({
         ok: false,
         code: "binding_unpublished",
       });

@@ -4,8 +4,8 @@
 //   K_srv and K_gw and returns the binding the owner root signs, with Discovery's published
 //   descriptor when `code` (the owner account's link code) reads it; commit takes that R-signed
 //   binding and the code that publishes it; cancel deletes uncommitted staged keys;
-// - unlink_preview / unlink: "Unlink from OpenClaw ID" (OCF-281). preview returns the claw's
-//   address and how many people and devices lose access; unlink signs the ClawUnlink with K_gw,
+// - unlink_preview / unlink: "Unlink from OpenClaw ID" (OCF-281). preview returns the claw's id,
+//   address and how many people and devices lose access; unlink takes that `clawId`, signs the ClawUnlink with K_gw,
 //   clears the link and all membership and sends it to Discovery (pending when Discovery can't
 //   be reached).
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
@@ -52,7 +52,7 @@ export async function handleOpenClawIdMachineAction(
   const result = rebindStep
     ? await service.rebind(rebindStep, channel, { binding: params.binding, code })
     : action === "unlink"
-      ? await service.unlink.run(channel)
+      ? await service.unlink.run(channel, params.clawId)
       : await service.unlink.preview(channel);
   if ("ok" in result && !result.ok) {
     refuse(result);

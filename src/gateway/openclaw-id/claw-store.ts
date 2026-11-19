@@ -60,6 +60,8 @@ export type StoredClaw = {
     hostname: string;
     /** The Discovery that held the unlinked claw. */
     discovery_url: string;
+    /** Discovery's refusal code when it refused the unlink for good; it is not sent again. */
+    refused?: string;
   }>;
   /** Discovery publication state (a mirror; never authority). */
   discovery: {

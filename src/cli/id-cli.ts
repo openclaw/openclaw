@@ -49,7 +49,11 @@ const authority = (opts: IdCliOpts, params: Record<string, unknown>) =>
 
 type KeysStatus = {
   status?: { state?: string; key?: string; reason?: string };
-  link?: { linked?: boolean; hostname?: string; pendingUnlinks?: string[] };
+  link?: {
+    linked?: boolean;
+    hostname?: string;
+    pendingUnlinks?: Array<{ hostname: string; refused?: string }>;
+  };
 };
 type PeopleLink = {
   binding?: {
@@ -170,9 +174,12 @@ async function runStatus(opts: IdCliOpts, signal?: AbortSignal) {
   if (status.link?.hostname) {
     lines.push(`Claw: ${sanitizeTerminalText(status.link.hostname)}`);
   }
-  for (const hostname of status.link?.pendingUnlinks ?? []) {
+  for (const pending of status.link?.pendingUnlinks ?? []) {
+    const host = sanitizeTerminalText(pending.hostname);
     lines.push(
-      `Unlink pending: ${sanitizeTerminalText(hostname)} is unlinked here; OpenClaw ID gets the unlink when it can be reached.`,
+      pending.refused
+        ? `Unlink refused: ${host} is unlinked here, but OpenClaw ID refused to retire it (${sanitizeTerminalText(pending.refused)}).`
+        : `Unlink pending: ${host} is unlinked here; OpenClaw ID gets the unlink when it can be reached.`,
     );
   }
   if (link?.binding) {

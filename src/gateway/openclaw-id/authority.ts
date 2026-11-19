@@ -551,12 +551,7 @@ export function createOpenClawIdAuthority(
     ...createNodeInviteOperations({ serialize, load, commit }),
 
     ...createRebindOperations({ serialize, load, commit }),
-    ...createUnlinkOperations({
-      serialize,
-      load,
-      commit,
-      freshRecord: () => emptyRecord(bytesToHex(randomBytes(16))),
-    }),
+    ...createUnlinkOperations({ serialize, load, commit, emptyRecord }),
 
     /** Records an invite redemption from the mailbox as pending (it admits nothing). */
     redeem(
@@ -813,8 +808,11 @@ export function createOpenClawIdAuthority(
       return [...expired].filter((key) => !isAdmitted(state, key, now)).toSorted();
     },
 
-    /** Records mirror progress; recovery may require the same committed binding through settlement. */
-    recordDiscovery(update: Partial<StoredClaw["discovery"]>, expected?: StoredClaw) {
+    /**
+     * Records mirror progress; recovery may require the same committed binding through settlement.
+     * With a claw id as `expected`, progress for another claw (one unlinked meanwhile) is dropped.
+     */
+    recordDiscovery(update: Partial<StoredClaw["discovery"]>, expected?: StoredClaw | string) {
       return serialize(async () => {
         for (const field of ["owner_account_id", "mailbox_cursor"] as const) {
           if (Object.hasOwn(update, field)) {
@@ -822,7 +820,10 @@ export function createOpenClawIdAuthority(
           }
         }
         const current = await load();
-        if (expected) {
+        if (typeof expected === "string" ? current?.claw_id !== expected : false) {
+          return;
+        }
+        if (expected && typeof expected !== "string") {
           assertSameClawIdentity(current, expected);
         }
         if (current) {

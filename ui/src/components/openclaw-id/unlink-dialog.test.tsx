@@ -28,8 +28,8 @@ afterEach(() => {
 
 function client(answer: (action: string) => unknown) {
   const actions: string[] = [];
-  const request = vi.fn(async (_method: string, params: { action: string }) => {
-    actions.push(params.action);
+  const request = vi.fn(async (_method: string, params: { action: string; clawId?: string }) => {
+    actions.push(params.clawId ? `${params.action}:${params.clawId}` : params.action);
     return answer(params.action);
   });
   // SAFETY: the dialog only calls request("openclawId.authority", ...).
@@ -69,7 +69,7 @@ it("shows the live counts, the address and the retired name before unlinking", a
   expect(actions).toEqual(["unlink_preview"]);
   await click("Unlink");
   await expect(result).resolves.toBe(true);
-  expect(actions).toEqual(["unlink_preview", "unlink"]);
+  expect(actions).toEqual(["unlink_preview", `unlink:${preview.claw_id}`]);
   expect(notice).toHaveBeenCalledWith({
     severity: "success",
     message: "studio-k7x2q.claws.example.test is unlinked from OpenClaw ID.",

@@ -44,6 +44,10 @@ export function describeUnlinkResult(result: UnlinkResult): string {
     lines.push(
       "OpenClaw ID couldn't be reached. This computer sends the unlink as soon as it can; until then the address may still be listed (openclaw id status).",
     );
+  } else if (result.discovery === "refused") {
+    lines.push(
+      `OpenClaw ID refused the unlink (${sanitizeTerminalText(result.discoveryCode ?? "unknown")}), so the address may still be listed. This computer no longer accepts anyone through it.`,
+    );
   }
   if (result.followUpError !== undefined) {
     lines.push(
@@ -75,9 +79,9 @@ export async function runUnlink(
     }
   }
   // SAFETY: unlink answers the service's UnlinkResult contract.
-  const result = (await authority({ action: "unlink" })) as UnlinkResult;
+  const result = (await authority({ action: "unlink", clawId: preview.claw_id })) as UnlinkResult;
   write(result, describeUnlinkResult(result));
-  if (result.followUpError !== undefined) {
+  if (result.followUpError !== undefined || result.discovery === "refused") {
     process.exitCode = 2;
   }
 }
