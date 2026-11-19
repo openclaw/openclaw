@@ -87,9 +87,19 @@ it(
       await fs.writeFile(path.join(state.workspaceDir, "marker.txt"), "prepared workspace\n");
       await requireGit(state.workspaceDir, ["add", "."]);
       await requireGit(state.workspaceDir, ["commit", "-qm", "synthetic workspace"]);
+      const baseUrl = await listenProvider(provider);
+      // Bypass the ambient proxy only for this fixture, preserving other proxy routing.
+      // A standalone "*" must remain standalone to retain its bypass-all semantics.
+      const inheritedNoProxy = process.env.no_proxy ?? process.env.NO_PROXY;
+      const noProxy =
+        inheritedNoProxy === "*"
+          ? inheritedNoProxy
+          : [inheritedNoProxy, new URL(baseUrl).host].filter(Boolean).join(",");
+      Object.assign(state.envVars, { NO_PROXY: noProxy, no_proxy: noProxy });
+      state.applyEnv();
       const model = productModelConfig(
         state.workspaceDir,
-        buildMockOpenAiResponsesProvider(await listenProvider(provider), "restart-workspace"),
+        buildMockOpenAiResponsesProvider(baseUrl, "restart-workspace"),
       );
       const cfg: OpenClawConfig = {
         agents: {
