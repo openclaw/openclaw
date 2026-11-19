@@ -91,6 +91,15 @@ export async function convergeUpdatePlugins(params: {
   assertCurrent?.();
   const postUpdateRoot = params.result.root ?? params.root;
   const gitRelease = isSwitchedGitRelease(params.result);
+  // Every path below writes a changed channel to config: copy the originals first.
+  if (
+    params.requestedChannel &&
+    params.configSnapshot.valid &&
+    params.requestedChannel !== params.storedChannel
+  ) {
+    await params.opts.run?.captureOriginal?.();
+    assertCurrent?.();
+  }
   if (gitRelease && params.opts.restart === false) {
     // Unverified until it starts: replacing plugins now could strand them if its trial fails.
     const postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
@@ -196,17 +205,6 @@ export async function convergeUpdatePlugins(params: {
         let retiredWarnings: ReadonlySet<string> = new Set();
         let targetRuntimeConverged = false;
         let maintenanceDeferred = false;
-        // Known state changes ahead: a fresh process always runs Doctor repair and cannot
-        // copy itself, and a changed channel is written to config. Copy the originals first.
-        if (
-          shouldResumePostCoreInFreshProcess ||
-          (params.requestedChannel &&
-            params.configSnapshot.valid &&
-            params.requestedChannel !== params.storedChannel)
-        ) {
-          await params.opts.run?.captureOriginal?.();
-          assertCurrent?.();
-        }
         if (shouldResumePostCoreInFreshProcess) {
           if (retainedDifferentRuntime && params.opts.run?.completionOwner === "gateway-restart") {
             await params.beforeDoctor?.();

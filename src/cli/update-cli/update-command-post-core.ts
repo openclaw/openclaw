@@ -329,6 +329,10 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       params.opts.fullIntegrityCheck && options.has("--full-integrity-check"),
     );
   }
+  // The fresh process runs Doctor repair and cannot copy itself. Once it will launch, and
+  // before its tentative plugin index, copy the originals (a no-op if this run already did).
+  await params.opts.run?.captureOriginal?.();
+  authority.assertCurrent();
 
   const argv = [
     entryPath,

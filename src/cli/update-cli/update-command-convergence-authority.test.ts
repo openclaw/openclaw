@@ -219,17 +219,31 @@ describe("candidate convergence Doctor dispatch authority", () => {
     const releaseRoot = (await createGitReleaseDirs(prefix)).releaseRoot;
     await fs.mkdir(releaseRoot, { recursive: true });
     await publishGitRelease({ prefix, releaseRoot, trial: false });
+    // The channel write is a state change: the run copies its originals first.
+    const order: string[] = [];
     const persist = vi
       .spyOn(pluginConfig, "persistRequestedUpdateChannel")
-      .mockResolvedValue(snapshot);
+      .mockImplementation(async () => {
+        order.push("persist-channel");
+        return snapshot;
+      });
+    const captureOriginal = async () => {
+      order.push("copy");
+    };
     const { resultWithPostUpdate } = await converge({
       root: gitReleaseSlot(prefix),
       result: { root: gitReleaseSlot(prefix) },
       requestedChannel: "beta",
-      opts: { json: true, yes: true, restart: false },
+      opts: {
+        json: true,
+        yes: true,
+        restart: false,
+        run: { runId: "git-release-channel", env: process.env, captureOriginal },
+      },
     });
     expect(resultWithPostUpdate.status).toBe("ok");
     expect(persist).toHaveBeenCalledWith(expect.objectContaining({ requestedChannel: "beta" }));
+    expect(order).toEqual(["copy", "persist-channel"]);
     expect(mocks.convergeCandidate).not.toHaveBeenCalled();
   });
   it("completes an already-current rerun from the checkout of a converted install", async () => {
@@ -255,42 +269,6 @@ describe("candidate convergence Doctor dispatch authority", () => {
     });
     expect(resultWithPostUpdate.reason).not.toBe("post-core-update-failed");
     expect(mocks.convergeCandidate).toHaveBeenCalled();
-  });
-  it("copies an already-current core's originals before a fresh process repairs it", async () => {
-    // The installed target differs from this updater, so post-core work runs in a fresh
-    // process that always runs Doctor repair and cannot copy the originals itself.
-    vi.mocked(shared.readPackageVersion).mockResolvedValue("2026.9.4");
-    const order: string[] = [];
-    vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess").mockImplementationOnce(async () => {
-      order.push("fresh-process");
-      return { resumed: false, exitCode: 1, error: "fixture stop", failureFacts: [] };
-    });
-    await withOpenClawTestState({ label: "current-core-fresh-process" }, async (state) => {
-      const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
-      await converge({
-        coreAlreadyCurrent: true,
-        result: {
-          status: "skipped",
-          reason: "already-current",
-          mode: "npm",
-          before: { version: VERSION },
-          after: { version: "2026.9.4" },
-        },
-        downgradeRisk: true,
-        opts: {
-          json: true,
-          yes: true,
-          run: {
-            runId,
-            env: state.env,
-            captureOriginal: async () => {
-              order.push("capture");
-            },
-          },
-        },
-      });
-    });
-    expect(order).toEqual(["capture", "fresh-process"]);
   });
   it.each([
     { requestedChannel: "beta" as const, copies: true },

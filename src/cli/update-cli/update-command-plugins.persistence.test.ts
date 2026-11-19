@@ -729,37 +729,47 @@ it.each([1, 5])("bounds publication retries after %s late writes", async (writes
   );
 });
 
-it.each([true, false])(
-  "runs the original-state copy before plugin records publish, and never without a change (changed=%s)",
-  async (changed) => {
+it.each(["records only", "records and config", "unchanged"] as const)(
+  "runs the original-state copy before plugin records publish, never without a change (%s)",
+  async (shape) => {
     await withOpenClawTestState({ label: "updater-plugin-copy-first" }, async (state) => {
-      const prepared = await prepareUpdate(state, { plugins: { enabled: false } });
-      const order: string[] = [];
+      const config: OpenClawConfig = { plugins: { enabled: false } };
+      const prepared = await prepareUpdate(state, config);
+      const preparedWrite = await readConfigFileSnapshotForWrite();
+      const records = { next: { source: "archive" as const } };
       mocks.convergence.mockImplementationOnce(async ({ cfg }) => ({
         ...convergenceResult(cfg),
-        ...(changed
+        ...(shape === "unchanged"
+          ? {}
+          : { changes: ["Installed fixture next."], installRecords: records }),
+        // A config delta takes the combined writer, which commits the index first.
+        ...(shape === "records and config"
           ? {
-              changes: ["Installed fixture next."],
-              installRecords: { next: { source: "archive" } },
+              config: { ...cfg, plugins: { ...cfg.plugins, entries: { next: { enabled: true } } } },
+              configChanges: ["Enabled fixture next."],
             }
           : {}),
       }));
+      // What a copy taken at this moment would hold: the index as it was before publication.
+      const indexAtCopy: unknown[] = [];
       await updatePluginsAfterCoreUpdate({
         ...prepared,
         configChanged: false,
-        configWriteOptions: {
-          beforeCommit: async () => {
-            order.push("commit");
-          },
-        },
+        configWriteOptions: preparedWrite.writeOptions,
         beforeRecordPublication: async () => {
-          order.push("copy");
+          indexAtCopy.push(
+            await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+          );
         },
       });
-      expect(order).toEqual(changed ? ["copy", "commit"] : []);
+      expect(indexAtCopy.slice(0, 1)).toEqual(shape === "unchanged" ? [] : [{}]);
       expect(
         await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
-      ).toEqual(changed ? { next: { source: "archive" } } : {});
+      ).toEqual(shape === "unchanged" ? {} : records);
+      if (shape === "records and config") {
+        const saved = (await readConfigFileSnapshot()).sourceConfig;
+        expect(saved.plugins?.entries?.next?.enabled).toBe(true);
+      }
     });
   },
 );

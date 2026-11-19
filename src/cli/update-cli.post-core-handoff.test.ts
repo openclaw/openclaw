@@ -22,6 +22,7 @@ import {
   writeGitUpdateResultFixture,
   writeOpenClawPackageFixture,
 } from "./update-cli/update-cli-package.test-support.js";
+import { withUpdateCommandExecutor } from "./update-cli/update-command-executor.js";
 
 // These cases cover the in-place Git runner that Windows checkouts and package-to-Git switches use.
 vi.mock("../infra/git-release-paths.js", async (importOriginal) => ({
@@ -219,6 +220,45 @@ it("keeps foreign-service updates in the caller profile", async () => {
   checks.expectNoSideEffects(mocks.serviceStop, mocks.serviceRestart);
   expect(checks.spawnCall()?.[2]?.env).toMatchObject(callerEnv);
 });
+
+it.each([true, false])(
+  "copies the originals once the fresh post-core process will launch (launches=%s)",
+  async (launches) => {
+    // The fresh process runs Doctor repair and cannot copy itself; a missing entry point
+    // launches nothing and changes nothing, so it copies nothing.
+    const order: string[] = [];
+    const captureOriginal = vi.fn(async () => {
+      order.push("copy");
+    });
+    if (launches) {
+      freshContinuation();
+      mocks.spawn.mockImplementationOnce(() => {
+        order.push("spawn");
+        return exitingChild();
+      });
+    } else {
+      vi.mocked(cli.resolveGatewayInstallEntrypoint).mockResolvedValueOnce(undefined);
+    }
+    const root = "/tmp/openclaw-updated-root";
+    const { runId } = cli.createUpdateRun({ trigger: "cli" });
+    const result = await withUpdateCommandExecutor(runId, async (executor) => {
+      const executorFence = await executor.enter(root);
+      return await cli.continuePostCoreUpdateInFreshProcess({
+        root,
+        channel: "stable",
+        requestedChannel: null,
+        opts: { run: { runId, env: process.env, executorFence, captureOriginal } },
+        pluginInstallRecords: {},
+        updateStartedAtMs: 123,
+        timeoutMs: 30_000,
+      });
+    });
+    expect(order).toEqual(launches ? ["copy", "spawn"] : []);
+    if (!launches) {
+      expect(result).toEqual({ resumed: false });
+    }
+  },
+);
 
 it("never pipes JSON post-core output to stdout", async () => {
   const { entrypoints } = f.setupUpdatedRootRefresh();

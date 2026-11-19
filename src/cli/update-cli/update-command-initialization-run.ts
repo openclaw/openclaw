@@ -113,6 +113,7 @@ export async function initializeAndRunUpdate(
                   admissionAttempted = true;
                   return originalExecutor.enter(...args);
                 },
+                exclude: originalExecutor.exclude?.bind(originalExecutor),
               };
               const selection: UpdateTargetSelection | undefined = await withOwnedManagedUpdateEnv(
                 targetEnv,
@@ -223,11 +224,14 @@ export async function initializeAndRunUpdate(
                     // The execution owner calls this at its first state change: Gateway
                     // handoff, activation, or Doctor. Refusals and no-op runs copy nothing.
                     run.captureOriginal = async () => {
-                      // The copy has its own step bound; it never spends the operator's
-                      // --timeout budget, which it did not before it became lazy either.
+                      // The copy has its own step bound. It spends neither the operator's
+                      // --timeout budget nor the executor's activation clock, as before it
+                      // became lazy.
+                      const outsideActivation = () =>
+                        executor.exclude ? executor.exclude(captureOriginal) : captureOriginal();
                       await (run.deadline
-                        ? run.deadline.exclude(captureOriginal)
-                        : captureOriginal());
+                        ? run.deadline.exclude(outsideActivation)
+                        : outsideActivation());
                       recordCaptureSteps();
                     };
                   }
