@@ -19,12 +19,27 @@ import { recordGatewayShutdownWarning } from "./server-shutdown.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 
+/** Restart markers belong to an agent: a global-scope or "unknown" key is shared by agents. */
+export function createRestartResumeMarks() {
+  const marked = new Set<string>();
+  return {
+    mark: (agentId: string, sessionKey: string) => {
+      marked.add(JSON.stringify([agentId, sessionKey]));
+    },
+    // A stop target without an agent keeps the plain reason and is interrupted as before.
+    reasonFor: (agentId: string | undefined, sessionKey: string | undefined) =>
+      agentId && sessionKey && marked.has(JSON.stringify([agentId, sessionKey]))
+        ? createAgentRunResumableRestartAbortError()
+        : undefined,
+  };
+}
+
 export type GatewayRunShutdownParams = {
   resolveGatewayContext: GatewayContextResolver;
   /** Snapshot live owners once, before cancellation changes their running state. */
   persistRunningSessionsForRestart?: (
     signal: AbortSignal,
-    onMarked: (sessionKey: string) => void,
+    onMarked: (agentId: string, sessionKey: string) => void,
   ) => Promise<void>;
   terminateRunningSubagentsForShutdown?: () => Promise<void>;
   cancelReceivedWork?: (reason?: Error) => void;
@@ -51,7 +66,7 @@ export async function prepareGatewayRunShutdown(
   });
   const effects = captureGatewaySessionWorkAdmissionInterruption(params.resolveGatewayContext);
   const persistence = new AbortController();
-  const marked = new Set<string>();
+  const marks = createRestartResumeMarks();
   // Leave time for abort finalizers and resource retirement within the owner's deadline.
   const budget = getProcessCleanupBudget();
   const remainingCleanupMs = () =>
@@ -62,7 +77,7 @@ export async function prepareGatewayRunShutdown(
     await raceWithTimeout(
       () =>
         measureGatewayCloseStep("restart.close.session-markers", async () =>
-          params.persistRunningSessionsForRestart?.(persistence.signal, (key) => marked.add(key)),
+          params.persistRunningSessionsForRestart?.(persistence.signal, marks.mark),
         ),
       persistenceMs,
       () => {
@@ -88,8 +103,7 @@ export async function prepareGatewayRunShutdown(
     capture,
     source: "restart",
     // Only a session the next Gateway resumes may leave remote harness work running.
-    reasonForSession: (sessionKey) =>
-      sessionKey && marked.has(sessionKey) ? createAgentRunResumableRestartAbortError() : undefined,
+    reasonForSession: marks.reasonFor,
     onError: (_target, error) => {
       shutdownLog.warn(`failed to cancel work during shutdown: ${String(error)}`);
       recordGatewayShutdownWarning(params.warnings, "session-abort");

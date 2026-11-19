@@ -139,7 +139,7 @@ type SessionStopRequestBase = {
   assertCurrent?: () => void;
   reason?: unknown;
   /** Per-session reason; undefined keeps the request reason. */
-  reasonForSession?: (sessionKey: string | undefined) => unknown;
+  reasonForSession?: (agentId: string | undefined, sessionKey: string | undefined) => unknown;
   messageIdentity?: unknown;
   recordAbortTarget?: (options: { recordCutoff: boolean }) => Promise<void>;
   hookContext?: SessionStopHookContext;
@@ -250,8 +250,8 @@ function applySessionControllerStop(
         : params.source === "channel-user"
           ? createAgentRunDirectAbortError(true)
           : undefined);
-  const reasonFor = (sessionKey: string | undefined) =>
-    params.reasonForSession?.(sessionKey) ?? reason;
+  const reasonFor = (agentId: string | undefined, sessionKey: string | undefined) =>
+    params.reasonForSession?.(agentId, sessionKey) ?? reason;
   const once = (
     effect: () => boolean,
     committedAfterFailure: () => boolean,
@@ -303,7 +303,9 @@ function applySessionControllerStop(
       () =>
         abortSessionControllerInput(
           input,
-          reasonFor(operation?.key ?? input.target?.sessionKey),
+          operation
+            ? reasonFor(operation.agentId, operation.key)
+            : reasonFor(input.target?.agentId, input.target?.sessionKey),
           assertCurrent,
         ),
       () =>
@@ -404,7 +406,7 @@ function applySessionControllerStop(
           }
           return params.source === "watchdog"
             ? operation.abortForStall()
-            : operation.abort(reasonFor(operation.key));
+            : operation.abort(reasonFor(operation.agentId, operation.key));
         },
         () =>
           !hadResult &&
@@ -430,9 +432,8 @@ function applySessionControllerStop(
       let matchedRun: SessionWorkRun | undefined;
       const cancel = once(
         () => {
-          const effectReason = reasonFor(captured.run?.sessionKey);
           const receipt = captured.interrupt(
-            effectReason instanceof Error ? effectReason : createAgentRunDirectAbortError(),
+            reason instanceof Error ? reason : createAgentRunDirectAbortError(),
           );
           matchedRun = receipt?.run;
           return Boolean(receipt);

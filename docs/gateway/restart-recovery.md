@@ -26,9 +26,11 @@ A Codex turn in a session that receives a marker, running in an app-server that
 the Gateway reaches over a WebSocket or Unix socket rather than one it started,
 is not interrupted: it keeps running, as it does after a crash. The next
 Gateway's recovery input waits up to two minutes for that turn to finish, then
-continues from its result. A turn in a session without a marker, or one still
-waiting on the stopping Gateway (an approval, a question, or an OpenClaw tool
-call), is interrupted as before.
+continues from its result. A final Gateway stop also leaves such a turn
+running; to end it, stop the turn before stopping the Gateway. A turn in a
+session without a marker, one in a sandboxed session, or one still waiting on
+the stopping Gateway (an approval, a question, or an OpenClaw tool call) is
+interrupted as before.
 
 Scheduled automation retains its cron owner, even when it runs in an ordinary
 conversation. Shutdown does not turn an interrupted occurrence into an operator

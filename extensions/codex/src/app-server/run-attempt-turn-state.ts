@@ -100,12 +100,14 @@ export function createCodexAttemptTurnState(resources: StartedCodexAttemptResour
     resolveCompletion();
   };
   // A Gateway stop leaves a resumable turn in an app-server it did not start running, as a
-  // crash does; the next Gateway's restart input waits for it. Open requests to it end.
+  // crash does; the next Gateway's restart input waits for it. Open requests to it end, and
+  // so do commands the Gateway admits itself, so such a turn is interrupted as before.
   const keepResumableRemoteTurn = (interrupt: () => void) => () => {
     if (
       isAgentRunResumableRestartAbortReason(runAbortController.signal.reason) &&
       connection.appServer.start.transport !== "stdio" &&
       !connection.workerHostedCloud &&
+      !resources.nativeProcessAuthority?.requiresProcessAdmission &&
       state.activeAppServerTurnRequests === 0
     ) {
       completeTurn();

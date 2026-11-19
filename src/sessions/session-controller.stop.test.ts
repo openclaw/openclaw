@@ -261,8 +261,8 @@ it.each([
     await stopSession({
       source: "restart",
       capture: captureSessionControllerStop({ targets: [f.target] }),
-      reasonForSession: (sessionKey) =>
-        matched && sessionKey === f.sessionKey ? resumable : undefined,
+      reasonForSession: (agentId, sessionKey) =>
+        matched && agentId === "main" && sessionKey === f.sessionKey ? resumable : undefined,
     }).completed;
     const reason = signal.reason;
     expect(reason === resumable).toBe(matched);
@@ -270,6 +270,40 @@ it.each([
     expect(isAgentRunResumableRestartAbortReason(reason)).toBe(matched);
   },
 );
+
+it("asks for the per-session restart reason with each agent sharing a global key", async () => {
+  const sessions = ["main", "other"].map((agentId) => {
+    const sessionId = randomUUID();
+    const target = captureSessionTarget({
+      storeScope: `/synthetic/stop/${agentId}/${sessionId}`,
+      sessionKey: "global",
+      incarnation: sessionId,
+      agentId,
+    });
+    const operation = createReplyOperation({
+      sessionKey: "global",
+      sessionId,
+      resetTriggered: false,
+      target,
+    });
+    onTestFinished(async () => {
+      operation.complete();
+      await operation.ownerSettlement;
+    });
+    return { target, operation };
+  });
+  const resumable = createAgentRunResumableRestartAbortError();
+  await stopSession({
+    source: "restart",
+    capture: captureSessionControllerStop({ targets: sessions.map(({ target }) => target) }),
+    reasonForSession: (agentId, sessionKey) =>
+      agentId === "other" && sessionKey === "global" ? resumable : undefined,
+  }).completed;
+  const [main, other] = sessions.map(({ operation }) => operation.abortSignal.reason);
+  expect(isAgentRunRestartAbortReason(main)).toBe(true);
+  expect(isAgentRunResumableRestartAbortReason(main)).toBe(false);
+  expect(other).toBe(resumable);
+});
 
 it("cancels scoped runless effects without waiting for their producer release", async () => {
   const f = fixture();
