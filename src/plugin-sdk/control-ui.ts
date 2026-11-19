@@ -201,14 +201,44 @@ export type ControlUiPanel = {
   mount: ControlUiView<BoardGetParams>;
 };
 
+/** A draft offered to the user beside the composer; nothing changes until they accept it. */
+export type ControlUiDraftProposal = {
+  /** Short heading for the proposal card. */
+  title: string;
+};
+
+/** The user's choice; `"dismissed"` also covers the pane, chat, or action retiring first. */
+export type ControlUiDraftProposalOutcome = "accepted" | "dismissed";
+
+export type ControlUiComposerHandle = {
+  readonly draft: string;
+  setDraft: (text: string) => void;
+  /**
+   * Offer `text` as a replacement draft. The user accepts it (Use or Tab) or dismisses it
+   * (Dismiss or Escape); it is never sent. Accepting replaces the draft as one native edit,
+   * so undo restores the previous draft. A newer proposal replaces an unanswered one.
+   */
+  propose: (
+    text: string,
+    proposal: ControlUiDraftProposal,
+  ) => Promise<ControlUiDraftProposalOutcome>;
+};
+
 export type ControlUiAction = {
   id: string;
   label: string;
   placement: "composer" | "header" | "session";
+  /**
+   * Fixed host icon-registry name. A composer action with an icon renders as a compact
+   * toolbar button beside the attachment menu, named and tooltipped by its label.
+   */
+  icon?: string;
   resolve?: (context: BoardGetParams & { session?: ControlUiSession }) => {
     label?: string;
     disabled?: boolean;
     hidden?: boolean;
+    /** Shows the button as active, for example while the action's work runs. */
+    pressed?: boolean;
   };
   run: (
     context: BoardGetParams & {
@@ -216,14 +246,18 @@ export type ControlUiAction = {
       host: ControlUiHost;
       signal: AbortSignal;
       /** Composer placement only: the invoking pane's live draft; retires with `signal`. */
-      composer?: { readonly draft: string; setDraft: (text: string) => void };
+      composer?: ControlUiComposerHandle;
     },
   ) => void | Promise<void>;
 };
 
 export type ControlUiAccessory = {
   id: string;
-  placement: "session-header";
+  /**
+   * `session-header`: beside the chat title. `composer`: attached above the composer input,
+   * with the host's queue, progress, and approval cards.
+   */
+  placement: "session-header" | "composer";
   mount: ControlUiView<BoardGetParams>;
 };
 

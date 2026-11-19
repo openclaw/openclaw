@@ -1,5 +1,10 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import type { ControlUiAction, ControlUiSession } from "../../../src/plugin-sdk/control-ui.js";
+import type {
+  ControlUiAction,
+  ControlUiDraftProposal,
+  ControlUiDraftProposalOutcome,
+  ControlUiSession,
+} from "../../../src/plugin-sdk/control-ui.js";
 import type { PluginSessionMenuAction } from "../components/session-menu-solid.tsx";
 import { i18n } from "../i18n/lib/translate.ts";
 import type { ControlUiPluginCapability } from "./control-ui-capability.ts";
@@ -10,6 +15,12 @@ export type ControlUiComposerDraft = {
   draft: string;
   getDraft?: () => string;
   onDraftChange: (next: string) => void;
+  /** Rejects where the pane cannot present proposals, such as beside a replacement composer. */
+  propose: (
+    text: string,
+    title: string,
+    signal: AbortSignal,
+  ) => Promise<ControlUiDraftProposalOutcome>;
 };
 
 export function pluginSessionMenuActions(
@@ -116,6 +127,10 @@ export async function runControlUiPluginAction(
       setDraft: (text: string) => {
         checkComposer();
         composer.onDraftChange(text);
+      },
+      propose: (text: string, proposal: ControlUiDraftProposal) => {
+        checkComposer();
+        return composer.propose(text, proposal.title, signal);
       },
     },
   });

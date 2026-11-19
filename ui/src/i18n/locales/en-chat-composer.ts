@@ -12,6 +12,21 @@ const catalog = {
       predictionHint: "Tab to complete",
       predictionAvailable:
         "Suggested message: {text}. Press Tab to use it, or Escape to dismiss. It won’t be sent automatically.",
+      proposal: {
+        use: "Use",
+        dismiss: "Dismiss",
+        dismissKey: "Esc",
+        useKey: "Tab",
+        undo: "Undo",
+        notSent: "not sent",
+        replacesDraft: "replaces your draft · not sent",
+        accepted: "Draft replaced",
+        available:
+          "{title}. Press Tab to use it, or Escape to dismiss. It won’t be sent automatically.",
+        expand: "Show the whole suggestion",
+        unavailable:
+          "This composer can’t show suggested drafts. Switch back to the built-in composer and try again.",
+      },
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
       emptyHint: "Type a message first.",

@@ -6,6 +6,7 @@ import {
 } from "./chat-composer-dom.ts";
 import { createComposerEmojiMenu } from "./chat-composer-emoji-state.ts";
 import { createHumanMentionMenu } from "./chat-composer-mention-menu-state.ts";
+import { createComposerProposal } from "./chat-composer-proposal.ts";
 import { createSkillMenu } from "./chat-composer-skill-menu-state.ts";
 import { createSlashMenu } from "./chat-composer-slash-menu-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
@@ -42,6 +43,7 @@ function createChatComposerState(): ChatComposerState {
     dictation: null,
     composerDraftScope: null,
     dictationSelection: null,
+    proposal: createComposerProposal(),
   };
 }
 

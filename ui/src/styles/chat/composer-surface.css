@@ -82,9 +82,11 @@
     > .agent-chat__composer-notices > .chat-composer-lit-content > *,
     > .chat-composer-lit-content
       > :not(openclaw-plugin-contributions, openclaw-chat-outbox-recovery),
-    > .chat-composer-lit-content > openclaw-plugin-contributions > *,
+    > .chat-composer-lit-content > openclaw-plugin-contributions > :not(openclaw-plugin-view),
     > .chat-composer-lit-content > openclaw-chat-outbox-recovery > *,
-    > openclaw-plugin-contributions > *,
+    > openclaw-plugin-contributions > :not(openclaw-plugin-view),
+    /* An accessory counts only while its plugin shows something. */
+    > openclaw-plugin-contributions > openclaw-plugin-view > [data-plugin-view-root] > :not([hidden]),
     > openclaw-chat-outbox-recovery > *
   )
 ) {
@@ -780,6 +782,33 @@
     color: var(--text-strong);
     background: var(--chat-composer-hover);
   }
+}
+
+.agent-chat__input .agent-chat__composer-action[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .agent-chat__composer-action[aria-pressed="true"] svg {
+    animation: pulse-subtle 2s var(--ease-in-out) infinite;
+  }
+}
+
+/* A failed plugin toolbar action reports above the composer without moving it. */
+.agent-chat__composer-action-error {
+  position: absolute;
+  inset-block-end: calc(100% + 6px);
+  inset-inline-start: 0;
+  max-width: min(420px, 100%);
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.4;
+  z-index: 1;
 }
 
 .agent-chat__input-btn svg,

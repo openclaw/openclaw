@@ -31,7 +31,12 @@ import "../../../styles/chat/mention-menu.css";
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createComposerMobileInteraction } from "./chat-composer-mobile-interaction.tsx";
+import { ChatComposerPluginContributions } from "./chat-composer-plugin-contributions.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
+import {
+  ComposerProposalCard,
+  composerProposalAnnouncement,
+} from "./chat-composer-proposal-card.tsx";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
 import { ComposerQueue, ComposerInputScope, ComposerProgress } from "./chat-composer-regions.tsx";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
@@ -307,6 +312,13 @@ export function renderChatComposerView(
       <div class="agent-chat__composer-float" ref={[elementRef(props.onComposerFloatRef)]}>
         <div class="chat-footer__context" ref={(element) => (state.composerContext = element)}>
           {props.footerContent}
+          <ComposerProposalCard
+            proposal={state.proposal}
+            draft={context().visibleDraft}
+            canCompose={context().canCompose}
+            keyHints={!props.mobileComposer}
+            textarea={() => state.composerTextarea}
+          />
           <div class="agent-chat__composer-notices">
             {props.notices} {composerStatus()} {composerAlerts()} {fallbackStatus()}
             <Show when={context().cancellationCaveat}>
@@ -590,6 +602,9 @@ export function renderChatComposerView(
                 <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
                   {predictionAnnouncement()}
                 </span>
+                <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
+                  {composerProposalAnnouncement(state.proposal)}
+                </span>
                 <span
                   id={slashMenuAnnouncementId()}
                   class="sr-only"
@@ -629,6 +644,11 @@ export function renderChatComposerView(
                     },
                     onViewChange: setCapabilityView,
                   }}
+                />
+                <ChatComposerPluginContributions
+                  kind="composer-toolbar"
+                  composer={props}
+                  presented={props.pluginActionsPresented ?? true}
                 />
                 {composerLeadControl}
               </div>

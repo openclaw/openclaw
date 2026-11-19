@@ -46,6 +46,7 @@ import type {
   HumanMentionMenu,
 } from "./chat-composer-mention-menu-state.ts";
 import type { ChatComposerCapabilityMenuSource } from "./chat-composer-plus-menu.types.ts";
+import type { ComposerProposal } from "./chat-composer-proposal.ts";
 import type { SkillMenu } from "./chat-composer-skill-menu-state.ts";
 import type { SlashMenu } from "./chat-composer-slash-menu-state.ts";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.tsx";
@@ -219,6 +220,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
     component: typeof ChatPaneModelControl;
   };
   footerContent?: JSX.Element;
+  /** False while the pane is retained but hidden; plugin composer actions retire then. */
+  pluginActionsPresented?: boolean;
   composerRecovery?:
     | (Parameters<typeof PaneOutboxRecovery>[0] & {
         component: typeof PaneOutboxRecovery;
@@ -302,4 +305,6 @@ export type ChatComposerState = {
   dictation: ComposerDictationOwner | null;
   composerDraftScope: { key: string } | null;
   dictationSelection: { start: number; end: number; value: string } | null;
+  /** A plugin-offered replacement draft; per pane, cleared when the draft scope changes. */
+  proposal: ComposerProposal;
 };

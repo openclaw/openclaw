@@ -307,6 +307,7 @@ export function createChatComposerContext(
       return;
     }
     state.composerComposing = false;
+    state.proposal.clearAccepted();
     interaction.setComposition(null);
     commitComposerDraft(props, draft);
     props.onTypingChange?.(false);
@@ -334,9 +335,16 @@ export function createChatComposerContext(
     }
     prediction?.acceptInto(state.composerTextarea);
   };
+  const acceptProposal = () => {
+    if (state.composerComposing || !canCompose) {
+      return false;
+    }
+    return state.proposal.accept(state.composerTextarea);
+  };
   const handleKeyDown = createComposerKeyDownHandler({
     prediction,
     acceptPrediction,
+    acceptProposal,
     state,
     props,
     skillMenuHost,
@@ -361,6 +369,7 @@ export function createChatComposerContext(
     );
   const syncComposerValue = (target: HTMLTextAreaElement, typedAtSign = false) => {
     prediction?.dismiss();
+    state.proposal.clearAccepted();
     adjustTextareaHeight(target, { nativeInput: true });
     target.dir = detectTextDirection(target.value);
     const mentions = getMentions();

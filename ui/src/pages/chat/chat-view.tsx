@@ -32,6 +32,7 @@ import {
 import type { ChatActivityPillsProps } from "./components/chat-activity-pills-types.ts";
 import { publicationOutsidePills } from "./components/chat-activity-pills-visibility.ts";
 import { ChatCommentController } from "./components/chat-comment-controller.ts";
+import { ChatComposerPluginContributions } from "./components/chat-composer-plugin-contributions.tsx";
 import {
   ComposerQuestionDock,
   createComposerQuestionPanel,
@@ -210,15 +211,11 @@ function ChatFooterContent(
           />
         </ChatLazyBoundary>
       </Show>
-      <Show when={input.application}>
-        <openclaw-plugin-contributions
-          prop:kind="composer"
-          prop:sessionKey={input.props.sessionKey}
-          prop:agentId={input.props.currentAgentId}
-          prop:presented={input.presented}
-          prop:composer={input.props}
-        />
-      </Show>
+      <ChatComposerPluginContributions
+        kind="composer"
+        composer={input.props}
+        presented={input.presented}
+      />
     </>
   );
 }
@@ -295,6 +292,7 @@ function ChatComposerView(input: ChatViewInput) {
           activities={activities()}
         />
       }
+      pluginActionsPresented={input.presented}
       mobileActivityPills={activities()}
       mobileApprovalContent={
         <Show

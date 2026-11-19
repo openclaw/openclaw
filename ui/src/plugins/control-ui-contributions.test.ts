@@ -206,8 +206,8 @@ async function mountActions(
     run,
   };
   const plugins = {
-    registrations: () =>
-      registered
+    registrations: (kind: string) =>
+      registered && kind === "actions"
         ? [
             {
               key: "fixture/review",

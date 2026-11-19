@@ -21,7 +21,7 @@ import { PluginContribution } from "./control-ui-view.solid.tsx";
 import { navigationItemCurrent } from "./navigation-sections.ts";
 
 type ContributionsProps = {
-  kind: "navigation" | "session-header" | "composer" | "header";
+  kind: "navigation" | "session-header" | "composer" | "composer-toolbar" | "header";
   sessionKey: string;
   agentId: string | undefined;
   navigationKey: string;
@@ -91,7 +91,9 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
           const sources = [
             current?.plugins,
             ...(kind === "navigation" ? [current?.router] : []),
-            ...(kind === "header" || kind === "composer" ? [current?.sessions] : []),
+            ...(kind === "header" || kind === "composer" || kind === "composer-toolbar"
+              ? [current?.sessions]
+              : []),
           ];
           const stops = sources.map((owner) => owner?.subscribe(changed));
           return () => stops.forEach((stop) => stop?.());
@@ -185,6 +187,8 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
       </a>
     );
   }
+  // Composer actions with an icon render compact in the composer toolbar; the rest above it.
+  const placement = () => (props.kind === "composer-toolbar" ? "composer" : props.kind);
   const actions = createMemo(() => {
     const runtime = source().read();
     // Target changes retire the invocation before this presentation is recomputed.
@@ -192,7 +196,12 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
     return (
       runtime
         ?.registrations("actions")
-        .filter((entry) => entry.value.placement === props.kind)
+        .filter(
+          (entry) =>
+            entry.value.placement === placement() &&
+            (props.kind !== "composer" || !entry.value.icon) &&
+            (props.kind !== "composer-toolbar" || Boolean(entry.value.icon)),
+        )
         .flatMap((entry) => {
           const state = resolveAction(entry);
           if (state?.hidden) {
@@ -214,6 +223,50 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
         }) ?? []
     );
   });
+  type Action = ReturnType<typeof actions>[number];
+  const runAction = (current: Action) => {
+    const runtime = context?.plugins;
+    if (!runtime || current.signal.aborted || !host.presented || !host.isConnected) {
+      return;
+    }
+    // Keep this outside a Solid action so owner updates render while it is pending.
+    const promise = runControlUiPluginAction({
+      runtime,
+      id: current.entry.key,
+      placement: current.entry.value.placement,
+      sessionKey: host.sessionKey,
+      agentId: host.agentId,
+      session: currentSession(),
+      composer: host.composer,
+      signal: current.signal,
+      isCurrent: () => host.isConnected && host.presented,
+    }).catch((error: unknown) => {
+      if (!current.signal.aborted) {
+        throw error;
+      }
+    });
+    // An earlier concurrent invocation can fail after this one starts.
+    void promise.catch(() => setActionRead({ promise }));
+    setActionRead({ promise });
+  };
+  const accessories = (kind: "session-header" | "composer") => (
+    <For
+      each={source()
+        .read()
+        ?.registrations("accessories")
+        .filter((entry) => entry.value.placement === kind)}
+      keyed={(entry) => entry.signal}
+    >
+      {(entry) => (
+        <PluginContribution
+          kind="accessories"
+          contributionKey={entry().key}
+          props={{ sessionKey: props.sessionKey, agentId: props.agentId }}
+          presented={props.presented}
+        />
+      )}
+    </For>
+  );
   return (
     <Show
       when={props.kind === "navigation"}
@@ -225,13 +278,16 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
               <For each={actionRead() ? [actionRead()!] : []}>
                 {(read) => (
                   <Errored
-                    fallback={(error) => {
-                      const message = () => {
-                        const failure = error();
-                        return formatUiError(failure);
-                      };
-                      return <span role="alert">{message()}</span>;
-                    }}
+                    fallback={(error) => (
+                      <span
+                        role="alert"
+                        class={{
+                          "agent-chat__composer-action-error": props.kind === "composer-toolbar",
+                        }}
+                      >
+                        {formatUiError(error())}
+                      </span>
+                    )}
                   >
                     <Loading>
                       <ActionCompletion promise={read.promise} />
@@ -241,65 +297,41 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
               </For>
               <For each={actions()} keyed={(action) => action.entry.signal}>
                 {(action) => (
-                  <button
-                    class="btn btn--sm"
-                    type="button"
-                    disabled={action().state?.disabled ?? false}
-                    onClick={() => {
-                      const current = action();
-                      const runtime = context?.plugins;
-                      if (
-                        !runtime ||
-                        current.signal.aborted ||
-                        !host.presented ||
-                        !host.isConnected
-                      ) {
-                        return;
-                      }
-                      // Keep this outside a Solid action so owner updates render while it is pending.
-                      const promise = runControlUiPluginAction({
-                        runtime,
-                        id: current.entry.key,
-                        placement: current.entry.value.placement,
-                        sessionKey: host.sessionKey,
-                        agentId: host.agentId,
-                        session: currentSession(),
-                        composer: host.composer,
-                        signal: current.signal,
-                        isCurrent: () => host.isConnected && host.presented,
-                      }).catch((error: unknown) => {
-                        if (!current.signal.aborted) {
-                          throw error;
-                        }
-                      });
-                      // An earlier concurrent invocation can fail after this one starts.
-                      void promise.catch(() => setActionRead({ promise }));
-                      setActionRead({ promise });
-                    }}
+                  <Show
+                    when={props.kind === "composer-toolbar"}
+                    fallback={
+                      <button
+                        class="btn btn--sm"
+                        type="button"
+                        disabled={action().state?.disabled ?? false}
+                        onClick={() => runAction(action())}
+                      >
+                        {action().state?.label ?? action().entry.value.label}
+                      </button>
+                    }
                   >
-                    {action().state?.label ?? action().entry.value.label}
-                  </button>
+                    <openclaw-tooltip
+                      prop:content={action().state?.label ?? action().entry.value.label}
+                    >
+                      <button
+                        class="agent-chat__input-btn agent-chat__composer-action"
+                        type="button"
+                        aria-label={action().state?.label ?? action().entry.value.label}
+                        aria-pressed={action().state?.pressed ? "true" : "false"}
+                        disabled={action().state?.disabled ?? false}
+                        onClick={() => runAction(action())}
+                      >
+                        <Icon name={actionIcon(action().entry.value.icon)} />
+                      </button>
+                    </openclaw-tooltip>
+                  </Show>
                 )}
               </For>
+              <Show when={props.kind === "composer"}>{accessories("composer")}</Show>
             </>
           }
         >
-          <For
-            each={source()
-              .read()
-              ?.registrations("accessories")
-              .filter((entry) => entry.value.placement === "session-header")}
-            keyed={(entry) => entry.signal}
-          >
-            {(entry) => (
-              <PluginContribution
-                kind="accessories"
-                contributionKey={entry().key}
-                props={{ sessionKey: props.sessionKey, agentId: props.agentId }}
-                presented={props.presented}
-              />
-            )}
-          </For>
+          {accessories("session-header")}
         </Show>
       }
     >
@@ -352,6 +384,10 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
       </For>
     </Show>
   );
+}
+
+function actionIcon(icon: string | undefined): IconName {
+  return isIconName(icon) ? icon : "plug";
 }
 
 function ActionCompletion(props: { promise: Promise<void> }) {
