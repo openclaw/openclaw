@@ -5,6 +5,7 @@ import {
   withProviderRateLimitRetryDeadline,
 } from "../llm/provider-rate-limit.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { FailoverError } from "./failover-error.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import { prepareModelFallbackRateLimit } from "./model-fallback-rate-limit.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
@@ -290,4 +291,36 @@ describe("shared model saturation guards", () => {
     expect(routed.candidates.map(({ model }) => model)).toEqual(["primary", "backup"]);
     expect(routed.attempts).toEqual([]);
   });
+});
+
+it("rechecks a fallback refused for an unusable saved login on the next turn (#194689)", async () => {
+  vi.stubEnv("OPENCLAW_FALLBACK_SKIP_TTL_MS", "60000");
+  const run = vi.fn(async (provider: string, model: string) => {
+    if (model === "last") {
+      return "ok";
+    }
+    throw model === "primary"
+      ? Object.assign(new Error("synthetic provider failure"), { status: 503 })
+      : new FailoverError("saved login unavailable", {
+          provider,
+          model,
+          reason: "auth",
+          code: "selected_auth_profile_unavailable",
+        });
+  });
+  const turn = () =>
+    runWithModelFallback({
+      cfg: { plugins: { enabled: false } },
+      provider: "saved-login-provider",
+      model: "primary",
+      fallbacksOverride: ["saved-login-provider/backup", "saved-login-provider/last"],
+      manifestPlugins: [],
+      skipAuthProfileRuntime: true,
+      sessionId: "session:saved-login-recheck",
+      run,
+    });
+  await turn();
+  await turn();
+  // Fixing the order takes effect on the next turn instead of after the skip window.
+  expect(run.mock.calls.filter(([, model]) => model === "backup")).toHaveLength(2);
 });

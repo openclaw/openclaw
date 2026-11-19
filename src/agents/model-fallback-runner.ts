@@ -27,6 +27,7 @@ import {
 import { isLikelyContextOverflowError } from "./failover/classify.js";
 import type { FailoverReason } from "./failover/signal.js";
 import {
+  cachesAuthFailureSkip,
   getFallbackCandidateSkipReason,
   isFallbackCandidateSkipped,
   markFallbackCandidateSkipped,
@@ -663,12 +664,7 @@ async function runWithModelFallbackInternal<T>(
     }
 
     // Cache non-primary auth failures for the next turn.
-    if (
-      isKnownFailover &&
-      !isPrimary &&
-      params.sessionId &&
-      (normalized.reason === "auth" || normalized.reason === "auth_permanent")
-    ) {
+    if (isKnownFailover && !isPrimary && params.sessionId && cachesAuthFailureSkip(normalized)) {
       markFallbackCandidateSkipped({
         sessionId: params.sessionId,
         ...candidateRef,

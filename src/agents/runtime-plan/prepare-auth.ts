@@ -88,22 +88,6 @@ function createAuthProfileCooldownError(
   );
 }
 
-// A local refusal, not a provider response: no HTTP status, and the saved-login code keeps
-// its copy and lets fallback owners (turns and compaction) move to the next model.
-function createExplicitAuthOrderError(
-  params: PrepareAgentRuntimeAuthPlanParams,
-  message: string,
-  profileId: string | undefined,
-): FailoverError {
-  return new FailoverError(message, {
-    reason: "auth",
-    code: "selected_auth_profile_unavailable",
-    provider: params.provider,
-    model: params.modelId,
-    profileId,
-  });
-}
-
 type LogicalAuthAttempt = Extract<
   ReturnType<typeof selectProviderModelAuthSources>,
   { kind: "selected" }
@@ -624,7 +608,15 @@ export function prepareAgentRuntimeAuth(
       return createAuthProfileCooldownError(params, decision.source.profileId);
     }
     if (decision.reason === "explicit-order") {
-      return createExplicitAuthOrderError(params, decision.message, decision.source?.profileId);
+      // A local refusal, not a provider response: no HTTP status, and the saved-login code keeps
+      // its copy and lets fallback owners (turns and compaction) move to the next model.
+      return new FailoverError(decision.message, {
+        reason: "auth",
+        code: "selected_auth_profile_unavailable",
+        provider: params.provider,
+        model: params.modelId,
+        profileId: decision.source?.profileId,
+      });
     }
     return new Error(decision.message);
   };
