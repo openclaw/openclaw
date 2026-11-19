@@ -179,6 +179,74 @@ export async function inspectNpmGlobalDestination(
   }
 }
 
+/**
+ * A pnpm or Bun global entry that links to this Git checkout is the checkout's own
+ * `openclaw` command. This updater cannot switch it to the package: replacing the entry
+ * changes what every later service ownership check names, so revalidation, rollback and
+ * recovery refuse and leave the Gateway stopped, and pnpm 12.15+ launchers staged for the
+ * replacement still point into the removed stage. Refuse before anything changes.
+ */
+export async function inspectCheckoutLinkPackageSwitch(params: {
+  checkoutRoot: string;
+  installTarget: ResolvedGlobalInstallTarget;
+  serviceRunsCheckout: boolean;
+  targetSpec: string;
+  storedChannel: string | null;
+  requestedChannel: string;
+}) {
+  const { manager, packageRoot } = params.installTarget;
+  if (manager === "npm" || !packageRoot) {
+    return null;
+  }
+  if (!(await fs.lstat(packageRoot).catch(() => null))?.isSymbolicLink()) {
+    return null;
+  }
+  const [linked, checkout] = await Promise.all([
+    realpathOrResolve(packageRoot),
+    realpathOrResolve(params.checkoutRoot),
+  ]);
+  if (linked !== checkout) {
+    return null;
+  }
+  const install = manager === "pnpm" ? "pnpm add -g" : "bun add -g --trust";
+  // The owning manager writes its own link and launcher while the Gateway keeps serving
+  // the checkout; the package then reinstalls the service on itself and restarts it.
+  const commands = [
+    `${install} ${quoteCliArg(params.targetSpec)}`,
+    ...(params.serviceRunsCheckout
+      ? ["openclaw gateway install --force", "openclaw gateway restart"].map((command) =>
+          formatCliCommand(command),
+        )
+      : []),
+  ];
+  const running = params.serviceRunsCheckout
+    ? "the CLI and Gateway still run"
+    : "the CLI still runs";
+  const followChannel =
+    params.storedChannel === params.requestedChannel
+      ? `\`${formatCliCommand("openclaw update")}\``
+      : `\`${formatCliCommand(`openclaw config set update.channel ${params.requestedChannel}`)}\`, then \`${formatCliCommand("openclaw update")}\``;
+  const message = [
+    `Switch to ${params.targetSpec} not started: \`openclaw\` is a ${manager} global link to this Git checkout (${packageRoot} -> ${checkout})${params.serviceRunsCheckout ? " and the managed Gateway runs from that checkout" : ""}.`,
+    `This updater cannot replace that link in a way it can verify and roll back, so nothing was stopped or changed; ${running} the checkout.`,
+    `To switch to the package, run ${commands.map((command) => `\`${command}\``).join(", then ")}.`,
+    `To keep this checkout and follow the ${params.requestedChannel} channel through its release tags, run ${followChannel}.`,
+    `For help, run \`${formatCliCommand("openclaw triage")}\` or ask this instance's agent.`,
+  ].join(" ");
+  return {
+    reason: "unsupported-package-target",
+    message,
+    failureFacts: [
+      createUpdateFailureFact({
+        check: "installation-inspection",
+        code: "unsupported-package-target",
+        message,
+      }),
+    ],
+    recoverySteps: commands.map((command) => ({ kind: "continue-update" as const, command })),
+  };
+}
+
 function destinationRefusal(detail: string, destination: UpdateDestinationFailure) {
   const message = `Next step: ${UPDATE_DESTINATION_RECOVERY} ${detail}`;
   return {
