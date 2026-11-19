@@ -28,7 +28,11 @@ import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { toCronBroadcastEvent } from "./server-cron-plugin-job.js";
-import { observePostgresPoolReuse } from "./server-database-engine-cron.test-support.js";
+import {
+  createCronRestartDiagnostics,
+  startHeldCronRetryProvider,
+  observePostgresPoolReuse,
+} from "./server-database-engine-cron.test-support.js";
 import { readPostgresAnchor } from "./server-database-engine-delivery-crash.test-support.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
@@ -177,6 +181,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
     resources,
     signal,
     onEvent,
+    onPhase,
   }: {
     initial: Awaited<ReturnType<typeof startCronGateway>>;
     receiptId: string;
@@ -184,6 +189,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
     resources: AsyncDisposableStack;
     signal: AbortSignal;
     onEvent?: Parameters<typeof connectGatewayClient>[0]["onEvent"];
+    onPhase?: (phase: string) => void;
   }) {
     const { instance, gateway, anchor, applicationName, bootId, closed } = initial;
     const child = instance.child!;
@@ -214,15 +220,21 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         [applicationName, lockerPid],
       );
     // The provider is still running: restart-intent consumption must precede finalization.
+    onPhase?.("request-restart");
     const restart = await gateway.request<{ preflight: { counts: { cronRuns: number } } }>(
       "gateway.restart.request",
       { skipDeferral: true, reason: "postgres-cron-in-process-test" },
     );
     expect(restart).toMatchObject({ ok: true, status: "scheduled" });
     expect(restart.preflight.counts.cronRuns).toBeGreaterThan(0);
+    onPhase?.("restart-replied");
+    onPhase?.("await-provider-abort");
     await withinTest(aborted, signal);
+    onPhase?.("provider-aborted");
     await expect.poll(blockedBackends, { timeout: 15_000 }).toEqual([{ pid: expect.any(Number) }]);
+    onPhase?.("finalizer-blocked");
     // Ingress retires after cron's grace window, before the retained finalizer joins.
+    onPhase?.("await-ingress-close");
     await expect(withinTest(closed, signal)).resolves.toEqual({
       code: 1012,
       reason: "service restart",
@@ -233,6 +245,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
     expect(child.signalCode).toBeNull();
     pool.expectBeforeRestart();
     await lock.disposeAsync();
+    onPhase?.("finalizer-unlocked");
     await disconnectGatewayClient(gateway);
     await expect
       .poll(
@@ -283,6 +296,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       ).status,
     ).toBe(200);
     await pool.expectAfterRestart(restarted);
+    onPhase?.("replacement-ready");
     return restarted;
   }
 
@@ -415,45 +429,18 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       await using resources = new AsyncDisposableStack();
       const prompt = "Report the automatically retried one-shot result.";
       const summary = "Automatically retried one-shot completed.";
-      const accepted = createDeferred();
-      const aborted = createDeferred();
-      const retryResponse = createDeferred<() => void>();
-      const requests: string[] = [];
-      const providerServer = createServer((request, response) => {
-        void (async () => {
-          if (request.method !== "POST" || request.url !== "/v1/responses") {
-            response.writeHead(404).end();
-            return;
-          }
-          requests.push(await readRequestText(request));
-          const complete = () =>
-            writeOpenAiResponsesText(response, {
-              text: summary,
-              messageId: "scheduled-retry-message",
-              responseId: "scheduled-retry-response",
-            });
-          if (requests.length === 1) {
-            response.once("close", () => {
-              if (!response.writableEnded) {
-                aborted.resolve();
-              }
-            });
-            accepted.resolve();
-          } else if (requests.length === 2) {
-            // Hold retry completion until the replacement client's event observer is ready.
-            retryResponse.resolve(complete);
-          } else {
-            complete();
-          }
-        })().catch((error: unknown) => {
-          response.writeHead(500).end(String(error));
-        });
-      });
-      const providerUrl = await listenLoopback(providerServer);
-      resources.defer(() => closeHttpServer(providerServer));
+      const { providerUrl, requests, accepted, aborted, retryResponse } =
+        await startHeldCronRetryProvider(resources, summary);
+      const { trace, elapsedMs } = createCronRestartDiagnostics(
+        signal,
+        resources,
+        () => requests.length,
+      );
+      trace("await-initial-gateway");
       const initial = await startCronGateway(resources, signal, providerUrl, {
         schedulerEnabled: true,
       });
+      trace("initial-gateway-ready");
       const { instance, gateway, anchor, ownedBackends } = initial;
       await expect(gateway.request("cron.status", {})).resolves.toMatchObject({ enabled: true });
       const at = new Date().toISOString();
@@ -468,7 +455,9 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         payload: { kind: "agentTurn", message: prompt },
         delivery: { mode: "none" },
       });
+      trace("await-initial-provider");
       await withinTest(accepted.promise, signal);
+      trace("initial-provider-accepted");
       type Receipt = {
         receipt_id: string;
         request_run_id: string | null;
@@ -505,6 +494,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         aborted: aborted.promise,
         resources,
         signal,
+        onPhase: trace,
         onEvent: ({ event, payload }) => {
           if (event !== "cron") {
             return;
@@ -518,10 +508,17 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       await expect(restarted.request("cron.status", {})).resolves.toMatchObject({ enabled: true });
       // The scheduler owns the retry deadline, including any startup deferral.
       const pending = await restarted.request<CronJob>("cron.get", { id: job.id });
+      console.info("cron-restart-deadline", {
+        nextRunDelayMs: (pending.state.nextRunAtMs ?? 0) - Date.now(),
+        startupCatchupDelayMs: (pending.state.startupCatchupAtMs ?? 0) - Date.now(),
+        remainingMs: 210_000 - elapsedMs(),
+      });
       expect(pending).toMatchObject({ enabled: true, schedule: { kind: "at", at } });
       expect(pending.state.nextRunAtMs).toEqual(expect.any(Number));
       expect(pending.state.consecutiveErrors).toBe(activeJob.state.consecutiveErrors);
+      trace("await-retry-provider");
       const completeRetry = await withinTest(retryResponse.promise, signal);
+      trace("retry-provider-accepted");
       const receipts = await readReceipts();
       expect(receipts).toHaveLength(2);
       expect(receipts[0]).toEqual({ ...first, status: "interrupted" });
@@ -550,6 +547,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         completionStatus: "failed",
       });
       completeRetry();
+      trace("await-finished");
       expect(await withinTest(finished.promise, signal)).toMatchObject({
         jobId: job.id,
         runId: expect.stringContaining(retry.receipt_id),
@@ -557,6 +555,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         completionStatus: "succeeded",
         summary,
       });
+      trace("retry-finished");
       const history = await readHistory();
       expect(history.entries).toHaveLength(2);
       expect(history.entries).toEqual(
@@ -582,10 +581,13 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       await disconnectGatewayClient(restarted);
       const child = instance.child!;
       const exited = once(child, "exit");
+      trace("await-final-exit");
       process.kill(child.pid!, "SIGINT");
       expect(await withinTest(exited, signal)).toEqual([0, null]);
+      trace("final-exit");
       await instance.stopGateway();
       await expect.poll(ownedBackends).toEqual([]);
+      trace("cleanup-completed");
       expect(requests).toHaveLength(2);
       expect(requests.every((body) => body.includes(prompt))).toBe(true);
       expect(await readReceipts()).toEqual([
@@ -600,9 +602,9 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         { run_id: interrupted.entries[0]!.runId, status: "failed" },
         { run_id: expect.stringContaining(retry.receipt_id), status: "succeeded" },
       ]);
-      expect(history.entries.map((entry) => entry.runId).toSorted()).toEqual(
-        tasks.map((task) => task.run_id).toSorted(),
-      );
+      expect(
+        history.entries.map((entry) => entry.runId).toSorted((a, b) => a.localeCompare(b)),
+      ).toEqual(tasks.map((task) => task.run_id).toSorted((a, b) => a.localeCompare(b)));
     },
   );
 
