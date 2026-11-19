@@ -18,7 +18,7 @@ it("shares the human-question deadline and error contract with harness watchdogs
   expect(resolveQuestionTimeoutMs(undefined)).toBe(910_000);
   expect(normalizeHarnessQuestionTimeout(5)).toBe(30);
   expect(normalizeHarnessQuestionTimeout(9_999)).toBe(3_600);
-  for (const value of ["30", 1.5, NaN, Infinity]) {
+  for (const value of ["30", 1.5, Number.NaN, Infinity]) {
     expect(() => normalizeHarnessQuestionTimeout(value)).toThrow(ToolInputError);
     expect(() => normalizeAskUserParams({ ...validArgs, timeoutSeconds: value })).toThrow(
       ToolInputError,

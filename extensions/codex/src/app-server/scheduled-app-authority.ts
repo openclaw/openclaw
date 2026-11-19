@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppInventorySnapshot } from "./app-inventory-cache.js";
 import { readCodexAppRuntimeTools, type CodexAppRuntimeTool } from "./app-runtime-tools.js";
-import { type CodexAppServerClient } from "./client.js";
+import type { CodexAppServerClient } from "./client.js";
 import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import type { CodexPluginDestructiveApprovalMode } from "./config.js";
 import { buildCodexAppApprovalOverrides } from "./plugin-app-approval-overrides.js";

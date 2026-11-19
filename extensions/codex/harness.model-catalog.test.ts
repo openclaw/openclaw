@@ -34,11 +34,17 @@ vi.mock("./src/app-server/model-catalog.js", () => ({
 it("retains host auth and rejects catalog creation after disposal during fallback auth loading", async () => {
   catalog.create.mockReturnValue(catalog);
   const harnesses: ReturnType<typeof createCodexAppServerAgentHarness>[] = [];
-  let pending: ReturnType<NonNullable<(typeof harnesses)[number]["loadModelCatalog"]>> | undefined;
+  const pending: {
+    catalog?: ReturnType<NonNullable<(typeof harnesses)[number]["loadModelCatalog"]>>;
+  } = {};
   onTestFinished(async () => {
     auth.release.resolve();
-    await pending;
-    await Promise.all(harnesses.map((harness) => harness.dispose?.()));
+    await pending.catalog;
+    await Promise.all(
+      harnesses.map(async (harness) => {
+        await harness.dispose?.();
+      }),
+    );
   });
   const makeHarness = (runtime?: PluginRuntime) => {
     const harness = createCodexAppServerAgentHarness({
@@ -63,11 +69,11 @@ it("retains host auth and rejects catalog creation after disposal during fallbac
   catalog.load.mockClear();
 
   const retired = makeHarness();
-  pending = retired.loadModelCatalog!(params);
+  pending.catalog = retired.loadModelCatalog!(params);
   await auth.started.promise;
   await retired.dispose?.();
   auth.release.resolve();
-  await expect(pending).resolves.toEqual({ entries: [] });
+  await expect(pending.catalog).resolves.toEqual({ entries: [] });
   expect(catalog.create).not.toHaveBeenCalled();
   expect(catalog.load).not.toHaveBeenCalled();
 

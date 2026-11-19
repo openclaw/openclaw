@@ -9,7 +9,7 @@ import type { NativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-ha
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { hasPromptImageInput } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
-import { type CodexAppServerClient } from "./client.js";
+import type { CodexAppServerClient } from "./client.js";
 import type { CodexUserInput } from "./protocol.js";
 import {
   isCodexAppServerIndeterminateRequestCancellationError,

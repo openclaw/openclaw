@@ -9,10 +9,10 @@ import {
   shouldRetireCodexStartupClient,
 } from "./attempt-client-cleanup.js";
 import { CodexAppServerStartupError, isCodexAppServerStartupError } from "./attempt-timeouts.js";
-import { isCodexAppServerIndeterminateTransportError } from "./rpc-error.js";
 import {
   CodexAppServerScopedRequestRejectedError,
   codexPrewriteRejectionCause,
+  isCodexAppServerIndeterminateTransportError,
 } from "./rpc-error.js";
 import { createClientHarness } from "./test-support.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";

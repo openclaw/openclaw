@@ -3,10 +3,10 @@ import { defaultCodexAppInventoryCache } from "./app-server/app-inventory-cache.
 import { refreshCodexAppRuntimeState } from "./app-server/plugin-activation.js";
 import type { CodexAppServerRequestResult } from "./app-server/protocol.js";
 import {
+  CodexAppServerRpcError,
   isCodexAppServerIndeterminateRequestCancellationError,
   isCodexAppServerPrewriteRequestCancellationError,
 } from "./app-server/rpc-error.js";
-import { CodexAppServerRpcError } from "./app-server/rpc-error.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import {
   describeCodexHostedAppsSupport,

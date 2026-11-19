@@ -43,10 +43,10 @@ import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js"
 import type { JsonObject } from "./protocol.js";
 import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth-policy.js";
 import {
+  CodexAppServerScopedRequestRejectedError,
   isCodexAppServerIndeterminateRequestCancellationError,
   isCodexAppServerPrewriteRequestCancellationError,
 } from "./rpc-error.js";
-import { CodexAppServerScopedRequestRejectedError } from "./rpc-error.js";
 import { prepareCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import {
   CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS,
