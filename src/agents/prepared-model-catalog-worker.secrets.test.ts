@@ -304,6 +304,9 @@ module.exports = {
       let runtime = makeConfig(owner === "config" ? value : undefined);
       const env = {
         ...state.env,
+        // Keep this fixture endpoint local even when Node inherits an environment proxy.
+        NO_PROXY: [state.env.NO_PROXY, new URL(baseUrl).host].filter(Boolean).join(","),
+        no_proxy: [state.env.no_proxy, new URL(baseUrl).host].filter(Boolean).join(","),
         LITERAL_KEY: undefined,
         PENDING_KEY: undefined,
         ...loader?.env,
