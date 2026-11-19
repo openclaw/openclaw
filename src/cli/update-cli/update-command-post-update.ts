@@ -581,10 +581,11 @@ async function finishSettledUpdate(
             },
           }),
         );
-        if (gatewayStartAttempted && restarted !== "failed" && params.rollbackBlockedReason) {
-          // The service manager launched the candidate, so it owns the migrated state. Its
+        if (gatewayStartAttempted === "restart" && restarted !== "failed") {
+          // The service manager restarted the candidate, so it owns the migrated state. Its
           // readiness failure concerns that runtime, not the refused rollback; only owners
-          // that observe a data risk may record one. A start that never launched keeps it.
+          // that observe a data risk may record one. A failed restart command, or an install
+          // whose start may only be queued, keeps the block.
           params.rollbackBlockedReason = undefined;
         }
         if (restarted !== "failed" && restarted !== "restart-health-failed") {
