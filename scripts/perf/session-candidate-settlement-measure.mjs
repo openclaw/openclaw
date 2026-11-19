@@ -91,6 +91,7 @@ const config = values.gateway
       browser: { enabled: false },
       plugins: { enabled: false },
       cron: { enabled: false },
+      session: { maintenance: { mode: "warn", coldStorage: { enabled: false } } },
       update: { checkOnStart: false },
       discovery: { mdns: { mode: "off" } },
       logging: { level: "info", consoleLevel: "silent", file: gatewayLog },
