@@ -79,7 +79,7 @@ afterEach(() => {
 });
 
 describe("agent-authored controls", () => {
-  it("marks direct Gateway message actions that bypass the runner, once", async () => {
+  it("marks direct Gateway message actions once, round-tripping an authored mark", async () => {
     const { dispatch, handleRootAction } = scopedReader(false);
     const buttons = (value: string) => ({
       blocks: [{ type: "buttons", buttons: [{ label: "A", action: { type: "callback", value } }] }],
@@ -89,7 +89,7 @@ describe("agent-authored controls", () => {
     }
     expect(handleRootAction.mock.calls.map(([ctx]) => ctx.params.presentation)).toEqual([
       buttons("::pick:a"),
-      buttons("::pick:a"),
+      buttons("::::pick:a"),
     ]);
   });
 });

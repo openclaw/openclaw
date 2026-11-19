@@ -590,7 +590,7 @@ export function shouldDeferExternalMessageActionTargetResolution(
 export async function dispatchChannelMessageAction(
   dispatchCtx: ChannelMessageActionDispatchContext,
 ): Promise<AgentToolResult<unknown> | null> {
-  // Direct Gateway message actions reach plugins here without the runner; marking is idempotent.
+  // Message-action controls leave core for a plugin here (runner or direct Gateway call).
   const ctx = { ...dispatchCtx, params: stampAgentControls(dispatchCtx.params) };
   const prepared = prepareMessageActionReadContext(ctx);
   if (!prepared) {

@@ -4,8 +4,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 
-// An empty namespace is unregistrable, so no plugin claims a value by its mark. Two
-// colons keep marking idempotent across runner re-entry for nearly every authored value.
+// An empty namespace is unregistrable, so no plugin claims a value by its mark.
 const AGENT_CONTROL_MARK = "::";
 
 function stampAgentControl(control: unknown): unknown {
@@ -17,7 +16,7 @@ function stampAgentControl(control: unknown): unknown {
       ? undefined
       : (action ?? record);
   const value = normalizeOptionalString(target?.value);
-  if (!value || value.startsWith(AGENT_CONTROL_MARK)) {
+  if (!value) {
     return control;
   }
   const stamped = { ...target, value: `${AGENT_CONTROL_MARK}${value}` };
@@ -31,7 +30,10 @@ function stampAgentControlBlock(block: unknown): unknown {
   return Array.isArray(controls) ? { ...record, [key]: controls.map(stampAgentControl) } : block;
 }
 
-/** Marks message-action callback values as the conversation agent's; re-marking is a no-op. */
+/**
+ * Marks message-action callback values as the conversation agent's. Call it only where
+ * controls leave core for a channel, which a delivery reaches exactly once.
+ */
 export function stampAgentControls(payload: Record<string, unknown>): Record<string, unknown> {
   const stamped = { ...payload };
   for (const key of ["presentation", "interactive"] as const) {

@@ -482,11 +482,11 @@ describe("runMessageAction plugin dispatch", () => {
   });
 
   it.each([
-    { valid: true, hop: false },
-    { valid: false, hop: false },
-    // The Gateway hop carries params its delegating runner already marked.
-    { valid: true, hop: true },
-  ])("validates and marks presentation JSON (%j)", async ({ valid, hop }) => {
+    { valid: true, authored: "a" },
+    { valid: false, authored: "a" },
+    // Marking is not inferred from the value, so an authored mark round-trips.
+    { valid: true, authored: "::a" },
+  ])("validates and marks presentation JSON once (%j)", async ({ valid, authored }) => {
     const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
       jsonResult({ ok: true, presentation: params.presentation ?? null }),
     );
@@ -505,7 +505,7 @@ describe("runMessageAction plugin dispatch", () => {
     const buttons = (value: string) => ({
       blocks: [{ type: "buttons", buttons: [{ label: "A", value }] }],
     });
-    const presentation = buttons(hop ? "::a" : "a");
+    const presentation = buttons(authored);
     const pending = runMessageAction({
       cfg: {},
       action: "send",
@@ -516,13 +516,12 @@ describe("runMessageAction plugin dispatch", () => {
         message: "hi",
         presentation: valid ? JSON.stringify(presentation) : "{not-json}",
       },
-      ...(hop ? { callerRecordsDestinationHistory: true } : {}),
     });
     if (valid) {
       const result = await pending;
       // Message-action callbacks reach the channel marked once as the conversation agent's.
       expect(result.payload).toEqual(
-        expect.objectContaining({ ok: true, presentation: buttons("::a") }),
+        expect.objectContaining({ ok: true, presentation: buttons(`::${authored}`) }),
       );
     } else {
       await expect(pending).rejects.toThrow(/--presentation must be valid JSON/);
