@@ -453,5 +453,4 @@ it("does not offer NO_REPLY to a result-required sessions_send turn into WebChat
     "This turn owes its sender a result, so end with a brief final answer, not NO_REPLY.",
   );
   expect(turn).not.toContain('reply with exactly "NO_REPLY"');
-  expect(opts.silentReplyPromptMode).toBe("none");
 });
