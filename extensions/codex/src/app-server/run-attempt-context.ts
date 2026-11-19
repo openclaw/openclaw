@@ -27,6 +27,7 @@ import type { JsonValue } from "./protocol.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
 import type { CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
+import type { CodexHistoryBootstrapItems } from "./thread-lifecycle-types.js";
 import {
   buildDeveloperInstructions,
   resolveCodexOpenClawBaseInstructions,
@@ -243,10 +244,7 @@ export async function prepareCodexAttemptContext(
     promptContextRange: CodexProjectedContextRange | undefined;
     developerInstructions: string;
     contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
-    historyBootstrapItems:
-      | JsonValue[]
-      | ((assertCurrent: () => void) => Promise<JsonValue[]>)
-      | undefined;
+    historyBootstrapItems: CodexHistoryBootstrapItems | undefined;
     historyDeltaItems: JsonValue[] | undefined;
     noEngineContinuityProjectionApplied: boolean;
   } = {

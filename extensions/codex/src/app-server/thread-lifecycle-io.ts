@@ -583,6 +583,8 @@ export async function startFreshCodexThread(
       response,
       expectedModel: startParams.model,
       expectedProvider: requestModelProvider ?? startModelProvider,
+      context,
+      pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
       lifecycleTiming,
       assertCurrent,
     });

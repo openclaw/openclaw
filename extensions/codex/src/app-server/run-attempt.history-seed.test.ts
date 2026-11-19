@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
@@ -7,9 +8,15 @@ import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, it, vi } from "vitest";
 import { buildCodexSelectedHistoryItems } from "./context-engine-history-items.js";
+import {
+  createCodexTestHostCapabilities,
+  setCodexTestToolFactory,
+} from "./host-capability.test-support.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
 import {
   assistantMessage,
+  createRuntimeDynamicTool,
+  runCodexAppServerAttempt as runWithTools,
   setupRunAttemptTestHooks,
   tempDir,
   threadStartResult,
@@ -25,6 +32,7 @@ import {
 } from "./run-attempt.context-engine.test-support.js";
 import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
 import { isCodexTurnContextHandoff } from "./test-support.js";
+import { setCodexTestModelSupportsTools } from "./thread-lifecycle.test-fixtures.js";
 
 setupRunAttemptTestHooks();
 
@@ -225,6 +233,97 @@ it.each([false, true])("prepares only fresh native history (engine: %s)", async 
   await expect(readCodexAppServerBinding(params.sessionFile)).resolves.toMatchObject({
     threadId: "thread-selected-1",
   });
+});
+
+it("recovers a fresh thread from an exhausted tool estimate only for the observed catalog", async () => {
+  const { params } = seedParams();
+  delete params.contextEngine;
+  delete params.authoredContextTokenCap;
+  const agentDir = path.join(tempDir, "agent");
+  params.agentDir = agentDir;
+  setCodexTestModelSupportsTools(params, true);
+  const tool = createRuntimeDynamicTool("message");
+  tool.description = "Synthetic schema vocabulary. ".repeat(32_000);
+  const prepareBoundedSeed = vi.fn<
+    NonNullable<EmbeddedRunAttemptParams["hostCapabilities"]["prepareBoundedSeed"]>
+  >(async ({ tokenBudget }) => {
+    if (tokenBudget === 1) {
+      throw new Error("Synthetic seed cannot fit the omission notice");
+    }
+    return [userMessage("MEASURED_SELECTED_HISTORY", 1)];
+  });
+  params.hostCapabilities = createCodexTestHostCapabilities({ prepareBoundedSeed });
+  setCodexTestToolFactory(params, () => [tool]);
+  const harness = selectedHarness();
+  const initial = runWithTools(params);
+  await Promise.race([initial.waitForTurnAccepted(), initial]);
+  await harness.completeTurn("completed", "thread-selected-1");
+  await initial;
+  expect(
+    JSON.stringify(harness.requests.find(({ method }) => method === "thread/start")),
+  ).toContain(tool.description);
+  const recordPredecessor = async () => {
+    const predecessor = await readCodexAppServerBinding(params.sessionFile);
+    assert(predecessor);
+    const rolloutPath = path.join(
+      agentDir,
+      "codex-home",
+      "sessions",
+      `${predecessor.threadId}.jsonl`,
+    );
+    await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+    await fs.writeFile(
+      rolloutPath,
+      [
+        { type: "turn_context" },
+        { type: "response_item", payload: { role: "assistant", phase: "final_answer" } },
+        {
+          type: "token_usage_record",
+          payload: { turn_id: "turn-1", usage: { input_tokens: 140_000 } },
+        },
+        {
+          payload: {
+            type: "token_count",
+            info: {
+              last_token_usage: { input_tokens: 140_000, total_tokens: 141_000 },
+              model_context_window: 258_400,
+            },
+          },
+        },
+        { payload: { type: "task_complete", turn_id: "turn-1" } },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join("\n"),
+    );
+    await writeCodexAppServerBinding(params.sessionFile, {
+      ...predecessor,
+      rolloutPath,
+      // Rotate at startup without changing the catalog that supplied the sample.
+      nativeSkillIsolationFingerprint: "stale-test-skill-isolation",
+    });
+  };
+  await recordPredecessor();
+  params.contextTokenBudget = 258_400;
+  const recoveryOffset = harness.requests.length;
+  const recovered = runWithTools({ ...params, runId: "recovered" });
+  await Promise.race([recovered.waitForTurnAccepted(), recovered]);
+  await harness.completeTurn("completed", "thread-selected-2");
+  await recovered;
+  expect(JSON.stringify(selectedItems(harness.requests.slice(recoveryOffset)))).toContain(
+    "MEASURED_SELECTED_HISTORY",
+  );
+  expect(prepareBoundedSeed.mock.lastCall?.[0].tokenBudget).toBeGreaterThan(10_000);
+
+  await recordPredecessor();
+  tool.description += "changed";
+  const changedOffset = harness.requests.length;
+  await expect(runWithTools({ ...params, runId: "changed" })).rejects.toThrow(
+    "Synthetic seed cannot fit the omission notice",
+  );
+  expect(prepareBoundedSeed.mock.lastCall?.[0].tokenBudget).toBe(1);
+  expect(harness.requests.slice(changedOffset).some(({ method }) => method === "turn/start")).toBe(
+    false,
+  );
 });
 
 it("installs >1,048,576 characters in UTF-8-bounded quotes with ordered media before readiness", async () => {

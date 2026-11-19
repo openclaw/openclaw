@@ -11,8 +11,15 @@ import {
   neutralizeCodexExplicitMentionSigils,
   projectContextEngineAssemblyForCodex,
   renderMessageBody,
+  resolveProjectionPromptBudgetTokens,
 } from "./context-engine-projection.js";
-import type { JsonValue } from "./protocol.js";
+import { joinPresentSections } from "./developer-instruction-sections.js";
+import {
+  flattenCodexDynamicToolFunctions,
+  type CodexDynamicToolSpec,
+  type JsonValue,
+} from "./protocol.js";
+import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { buildCodexUserInput } from "./user-input.js";
 
 const FRAGMENT_PREFIX =
@@ -27,10 +34,7 @@ type PromptBudget = NonNullable<
   Parameters<typeof assembleHarnessContextEngine>[0]["promptBudget"]
 > & { contextTokens: number };
 
-export function reserveCodexHistoryBudget(promptBudget: PromptBudget | undefined) {
-  if (!promptBudget) {
-    return undefined;
-  }
+function reserveCodexHistoryBudget(promptBudget: PromptBudget) {
   const maxItems = Math.ceil((promptBudget.contextTokens * 16) / PAYLOAD_BYTES);
   const inputTokens =
     (promptBudget.inputTokens ?? 0) + maxItems * (Math.ceil(FRAME_BYTES / 4) + 32);
@@ -46,6 +50,46 @@ export function reserveCodexHistoryBudget(promptBudget: PromptBudget | undefined
         inputTokens -
         estimateRenderedLlmBoundaryTokenPressure(promptBudget),
     ),
+  };
+}
+
+export function prepareCodexHistoryBudgets(
+  prompt: Omit<PromptBudget, "reserveTokens"> | undefined,
+  toolSpecs: CodexDynamicToolSpec[],
+  sample?: readonly [CodexAppServerThreadBinding | undefined, number | undefined],
+) {
+  if (!prompt) {
+    return {};
+  }
+  const promptBudget = {
+    ...prompt,
+    reserveTokens:
+      prompt.contextTokens -
+      resolveProjectionPromptBudgetTokens({ contextTokenBudget: prompt.contextTokens }),
+  };
+  const historyBudget = reserveCodexHistoryBudget({
+    ...promptBudget,
+    systemPrompt: joinPresentSections(promptBudget.systemPrompt, JSON.stringify(toolSpecs)),
+  });
+  const [predecessor, observedInputTokens] = sample ?? [];
+  if (
+    historyBudget.tokenBudget !== 1 ||
+    !predecessor ||
+    !observedInputTokens ||
+    flattenCodexDynamicToolFunctions(toolSpecs).some((tool) => tool.deferLoading)
+  ) {
+    return { historyBudget };
+  }
+  // The previous full input bounds the unchanged eager catalog. Count this turn's
+  // own prompt and instructions separately.
+  const observedBudget = reserveCodexHistoryBudget({
+    ...promptBudget,
+    inputTokens: (promptBudget.inputTokens ?? 0) + observedInputTokens,
+  }).tokenBudget;
+  return {
+    historyBudget,
+    historyBudgetObservation:
+      observedBudget > 1 ? { predecessor, tokenBudget: observedBudget } : undefined,
   };
 }
 

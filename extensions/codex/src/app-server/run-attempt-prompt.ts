@@ -14,7 +14,7 @@ import {
 } from "./attempt-context.js";
 import { isNonEmptyString } from "./attempt-workspace-context.js";
 import type { CodexNativeModelContext } from "./client-workspace-state.js";
-import { reserveCodexHistoryBudget } from "./context-engine-history-items.js";
+import { prepareCodexHistoryBudgets } from "./context-engine-history-items.js";
 import { prepareCodexContextEngineHistory } from "./context-engine-history.js";
 import {
   CODEX_TURN_START_TEXT_INPUT_MAX_CHARS,
@@ -22,7 +22,6 @@ import {
   CodexContextAttachmentError,
   isCodexDurableCustomMessage,
   projectContextEngineAssemblyForCodex,
-  resolveProjectionPromptBudgetTokens,
   type CodexProjectedImageGroup,
 } from "./context-engine-projection.js";
 import { joinPresentSections, renderCodexThreadPolicy } from "./developer-instruction-sections.js";
@@ -214,9 +213,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     const promptBudget = configuredContextBudget
       ? {
           contextTokens: configuredContextBudget,
-          reserveTokens:
-            configuredContextBudget -
-            resolveProjectionPromptBudgetTokens({ contextTokenBudget: configuredContextBudget }),
           inputTokens: (params.images?.length ?? 0) * IMAGE_BLOCK_TOKENS,
           systemPrompt: joinPresentSections(
             ...(replacedSystemPromptForBudget !== undefined
@@ -224,7 +220,6 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
               : [openClawBaseInstructions, baseDeveloperInstructions]),
             refreshableInstructions,
             collaboration.developer_instructions ?? undefined,
-            JSON.stringify(toolBridge.specs),
           ),
           prompt: joinPresentSections(
             params.prompt,
@@ -234,7 +229,11 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           ),
         }
       : undefined;
-    const historyBudget = reserveCodexHistoryBudget(promptBudget);
+    const { historyBudget, historyBudgetObservation } = prepareCodexHistoryBudgets(
+      promptBudget,
+      toolBridge.specs,
+      mutable.startupHistorySample,
+    );
     try {
       const assembled: Awaited<ReturnType<typeof assembleHarnessContextEngine>> =
         activeContextEngine
@@ -283,6 +282,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           imageHistory,
         },
         historyTokenBudget: historyBudget?.tokenBudget,
+        historyBudgetObservation,
         baseDeveloperInstructions,
         assertCurrent: assertProjectionCurrent,
       });
