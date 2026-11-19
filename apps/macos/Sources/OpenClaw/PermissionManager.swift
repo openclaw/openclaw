@@ -192,21 +192,12 @@ enum PermissionManager {
             SystemSettingsURLSupport.openPrivacySettings(for: .speechRecognition)
         }
         if status == .notDetermined, interactive, !Task.isCancelled, isCurrent() {
-            await self.requestSpeechRecognitionAuthorization()
+            await withUnsafeContinuation { (continuation: UnsafeContinuation<Void, Never>) in
+                // TCC calls back off the main actor; isolation must be safe at callback entry.
+                SFSpeechRecognizer.requestAuthorization { @Sendable _ in continuation.resume() }
+            }
         }
         return SFSpeechRecognizer.authorizationStatus() == .authorized
-    }
-
-    @MainActor
-    static func requestSpeechRecognitionAuthorization(
-        using request: (@escaping (SFSpeechRecognizerAuthorizationStatus) -> Void) -> Void =
-            SFSpeechRecognizer.requestAuthorization) async
-    {
-        await withUnsafeContinuation { (continuation: UnsafeContinuation<Void, Never>) in
-            // TCC calls back off the main actor. The callback must be nonisolated at entry,
-            // before any executor hop; resuming a continuation is safe on that queue.
-            request { @Sendable _ in continuation.resume() }
-        }
     }
 
     @MainActor
