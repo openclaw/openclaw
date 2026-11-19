@@ -4,14 +4,11 @@ import type {
 } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { reserveExternalWindowForDeferredNavigation } from "../../lib/open-external-url.ts";
-import type { TemplateReviewTarget } from "./creator-publication.ts";
+import type { TemplateReviewTarget, TemplateSignInPresentation } from "./creator-publication.ts";
 
 const METHOD = "templates.drafts.signIn";
 
 type Pending = Extract<TemplatesDraftsSignInResult, { status: "pending" }>;
-export type TemplateSignInPresentation =
-  | { status: "required" | "starting" | "expired" | "denied" | "cancelled" | "failed" }
-  | Pending;
 
 type Target = TemplateReviewTarget & { client: GatewayBrowserClient };
 

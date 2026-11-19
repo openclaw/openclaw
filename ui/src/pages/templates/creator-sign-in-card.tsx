@@ -1,7 +1,6 @@
 import { Show } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { TemplateCreator } from "./creator-publication.ts";
-import type { TemplateSignInPresentation } from "./creator-sign-in.ts";
+import type { TemplateCreator, TemplateSignInPresentation } from "./creator-publication.ts";
 import "../../styles/chat/clawhub-card.css";
 
 const clawHubLogo = new URL("./clawhub-logo.png", import.meta.url).href;

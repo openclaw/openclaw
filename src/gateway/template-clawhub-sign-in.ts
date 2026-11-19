@@ -189,7 +189,7 @@ export function createTemplateClawHubSignIn(dependencies = defaultDependencies) 
         const current = () => {
           target.assertCurrent();
           if (attempt.result || dependencies.now() >= attempt.expiresAt) {
-            throw new Error("ClawHub sign-in is no longer active.");
+            throw new Error("This ClawHub approval request has ended. Start a new sign-in.");
           }
         };
         if (attempt.result) {
