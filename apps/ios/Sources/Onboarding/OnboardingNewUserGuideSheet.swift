@@ -4,6 +4,7 @@ import SwiftUI
 /// Onboarding offers it only while no Gateway has ever been saved on this device.
 struct OnboardingNewUserGuideSheet: View {
     static let setupGuideURL = URL(string: "https://docs.openclaw.ai/start/getting-started")!
+    static let connectionHelpURL = URL(string: "https://docs.openclaw.ai/platforms/ios#quick-start-pair-connect")!
 
     @Environment(\.openURL) private var openURL
 
@@ -28,13 +29,26 @@ struct OnboardingNewUserGuideSheet: View {
                     OnboardingNewUserGuideStep(
                         number: 2,
                         title: "Show a pairing code",
-                        detail: "On the computer, open Devices and choose Connect a device.")
+                        detail: """
+                        On the computer, open Devices and choose Connect a device. \
+                        Your phone needs a secure way to reach the computer first.
+                        """)
                     OnboardingNewUserGuideStep(
                         number: 3,
                         title: "Scan it here",
                         detail: "Come back and tap Scan QR.")
                 }
                 .padding(.top, 26)
+
+                Button {
+                    self.openURL(Self.connectionHelpURL)
+                } label: {
+                    Text("Connection help")
+                        .font(OpenClawType.subheadSemiBold)
+                        .foregroundStyle(OpenClawBrand.activationPrimaryAction)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 18)
 
                 VStack(spacing: 10) {
                     ShareLink(item: Self.setupGuideURL) {
