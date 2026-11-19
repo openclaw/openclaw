@@ -263,6 +263,21 @@ describe("exec approval followup", () => {
     );
   });
 
+  it("suppresses expired approval delivery warnings", async () => {
+    const warning = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    vi.mocked(sendMessage).mockRejectedValue(
+      Object.assign(new Error("approval not found"), { gatewayCode: "APPROVAL_NOT_FOUND" }),
+    );
+    await expect(
+      sendExecApprovalFollowupResult(
+        { approvalId: "req-expired-warning", ...route, direct: true },
+        finished,
+      ),
+    ).resolves.toBeUndefined();
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(warning).not.toHaveBeenCalled();
+  });
+
   it("provides a summary when a no-session completion has no output", async () => {
     await direct({ resultText: "Exec finished (gateway id=req-1, code 0)" });
     directArgs({ content: "Background command finished." });

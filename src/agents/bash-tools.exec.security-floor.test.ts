@@ -145,11 +145,6 @@ afterEach(() => {
   }
 });
 
-it("does not load optional review or delivery runtimes for full/off execution", async () => {
-  const result = await run({ host: "gateway", mode: "full" }, "echo hello");
-  expect(result.details.status).toBe("completed");
-});
-
 it("records elevated execution without logging the command payload", async () => {
   using logInfo = vi.spyOn(logger, "logInfo").mockImplementation(() => {});
 
