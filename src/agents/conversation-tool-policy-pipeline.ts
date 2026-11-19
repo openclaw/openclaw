@@ -111,7 +111,7 @@ export function projectConversationToolNames<TName extends string>(params: {
   capabilityProfile: ResolvedConversationCapabilityProfile;
   toolNames: readonly TName[];
   toolMeta?: (tool: { name: TName }) => { pluginId: string } | undefined;
-  warn: (message: string) => void;
+  warn?: (message: string) => void;
 }): TName[] {
   const policies = resolveConversationToolPolicies({
     capabilityProfile: params.capabilityProfile,
@@ -139,7 +139,6 @@ export function isConversationToolAllowed(
       capabilityProfile,
       toolNames: [toolName],
       toolMeta: () => toolMeta,
-      warn: () => undefined,
     }).length === 1
   );
 }

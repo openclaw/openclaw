@@ -148,7 +148,6 @@ function shouldReportBundleMcpRuntimeDiagnostic(params: {
         modelProvider: params.modelRef.provider,
         modelId: params.modelRef.model,
       }),
-      warn: () => {},
     }).length > 0
   );
 }
@@ -393,7 +392,6 @@ export async function collectRuntimeToolSchemaFindings(
                   modelProvider: modelRef.provider,
                   modelId: modelRef.model,
                 }),
-                warn: () => {},
               });
               return collectNormalizedToolSchemaFindings({
                 cfg,

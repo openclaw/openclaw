@@ -48,7 +48,7 @@ export async function prepareNativeMcpPolicy(params: {
   workspaceDir: string;
   capabilityProfile: ResolvedConversationCapabilityProfile;
   runtimeToolsAllow?: string[];
-  warn: (message: string) => void;
+  warn?: (message: string) => void;
 }): Promise<PreparedNativeMcpPolicy> {
   params.runtime.markUsed();
   const catalog = await params.runtime.getCatalog();
