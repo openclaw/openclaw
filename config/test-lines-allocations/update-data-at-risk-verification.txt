@@ -1,8 +1,9 @@
 # Recorded data-at-risk marks: one new verification owner proved against real SQLite
 # (consistent beside a live writer without a copy, newer, behind, unfinished recovery,
 # interrupted restore, unreadable, live Doctor writers before and after Doctor holds the
-# state, partial rollback leftovers), its
-# readers (repair before and after Doctor, next-update admission including already-current)
-# with exact rendered text per outcome, and Git release-mode service ownership against
-# real git worktrees with copied, foreign and out-of-prefix negative controls. Exact net growth.
-232
+# state, partial rollback leftovers), its readers (repair before and after Doctor,
+# next-update admission including already-current) with exact rendered text per outcome,
+# Git release-mode service ownership against real git worktrees with copied, foreign and
+# out-of-prefix negative controls, and the stale-Gateway stop that is skipped when the
+# service identity cannot be inspected. Exact net growth.
+260

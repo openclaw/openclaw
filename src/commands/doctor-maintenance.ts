@@ -561,6 +561,12 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
                       if (stopped.serviceUpdateVerdict?.kind === "unavailable") {
                         warn(stopped.serviceUpdateVerdict.message);
                       }
+                      if (staleReplacement && !stopped.stopped) {
+                        // The stop was skipped, not attempted: say why and that the PID still runs.
+                        throw new Error(
+                          `Stale Gateway PID ${staleReplacement.pid ?? "unknown"} was not stopped and is still running: ${stopped.serviceMutationSkipMessage ?? stopped.blockMessage ?? "the managed service stop was skipped."}`,
+                        );
+                      }
                       if (staleReplacement && stopped.serviceEnv) {
                         await assertStaleDoctorGatewayStopped({
                           stale: staleReplacement,
