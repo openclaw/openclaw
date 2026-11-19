@@ -34,8 +34,8 @@ function injectToolCallThoughtSignatures(
   context: ProviderContext,
   model: OpenAIModeModel,
 ): void {
-  // Other compatible endpoints (for example LiteLLM in front of Gemini) receive back
-  // only the signatures they issued on this route, in the field they used.
+  // Other compatible endpoints (LiteLLM in front of Gemini) get back only signatures issued on
+  // this route, in LiteLLM's provider_specific_fields; provider adapters may move them.
   const google = isGoogleOpenAICompatModel(model);
   const sigById = new Map<string, string>();
   const fallbackSig =
