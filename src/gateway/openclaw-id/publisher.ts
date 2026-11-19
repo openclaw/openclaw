@@ -151,7 +151,10 @@ async function supersededBy(
   };
 }
 
-/** Builds the descriptor for a linked claw. */
+/**
+ * Builds the descriptor for a linked claw. After an owner reset it carries the reset's
+ * evidence until the next binding change (discovery.md, "Owner reset").
+ */
 function buildDescriptor(
   record: StoredClaw,
   relayUrl: string,
@@ -167,6 +170,9 @@ function buildDescriptor(
     relay_url: relayUrl,
     root_pub: record.authority.anchor.root_pub,
     binding: record.binding,
+    ...(record.reset?.statement.body.binding_seq === record.binding.body.binding_seq
+      ? { reset: record.reset }
+      : {}),
     published_at: now,
   };
 }
@@ -208,8 +214,8 @@ export async function publishClaw(params: {
     snapshotBody(state, bindingSeq, now),
     params.signer,
   );
-  // A binding after the first comes from a re-bind (new K_gw): until Discovery confirmed it,
-  // it goes out with its snapshot in one write.
+  // A binding after the first comes from a re-bind or an owner reset, both of which name a new
+  // K_gw: until Discovery confirmed it, it goes out with its snapshot in one write.
   const rebindPending =
     bindingSeq > 1 && params.record.discovery.published_binding_seq < bindingSeq;
   try {

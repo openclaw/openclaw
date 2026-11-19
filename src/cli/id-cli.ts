@@ -1,6 +1,7 @@
 // `openclaw id`: OpenClaw ID remote access of the Gateway on this machine. `rebind`
-// moves the claw to new machine keys with its recovery kit; the Gateway accepts it only
-// from a direct-loopback client, never over the tunnel.
+// moves the claw to new machine keys with its recovery kit and `reset` replaces the owner
+// key with a new kit; the Gateway accepts both only from a direct-loopback client, never
+// over the tunnel.
 import { setTimeout as sleep } from "node:timers/promises";
 import { password } from "@clack/prompts";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
@@ -324,6 +325,23 @@ export function registerIdCli(program: Command) {
       .option("--yes", "Skip the confirmation (needs --kit-stdin)", false)
       .option("--cancel", "Delete keys staged by an unfinished move", false),
   ).action(async (opts: RebindOpts) => await runRebind(opts));
+
+  // No --json: the new recovery kit is shown once and never written as JSON.
+  id.command("reset")
+    .description(
+      "Reset owner access with a new recovery kit, removing every owner device, person and invite (on this machine's running Gateway only; needs a link code from the owner account)",
+    )
+    .option("--url <url>", "Gateway WebSocket URL (must be this machine's Gateway)")
+    .option("--token <token>", "Gateway token (if required)")
+    .option("--timeout <ms>", "Timeout in ms", String(DEFAULT_TIMEOUT_MS))
+    .option(
+      "--code <link-code>",
+      "One-time link code from the OpenClaw ID account that owns this claw",
+    )
+    .action(async (opts: IdCliOpts & { code?: string }) => {
+      const { runReset } = await import("./id-cli-reset.js");
+      await runReset(opts, () => readLinkCode(opts));
+    });
 
   addIdGatewayOptions(
     id

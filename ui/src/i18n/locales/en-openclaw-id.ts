@@ -84,7 +84,7 @@ const enOpenClawId = {
     kitUsedNotice: "Your recovery kit was used to add {device}",
     kitUsedNoticeUnknown: "Your recovery kit was used to add a device",
     kitUsedNoticeBody:
-      "If this wasn’t you, remove it in Your devices. Your recovery kit can still add devices: to stop it, relink this claw as a new claw on the computer that runs it.",
+      "If this wasn’t you, remove it in Your devices. Your recovery kit can still add devices: to stop it, use Reset owner access in Settings → OpenClaw ID on the computer that runs this claw.",
     signIn: "Sign in with OpenClaw ID",
     signInLocalOnly:
       "Sign in through Tailscale or another personal sign-in, or on the computer that runs this claw.",
@@ -146,6 +146,56 @@ const enOpenClawId = {
     joinRequestReview: "Review",
     memberUsedRecoveryKit: "{name} used a recovery kit",
     memberRecoveryUseDetail: "{browser} was added. Review access in Access → People.",
+    settingsLink: "OpenClaw ID settings",
+    pageOff: "OpenClaw ID is off. Turn it on in Settings → Labs.",
+    pageUnavailable: "Connect to the Gateway to see this claw's OpenClaw ID.",
+    pageLoadFailed: "Couldn't read this claw's OpenClaw ID status.",
+    pageClaw: "This claw",
+    pageAddress: "Address",
+    pageNotLinked: "Remote access is off. Turn it on from the account menu.",
+    pageRemoteAccess: "Remote access",
+    pagePublication: "Discovery",
+    pagePublished: "Published",
+    pageNotPublished: "Not published yet",
+    pageDevicesDescription: "Owner browsers approved for this claw.",
+    pagePeople: "People",
+    pagePeopleDescription: "People who can reach this claw remotely.",
+    pageOpen: "Open",
+    pageKeys: "Keys",
+    pageMoveKeysDescription: "Replace this claw's connection keys using your recovery kit.",
+    pageMoveKeysLocalOnly:
+      "Moving to new keys is only available on the computer that runs this claw.",
+    resetOwnerAccess: "Reset owner access",
+    resetDescription:
+      "If your recovery kit is lost or leaked: make a new kit and remove every owner device, person, node and invite. Access on this computer, the claw's address and its data stay.",
+    resetRequirements:
+      "Reset owner access needs both of these, so only the owner, at this claw's computer, can do it:",
+    resetNeedsLocal: "On the computer that runs this claw",
+    resetNeedsLocalDetail:
+      "Open the Control UI on that computer itself. Remote, tunneled and proxied connections can't reset: a reset ends every remote session, including the one it would start from.",
+    resetNeedsOwnerAccount: "Signed in with the account that owns this claw",
+    resetNeedsOwnerAccountDetail:
+      "Discovery accepts the new owner key only with a link code from the OpenClaw ID account that owns this claw. Sign in from the account menu.",
+    resetRequirementMet: "Yes",
+    resetRequirementMissing: "No",
+    resetSignedInAs: "Signed in as {account}",
+    resetNotSignedIn: "Not signed in",
+    resetAction: "Reset…",
+    resetWarningTitle: "This can't be undone",
+    resetBody:
+      "This removes {devices} owner device(s), {members} person(s), {nodes} node(s) and {invites} invite(s) from {host}. Their remote sessions close and their sign-ins stop working. Your old recovery kit stops working, and this claw gets a new Gateway key.",
+    resetKeeps:
+      "Access on this computer, the claw's address and all of its data stay. Set up your other browsers again afterwards with the new kit.",
+    resetConfirmLabel: "Type {name} to confirm",
+    resetMakeKit: "Make a new recovery kit",
+    resetKitBody:
+      "Save this new kit before you reset. It's shown only now and isn't stored on this computer.",
+    resetCommit: "Reset owner access",
+    resetDone: "Owner access reset. Set up your other browsers again with the new kit.",
+    resetDoneUnpublished:
+      "Owner access reset. Discovery doesn't have the new owner key yet; this claw keeps publishing it.",
+    resetUncertain:
+      "Couldn't confirm the reset. If Your devices now lists only this browser, the kit you saved is this claw's recovery kit.",
   },
 } satisfies TranslationMap;
 
