@@ -508,7 +508,12 @@ export function usePrefixStabilityJourney() {
           expect(owner.text).toContain("OWNER turn after a scheduled first turn");
           // Whole declarations in order; only the known growth, which must still occur, may differ.
           const names = cronFirstRequests.map((request) => toolNames(request.tools).join(","));
-          expect(toolNames(cronFirstRequests[0]!.tools), names[0]).not.toContain("message");
+          expect(
+            toolNames(cronFirstRequests[0]!.tools).filter((name) =>
+              CRON_FIRST_GROWTH.tools.includes(name),
+            ),
+            names[0],
+          ).toEqual([]);
           expect(toolNames(owner.tools), names.at(-1)).toEqual(
             expect.arrayContaining(CRON_FIRST_GROWTH.tools),
           );
