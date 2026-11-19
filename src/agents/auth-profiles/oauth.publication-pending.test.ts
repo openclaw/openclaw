@@ -26,7 +26,7 @@ const profileId = "openai:token-sharing:fixture";
 // Setup checks a just-saved Sign in with ChatGPT login while the Gateway's catalog publishes it.
 it.each([
   { settles: true, outcome: { apiKey: "synthetic-access" } },
-  { settles: false, outcome: { error: "authority is unavailable" } },
+  { settles: false, outcome: { error: expect.stringContaining("authority is unavailable") } },
 ])("reads a ChatGPT login whose publication settles=$settles", async ({ settles, outcome }) => {
   const stateDir = dirs.make("oauth-publication-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: undefined };
@@ -62,9 +62,5 @@ it.each([
     (resolved) => ({ apiKey: resolved?.apiKey }),
     (error: unknown) => ({ error: String(error) }),
   );
-  if ("error" in outcome) {
-    expect(result).toEqual({ error: expect.stringContaining(outcome.error) });
-  } else {
-    expect(result).toEqual(outcome);
-  }
+  expect(result).toEqual(outcome);
 });
