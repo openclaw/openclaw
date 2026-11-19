@@ -1,6 +1,9 @@
 import { getRuntimeConfig } from "../../../config/config.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
-import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   runWithGatewayDetachedWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
@@ -9,6 +12,7 @@ import { findSessionControllerOperationByRunId } from "../../../sessions/session
 import { runInDetachedAsyncContext } from "../../../shared/detached-async-context.js";
 import { reconcileRetiredSubagentCancellation } from "../completion/subagent-completion-admission.store.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
+import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { emitSubagentProgressEndedHook } from "./subagent-registry-completion.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
@@ -23,6 +27,7 @@ import {
   ANNOUNCE_EXPIRY_MS,
   GATEWAY_ADMISSION_RETRY_DELAY_MS,
 } from "./subagent-registry-helpers.js";
+import { completeSubagentRunAttempt } from "./subagent-registry-lifecycle-completion.js";
 import { subagentRegistryLog as log } from "./subagent-registry-lifecycle-log.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
@@ -55,7 +60,7 @@ import {
 } from "./subagent-requester-settle-identity.js";
 import { isClaimedByLiveRequesterTurn } from "./subagent-requester-turn-liveness.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
-import { isSubagentRunLive } from "./subagent-run-liveness.js";
+import { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
 import { resolveSubagentWaitTimeoutMs } from "./subagent-run-timeout.js";
 import {
   resolveSubagentSessionCompletion,
@@ -567,6 +572,36 @@ export const getSwarmRunByLaunchReplayKey = publicApi.getSwarmRunByLaunchReplayK
 export const countActiveRunsForSession = publicApi.countActiveRunsForSession;
 export function initSubagentRegistry() {
   return subagentRestorer.restoreOnce();
+}
+
+/**
+ * Shutdown interrupts execution. A child whose session got a restart marker resumes itself;
+ * for any other child the completion owner still owes the requester its outcome.
+ */
+export async function terminateLiveSubagentsForShutdown(
+  resolveGatewayContext: GatewayContextResolver,
+  markedSessionKeys: ReadonlySet<string>,
+): Promise<void> {
+  const gateway = resolveGatewayContext();
+  const entries = [...subagentRuns.values()].filter(
+    (entry) =>
+      (isSubagentRunLive(entry) || isSubagentRunQueued(entry)) &&
+      !markedSessionKeys.has(entry.childSessionKey) &&
+      gateway !== undefined &&
+      getGatewayContextResolver(entry)?.() === gateway,
+  );
+  await Promise.all(
+    entries.map((entry) =>
+      // Shutdown joins this terminal write after new-root admission has closed.
+      completeSubagentRunAttempt(subagentLifecycleController, {
+        runId: entry.runId,
+        reason: SUBAGENT_ENDED_REASON_ERROR,
+        outcome: { status: "error", error: "Gateway stopped" },
+        triggerCleanup: false,
+        suppressSessionEffects: true,
+      }),
+    ),
+  );
 }
 
 export function activateSubagentRegistry(

@@ -63,6 +63,8 @@ import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authori
 export async function persistRunningSessionsForRestart(params: {
   cfg: OpenClawConfig;
   signal?: AbortSignal;
+  /** Receives each session key whose marker committed. */
+  marked?: Set<string>;
 }): Promise<void> {
   const summary = createRestartResumeSummary("shutdown");
   const publish = () => summary.publish();
@@ -157,6 +159,7 @@ async function persistRunningSessions(
       for (const { session, preserve } of preserveQueued) {
         if (session.needsResume) {
           summary.record(session.agentId, session.sessionKey, "marked");
+          params.marked?.add(session.sessionKey);
         }
         preserve();
       }
@@ -417,8 +420,7 @@ async function resumeRestartStore(
               ...selected,
               // Keep durable custody until the new turn accepts, including another
               // restart while its workspace is still being prepared.
-              resumeAfterRestart:
-                (!parked || parked === "resume") && !skip ? marker : undefined,
+              resumeAfterRestart: (!parked || parked === "resume") && !skip ? marker : undefined,
               mainRestartRecovery: undefined,
               ...(orphanedRun
                 ? derivePersistedSessionLifecyclePatch({

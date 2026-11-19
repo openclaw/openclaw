@@ -20,6 +20,7 @@ export type GatewayRunShutdownParams = {
   resolveGatewayContext: GatewayContextResolver;
   /** Snapshot live owners once, before cancellation changes their running state. */
   persistRunningSessionsForRestart?: (signal: AbortSignal) => Promise<void>;
+  terminateRunningSubagentsForShutdown?: () => Promise<void>;
   cancelReceivedWork?: (reason?: Error) => void;
 };
 
@@ -71,8 +72,11 @@ export async function prepareGatewayRunShutdown(
     shutdownLog.warn(`Restart marker persistence failed: ${String(error)}`);
     failure = { error };
   }
-  // Signal every captured owner before joining any of them. Interrupted subagent rows stay
-  // unended: each child session resumes its own task after the restart.
+  // Start child retirement, then signal every captured owner before joining any of them.
+  const subagents = measureGatewayCloseStep("restart.close.subagent-settlement", async () =>
+    params.terminateRunningSubagentsForShutdown?.(),
+  );
+  void subagents.catch(() => {});
   stopSession({
     capture,
     source: "restart",
@@ -94,6 +98,20 @@ export async function prepareGatewayRunShutdown(
   const reason = createAgentRunRestartAbortError();
   params.cancelReceivedWork?.(reason);
   const interrupted = effects.interrupt(reason);
+  const subagentMs = remainingCleanupMs();
+  try {
+    await raceWithTimeout(
+      () => subagents,
+      subagentMs,
+      () => {
+        throw new Error(`Shutdown subagent settlement did not settle within ${subagentMs}ms`);
+      },
+      { ref: false },
+    );
+  } catch (error) {
+    shutdownLog.warn(`Subagent settlement failed: ${String(error)}`);
+    failure ??= { error };
+  }
   // Raw model/tool ownership is resource cleanup, not permission to wait forever.
   const terminalPersistence = sources.flatMap(([, source]) =>
     source.adapter.projectSessionTerminalPersistence
@@ -101,6 +119,7 @@ export async function prepareGatewayRunShutdown(
       : [],
   );
   const released = Promise.allSettled([
+    subagents,
     capture.settled,
     interrupted.released,
     ...terminalPersistence,

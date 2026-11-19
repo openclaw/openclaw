@@ -531,6 +531,7 @@ export async function prepareGatewayLifecycle(params: {
     runtime.scheduler.fence();
     runtime.resolvePluginGatewayContext()?.scopeUpgradeCoordinator?.beginClose();
     cronReconciliation.invalidate();
+    const marked = new Set<string>(); // Children with a restart marker resume themselves.
     const preparation = await shutdownRuntime.prepareGatewayClose(
       {
         resolveGatewayContext: runtime.resolvePluginGatewayContext,
@@ -545,11 +546,17 @@ export async function prepareGatewayLifecycle(params: {
           await persistRunningSessionsForRestart({
             cfg,
             signal,
+            marked,
           });
         },
-        cancelReceivedWork: (reason) => {
+        terminateRunningSubagentsForShutdown: async () => {
           // Persistence has settled or timed out; release marker retention before run claims.
           void Promise.resolve(markClosePreludeStarted(optsValue)).catch(() => {});
+          const { terminateLiveSubagentsForShutdown } =
+            await import("../agents/subagents/registry/subagent-registry.js");
+          await terminateLiveSubagentsForShutdown(runtime.resolvePluginGatewayContext, marked);
+        },
+        cancelReceivedWork: (reason) => {
           // Restart markers and session stop classification precede authority retirement.
           requestEntryLifetime.retire(reason);
           runtime.scheduler.beginClose();
