@@ -377,6 +377,41 @@ function removeUiAssistantIdentity(raw: Record<string, unknown>, changes: string
   }
 }
 
+// Exact Lean migration: true selects openclaw/small and false keeps an explicit
+// openclaw/base at the same scope, so an opt-out still beats inherited or
+// model-bound profiles. An existing agentProfileId at that scope wins.
+function migrateLocalModelLeanToAgentProfile(raw: Record<string, unknown>, changes: string[]) {
+  visitAgentConfigScopes(raw, (scope, path) => {
+    const experimental = getRecord(scope.experimental);
+    if (!experimental || !Object.hasOwn(experimental, "localModelLean")) {
+      return;
+    }
+    const lean = experimental.localModelLean;
+    delete experimental.localModelLean;
+    if (Object.keys(experimental).length === 0) {
+      delete scope.experimental;
+    }
+    if (typeof lean !== "boolean") {
+      changes.push(`Removed invalid ${path}.experimental.localModelLean.`);
+      return;
+    }
+    const profileId = lean ? "openclaw/small" : "openclaw/base";
+    const existing = scope.agentProfileId;
+    if (existing !== undefined && existing !== "auto") {
+      changes.push(
+        existing === profileId
+          ? `Removed ${path}.experimental.localModelLean; ${path}.agentProfileId already selects ${profileId}.`
+          : `Removed ${path}.experimental.localModelLean=${lean}; kept ${path}.agentProfileId=${typeof existing === "string" ? existing : JSON.stringify(existing)}.`,
+      );
+      return;
+    }
+    scope.agentProfileId = profileId;
+    changes.push(
+      `Moved ${path}.experimental.localModelLean=${lean} → ${path}.agentProfileId="${profileId}".`,
+    );
+  });
+}
+
 function probedMigration(
   id: string,
   message: string,
@@ -423,7 +458,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
           changes.push("Removed onboarding-owned agents.defaults.experimental.localModelLean.");
         } else {
           changes.push(
-            "Retained explicit or unowned agents.defaults.experimental.localModelLean=true; remove it or set it to false to restore the full tool capabilities through Tool Search.",
+            'Retained explicit or unowned agents.defaults.experimental.localModelLean=true as agents.defaults.agentProfileId="openclaw/small"; set it to "openclaw/base" to restore the full tool capabilities through Tool Search.',
           );
         }
       }
@@ -431,6 +466,11 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
       changes.push("Removed retired wizard.localModelLeanAutoModel.");
     },
   },
+  probedMigration(
+    "runtime.local-model-lean-agent-profile",
+    'experimental.localModelLean moved to agentProfileId ("openclaw/small" for true, "openclaw/base" for false).',
+    migrateLocalModelLeanToAgentProfile,
+  ),
   {
     id: "runtime.messages-suppress-tool-errors",
     legacyRules: [

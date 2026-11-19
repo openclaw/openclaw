@@ -37,7 +37,7 @@ async function promptFixture(
   skillsDeferred = false,
 ) {
   const config = {
-    agents: { defaults: { experimental: { localModelLean: false } } },
+    agents: { defaults: { agentProfileId: "openclaw/base" as const } },
     tools: { codeMode, ...(!codeMode && { toolSearch: { enabled: true, mode } }) },
   };
   const fixture = createFixture({ pendingImageCount: 0 });

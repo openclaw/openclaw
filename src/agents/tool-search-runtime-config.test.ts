@@ -11,7 +11,10 @@ const pluginConfig = (marker: unknown) => ({
 
 function createRuntimeConfigPair(localModelLean = true) {
   const sourceConfig = {
-    agents: { defaults: { experimental: { localModelLean } }, entries: { main: {} } },
+    agents: {
+      defaults: { agentProfileId: localModelLean ? "openclaw/small" : "openclaw/base" },
+      entries: { main: {} },
+    },
     plugins: pluginConfig(secretMarker()),
   } as OpenClawConfig;
   const runtimeConfig = { ...sourceConfig, plugins: pluginConfig("resolved") } as OpenClawConfig;

@@ -476,9 +476,7 @@ export function resolveAgentConfig(
     contextInjection: entry.contextInjection,
     bootstrapMaxChars: entry.bootstrapMaxChars,
     bootstrapTotalMaxChars: entry.bootstrapTotalMaxChars,
-    experimental: entry.experimental
-      ? { ...agentDefaults?.experimental, ...entry.experimental }
-      : agentDefaults?.experimental,
+    experimental: agentDefaults?.experimental,
     skills: entry.skills,
     memory: entry.memory,
     humanDelay: entry.humanDelay,

@@ -5,6 +5,7 @@ import {
   AgentCompactionMaxSummaryCharsSchema,
   AgentModelMapSchema,
   AgentModelPolicySchema,
+  AgentProfileSelectorSchema,
   WorkspaceFileModeSchema,
 } from "./zod-schema.agent-entry-base.js";
 import {
@@ -84,9 +85,10 @@ export const AgentDefaultsBaseSchema = z.strictObject({
       /** Global opt-in for automatic Decision experiments; model selection is separate. */
       decisionAssistance: z.boolean().optional(),
       usageRankedToolIndex: z.boolean().optional(),
-      localModelLean: z.boolean().optional(),
     })
     .optional(),
+  /** Default Agent Profile for every agent; `auto` defers to model bindings. */
+  agentProfileId: AgentProfileSelectorSchema.optional(),
   userTimezone: z.string().optional(),
   startupContext: z
     .strictObject({

@@ -1,3 +1,5 @@
+import type { AgentProfileSelectionSource } from "../agent-profile-ids.js";
+
 /** Persisted size and provenance summary for one assembled system prompt. */
 export type SessionSystemPromptReport = {
   source: "run" | "estimate";
@@ -21,6 +23,11 @@ export type SessionSystemPromptReport = {
   sandbox?: {
     mode?: string;
     sandboxed?: boolean;
+  };
+  /** Agent Profile selected for the run and the scope that selected it. */
+  agentProfile?: {
+    id: string;
+    source: AgentProfileSelectionSource;
   };
   systemPrompt: {
     chars: number;

@@ -184,8 +184,10 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Global opt-in for experimental assistance from the owning agent’s configured Decision model (default: false; requires explicit true). The effective decisionModel can be inherited from global defaults or selected per agent; an empty per-agent value disables assistance. Supported uses may send selected data to that provider and incur provider charges. See the Decision assistance documentation for supported uses, setup, and data handling. This setting does not gate explicit decision_evaluate calls, select providers, or grant actions.",
   "agents.defaults.experimental.usageRankedToolIndex":
     "Opt in to usage-ranked Code Mode, Tool Search, and MCP tool directory prompt indexes in the embedded OpenClaw runtime (default: false). Stores only tool IDs, decayed scores, and timestamps in operator-owned agent storage for 90 days; excludes incognito sessions. Rankings stay frozen until a prompt-prefix boundary. Does not change tool permissions or Codex. Inspect, import past usage, or reset with openclaw tools usage.",
-  "agents.defaults.experimental.localModelLean":
-    "Advanced troubleshooting override that restricts optional tools such as browser, automations, and message. Off by default; supported local runtimes use automatic Tool Search without this restriction. Explicit tool allows and required delivery tools are preserved.",
+  "agents.defaults.agentProfileId":
+    'Default Agent Profile. "openclaw/small" restricts optional tools such as browser, automations, and message (formerly experimental.localModelLean); "openclaw/base" keeps the full tool surface. "auto" or omitted uses agents.defaults.models.<provider/model>.agentProfileId when set. Explicit tool allows and required delivery tools are preserved.',
+  "agents.defaults.models.*.agentProfileId":
+    "Agent Profile for this exact provider/model, for example openclaw/small for one local model. Agent and default agentProfileId values take precedence.",
   "agents.defaults.startupContext":
     'Runtime-owned first-turn prelude for bare "/new" and "/reset". Use this to control whether recent daily memory files are preloaded into the first prompt instead of asking the model to decide what to read.',
   "agents.defaults.startupContext.enabled":

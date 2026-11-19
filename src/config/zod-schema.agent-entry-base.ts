@@ -1,6 +1,7 @@
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { z } from "zod";
 import { ALL_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
+import { AGENT_PROFILE_SELECTORS } from "./agent-profile-ids.js";
 import { AgentModelSchema, DecisionModelSchema } from "./zod-schema.agent-model.js";
 import { RecommendedPromptsSchema } from "./zod-schema.recommended-prompts.js";
 
@@ -11,6 +12,9 @@ export const WorkspaceFileModeSchema = z.enum(["0600", "0620", "0640", "0660"], 
 
 /** Persisted client-side summary ceiling; the active model token budget may require less. */
 export const AgentCompactionMaxSummaryCharsSchema = z.number().int().min(1_000).max(200_000);
+
+/** Agent Profile selector: a built-in profile id, or `auto` to defer to the next scope. */
+export const AgentProfileSelectorSchema = z.enum(AGENT_PROFILE_SELECTORS);
 
 export const AgentRuntimePolicySchema = z
   .strictObject({
@@ -42,6 +46,8 @@ const AgentModelRuntimeEntrySchema = z.strictObject({
   codeMode: z.boolean().optional(),
   /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
   streaming: z.boolean().optional(),
+  /** Agent Profile for this exact provider/model; agent and default selectors take precedence. */
+  agentProfileId: AgentProfileSelectorSchema.optional(),
 });
 
 export const AgentModelMapSchema = z
@@ -53,6 +59,10 @@ export const AgentModelMapSchema = z
         [
           "codeMode",
           "Code Mode requires an exact provider/model entry; wildcard and bare model keys are not supported.",
+        ],
+        [
+          "agentProfileId",
+          "Agent Profile bindings require an exact provider/model entry; wildcard and bare model keys are not supported.",
         ],
       ] as const) {
         if (entry[key] !== undefined && (ref.includes("*") || !parseProviderModelRef(ref))) {
@@ -112,11 +122,8 @@ export const AgentEntryBaseSchema = z.strictObject({
     .optional(),
   bootstrapMaxChars: z.number().int().positive().optional(),
   bootstrapTotalMaxChars: z.number().int().positive().optional(),
-  experimental: z
-    .strictObject({
-      localModelLean: z.boolean().optional(),
-    })
-    .optional(),
+  /** Agent Profile for this agent; overrides the default selector and model bindings. */
+  agentProfileId: AgentProfileSelectorSchema.optional(),
   skills: z.array(z.string()).optional(),
   subagents: z
     .strictObject({

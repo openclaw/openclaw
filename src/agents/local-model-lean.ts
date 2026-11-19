@@ -4,10 +4,7 @@
  * preserving explicitly required delivery tools.
  */
 import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery-mode.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { resolveAgentConfig } from "./agent-scope-config.js";
-import { resolveSessionAgentIds } from "./agent-scope.js";
+import { resolveAgentProfile, type AgentProfileScope } from "./agent-profiles.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
@@ -47,50 +44,18 @@ export function resolveLocalModelLeanPreserveToolNames(params?: {
   return [...new Set(names)];
 }
 
-// Agent id may arrive explicitly, through the session key, or via config default.
-// Resolve once so default/agent experimental flags use the same scope.
-function resolveLocalModelLeanAgentId(params: {
-  config?: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-}): string | undefined {
-  const explicitAgentId = params.agentId?.trim() ? normalizeAgentId(params.agentId) : undefined;
-  if (params.config) {
-    return resolveSessionAgentIds({
-      config: params.config,
-      agentId: explicitAgentId,
-      sessionKey: params.sessionKey,
-    }).sessionAgentId;
-  }
-  const parsedSessionAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
-  return (
-    explicitAgentId ?? (parsedSessionAgentId ? normalizeAgentId(parsedSessionAgentId) : undefined)
-  );
-}
-
-/** Returns true when local-model lean mode is enabled for the selected agent. */
-export function isLocalModelLeanEnabled(params: {
-  config?: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-}): boolean {
-  const normalizedAgentId = resolveLocalModelLeanAgentId(params);
-  const resolvedExperimental =
-    params.config && normalizedAgentId
-      ? (resolveAgentConfig(params.config, normalizedAgentId)?.experimental ??
-        params.config.agents?.defaults?.experimental)
-      : params.config?.agents?.defaults?.experimental;
-  return resolvedExperimental?.localModelLean ?? false;
+/** Returns true when the selected Agent Profile uses the lean OpenClaw tool profile. */
+export function isLocalModelLeanEnabled(params: AgentProfileScope): boolean {
+  return resolveAgentProfile(params).profile.spec["openclaw.ai"]?.toolProfile === "lean";
 }
 
 /** Filters tools for local-model lean mode while preserving required delivery tools. */
-export function filterLocalModelLeanTools(params: {
-  tools: AnyAgentTool[];
-  config?: OpenClawConfig;
-  agentId?: string;
-  sessionKey?: string;
-  preserveToolNames?: Iterable<string>;
-}): AnyAgentTool[] {
+export function filterLocalModelLeanTools(
+  params: AgentProfileScope & {
+    tools: AnyAgentTool[];
+    preserveToolNames?: Iterable<string>;
+  },
+): AnyAgentTool[] {
   if (!isLocalModelLeanEnabled(params)) {
     return params.tools;
   }

@@ -692,7 +692,7 @@ new snapshot.
 ## Local model lean mode
 
 Lean mode is an advanced troubleshooting override, configured outside Labs.
-Its existing `experimental.localModelLean` keys remain supported. See
+It is the `openclaw/small` Agent Profile, selected with `agentProfileId`; `openclaw doctor --fix` moves the retired `experimental.localModelLean` flag. See
 [Local model lean mode](/gateway/local-models#local-model-lean-mode) for capability
 restrictions, config examples, and recovery guidance.
 

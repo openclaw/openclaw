@@ -57,7 +57,7 @@ it("keeps host-owned controls out of public attempt and tool inputs", () => {
 
 it("preserves explicitly allowed tools in an asynchronously prepared lean surface", async () => {
   const runtime = await surface("async", {
-    agents: { defaults: { experimental: { localModelLean: true } } },
+    agents: { defaults: { agentProfileId: "openclaw/small" } },
     tools: { allow: ["browser"], codeMode: false, toolSearch: false },
   });
   const tools = ["browser", "tts"].map((name) => ({

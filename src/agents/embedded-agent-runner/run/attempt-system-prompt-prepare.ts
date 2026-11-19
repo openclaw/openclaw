@@ -16,6 +16,7 @@ import {
   readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
+import { resolveAgentProfile } from "../../agent-profiles.js";
 import { isHostSystemTurn } from "../../agent-tools.turn-authority.js";
 import {
   buildBootstrapPromptWarningNotice,
@@ -190,6 +191,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
               runtimeConfig: params.toolSearchRuntimeConfig,
               agentId: params.setup.sessionAgentId,
               sessionKey: params.setup.sandboxSessionKey,
+              modelProvider: attempt.provider,
+              modelId: attempt.modelId,
               sessionId: attempt.sessionId,
               runId: attempt.runId,
               catalogRef: params.toolSearchCatalogRef,
@@ -482,6 +485,13 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   const attemptSystemPrompt = await buildAttemptSystemPrompt(promptInputs);
   assertPreparationCurrent();
   phases.mark("attempt.system-prompt.report");
+  const agentProfile = resolveAgentProfile({
+    config: attempt.config,
+    agentId: params.setup.sessionAgentId,
+    sessionKey: attempt.sessionKey,
+    modelProvider: attempt.provider,
+    modelId: attempt.modelId,
+  });
   const reportInputs: Parameters<typeof buildSystemPromptReport>[0] = {
     source: "run",
     generatedAt: Date.now(),
@@ -502,6 +512,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     skillsPrompt: attemptSystemPrompt.skillsPrompt,
     tools: params.effectiveTools,
     catalogEntries: params.toolSearchCatalogRef?.current?.entries,
+    agentProfile: { id: agentProfile.profile.id, source: agentProfile.selectionSource },
   };
   const systemPromptReport = buildSystemPromptReport(reportInputs);
   params.setup.prepStages?.mark("system-prompt");

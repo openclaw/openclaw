@@ -12,7 +12,9 @@ function tools(names: string[]): AnyAgentTool[] {
   return names.map((name) => ({ name })) as AnyAgentTool[];
 }
 
-const lean = (localModelLean: boolean) => ({ experimental: { localModelLean } });
+const lean = (localModelLean: boolean): { agentProfileId: "openclaw/small" | "openclaw/base" } => ({
+  agentProfileId: localModelLean ? "openclaw/small" : "openclaw/base",
+});
 function defaultLeanConfig(
   entries: NonNullable<OpenClawConfig["agents"]>["entries"] = { main: {} },
 ): OpenClawConfig {
@@ -88,5 +90,19 @@ describe("local model lean tool filtering", () => {
 
     expect(isLocalModelLeanEnabled({ config: cfg, sessionKey: "agent:gemma:main" })).toBe(true);
     expect(filteredNames(cfg, { sessionKey: "agent:gemma:main" })).toEqual(["read", "exec"]);
+  });
+
+  it("enables lean mode for an exact model binding only", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: { models: { "ollama/qwen3:8b": { agentProfileId: "openclaw/small" } } },
+        entries: { main: {}, full: { agentProfileId: "openclaw/base" } },
+      },
+    };
+    const scope = { config, agentId: "main", modelProvider: "ollama", modelId: "qwen3:8b" };
+    expect(isLocalModelLeanEnabled(scope)).toBe(true);
+    expect(filteredNames(config, scope)).toEqual(["read", "exec"]);
+    expect(isLocalModelLeanEnabled({ ...scope, modelId: "qwen3:14b" })).toBe(false);
+    expect(isLocalModelLeanEnabled({ ...scope, agentId: "full" })).toBe(false);
   });
 });

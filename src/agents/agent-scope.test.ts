@@ -94,14 +94,14 @@ describe("resolveAgentConfig", () => {
     });
   });
 
-  it("merges experimental flags from defaults with per-agent overrides", () => {
+  it("inherits experimental flags from defaults", () => {
     const cfg = agentConfig({
-      defaults: { experimental: { localModelLean: true } },
-      entries: { main: { experimental: { localModelLean: false } } },
+      defaults: { experimental: { usageRankedToolIndex: true } },
+      entries: { main: {} },
     });
 
     expect(resolveAgentConfig(cfg, "main")?.experimental).toEqual({
-      localModelLean: false,
+      usageRankedToolIndex: true,
     });
   });
 

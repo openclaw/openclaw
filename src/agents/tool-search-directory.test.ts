@@ -79,7 +79,7 @@ describe("lean Tool Search directory", () => {
   it("does not spend removed tools' prompt savings on longer descriptions", () => {
     const tools = localCatalog();
     const config: OpenClawConfig = {
-      agents: { defaults: { experimental: { localModelLean: true } } },
+      agents: { defaults: { agentProfileId: "openclaw/small" } },
       tools: { toolSearch: { mode: "tools" } },
     };
     const leanTools = filterLocalModelLeanTools({ tools, config });
@@ -105,8 +105,8 @@ describe("lean Tool Search directory", () => {
     const ref = catalogRef(localCatalog().slice(0, 1));
     const config: OpenClawConfig = {
       agents: {
-        defaults: { experimental: { localModelLean: true } },
-        entries: { lean: {}, full: { experimental: { localModelLean: false } } },
+        defaults: { agentProfileId: "openclaw/small" },
+        entries: { lean: {}, full: { agentProfileId: "openclaw/base" } },
       },
     };
     const full = buildToolSchemaDirectoryPrompt({ config, agentId: "full", catalogRef: ref });

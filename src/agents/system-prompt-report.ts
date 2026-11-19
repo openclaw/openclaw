@@ -192,6 +192,7 @@ export function buildSystemPromptReport(params: {
   tools: PromptReportTool[];
   catalogEntries?: readonly ToolSearchCatalogEntry[];
   currentTurn?: SessionSystemPromptReport["currentTurn"];
+  agentProfile?: SessionSystemPromptReport["agentProfile"];
 }): SessionSystemPromptReport {
   const systemPromptChars = params.systemPrompt.length;
   const projectContextChars = measureRenderedProjectContextChars(params.systemPrompt);
@@ -219,6 +220,7 @@ export function buildSystemPromptReport(params: {
       nonProjectContextChars: Math.max(0, systemPromptChars - projectContextChars),
     },
     ...(params.currentTurn ? { currentTurn: params.currentTurn } : {}),
+    ...(params.agentProfile ? { agentProfile: params.agentProfile } : {}),
     injectedWorkspaceFiles: params.injectedWorkspaceFiles,
     skills: {
       promptChars: skillsPrompt.length,

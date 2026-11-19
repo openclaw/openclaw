@@ -545,7 +545,7 @@ inherits the daemon's limits even if that alias forwards to a hosted model.
 Other providers are not classified as local from model names or a loopback URL alone.
 
 An explicit `tools.toolSearch` value takes precedence, including `false`.
-Setting `agents.defaults.experimental.localModelLean: false` restores optional
+Setting `agents.defaults.agentProfileId: "openclaw/base"` restores optional
 tools but does not turn off automatic Tool Search.
 
 Enable structured Tool Search explicitly:

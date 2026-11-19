@@ -31,6 +31,8 @@ export function applyModelProviderToolPolicy(
     config: params?.config,
     agentId: params?.agentId,
     sessionKey: params?.sessionKey,
+    modelProvider: params?.modelProvider,
+    modelId: params?.modelId,
     preserveToolNames: params?.localModelLeanPreserveToolNames ?? params?.runtimeToolAllowlist,
   });
 

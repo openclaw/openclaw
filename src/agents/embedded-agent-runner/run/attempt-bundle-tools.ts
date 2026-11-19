@@ -232,6 +232,8 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         ),
         config: params.attempt.config,
         agentId: params.setup.sessionAgentId,
+        modelProvider: params.attempt.provider,
+        modelId: params.attempt.modelId,
         preserveToolNames: localModelLeanPreserveToolNames,
       });
       const schemaProjection = filterRuntimeCompatibleTools(projectedTools);

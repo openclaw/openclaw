@@ -110,6 +110,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Optional per-model runtime policy for this agent. Use this for agent-specific model exceptions instead of setting a whole-agent runtime.",
   "agents.entries.*.models.*.agentRuntime.id":
     'Per-agent model runtime id: "openclaw", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli".',
+  "agents.entries.*.models.*.agentProfileId":
+    "Agent Profile for this agent and exact provider/model. The agent's own agentProfileId and agents.defaults.agentProfileId take precedence; this binding wins over the shared model binding.",
   "agents.entries.*.models.*.codeMode":
     "OpenClaw Code Mode for this agent and exact provider/model: On forces it on, Off disables it, and Default inherits the agent activation setting, then the shared model override, then tools.codeMode.enabled. This does not change the selected runtime or Codex native Code Mode.",
   "agents.defaults.imageModel.primary":

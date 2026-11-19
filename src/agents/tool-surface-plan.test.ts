@@ -111,7 +111,7 @@ describe("resolveAgentToolSurfacePlan", () => {
         tools: { toolSearch },
         agents: {
           ownership: "explicit",
-          defaults: { experimental: { localModelLean: false } },
+          defaults: { agentProfileId: "openclaw/base" },
           entries: { local: {}, hosted: {} },
         },
       };

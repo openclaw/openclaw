@@ -205,7 +205,7 @@ describe("onboarding agent target", () => {
           },
           modelPolicy: { allow: ["provider/selected"] },
           mediaModels: { video: { primary: "media/video" } },
-          experimental: { localModelLean: true },
+          agentProfileId: "openclaw/small",
         },
       },
     }));
@@ -213,7 +213,7 @@ describe("onboarding agent target", () => {
     expect(updated.agents?.defaults).toEqual({
       ...modelSettings("openai/global", "Global"),
       mediaModels: { video: { primary: "media/video" } },
-      experimental: { localModelLean: true },
+      agentProfileId: "openclaw/small",
     });
     expect(updated.agents).not.toHaveProperty("list");
     expect(updated.agents?.entries).toEqual({

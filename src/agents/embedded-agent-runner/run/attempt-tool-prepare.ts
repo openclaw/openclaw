@@ -288,6 +288,8 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     config: attempt.config,
     agentId: params.setup.sessionAgentId,
     sessionKey: attempt.sessionKey,
+    modelProvider: attempt.provider,
+    modelId: attempt.modelId,
   });
   const localModelLeanPreserveToolNames = resolveLocalModelLeanPreserveToolNames({
     toolNames: runtimeCapabilityProfile.policy.explicitToolOverrideAllowlist,

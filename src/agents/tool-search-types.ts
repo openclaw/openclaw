@@ -52,6 +52,9 @@ export type ToolSearchToolContext = {
   runtimeConfig?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  /** Selected model; Agent Profile model bindings use it. */
+  modelProvider?: string;
+  modelId?: string;
   sessionId?: string;
   runId?: string;
   catalogRef?: ToolSearchCatalogRef;

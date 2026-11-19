@@ -275,7 +275,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
   it("returns the canonical directory only after applying prompt policy", () => {
     const runtime = configuredRuntime({
       config: {
-        agents: { defaults: { experimental: { localModelLean: false } } },
+        agents: { defaults: { agentProfileId: "openclaw/base" } },
         tools: { codeMode: false, toolSearch: { enabled: true, mode: "directory" } },
       },
       model: { contextWindow: 8_000 },
@@ -302,7 +302,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     const toolsAllow = attachToolAllowlistIntersection([], [["web_*"], ["*_search"]]);
     const runtime = configuredRuntime({
       config: {
-        agents: { defaults: { experimental: { localModelLean: false } } },
+        agents: { defaults: { agentProfileId: "openclaw/base" } },
         tools: { codeMode: true, toolSearch: false },
       },
       executeTool: async () => ({ content: [], details: {} }),
@@ -333,7 +333,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       },
     };
     const config: OpenClawConfig = {
-      agents: { defaults: { experimental: { localModelLean: false } } },
+      agents: { defaults: { agentProfileId: "openclaw/base" } },
     };
     const runtime = configuredRuntime({
       config,
@@ -424,7 +424,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
 
   it("filters raw SDK tools but does not refilter prepared constructor output", () => {
     const config: OpenClawConfig = {
-      agents: { defaults: { experimental: { localModelLean: true } } },
+      agents: { defaults: { agentProfileId: "openclaw/small" } },
       tools: { alsoAllow: ["image_generate"], toolSearch: { enabled: false } },
     };
     const runtime = createRuntime(config);
@@ -446,8 +446,11 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     ({ lean, scope }) => {
       const config: OpenClawConfig = {
         agents: {
-          defaults: { experimental: { localModelLean: !lean } },
-          entries: { main: {}, scoped: { experimental: { localModelLean: lean } } },
+          defaults: { agentProfileId: !lean ? "openclaw/small" : "openclaw/base" },
+          entries: {
+            main: {},
+            scoped: { agentProfileId: lean ? "openclaw/small" : "openclaw/base" },
+          },
         },
         tools: { codeMode: false, toolSearch: { mode: "tools" } },
       };

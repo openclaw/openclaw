@@ -56,7 +56,7 @@ describe("resolved model Tool Search policy", () => {
     { provider: "custom-host", api: "ollama", id: "model:cloud", expected: false },
   ] as const)("prepares $provider/$id using its $api policy", ({ expected, ...route }) => {
     const config: OpenClawConfig = {
-      agents: { defaults: { experimental: { localModelLean: false } } },
+      agents: { defaults: { agentProfileId: "openclaw/base" } },
     };
     const resolved = resolve(route, config);
     expect(resolved).toHaveProperty("toolSearchMode", expected);

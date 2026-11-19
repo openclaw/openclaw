@@ -218,7 +218,7 @@ describe("agent exec command composition", () => {
                 defaults: {
                   thinkingDefault: "medium",
                   workspace: "/ignored",
-                  experimental: { localModelLean: false },
+                  agentProfileId: "openclaw/base",
                 },
                 entries: { alpha: { skills: [], workspace: "/also-ignored" } },
               },
@@ -244,7 +244,7 @@ describe("agent exec command composition", () => {
               defaults: {
                 thinkingDefault: "medium",
                 workspace: root,
-                experimental: { localModelLean: true },
+                agentProfileId: "openclaw/small",
               },
               entries: { alpha: { ...alpha, workspace: root, skills: [] } },
             },
@@ -436,7 +436,7 @@ describe("agent exec command composition", () => {
         async (invocation) => {
           const config = expectDefined(getRuntimeConfigSnapshot(), "isolated run config");
           expect(config.tools?.codeMode).toEqual(codeMode);
-          expect(config.agents?.defaults?.experimental?.localModelLean).toBe(true);
+          expect(config.agents?.defaults?.agentProfileId).toBe("openclaw/small");
           const surface = createAgentHarnessToolSurfaceRuntimeCore({
             config,
             agentId: "main",
