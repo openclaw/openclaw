@@ -476,7 +476,7 @@ export function buildAgentSystemPrompt(params: {
       : "Single global file workspace unless explicitly told otherwise.";
   const workspaceOnlyGuidance =
     params.fsWorkspaceOnly === true
-      ? `tools.fs.workspaceOnly ON: outputs that file tools need to read or write later stay in ${hasSeparateRuntimeCwd ? "working directory" : "workspace"}, preferably \`.openclaw/tmp/\`. Keep TMPDIR, TMP, and TEMP at their inherited system paths; native tools need short temporary paths for Unix sockets.`
+      ? `tools.fs.workspaceOnly ON: outputs that file tools need to read or write later stay in ${hasSeparateRuntimeCwd ? "working directory" : "workspace"}, preferably \`.openclaw/tmp/\`. Keep the provided TMPDIR, TMP, and TEMP values so temporary files stay in owned scratch; avoid explicit /tmp paths.`
       : "";
   const directorySection = hasSeparateRuntimeCwd
     ? [

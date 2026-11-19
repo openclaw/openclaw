@@ -26,6 +26,32 @@ start a new project session to leave a previously selected shared checkout.
 Unregistered nested Git worktrees are preserved because OpenClaw cannot prove
 their ownership or lossless removal from their path names alone.
 
+Agent shell commands receive `TMPDIR`, `TMP`, and `TEMP` pointing to the
+checkout's `.openclaw/tmp/`. Changing a command's working directory does not move
+its scratch root. Local native Codex shells (including Code Mode) and local CLI
+agent processes use the same policy. This puts default temporary files on the
+workspace filesystem instead of a host `/tmp` tmpfs. Keep workspaces on disk and
+use the provided variables (for example, `mktemp -d "$TMPDIR/validation.XXXXXXXX"`).
+Explicit command or sandbox environment overrides remain supported.
+
+Unix-domain sockets have much shorter path limits than ordinary files. A deeply
+nested workspace can therefore fail socket creation with `AF_UNIX path too long`.
+For those tools, select a short workspace path or explicitly override the temp
+variables with a short directory and remove it when the command finishes. Such
+overrides do not gain workspace scratch retention automatically. OpenClaw's test
+runner already owns a short, process-scoped temp directory for native socket tests.
+
+Docker and Podman have private `/tmp`, `/var/tmp`, and `/run` tmpfs mounts by
+default; they do not bind the host's `/tmp`. Their agent commands instead default
+to `.openclaw/tmp/` in the writable workspace mount. Read-only workspaces retain
+the container's writable `/tmp`; that scratch stays in private tmpfs until the
+container lifecycle releases it. Maintenance expires workspace scratch
+in registered local sandbox workspaces, with the same live/queued-session guard.
+Container retirement also releases the private tmpfs mounts. Remote execution
+uses the remote host's environment and lifecycle; Gateway-local paths are never
+forwarded to it. Programs that explicitly select `/tmp` bypass this policy;
+OpenClaw does not sweep arbitrary host temp entries based on their names.
+
 Branch pickers display the last recorded local refs while discovery refreshes in
 background. A refreshing indicator stays visible until the Gateway sends the
 updated options; slow Git keeps cached choices available. Discovery never fetches
@@ -764,7 +790,7 @@ Idle cleanup preserves an outer worktree containing a nested Git repository or l
 
 OpenClaw applies these cleanup rules:
 
-- Before processing the worktree-removal backlog, each maintenance pass spends its separate bounded scratch budget deleting disposable entries in each managed worktree's and project checkout's `.openclaw/tmp/` after **24 hours**, measured from the newest file's modification time (or the entry's modification time when it contains no files). The same pass expires `node-coverage-*` directories in the runtime temp root. There is no configuration option. Live or queued runs protect their checkout. A changing session binding retains its known paths and session-owned worktrees; it does not defer unrelated roots. An execution without a resolvable checkout owner protects roots created since its admission (and roots whose creation time is unavailable), alongside its known agent directories. Unrelated runs do not protect shared runtime coverage. Idle sessions and recorded artifact references do **not** protect scratch. Save durable outputs outside these roots. Missing scratch artifacts display `file expired (scratch cleaned after 24 h)` when listed or opened.
+- Before processing the worktree-removal backlog, each maintenance pass spends its separate bounded scratch budget deleting disposable entries in each managed worktree, project checkout, configured agent workspace, and registered local sandbox workspace's `.openclaw/tmp/` after **24 hours**, measured from the newest file's modification time (or the entry's modification time when it contains no files). The same pass expires `node-coverage-*` directories in the runtime temp root. There is no configuration option. Live or queued runs protect their checkout. A changing session binding retains its known paths and session-owned worktrees; it does not defer unrelated roots. An execution without a resolvable checkout owner protects roots created since its admission (and roots whose creation time is unavailable), alongside its known agent directories. Unrelated runs do not protect shared runtime coverage. Idle sessions and recorded artifact references do **not** protect scratch. Save durable outputs outside these roots. Missing scratch artifacts display `file expired (scratch cleaned after 24 h)` when listed or opened.
 - Scratch cleanup never follows symlinks: a symlinked scratch root is refused, while expired links inside scratch are unlinked without touching their targets. Nested clone object files with multiple hardlinks use their containing Git object directory's modification time for expiry; Git refreshing a shared pack elsewhere does not renew the scratch clone's lifetime. New links still update the directory's age. Removing scratch entries also invalidates the parent worktree's nested-repository deferral so idle cleanup can retry. Each pass enumerates at most 4,096 top-level names and inspects at most 256 candidates, with separate limits of 2 million filesystem entries for age scanning and removal, to depth 64. Recursive scratch scans and deletion run in a filesystem worker. The Gateway decides expiry and custody, then atomically renames each expired directory within scratch before handing its device/inode identity to the worker for rechecking. New runs can use the original path while the worker deletes the claimed tree. Interrupted claims remain discoverable by ordinary scratch cleanup after restart; no separate journal is needed. Pressure is checked at each pause. Deletion streams through the tree and pauses 100 milliseconds after every 128 removals. An incomplete scan retains the entry and reports a deferral. The next pass resumes the directory iterator; an entry exceeding the full scan or depth limit is deferred so later entries remain reachable. The cleanup receipt and health log include scratch entries and bytes removed, live-run skips, and deferred inspections; `openclaw worktrees gc --job <id>` shows the latest receipt.
 - At run end, it removes a worktree without Git force only when `git status --porcelain` is empty and `git log HEAD --not --remotes --oneline` finds no unpushed commits. It also checks the captured contents for edits hidden by index flags. Otherwise it retains the checkout and records why.
 - Background cleanup snapshots and removes unlocked Workboard- and session-owned worktrees idle for more than 7 days, even when dirty. A stable per-worktree delay of up to one additional hour spreads age-based expiry. Session worktrees whose owner is archived or absent are eligible without waiting 7 days. Failed owner lookups defer idle cleanup. Run `openclaw worktrees gc` to request cleanup and see its progress.

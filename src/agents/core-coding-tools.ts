@@ -430,6 +430,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     shell.push(
       createLazyExecTool({
         ...options.execDefaults,
+        scratchRoot: options.containmentRoot,
         ...(sandbox?.required ? { sandboxRequired: true } : {}),
         cwd: options.codingRoot,
         sandbox: sandbox

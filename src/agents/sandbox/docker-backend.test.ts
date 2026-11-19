@@ -459,7 +459,7 @@ it("binds Podman provisioning and later execs to the resolved target", async () 
   );
   expect(execSpec.argv.slice(0, 6)).toEqual(["podman", ...podmanTarget.globalArgs, "exec"]);
   expect(execSpec.stdinMode).toBe("pipe-closed");
-  expect(execSpec.argv.at(-1)).toBe("true");
+  expect(execSpec.argv.at(-1)).toBe('mkdir -p -- "$TMPDIR" || exit; true');
   expect(fs.readFileSync(envFile(execSpec), "utf8")).not.toContain("OPENCLAW_PREPEND_PATH=");
   await finalize(backend, execSpec.finalizeToken);
 });
@@ -472,6 +472,41 @@ it("admits explicit piped input without enabling a PTY", async () => {
   expect(spec.argv).not.toContain("-t");
   await finalize(backend, spec.finalizeToken);
 });
+
+it.skipIf(process.platform === "win32").each(["docker", "podman"] as const)(
+  "%s keeps temporary files writable with read-only workspace access",
+  async (engine) => {
+    provision();
+    const cfg = resolveSandboxConfigForAgent(createConfig(engine, false));
+    cfg.workspaceAccess = "ro";
+    cfg.docker.workdir = tempDirs.make("sandbox-readonly-workspace-");
+    fs.chmodSync(cfg.docker.workdir, 0o555);
+    const backend = await (
+      engine === "docker" ? createDockerSandboxBackend : createPodmanSandboxBackend
+    )(backendParams({ cfg }));
+    const spec = await backend.buildExecSpec({
+      command: 'temporary=$(mktemp -d "$TMPDIR/proof.XXXXXXXX") && rmdir "$temporary"',
+      env: {},
+      usePty: false,
+    });
+    try {
+      const child = spawnSync("/bin/sh", ["-c", spec.argv.at(-1)!], {
+        env: { PATH: "/usr/bin:/bin", ...backend.env },
+        encoding: "utf8",
+      });
+      expect(child.stderr).toBe("");
+      expect(child.status).toBe(0);
+      assertStaged(fs.readFileSync(envFile(spec), "utf8"), {
+        TMPDIR: "/tmp",
+        TMP: "/tmp",
+        TEMP: "/tmp",
+      });
+    } finally {
+      fs.chmodSync(cfg.docker.workdir, 0o755);
+      await finalize(backend, spec.finalizeToken);
+    }
+  },
+);
 
 it.skipIf(process.platform === "win32").each([undefined, "/requested/tools"])(
   "prepares native Git behind the executable mount (requested PATH=%s)",
@@ -511,7 +546,8 @@ it.skipIf(process.platform === "win32").each([undefined, "/requested/tools"])(
       }),
     );
     const spec = await backend.buildExecSpec({
-      command: 'printf "%s\\n" "$PATH"; command -v git; git --version',
+      command:
+        'printf "%s\\n" "$PATH"; command -v git; git --version && mktemp -d "$TMPDIR/proof.XXXXXXXX"',
       env: requestedPath ? { PATH: requestedPath } : {},
       usePty: false,
     });
@@ -532,9 +568,12 @@ it.skipIf(process.platform === "win32").each([undefined, "/requested/tools"])(
         encoding: "utf8",
       });
       expect(child.status).toBe(0);
-      const [toolPath, gitCommand, gitVersion] = child.stdout.trim().split("\n");
+      const [toolPath, gitCommand, gitVersion, temporary] = child.stdout.trim().split("\n");
       expect(gitCommand).toBe(launcher);
       expect(gitVersion).toMatch(/^git version /);
+      expect(path.dirname(temporary!)).toBe(path.join(cfg.docker.workdir, ".openclaw/tmp"));
+      expect(staged.TMP).toBe(path.dirname(temporary!));
+      expect(staged.TEMP).toBe(path.dirname(temporary!));
       expect(toolPath).toBe(
         `${hostBin}/container:${requestedPath ? `${requestedPath}:` : ""}/usr/bin:/bin`,
       );
@@ -651,7 +690,7 @@ process.stdout.write(JSON.stringify({
       expect(delivered.args).toEqual(expect.arrayContaining(["-t", "-w", "/workspace/project"]));
       expect(delivered.args.slice(-4, -1)).toEqual([containerId, "/bin/sh", "-lc"]);
       expect(delivered.args.at(-1)).toBe(
-        "export PATH=\"${OPENCLAW_PREPEND_PATH}:$PATH\"; unset OPENCLAW_PREPEND_PATH; printf '%s' '$HOME space \"quotes\" ${HOME}'",
+        'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; mkdir -p -- "$TMPDIR" || exit; printf \'%s\' \'$HOME space "quotes" ${HOME}\'',
       );
       expect(delivered.args.slice(delivered.args.indexOf("--env-file") + 2, -4)).toEqual(
         ["GH_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_TOKEN", "GITHUB_ENTERPRISE_TOKEN"].flatMap(
