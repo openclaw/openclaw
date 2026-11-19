@@ -216,7 +216,11 @@ export async function prepareDelegatedSystemAgentApproval(params: {
           params.session.engine.resolveOperatorApproval(
             decision,
             proposal.hash,
-            () => assertApprovalCurrent(),
+            // A reload or worker removal after approval applies to the next request; this approved apply finishes.
+            () =>
+              assertApprovalCurrent(
+                callerIdentity?.approvalSignals?.some((signal) => signal.aborted),
+              ),
             terminalStatus,
           ),
         );
