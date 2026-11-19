@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { formatErrorMessage, isErrno } from "./errors.js";
 import { PackageIntegrityMismatchError } from "./package-update-integrity.js";
 import type {
@@ -5,9 +6,24 @@ import type {
   StagedPackageSwapResult,
 } from "./package-update-swap-contract.js";
 import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
+import { repairStagedRuntimeLauncher } from "./update-launcher-repair.js";
 import type { NpmGlobalPrefixLayout } from "./update-npm-prefix.js";
-import { verifyRuntimeLauncher } from "./update-runtime-relocation.js";
+import {
+  resolveRuntimeLauncherTargets,
+  verifyRuntimeLauncher,
+} from "./update-runtime-relocation.js";
 import type { UpdateStepResult } from "./update-step-result.js";
+
+async function isLauncherFormatUnknown(file: string): Promise<boolean> {
+  try {
+    if ((await fs.lstat(file)).isSymbolicLink()) {
+      return false;
+    }
+    return (await resolveRuntimeLauncherTargets(file, "openclaw.mjs")).length === 0;
+  } catch {
+    return false;
+  }
+}
 
 /** Result reporting shares warnings with the swap owner but never performs recovery effects. */
 export function createPackageSwapResults(
@@ -66,12 +82,33 @@ export function createPackageSwapResults(
       if (!params.stage.native) {
         return;
       }
+      // A published launcher that cannot start the new package leaves no CLI. Repair one
+      // that still names the removed stage; otherwise fail so the transaction restores
+      // the previous launchers instead of reporting success.
       for (const { destination } of launchers) {
+        const unreadable = await isLauncherFormatUnknown(destination);
         try {
           await verifyRuntimeLauncher(destination, "openclaw.mjs");
+          continue;
         } catch (error) {
-          warnings.push(
-            `Published launcher ${destination} could not be verified: ${formatErrorMessage(error)}. Reinstall the current ${params.packageName} version with ${params.installTarget.manager} to recreate the launcher.`,
+          if (unreadable) {
+            // A format this updater cannot read proves nothing either way.
+            warnings.push(
+              `Published launcher ${destination} could not be verified: ${formatErrorMessage(error)}. Reinstall the current ${params.packageName} version with ${params.installTarget.manager} to recreate the launcher.`,
+            );
+            continue;
+          }
+          const repair = await repairStagedRuntimeLauncher(destination).catch(() => undefined);
+          if (repair?.outcome === "repaired") {
+            await verifyRuntimeLauncher(destination, "openclaw.mjs");
+            warnings.push(
+              `Repaired published launcher ${destination}: it still pointed into the removed update stage ${repair.stage}.`,
+            );
+            continue;
+          }
+          throw new Error(
+            `Published launcher ${destination} cannot start ${params.packageName}: ${formatErrorMessage(error)}`,
+            { cause: error },
           );
         }
       }

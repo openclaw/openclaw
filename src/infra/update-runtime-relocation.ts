@@ -21,7 +21,34 @@ type PreparedRuntimeRelocations = {
 };
 type RuntimeRelocations = readonly RuntimeRelocation[] | PreparedRuntimeRelocations;
 
-const launcherRelativePath = /(\$(?:basedir_abs|basedir_win|basedir)[/\\]|%~dp0\\)([^"\r\n]+)/gu;
+// pnpm cmd-shim writes `"$basedir/target"`; pnpm 12.15+ writes `"$basedir"/'target'`.
+const launcherRelativePath =
+  /(\$(?:basedir_abs|basedir_win|basedir)(?:"[/\\]'|[/\\])|%~dp0\\)([^"\r\n]+)/gu;
+
+/** Split a matched reference into its directory-relative target and the text after it. */
+function splitLauncherReference(prefix: string, reference: string): [string, string] {
+  const end = prefix.endsWith("'") ? reference.indexOf("'") : -1;
+  return end < 0 ? [reference, ""] : [reference.slice(0, end), reference.slice(end)];
+}
+
+/** The entry paths a launcher file executes, resolved the way its shell resolves them. */
+export async function resolveRuntimeLauncherTargets(
+  file: string,
+  entryName: string,
+  knownContent?: string,
+): Promise<string[]> {
+  const content = knownContent ?? (await fs.readFile(file, "utf8"));
+  const bunLauncher = parseBunCliLauncher(content);
+  const base = content.includes("$basedir_abs")
+    ? await fs.realpath(path.dirname(file))
+    : path.dirname(file);
+  return bunLauncher
+    ? [bunLauncher.entryPath]
+    : [...content.matchAll(launcherRelativePath)]
+        .map((match) => splitLauncherReference(match[1]!, match[2]!)[0].replaceAll("\\", path.sep))
+        .filter((relative) => path.basename(relative) === entryName && !/[$%]/u.test(relative))
+        .map((relative) => path.resolve(base, relative));
+}
 
 /** Check executable references, not cmd-shim-target metadata that may already be correct. */
 export async function verifyRuntimeLauncher(file: string, entryName: string): Promise<void> {
@@ -29,17 +56,7 @@ export async function verifyRuntimeLauncher(file: string, entryName: string): Pr
     await fs.stat(file);
     return;
   }
-  const content = await fs.readFile(file, "utf8");
-  const bunLauncher = parseBunCliLauncher(content);
-  const base = content.includes("$basedir_abs")
-    ? await fs.realpath(path.dirname(file))
-    : path.dirname(file);
-  const targets = bunLauncher
-    ? [bunLauncher.entryPath]
-    : [...content.matchAll(launcherRelativePath)]
-        .map((match) => match[2]!.replaceAll("\\", path.sep))
-        .filter((relative) => path.basename(relative) === entryName && !/[$%]/u.test(relative))
-        .map((relative) => path.resolve(base, relative));
+  const targets = await resolveRuntimeLauncherTargets(file, entryName);
   if (targets.length === 0) {
     throw new Error("Cannot resolve the launcher's executable target");
   }
@@ -194,7 +211,8 @@ export async function relocateRuntimeLauncher(
     const shellBase = original.includes("$basedir_abs")
       ? await canonicalPathFromExistingAncestor(destinationDir)
       : destinationDir;
-    content = original.replace(launcherRelativePath, (match, prefix: string, relative: string) => {
+    content = original.replace(launcherRelativePath, (match, prefix: string, reference: string) => {
+      const [relative, rest] = splitLauncherReference(prefix, reference);
       if (/[$%]/u.test(relative)) {
         return match;
       }
@@ -204,7 +222,7 @@ export async function relocateRuntimeLauncher(
         ? path.resolve(destinationBase, path.relative(sourceDir, sourceTarget))
         : relocateRuntimePath(sourceTarget, prepared);
       const replacement = path.relative(destinationBase, target);
-      return `${prefix}${prefix.startsWith("%") ? replacement.replaceAll("/", "\\") : replacement.replaceAll("\\", "/")}`;
+      return `${prefix}${prefix.startsWith("%") ? replacement.replaceAll("/", "\\") : replacement.replaceAll("\\", "/")}${rest}`;
     });
     for (const relocation of prepared.rules) {
       for (const sourceRoot of [relocation.sourceRoot, ...(relocation.sourceAliases ?? [])]) {
