@@ -529,9 +529,16 @@ it("does not retry a selected check failure as a full legacy check", () => {
   ]);
 });
 
-it.each(["success", "failure", "cancelled", "skipped"])(
-  "seals source evidence only after the matrix succeeds: %s",
-  (outcome) => {
+it.each([
+  ["success", "clean", true],
+  ["failure", "clean", false],
+  ["cancelled", "clean", false],
+  ["skipped", "clean", false],
+  ["success", "dirty", false],
+  ["success", "wrong-sha", false],
+] as const)(
+  "seals source evidence only after successful workers and an exact clean harness: %s/%s",
+  (outcome, harness, accepted) => {
     const root = tempDirs.make("npm-source-reducer-");
     const seal = step(preflight.jobs?.check_openclaw_npm, "Seal source-check evidence");
     const run = spawnSync(
@@ -539,7 +546,14 @@ it.each(["success", "failure", "cancelled", "skipped"])(
       [
         "-c",
         `
-      git() { if [[ "$*" == *'rev-parse HEAD' ]]; then printf '%s\\n' "$PREFLIGHT_WORKFLOW_SHA"; fi; }
+      git() {
+        case "$*" in
+          "rev-parse HEAD") printf '%s\\n' "$SOURCE_SHA" ;;
+          "-C .release-harness rev-parse HEAD") printf '%s\\n' "$HARNESS_SHA" ;;
+          "-C .release-harness status --porcelain") printf '%s' "$HARNESS_DIRTY" ;;
+          *) return 1 ;;
+        esac
+      }
       node() { printf '%s\\n' "$*" > sealed; }
       ${seal.run}
     `,
@@ -550,13 +564,16 @@ it.each(["success", "failure", "cancelled", "skipped"])(
         env: {
           ...process.env,
           SOURCE_STAGE_RESULT: outcome,
-          PREFLIGHT_WORKFLOW_SHA: "a".repeat(40),
+          SOURCE_SHA: "a".repeat(40),
+          PREFLIGHT_WORKFLOW_SHA: "b".repeat(40),
+          HARNESS_SHA: (harness === "wrong-sha" ? "c" : "b").repeat(40),
+          HARNESS_DIRTY: harness === "dirty" ? " M scripts/npm-prepared-bundle.mjs" : "",
         },
       },
     );
-    expect(run.status, run.stderr).toBe(outcome === "success" ? 0 : 1);
-    expect(existsSync(join(root, "sealed"))).toBe(outcome === "success");
-    if (outcome === "success") {
+    expect(run.status, run.stderr).toBe(accepted ? 0 : 1);
+    expect(existsSync(join(root, "sealed"))).toBe(accepted);
+    if (accepted) {
       expect(readFileSync(join(root, "sealed"), "utf8")).toBe(
         `.release-harness/scripts/npm-prepared-bundle.mjs source-evidence --source-sha ${"a".repeat(40)}\n`,
       );
@@ -572,6 +589,27 @@ it("keeps one aggregate receipt producer and requires both isolated workers", ()
     matrix: { stage: ["nonlint", "lintformat"] },
   });
   expect(workers?.outputs).toBeUndefined();
+  expect(step(aggregate, "Checkout").with).toEqual({
+    ref: "${{ inputs.tag }}",
+    "fetch-depth": 1,
+    filter: "blob:none",
+    "sparse-checkout": "package.json",
+    "sparse-checkout-cone-mode": false,
+    "persist-credentials": false,
+  });
+  for (const job of [
+    workers,
+    preflight.jobs?.prepare_openclaw_npm,
+    preflight.jobs?.check_sdk_npm,
+    preflight.jobs?.check_dependencies_npm,
+    preflight.jobs?.check_contents_npm,
+  ]) {
+    expect(step(job, "Checkout").with).toEqual({
+      ref: "${{ inputs.tag }}",
+      "fetch-depth": 1,
+      filter: "blob:none",
+    });
+  }
   expect(sourceStep("Enforce plugin compatibility release readiness").if).toBe(
     "${{ matrix.stage == 'nonlint' }}",
   );
