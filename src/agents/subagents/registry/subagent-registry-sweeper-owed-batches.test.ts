@@ -8,6 +8,7 @@ import { ensureGatewayOwnerProfile } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import type { deliverSubagentAnnouncement } from "../announce/subagent-announce-delivery.js";
+import { captureRequesterSessionEntryCurrent } from "../announce/subagent-announce-delivery.runtime.js";
 import { visibleCompletion } from "../announce/subagent-announce-fixtures.test-support.js";
 import {
   createRequesterSettleContext,
@@ -56,6 +57,10 @@ it("settles ready results from overlapping yielded batches without consuming mes
       createdActor: { type: "human" as const, source: "profile" as const, id: person.id },
     };
     replaceSessionEntrySync({ ...target, sessionKey }, requester);
+    vi.mocked(captureRequesterSessionEntryCurrent).mockResolvedValue({
+      readCurrent: () => requester,
+      release() {},
+    });
     loadRequester.mockResolvedValue(
       requesterSnapshot({}, requester, { sessionKey, storePath: target.storePath }),
     );
@@ -179,7 +184,8 @@ it("settles ready results from overlapping yielded batches without consuming mes
           return { delivered: true, path: "direct" };
         },
       );
-      for (let pass = 0; pass < batches.length; pass++) {
+      for (const batch of batches) {
+        void batch;
         const drain = observeRootWork();
         await harness.sweeper.sweepOnce();
         await drain();

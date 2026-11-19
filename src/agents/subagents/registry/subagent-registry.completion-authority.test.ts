@@ -166,6 +166,7 @@ describe("registered completion source custody", () => {
 
   it("partitions a shared requester wave by retained admitting source", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      useConfig({});
       const context = createContext();
       const resolveGatewayContext = () => context;
       const first = await retainedOperatorFixture("first", context, resolveGatewayContext);

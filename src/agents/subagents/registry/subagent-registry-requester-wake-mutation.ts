@@ -237,14 +237,16 @@ export function createRequesterWakeSettlement(params: {
         const requester = batch[0];
         if (
           !admittedWake?.pauseNotice &&
-          admittedWake?.requesterYieldBatch &&
+          (admittedWake?.requesterYieldBatch ||
+            (requester?.completionTarget === "parent" &&
+              outcome?.disposition === "permanent_failure")) &&
           requester?.completionRequesterSessionId &&
           outcome?.delivered !== true
         ) {
           const error =
             outcome?.error ?? "Child completion could not continue the yielded request.";
           const notice = renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed");
-          const runId = admittedWake.requesterRunId;
+          const runId = admittedWake?.requesterRunId;
           if (runId) {
             // A newer turn, reset, or Stop cannot inherit the failed batch's terminal.
             await persistGatewaySessionLifecycleEvent({

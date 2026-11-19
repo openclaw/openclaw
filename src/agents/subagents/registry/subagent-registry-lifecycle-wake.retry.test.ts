@@ -61,6 +61,7 @@ describe("requester settle retry lifetime", () => {
   it("retires only one member of a partitioned requester attachment", async () => {
     await withSubagentCompletionWorkerState(async (database) => {
       const input = armRequesterWake(records());
+      input.subagent.completionRequesterSessionId = "partition-requester-session";
       const retired = input.subagent.runId;
       const sibling = "surviving-partition";
       input.subagent.requesterSettleWake!.requesterYieldBatch = true;

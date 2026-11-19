@@ -4,7 +4,10 @@ import type {
   RequesterSettleWakeState,
   SubagentRunRecord,
 } from "../registry/subagent-registry.types.js";
-import { isSubagentObligationRetired } from "../registry/subagent-requester-settle-identity.js";
+import {
+  isRequesterYieldCohortMember,
+  isSubagentObligationRetired,
+} from "../registry/subagent-requester-settle-identity.js";
 import { isSameSubagentRun, isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import { hasSubagentRunEnded } from "../registry/subagent-run-liveness.js";
 import { finalizeRequesterFinalAttachment } from "../requester-final-attachment.js";
@@ -17,9 +20,11 @@ const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 
 export function captureRequesterWakeGeneration(state: RequesterSettleWakeState) {
   const generation = state.rearmGeneration;
+  const batchRunIds = state.requesterYieldBatch ? state.batchRunIds : undefined;
   const hasCurrentWake = (entry: SubagentRunRecord | undefined): entry is SubagentRunRecord =>
-    Boolean(entry?.requesterSettleWake) &&
-    entry?.requesterSettleWake?.rearmGeneration === generation;
+    entry?.requesterSettleWake !== undefined &&
+    entry.requesterSettleWake.rearmGeneration === generation &&
+    (!batchRunIds?.length || isRequesterYieldCohortMember(entry, batchRunIds, generation));
   return { generation, hasCurrentWake };
 }
 
