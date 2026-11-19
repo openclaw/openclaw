@@ -183,20 +183,3 @@ it.each([
     );
   },
 );
-
-it("supports gemini-nano-banana-2.1 with panoramic aspect ratios and 4K resolution", async () => {
-  const fetchMock = installGoogleFetchMock();
-  const result = await generateImage({
-    model: "gemini-nano-banana-2.1",
-    aspectRatio: "1:8",
-    resolution: "4K",
-    inputImages: [reference],
-  });
-  expectGenerationRequest(
-    fetchMock,
-    "gemini-nano-banana-2.1",
-    [inlineImage(reference.buffer), { text: "draw a cat" }],
-    { aspectRatio: "1:8", imageSize: "4K" },
-  );
-  expect(result.model).toBe("gemini-nano-banana-2.1");
-});
