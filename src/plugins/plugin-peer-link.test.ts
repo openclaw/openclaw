@@ -4,10 +4,12 @@ import fsPromises from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { setImmediate as nextImmediate } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   auditDeclaredOpenClawHostDependency,
   auditOpenClawPeerDependenciesInManagedNpmRoot,
@@ -118,6 +120,43 @@ function makeTempDir() {
 }
 
 describe("plugin peer links", () => {
+  it.runIf(process.platform === "win32")(
+    "admits a differently cased Windows junction target",
+    () => {
+      const { root, packageDir, linkPath } = peerFixture("missing-link");
+      const hostRoot = path.join(root, "OpenClaw");
+      fs.mkdirSync(hostRoot);
+      fs.symlinkSync(path.join(root, "openclaw"), linkPath, "junction");
+      vi.stubGlobal("__openclawStandaloneRootUrl", pathToFileURL(`${hostRoot}${path.sep}`).href);
+
+      expect(auditOpenClawPeerDependencyLinkSync({ packageDir })).toBeNull();
+    },
+  );
+
+  it.runIf(process.platform === "linux").each([
+    ["win32", "openclaw", true],
+    ["linux", "openclaw", false],
+    ["win32", "other-host", false],
+  ] as const)("audits %s peer target %s (admitted=%s)", (platform, peerName, admitted) => {
+    const { root, packageDir, linkPath } = peerFixture("missing-link");
+    const hostRoot = path.join(root, "OpenClaw");
+    const peerRoot = path.join(root, peerName);
+    fs.mkdirSync(hostRoot);
+    fs.mkdirSync(peerRoot);
+    fs.symlinkSync(peerRoot, linkPath, "junction");
+    vi.stubGlobal("__openclawStandaloneRootUrl", pathToFileURL(`${hostRoot}${path.sep}`).href);
+
+    // Distinct Linux directories preserve the different spellings returned by Windows junctions.
+    const issue = withMockedPlatform(platform, () =>
+      auditOpenClawPeerDependencyLinkSync({ packageDir }),
+    );
+    if (admitted) {
+      expect(issue).toBeNull();
+    } else {
+      expect(issue?.reason).toContain(`${peerRoot} instead of ${hostRoot}`);
+    }
+  });
+
   function standalone(root: string, overrides: Record<string, unknown> = {}) {
     const runtime = path.join(root, "runtime");
     writePackage(runtime, { name: "openclaw" });

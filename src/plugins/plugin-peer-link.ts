@@ -14,7 +14,7 @@ import { ignoreMissingPath } from "../infra/errno.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { isPathInside } from "../infra/path-guards.js";
+import { isPathInside, normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { resolvePluginInstallDir } from "./install-paths.js";
 import type { InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-path.js";
 import { listNpmPackageDirs } from "./npm-package-dirs.js";
@@ -161,7 +161,11 @@ export function openClawHostRootsMatch(currentRoot: string, expectedRoot: string
   if (!current || !expected) {
     return false;
   }
-  if (current === expected) {
+  if (
+    current === expected ||
+    (process.platform === "win32" &&
+      normalizeWindowsPathForComparison(current) === normalizeWindowsPathForComparison(expected))
+  ) {
     return true;
   }
   try {
