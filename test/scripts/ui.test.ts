@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { brotliCompressSync, gzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { isNodeCompilerArg } from "../../node-runtime-env.mjs";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import {
   isDirectScriptExecution,
@@ -603,7 +604,7 @@ for (const [file, bytes] of Object.entries(${JSON.stringify(buildFiles(buildId))
   fs.mkdirSync(path.dirname(path.join(out, file)), { recursive: true });
   fs.writeFileSync(path.join(out, file), bytes);
 }
-console.log(JSON.stringify({ tool: "vite", out, args }));
+console.log(JSON.stringify({ tool: "vite", out, args, execArgv: process.execArgv }));
 process.exitCode = ${viteExit};
 `);
     for (const [validator, name] of [
@@ -618,7 +619,7 @@ import path from "node:path";
 const args = process.argv.slice(2);
 const out = args.includes("--dist") ? args[args.indexOf("--dist") + 1]
   : args.find(arg => !arg.startsWith("--")) ?? path.resolve("dist/control-ui");
-console.log(JSON.stringify({ tool: ${JSON.stringify(name)}, out, args }));
+console.log(JSON.stringify({ tool: ${JSON.stringify(name)}, out, args, execArgv: process.execArgv }));
 if (out && !fs.existsSync(path.join(out, "index.html"))) throw new Error("missing staged index");
 `,
       );
@@ -648,7 +649,11 @@ fs.renameSync = function(from, to) {
 require("node:module").syncBuiltinESMExports();
 `,
     );
-    const args = ["--require", fsGuard, "scripts/ui.js", "build", "--mode", "fixture with spaces"];
+    // A seat's node shim adds compiler flags; children started on this runtime bypass it (#1546).
+    const args = [
+      "--no-opt",
+      ...["--require", fsGuard, "scripts/ui.js", "build", "--mode", "fixture with spaces"],
+    ];
     if (seedSiblings) {
       for (const name of [
         ...liveUiBuildSiblings,
@@ -696,7 +701,12 @@ require("node:module").syncBuiltinESMExports();
       const staging = calls[0].out;
       expect(path.dirname(staging)).toBe(path.join(root, "dist"));
       expect(staging).not.toBe(output);
-      expect(calls).toEqual([
+      // Each child keeps the parent's reviewed compiler flags, never its preloads.
+      for (const { execArgv } of calls) {
+        expect(execArgv.filter(isNodeCompilerArg)).toEqual(["--no-opt"]);
+        expect(execArgv).not.toContain(fsGuard);
+      }
+      expect(calls.map(({ execArgv: _execArgv, ...call }) => call)).toEqual([
         {
           tool: "vite",
           out: staging,

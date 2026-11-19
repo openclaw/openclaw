@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isNodeCompilerArg } from "../../node-runtime-env.mjs";
 import { isDirectRunUrl } from "./direct-run.mjs";
 import {
   runOwnedDistArtifactEntry,
@@ -38,6 +39,8 @@ export async function runDistArtifactChild(
     native?: boolean;
   } = {},
 ): Promise<number> {
+  // The child starts on this runtime, past any PATH node shim: keep its compiler flags.
+  const compilerArgs = process.execArgv.filter(isNodeCompilerArg);
   return withDistArtifactOwnership(
     rootDir,
     async () => {
@@ -49,7 +52,7 @@ export async function runDistArtifactChild(
           ...options,
           shell: false,
           cwd: options.cwd ?? rootDir,
-          args: distArtifactEntryArgs(script, args, options),
+          args: [...compilerArgs, ...distArtifactEntryArgs(script, args, options)],
         });
       }
       const claim = `child-${randomUUID()}`;
@@ -57,7 +60,7 @@ export async function runDistArtifactChild(
       fs.writeFileSync(claimPath, "Awaiting managed child completion.\n", { flag: "wx" });
       let joined = true;
       try {
-        const entryArgs = distArtifactEntryArgs(script, args, options);
+        const entryArgs = [...compilerArgs, ...distArtifactEntryArgs(script, args, options)];
         const entryIndex = entryArgs.indexOf(fileURLToPath(import.meta.url));
         entryArgs.splice(entryIndex + 1, 0, "--parent-claim", claim);
         return await runManagedCommand({
