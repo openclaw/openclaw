@@ -194,3 +194,10 @@ export function buildSubagentSpawnEnvelope(params: {
           .join(" "),
   };
 }
+
+const STRUCTURED_OUTPUT_INSTRUCTION =
+  'Call structured_output with {"result": <your final result>} until one payload is accepted, with at most one retry after a rejected attempt. The result value must match the requested JSON Schema. Do not call structured_output again after acceptance.';
+
+export function withOutputSchema(systemPrompt: string, schema: unknown): string {
+  return schema ? `${systemPrompt}\n\n${STRUCTURED_OUTPUT_INSTRUCTION}` : systemPrompt;
+}

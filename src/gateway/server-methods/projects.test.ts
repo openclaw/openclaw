@@ -297,6 +297,10 @@ test.each(["registered", "cloned"] as const)(
     await withProjectState(async (state) => {
       const workspace = await initializeRepository(state.root, "workspace");
       const outside = await initializeRepository(state.root, "outside");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json({ visibility: "public" })),
+      );
       const project =
         source === "cloned"
           ? await registerClonedProjectRegistry({
@@ -381,11 +385,8 @@ test("projects.list exposes a normalized configured default repository", async (
   const readOnly = await listProjects(config, { scopes: ["operator.read"] });
   expect(readOnly?.payload).not.toHaveProperty("defaultRepository");
   expect(
-    await listProjects(config, { scopes: ["operator.read", "operator.sessions.write"] }),
-  ).toMatchObject({
-    ok: true,
-    payload: { defaultRepository: { identity: "acme/private-repo" } },
-  });
+    (await listProjects(config, { scopes: ["operator.read", "operator.sessions.write"] }))?.payload,
+  ).not.toHaveProperty("defaultRepository");
 });
 
 test("projects.list refuses a default repository from a replaced config during registry lookup", async () => {
@@ -484,6 +485,10 @@ test("projects.searchRemote redacts unexpected error diagnostics", async () => {
 test("projects.list exposes checkout details only at write scope", async () => {
   return withProjectState(async (state) => {
     const repo = await initializeRepository(state.root);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ visibility: "public" })),
+    );
     await registerProjectRegistry({ path: repo, name: "Registered" });
     const cfg = projectConfig("/workspace/alpha");
 

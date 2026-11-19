@@ -22,18 +22,17 @@ import type { InternalSessionEntry, SessionEntry } from "../../../config/session
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { buildDashboardSessionTitleSource } from "../../../gateway/dashboard-session-title.js";
 import type { FreshChildSession } from "../../../gateway/in-process-session-run.js";
+import type { ProjectRequester } from "../../../gateway/project-access.js";
 import {
   normalizeTrustedGroupMetadata,
   resolveAgentSessionGroup,
   type TrustedGroupMetadata,
 } from "../../../gateway/server-methods/agent-subagent-registration.js";
 import type { PreparedGatewaySessionLifecycle } from "../../../gateway/session-create-service.types.js";
+import { resolveSessionProjectRoot } from "../../../gateway/session-project-source.js";
 import { isSessionVisibilityAllowed } from "../../../gateway/session-sharing-policy.js";
 import type { GatewaySessionStoreTargetWithStore } from "../../../gateway/session-utils-store.types.js";
-import {
-  prepareSessionWorktreeCreation,
-  resolveSessionProjectRoot,
-} from "../../../gateway/session-worktree-preparation.js";
+import { prepareSessionWorktreeCreation } from "../../../gateway/session-worktree-preparation.js";
 import {
   captureSessionTarget,
   type SessionTarget,
@@ -68,6 +67,7 @@ type InitialSubagentSession = {
 
 export async function createInitialSubagentSession(input: {
   cfg: OpenClawConfig;
+  projectRequester: ProjectRequester;
   requesterAgentId: string;
   targetAgentId: string;
   childSessionKey: string;
@@ -241,7 +241,12 @@ export async function createInitialSubagentSession(input: {
               throw new Error("projectId cannot be combined with cwd");
             }
             const project = projectId
-              ? await resolveSessionProjectRoot(params.cfg, projectId, true)
+              ? await resolveSessionProjectRoot(
+                  params.cfg,
+                  projectId,
+                  true,
+                  params.projectRequester,
+                )
               : undefined;
             params.assertActive?.();
             if (project && !project.ok) {
@@ -257,6 +262,7 @@ export async function createInitialSubagentSession(input: {
                 sandboxRequired: params.creationPolicy.sandbox === "required",
               },
               workspace: project?.value ?? params.spawnedCwd,
+              projectRequester: params.projectRequester,
               inheritParentKey:
                 !projectId && !params.spawnedCwd && parentTarget.agentId === params.targetAgentId
                   ? params.requesterInternalKey

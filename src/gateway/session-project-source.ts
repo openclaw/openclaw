@@ -10,11 +10,26 @@ import {
   ProjectCheckoutError,
   resolveProjectCheckout,
   resolveProjectDirectory,
-  resolveProjectRegistry,
   selectStoredProjectRegistry,
 } from "../projects/project-registry.js";
 import type { ProjectRegistryRecord } from "../projects/project-registry.types.js";
+import { resolveRequesterProject, type ProjectRequester } from "./project-access.js";
 import { prepareSessionCreateFilesystemRoot } from "./server-methods/session-create-root.js";
+import { invalidSessionRequest } from "./session-request-error.js";
+
+/** Resolve registered sources identically for dashboard and native child sessions. */
+export async function resolveSessionProjectRoot(
+  cfg: OpenClawConfig,
+  projectId: string,
+  worktree: boolean,
+  requester: ProjectRequester,
+): Promise<Result<string, ErrorShape>> {
+  const project = await resolveRequesterProject(cfg, projectId, requester, { fresh: true });
+  if (!project) {
+    return invalidSessionRequest(`unknown project id: ${projectId}`);
+  }
+  return resolveSessionProjectRootForRecord(project, worktree);
+}
 
 export async function resolveSessionProjectRootForRecord(
   project: ProjectRegistryRecord,
@@ -52,13 +67,14 @@ export function selectSessionWorktreeProjectSource(
 export async function resolveSessionProjectCheckoutOptions(params: {
   cfg: OpenClawConfig;
   projectId: string;
+  requester: ProjectRequester;
   targetAgentId: string;
   resolveSandboxRequired: () => boolean;
   assertCurrent: () => void;
   signal?: AbortSignal;
 }): Promise<{ current: boolean; worktree: boolean }> {
   params.assertCurrent();
-  const project = await resolveProjectRegistry(params.cfg, params.projectId);
+  const project = await resolveRequesterProject(params.cfg, params.projectId, params.requester);
   params.assertCurrent();
   if (!project) {
     return { current: false, worktree: false };
