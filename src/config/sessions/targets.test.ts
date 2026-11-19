@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
@@ -397,16 +397,19 @@ describe("isConfiguredAgentDatabaseTarget", () => {
     expect(statSpy.mock.calls.filter(([probed]) => probed === pathname)).toHaveLength(1);
   });
 
-  it("still resolves aliases through existing owned targets", () => {
-    const dir = tempDir();
-    const real = path.join(dir, "real.sqlite");
-    fsSync.writeFileSync(real, "");
-    const alias = path.join(dir, "alias.sqlite");
-    fsSync.symlinkSync(real, alias);
-    expect(
-      isConfiguredAgentDatabaseTarget([{ agentId: "main", path: alias }], "main", real),
-    ).toBe(true);
-  });
+  it.runIf(process.platform !== "win32")(
+    "still resolves aliases through existing owned targets",
+    () => {
+      const dir = tempDir();
+      const real = path.join(dir, "real.sqlite");
+      fsSync.writeFileSync(real, "");
+      const alias = path.join(dir, "alias.sqlite");
+      fsSync.symlinkSync(real, alias);
+      expect(
+        isConfiguredAgentDatabaseTarget([{ agentId: "main", path: alias }], "main", real),
+      ).toBe(true);
+    },
+  );
 
   it("does not fail an exact configured claim on an unusable earlier target", () => {
     const dir = tempDir();
@@ -414,7 +417,10 @@ describe("isConfiguredAgentDatabaseTarget", () => {
     const unusable = path.join(dir, "bad\u0000name.sqlite");
     expect(
       isConfiguredAgentDatabaseTarget(
-        [{ agentId: "main", path: unusable }, { agentId: "main", path: database }],
+        [
+          { agentId: "main", path: unusable },
+          { agentId: "main", path: database },
+        ],
         "main",
         database,
       ),
