@@ -126,6 +126,15 @@ const RELEASE_VALIDATION_WAIVERS = [
     jobName: "checks-node-compact-large-23 (node)",
     testFailures: {
       stepName: "Run Node test shard",
+      alternativeSignatures: [
+        [
+          {
+            kind: "vitest",
+            file: "src/gateway/worker-environments/live-events-settlement.test.ts",
+            test: "worker live event settlement joins writes before RPC acknowledgment (revoked) :: Error: ENOTEMPTY: directory not empty, rmdir '/tmp/oc-vt-qFaVWf/oc-vt-0XBHte/openclaw-worker-service-2laeTn'",
+          },
+        ],
+      ],
       signatures: [
         {
           kind: "vitest",
@@ -135,7 +144,7 @@ const RELEASE_VALIDATION_WAIVERS = [
       ],
     },
     reason:
-      "Dallin Romney authorized known-error acceptance on 2026-11-19 at 08:22 UTC after diagnosis and repair. Accept only the exact worker deletion fixture assertion from FRV 44467669773/1, CI 44468273128/1 job 135371689694, if it recurs on this repaired candidate. The queued-deletion fixture now waits for the environment queue before releasing provisioning; the original failure was not reproduced. This is accepted failure, not proof of a harmless flake or a passing test. Preserve complete execution and raw evidence. Changed or additional failures, other candidates, cancellation, incomplete coverage, security/integrity, install/update and publication gates remain blocking.",
+      "Dallin Romney also authorized the exact ENOTEMPTY cleanup failure from CI 44494425456 job 135458736030 on 2026-11-19 at 13:06 UTC; this is accepted risk, not proof of a harmless flake. Dallin Romney authorized known-error acceptance on 2026-11-19 at 08:22 UTC after diagnosis and repair. Accept only the exact worker deletion fixture assertion from FRV 44467669773/1, CI 44468273128/1 job 135371689694, if it recurs on this repaired candidate. The queued-deletion fixture now waits for the environment queue before releasing provisioning; the original failure was not reproduced. This is accepted failure, not proof of a harmless flake or a passing test. Preserve complete execution and raw evidence. Changed or additional failures, other candidates, cancellation, incomplete coverage, security/integrity, install/update and publication gates remain blocking.",
   },
   {
     targetVersion: "2026.11.6",
@@ -849,7 +858,11 @@ export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog 
       );
     }
     const signatures = parseNodeFailureReport(String(await getJobLog(job.id)), true);
-    if (!isDeepStrictEqual(signatures, waiver.testFailures.signatures)) {
+    if (
+      ![waiver.testFailures.signatures, ...(waiver.testFailures.alternativeSignatures ?? [])].some(
+        (accepted) => isDeepStrictEqual(signatures, accepted),
+      )
+    ) {
       throw new ReleaseAggregateValidationError(
         `Release test job has an unwaived or incomplete failure: ${waiver.jobName}`,
       );

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { createConfigIO } from "../../config/io.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -52,6 +53,7 @@ import {
 } from "../../infra/update-system-package-ownership.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
+import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { resolveNodeRunner } from "./shared.js";
 import type {
@@ -432,6 +434,41 @@ export async function readManagedGatewayServiceForUpdate(
 
 export async function tryRealpathOrResolve(value: string): Promise<string> {
   return await fs.realpath(path.resolve(value)).catch(() => path.resolve(value));
+}
+
+/** Explain how the update targets a managed service that runs elsewhere or on another runtime. */
+export function logManagedServicePackageUpdatePlan(plan: ManagedServicePackageUpdatePlan): void {
+  const { rootRedirect, nodeRunner } = plan;
+  if (rootRedirect) {
+    defaultRuntime.log(
+      theme.muted(`Targeting managed gateway service package root: ${rootRedirect.root}`),
+    );
+    defaultRuntime.log(
+      theme.warn(
+        `Shell OpenClaw root differs from the managed gateway service root: ${rootRedirect.previousRoot}`,
+      ),
+    );
+    if (nodeRunner) {
+      defaultRuntime.log(theme.muted(`Managed gateway service runtime: ${nodeRunner}`));
+    }
+  } else if (plan.serviceRoot) {
+    defaultRuntime.log(
+      theme.muted(
+        `Updating this installation and rebinding the managed Gateway from ${plan.serviceRoot} after ownership and runtime verification.`,
+      ),
+    );
+  } else if (nodeRunner) {
+    defaultRuntime.log(
+      theme.warn(
+        `Current runtime (${resolveNodeRunner()}) differs from the managed gateway service runtime (${nodeRunner}).`,
+      ),
+    );
+    defaultRuntime.log(
+      theme.muted(
+        "Using the managed service runtime for this update so the gateway can start after the upgrade.",
+      ),
+    );
+  }
 }
 
 export async function resolveManagedServicePackageUpdatePlan(params: {

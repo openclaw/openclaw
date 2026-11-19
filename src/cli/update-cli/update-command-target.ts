@@ -64,12 +64,18 @@ import {
   type UpdateCommandExecutor,
 } from "./update-command-executor.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
-import { inspectNpmGlobalDestination } from "./update-command-package-destination.js";
+import {
+  inspectCheckoutLinkPackageSwitch,
+  inspectNpmGlobalDestination,
+} from "./update-command-package-destination.js";
 import { UnreportedUpdateAdmissionOutcome, type RefuseUpdate } from "./update-command-result.js";
 import { recordUpdateCommandTarget, type prepareUpdateCommand } from "./update-command-run.js";
 import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
-import { resolveManagedServicePackageUpdatePlan } from "./update-command-service-plan.js";
+import {
+  logManagedServicePackageUpdatePlan,
+  resolveManagedServicePackageUpdatePlan,
+} from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { checkUpdateTargetSnapshotSpace } from "./update-command-target-space.js";
 
@@ -346,37 +352,7 @@ export async function resolveUpdateCommandTarget(
           warn(formatGatewayServiceRootRedirect(managedServiceRootRedirect));
         }
         if (!opts.json) {
-          const { rootRedirect, nodeRunner } = managedServicePlan;
-          if (rootRedirect) {
-            defaultRuntime.log(
-              theme.muted(`Targeting managed gateway service package root: ${rootRedirect.root}`),
-            );
-            defaultRuntime.log(
-              theme.warn(
-                `Shell OpenClaw root differs from the managed gateway service root: ${rootRedirect.previousRoot}`,
-              ),
-            );
-            if (nodeRunner) {
-              defaultRuntime.log(theme.muted(`Managed gateway service runtime: ${nodeRunner}`));
-            }
-          } else if (managedServicePlan.serviceRoot) {
-            defaultRuntime.log(
-              theme.muted(
-                `Updating this installation and rebinding the managed Gateway from ${managedServicePlan.serviceRoot} after ownership and runtime verification.`,
-              ),
-            );
-          } else if (nodeRunner) {
-            defaultRuntime.log(
-              theme.warn(
-                `Current runtime (${resolveNodeRunner()}) differs from the managed gateway service runtime (${nodeRunner}).`,
-              ),
-            );
-            defaultRuntime.log(
-              theme.muted(
-                "Using the managed service runtime for this update so the gateway can start after the upgrade.",
-              ),
-            );
-          }
+          logManagedServicePackageUpdatePlan(managedServicePlan);
         }
         packageUpdateNodeRunner =
           managedServiceRoot && !process.versions.bun
@@ -584,6 +560,26 @@ export async function resolveUpdateCommandTarget(
             if (canResolveRegistryVersionForPackageTarget(tag)) {
               packageInstallSpec = packageSpec(targetVersion);
             }
+          }
+          const unsafeSwitch =
+            switchToPackage &&
+            (await inspectCheckoutLinkPackageSwitch({
+              checkoutRoot: discoveredRoot,
+              installTarget: packageInstallTarget,
+              // The plan records a service only when it runs this same installation.
+              serviceRunsCheckout: Boolean(managedServicePlan?.service) && !managedServiceRoot,
+              targetSpec: packageInstallSpec,
+              storedChannel,
+              requestedChannel: channel,
+            }));
+          if (unsafeSwitch) {
+            await refuseUpdate(
+              unsafeSwitch.reason,
+              unsafeSwitch.message,
+              unsafeSwitch.failureFacts,
+              unsafeSwitch.recoverySteps,
+            );
+            return undefined;
           }
         }
       }
