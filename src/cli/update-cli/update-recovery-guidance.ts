@@ -75,7 +75,7 @@ export function resolveUpdateResultNextAction(params: {
         rollback?.status === "not-attempted" || rollback?.status === "failed"
           ? `Rollback ${rollback.status === "failed" ? "failed" : "not attempted"}: ${rollback.reason}. `
           : "";
-      return `${rollbackDetail}The installed Gateway is healthy and running on the retained state, but update maintenance is unfinished. Keep the recovery snapshots; stop the Gateway first (\`${formatCliCommand("openclaw gateway stop", env)}\`), then run \`${formatCliCommand("openclaw update repair", env)}\` to finish maintenance.`;
+      return `${rollbackDetail}The installed Gateway is healthy and running on the retained state, but update maintenance is unfinished. Keep the recovery snapshots; stop the Gateway through its service owner first (\`${formatCliCommand("openclaw gateway stop --force", env)}\` for the managed service), then run \`${formatCliCommand("openclaw update repair", env)}\` to finish maintenance.`;
     }
     if (
       result.reason === "update-failed" &&
