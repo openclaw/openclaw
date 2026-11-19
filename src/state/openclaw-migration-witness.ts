@@ -30,12 +30,8 @@ import {
 import { AGENT_JSON_PREDICATE_COLUMNS } from "./openclaw-agent-json-predicate-schema.js";
 import { LEGACY_MEMORY_REVISION_TRIGGER_NAMES } from "./openclaw-agent-memory-revision-migration.js";
 import { withoutOutboxEnqueueSequence } from "./openclaw-agent-outbox-sequence-migration.js";
+import { RECIPIENT_AUTHORITY_TABLE } from "./openclaw-agent-recipient-authority-schema.js";
 import { assertMigrationWitnessRegistryPreserved } from "./openclaw-migration-witness-registry.js";
-import {
-  AGENT_WITNESS_SCHEMA_VERSIONS,
-  omitAddedRecipientAuthority,
-  RECIPIENT_AUTHORITY_TABLE,
-} from "./openclaw-migration-witness.continuation.js";
 import {
   type OpenClawMigrationWitness,
   registryRowSchema,
@@ -48,6 +44,10 @@ import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-versio
 import { resolveOpenClawRegisteredAgentDatabasePath } from "./openclaw-state-db.paths.js";
 
 type OpenClawMigrationWitnessOwner = { role: "agent"; agentId: string } | { role: "global" };
+// 42 is continuation's recipient authority (AGENT_RECIPIENT_AUTHORITY_SCHEMA_VERSION).
+const agentSchemaVersions = new Set([
+  24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42,
+]);
 
 const derivedMigrationColumns = new Map<string, ReadonlySet<string>>(
   Object.entries({
@@ -93,7 +93,7 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
   }
   if (
     (witness.role === "agent" &&
-      (witness.agentId === null || !AGENT_WITNESS_SCHEMA_VERSIONS.has(witness.schemaVersion))) ||
+      (witness.agentId === null || !agentSchemaVersions.has(witness.schemaVersion))) ||
     (witness.role !== "agent" && witness.agentId !== null) ||
     (witness.role !== "agent" && witness.schemaSha256 !== witness.migrationSchemaSha256) ||
     (witness.role !== "global" && witness.registryMigrationBinding !== null) ||
@@ -412,7 +412,7 @@ export function captureOpenClawMigrationWitness(
         throw new Error("Migration witness database owner does not match the backup inventory");
       }
       if (owner.role === "agent") {
-        if (!AGENT_WITNESS_SCHEMA_VERSIONS.has(schemaVersion)) {
+        if (!agentSchemaVersions.has(schemaVersion)) {
           throw new Error(`Unsupported agent migration witness schema: ${schemaVersion}`);
         }
         assertOpenClawAgentSchemaContains(
@@ -688,7 +688,9 @@ export function assertOpenClawMigrationWitnessPreserved(
               (original.schemaVersion < AGENT_CREATION_OPERATIONS_SCHEMA_VERSION &&
                 table.name === "session_creation_operations") ||
               (original.schemaVersion < AGENT_ACTIVE_EVENT_FACTS_SCHEMA_VERSION &&
-                table.name === "session_transcript_active_event_facts")) &&
+                table.name === "session_transcript_active_event_facts") ||
+              // Continuation's recipient-authority step (42) adds its table empty.
+              table.name === RECIPIENT_AUTHORITY_TABLE) &&
             table.rowCount === 0
           ),
       )
@@ -719,7 +721,6 @@ export function assertOpenClawMigrationWitnessPreserved(
     }
     currentTables.delete(table.name);
   }
-  omitAddedRecipientAuthority(currentTables, crossing);
   if (currentTables.size > 0) {
     throw new Error("Migration added unclassified database content");
   }
