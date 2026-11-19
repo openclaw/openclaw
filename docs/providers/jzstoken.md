@@ -73,15 +73,16 @@ curl -s https://jzstoken.com/api/v1/models \
 
   </Step>
   <Step title="Select a model">
+    `models list` reports the inventory you configured; confirm the key can
+    call it with the authenticated `/v1/models` request from the note above.
+
     ```bash
     openclaw models list --provider jzstoken
+    openclaw config set agents.defaults.model "jzstoken/gpt-5.6-terra"
     ```
 
-    Then set a default or per-agent model:
-
-    ```bash
-    openclaw config set agents.defaults.model "jzstoken/jzs-max-3.0"
-    ```
+    To use the flagship, create the dedicated `jzs-max-3.0` key, add that model
+    row to the provider's `models` array, and set `jzstoken/jzs-max-3.0`.
 
   </Step>
 </Steps>
