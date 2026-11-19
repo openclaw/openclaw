@@ -21,8 +21,6 @@ ChatGPT-login model discovery reports the selected binary's version as its
 `client_version`, so the list matches the binary that runs turns. Availability can also
 be account-scoped. Use `/codex models` on a running gateway to see the live
 catalog for that harness and account.
-Availability can also be account-scoped. Use `/codex models` on a running
-gateway to see the live catalog for that harness and account.
 
 The OpenAI provider's ChatGPT subscription list is separate. ChatGPT hides a
 model from clients older than the model's minimum Codex version, so OpenClaw
