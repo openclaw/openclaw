@@ -153,6 +153,81 @@ it("discovers remote extra documents without Gateway fallback", async () => {
   });
 });
 
+it("skips one remote directory past the page budget and still loads its sibling", async () => {
+  const local = await workspace();
+  const remote = await workspace({ "keep/AGENTS.md": "kept instructions" });
+  const readDirectory = vi.fn(async ({ filePath }: { filePath: string }) => {
+    if (filePath === "." || filePath === "") {
+      return [
+        { name: "fat", isDirectory: true },
+        { name: "keep", isDirectory: true },
+      ];
+    }
+    if (filePath === "fat") {
+      throw Object.assign(new Error("Directory listing exceeded 32 pages"), {
+        code: "DIRECTORY_LISTING_TOO_LARGE",
+      });
+    }
+    if (filePath === "keep") {
+      return [{ name: "AGENTS.md", isDirectory: false }];
+    }
+    throw new Error(`unexpected directory ${filePath}`);
+  });
+  const bridge: Bridge = {
+    writeFile: vi.fn(),
+    stat: async ({ filePath }) => {
+      const stat = await fs.stat(path.join(remote, filePath));
+      return {
+        type: stat.isDirectory() ? "directory" : "file",
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+      };
+    },
+    readFile: async ({ filePath }) => fs.readFile(path.join(remote, filePath)),
+    readFileWithSource: async ({ filePath }) => ({
+      data: await fs.readFile(path.join(remote, filePath)),
+      canonicalPath: path.join(remote, filePath),
+    }),
+    readDirectory,
+  };
+  await withAccess(local, bridge, async () => {
+    const kept = await loadExtra(local, ["*/AGENTS.md"]);
+    expect(kept.diagnostics).toEqual([
+      {
+        path: path.join(local, "fat"),
+        reason: "io",
+        detail: "Directory listing exceeded 32 pages",
+      },
+    ]);
+    expect(kept.files.map((file) => file.content)).toEqual(["kept instructions"]);
+    expect(readDirectory.mock.calls.map(([params]) => params.filePath).toSorted()).toEqual([
+      ".",
+      "fat",
+      "keep",
+    ]);
+  });
+
+  readDirectory.mockImplementation(async ({ filePath }: { filePath: string }) => {
+    if (filePath === "." || filePath === "") {
+      return [
+        { name: "fat", isDirectory: true },
+        { name: "keep", isDirectory: true },
+      ];
+    }
+    throw new Error("Invalid dir.list response");
+  });
+  await withAccess(local, bridge, async () => {
+    const failed = await loadExtra(local, ["*/AGENTS.md"]);
+    expect(failed.files).toEqual([]);
+    expect(failed.diagnostics).toEqual([
+      expect.objectContaining({
+        reason: "io",
+        detail: "Invalid dir.list response",
+      }),
+    ]);
+  });
+});
+
 it("omits missing remote files despite Gateway copies", async () => {
   const names = [DEFAULT_MEMORY_FILENAME, DEFAULT_USER_FILENAME] as const;
   const local = await workspace(Object.fromEntries(names.map((name) => [name, "Gateway decoy"])));

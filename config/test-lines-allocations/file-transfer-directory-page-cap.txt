@@ -1,0 +1,2 @@
+# Directory page budget: record the skipped bootstrap directory and stop a 32-page listing.
+112
