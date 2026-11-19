@@ -303,10 +303,10 @@ export function createTalkClientAgentRuntime(params: {
             const receipt = result.meta.agentMeta?.terminalReceipt;
             if (
               !result.meta.aborted &&
-              !result.meta.yielded &&
               !result.meta.error &&
               result.meta.stopReason !== "error" &&
-              result.meta.terminalReply?.disposition === "visible" &&
+              (result.meta.yielded === true ||
+                result.meta.terminalReply?.disposition === "visible") &&
               (!receipt ||
                 (receipt.runId === operationalRunInstance.runId &&
                   receipt.sessionId === currentSessionId))

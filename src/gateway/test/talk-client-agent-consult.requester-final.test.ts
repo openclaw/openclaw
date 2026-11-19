@@ -76,9 +76,14 @@ beforeEach(() => {
 });
 afterEach(() => embeddedRunsTesting.resetActiveEmbeddedRuns());
 
-it.each([true, false])(
-  "Talk requester-final: preserves a promoted final only for a current owner (%s)",
-  async (current) => {
+it.each([
+  [true, false],
+  [false, false],
+  [true, true],
+  [false, true],
+])(
+  "Talk requester-final: preserves a promoted final only for a current owner (%s, yielded=%s)",
+  async (current, yielded) => {
     const batch = {
       requesterAgentId: agentId,
       requesterSessionKey: sessionKey,
@@ -88,7 +93,15 @@ it.each([true, false])(
     const finalAssistantVisibleText = current ? "late final" : "stale final";
     const instance = { instanceId: `instance:${batch.rearmGeneration}`, runId: "run-talk" };
     mocks.createOperationalRunInstanceRef.mockReturnValueOnce(instance);
-    const core = createDeferredCore<{ payloads: never[]; meta: { durationMs: number } }>();
+    const core = createDeferredCore<{
+      payloads: never[];
+      meta: { durationMs: number; yielded?: true };
+    }>();
+    mocks.consultRealtimeVoiceAgent.mockImplementationOnce(async (params: ConsultParams) => {
+      await params.onRunStarted?.({ runId: "run-talk", sessionId, timeoutMs: 60_000 });
+      await params.agentRuntime.runEmbeddedAgent(coreParams);
+      return yielded ? { text: "yield acknowledgement", yielded: true } : { text: "done" };
+    });
     if (current) {
       const handle = createEmbeddedRunHandle({ runId: "run-talk" });
       mocks.runEmbeddedAgentCore.mockImplementationOnce(async () => {
@@ -135,10 +148,16 @@ it.each([true, false])(
     expect(promoteRequesterFinalAttachment({ ...batch, requesterTurnRunId: "run-talk" })).toBe(
       true,
     );
-    core.resolve({ payloads: [], meta: { durationMs: 0 } });
-    await expect(run).resolves.toEqual({ text: "done" });
+    core.resolve({
+      payloads: [],
+      meta: { durationMs: 0, ...(yielded ? { yielded: true as const } : {}) },
+    });
+    await expect(run).resolves.toEqual(
+      yielded ? { text: "yield acknowledgement", yielded: true } : { text: "done" },
+    );
     runCurrent = current;
     expect(runner.runPrompt.claimAppend()).toBe(current);
+    expect(runner.runPrompt.claimAppend()).toBe(false);
     finalizeRequesterFinalAttachment({
       ...batch,
       requesterSessionId: sessionId,

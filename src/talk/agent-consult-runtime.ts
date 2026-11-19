@@ -629,9 +629,9 @@ async function consultRealtimeVoiceAgentInternal(
           prompt: buildRealtimeVoiceAgentConsultPrompt(params),
           provider: params.provider,
           model: params.model,
-          // A session-runtime consult thinks like the chat's typed turns unless voice config pins it;
-          // the typed-turn owner rejects levels the chat's model does not support.
-          thinkLevel: params.thinkLevel ?? (dispatchesInSessionRuntime ? undefined : "high"),
+          // Let the command owner retain persisted chat thinking unless voice config overrides it.
+          // Only the no-chat-setting fallback needs a normalized high override.
+          thinkLevel: params.thinkLevel ?? (sessionEntry.thinkingLevel ? undefined : "high"),
           fastMode: params.fastMode,
           verboseLevel: "off",
           reasoningLevel: "off",

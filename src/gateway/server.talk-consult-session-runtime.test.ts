@@ -7,12 +7,25 @@ import { createSteeredCliMessageInjection } from "../agents/cli-runner/execute-p
 import { attachCliReplyBackend } from "../agents/cli-runner/execution-target.js";
 import { captureCliRunToolAuthority } from "../agents/cli-runner/tool-authority.js";
 import { runWithCliTurn } from "../agents/cli-runner/turn-admission.js";
+import {
+  registerTestEmbeddedRun,
+  clearTestEmbeddedRun,
+  createEmbeddedRunHandle,
+} from "../agents/embedded-agent-runner/runs.test-support.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
+import {
+  finalizeRequesterFinalAttachment,
+  promoteRequesterFinalAttachment,
+} from "../agents/subagents/requester-final-attachment.js";
+import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
+import {
+  captureSessionControllerSettlement,
+  getCurrentSessionControllerOwner,
+} from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { controlTalkAgentRun } from "../talk/agent-run-control.js";
@@ -91,7 +104,7 @@ afterAll(async () => {
   await harness.close();
 });
 
-async function prepare(entry: Partial<SessionEntry>) {
+async function prepare(entry: Partial<SessionEntry>, runtime = "claude-cli") {
   requestExecution = await observeGatewayRunExecution();
   sessionId = randomUUID();
   storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
@@ -109,7 +122,7 @@ async function prepare(entry: Partial<SessionEntry>) {
         defaults: {
           ...previous.agents?.defaults,
           model: { primary: MODEL_REF },
-          models: { [MODEL_REF]: { agentRuntime: { id: "claude-cli" } } },
+          models: { [MODEL_REF]: { agentRuntime: { id: runtime } } },
         },
       },
     },
@@ -178,6 +191,7 @@ async function consult(
   adoptCompletionClaims = false,
   invalidate?: "abort" | "voice",
   expectedClaim = !invalidate,
+  requesterFinal?: { append: (text: string) => boolean },
 ) {
   const callId = expectDefined(voiceSessionId, "voice session");
   let currentCallId: string | undefined = callId;
@@ -195,7 +209,11 @@ async function consult(
     if (adoptCompletionClaims) {
       runner.runPrompt.adoptCompletionClaims();
       const controller = new AbortController();
-      const result = await runner.runPrompt({ prompt: question, signal: controller.signal });
+      const result = await runner.runPrompt({
+        prompt: question,
+        signal: controller.signal,
+        requesterFinal,
+      });
       if (invalidate === "abort") {
         controller.abort();
       } else if (invalidate === "voice") {
@@ -245,6 +263,30 @@ it("runs a Claude CLI chat's voice consult through the typed-turn CLI dispatch a
   expect(run.toolsAllow).toBeUndefined();
 });
 
+it.each([
+  { persisted: "low" as const, voice: undefined, expected: "low" },
+  { persisted: undefined, voice: undefined, expected: "high" },
+  { persisted: "low" as const, voice: "medium" as const, expected: "medium" },
+])(
+  "uses owner-decided thinking precedence through the command owner (%j)",
+  async ({ persisted, voice, expected }) => {
+    await prepare({ thinkingLevel: persisted });
+    if (voice) {
+      await prepareGatewayReplyRuntimeForTest({
+        force: true,
+        config: {
+          ...getRuntimeConfig(),
+          talk: { ...getRuntimeConfig().talk, consultThinkingLevel: voice },
+        },
+      });
+    }
+    runCliAgent.mockImplementation(async () => answer("THINKING_ANSWER", "claude-cli"));
+    await expect(consult("THINKING_QUESTION")).resolves.toEqual({ text: "THINKING_ANSWER" });
+    expect(runCliAgent).toHaveBeenCalledOnce();
+    expect(runCliAgent.mock.calls[0]?.[0].thinkLevel).toBe(expected);
+  },
+);
+
 it.each([false, true])(
   "retains completed CLI speech with correlation receipt present=%s",
   async (withReceipt) => {
@@ -285,6 +327,111 @@ it.each([false, true])(
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   },
 );
+
+it.each([undefined, "abort", "voice"] as const)(
+  "retains yielded CLI acknowledgement and late-result ownership unless invalidated (%s)",
+  async (invalidate) => {
+    await prepare({});
+    const append = vi.fn(() => true);
+    const batch = {
+      requesterAgentId: "main",
+      requesterSessionKey: sessionKey,
+      batchRunIds: ["yield-child"],
+      rearmGeneration: 1,
+    };
+    runCliAgent.mockImplementation(async ({ runId }) => {
+      expect(promoteRequesterFinalAttachment({ ...batch, requesterTurnRunId: runId })).toBe(true);
+      const result = answer("CLI_YIELD_ACK", "claude-cli");
+      return {
+        ...result,
+        meta: { ...result.meta, yielded: true, yieldAcknowledgment: "CLI_YIELD_ACK" },
+      };
+    });
+    await expect(
+      consult("CLI_YIELD_QUESTION", true, invalidate, !invalidate, { append }),
+    ).resolves.toEqual({
+      text: "CLI_YIELD_ACK",
+      yielded: true,
+    });
+    finalizeRequesterFinalAttachment({
+      ...batch,
+      requesterSessionId: sessionId,
+      requesterYieldBatch: true,
+      pause: false,
+      delivered: true,
+      finalAssistantVisibleText: "CLI_LATE_RESULT",
+    });
+    expect(append.mock.calls).toEqual(invalidate ? [] : [["CLI_LATE_RESULT"]]);
+    expect(runCliAgent).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  },
+);
+
+it("retains exactly one embedded yielded acknowledgement and late result through real command dispatch", async () => {
+  await prepare({}, "openclaw");
+  const append = vi.fn(() => true);
+  const batch = {
+    requesterAgentId: "main",
+    requesterSessionKey: sessionKey,
+    batchRunIds: ["embedded-yield-child"],
+    rearmGeneration: 1,
+  };
+  runEmbeddedAgent.mockImplementation(async (params) => {
+    const instance = expectDefined(params.preparedRunAdmission?.operationalRunInstance);
+    const handle = createEmbeddedRunHandle({ runId: params.runId });
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey,
+        operationalRunInstance: instance,
+        embeddedRunToolAuthorityBinding: () => ({
+          acceptsRequesterOrigin: () => false,
+          source: "attempt",
+          project: () => "authority",
+          projectAsync: async () => "authority",
+          assertRegistrationActive: () => {},
+          assertActive: () => {},
+        }),
+      },
+      () => {
+        registerTestEmbeddedRun(
+          sessionId,
+          handle,
+          sessionKey,
+          undefined,
+          "main",
+          expectDefined(getCurrentSessionControllerOwner()),
+        );
+      },
+    );
+    try {
+      expect(promoteRequesterFinalAttachment({ ...batch, requesterTurnRunId: params.runId })).toBe(
+        true,
+      );
+      const result = answer("EMBEDDED_YIELD_ACK", "anthropic");
+      return {
+        ...result,
+        meta: { ...result.meta, yielded: true, yieldAcknowledgment: "EMBEDDED_YIELD_ACK" },
+      };
+    } finally {
+      clearTestEmbeddedRun(sessionId, handle, sessionKey);
+    }
+  });
+  await expect(
+    consult("EMBEDDED_YIELD_QUESTION", true, undefined, true, { append }),
+  ).resolves.toEqual({ text: "EMBEDDED_YIELD_ACK", yielded: true });
+  finalizeRequesterFinalAttachment({
+    ...batch,
+    requesterSessionId: sessionId,
+    requesterYieldBatch: true,
+    pause: false,
+    delivered: true,
+    finalAssistantVisibleText: "EMBEDDED_LATE_RESULT",
+  });
+  expect(append.mock.calls).toEqual([["EMBEDDED_LATE_RESULT"]]);
+  expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+  expect(runCliAgent).not.toHaveBeenCalled();
+});
 
 it("does not claim a visible CLI snapshot after incomplete settlement", async () => {
   await prepare({});

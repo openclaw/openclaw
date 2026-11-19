@@ -570,7 +570,26 @@ describe("realtime voice agent consult runtime", () => {
     });
   });
 
-  it("leaves the lock and thinking level to the session's own runtime when dispatching there", async () => {
+  it.each([
+    { persisted: "low" as const, voice: undefined, forwarded: undefined },
+    { persisted: undefined, voice: undefined, forwarded: "high" },
+    { persisted: "low" as const, voice: "medium" as const, forwarded: "medium" },
+  ])(
+    "respects chat thinking below explicit voice config (%j)",
+    async ({ persisted, voice, forwarded }) => {
+      const session = createAgentRuntime();
+      const sessionKey = "agent:main:thinking";
+      session.sessionStore[sessionKey] = {
+        sessionId: "thinking-session",
+        updatedAt: 1,
+        thinkingLevel: persisted,
+      };
+      await runConsult(session.runtime, { agentId: "main", sessionKey, thinkLevel: voice }, true);
+      expect(requireEmbeddedAgentCall(session.runEmbeddedAgent).thinkLevel).toBe(forwarded);
+    },
+  );
+
+  it("leaves the lock to the session runtime while preserving the high voice default", async () => {
     const sessionKey = "agent:main:session-runtime";
     const bridge = createAgentRuntime();
     bridge.sessionStore[sessionKey] = { ...lockedEntry, sessionId: "locked-bridge" };
@@ -592,8 +611,8 @@ describe("realtime voice agent consult runtime", () => {
         true,
       ),
     ).resolves.toEqual({ text: "Speak this." });
-    // No voice-imposed default: the chat's typed-turn owner resolves its own thinking level.
-    expect(requireEmbeddedAgentCall(session.runEmbeddedAgent).thinkLevel).toBeUndefined();
+    // Voice retains its high default; the command owner normalizes runtime support.
+    expect(requireEmbeddedAgentCall(session.runEmbeddedAgent).thinkLevel).toBe("high");
 
     const plain = createAgentRuntime();
     await runConsult(plain.runtime, { agentId: "main", sessionKey: "agent:main:bridge" });
