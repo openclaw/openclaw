@@ -20,6 +20,7 @@ import { bindUserTurnTranscriptAnnotation } from "../../sessions/user-turn-trans
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { loadSkillLibrarySelection } from "../../skills/library/selection.js";
 import { resolveSkillResourceCandidates } from "../../skills/runtime/resource-candidates.js";
+import { prepareSkillReadIndex } from "../../skills/runtime/skill-read-index.js";
 import type { SkillEntry } from "../../skills/types.js";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -229,6 +230,9 @@ export function createAgentHarnessHostCapabilities(params: {
         })
       : undefined;
   const skillsSnapshot = attempt.skillsSnapshot ? cloneSnapshot(attempt.skillsSnapshot) : undefined;
+  if (skillsSnapshot) {
+    prepareSkillReadIndex(skillsSnapshot);
+  }
   const getInstalledSkills = bindHostSkillCatalog({
     snapshot: skillsSnapshot,
     workspaceDir:

@@ -110,7 +110,6 @@ export function hasAuthForProvider(params: {
   }
   return hasAuthProfileForProvider({
     provider: params.provider,
-    agentDir: params.agentDir,
     authStore: params.authStore,
     capability: params.capability,
   });
@@ -118,9 +117,7 @@ export function hasAuthForProvider(params: {
 
 export function hasAuthProfileForProvider(params: {
   provider: string;
-  agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   type?: AuthProfileCredential["type"];
   capability?: string;
 }): boolean {

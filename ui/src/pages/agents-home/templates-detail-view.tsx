@@ -13,6 +13,7 @@ import {
   renderPublisherIdentity,
 } from "../plugins/overview.tsx";
 import { TemplateArtwork } from "./template-artwork.tsx";
+import { TemplatePluginIcon } from "./template-plugin-icon.tsx";
 import type { TemplateCatalogDetail, TemplateCatalogEntry } from "./templates-catalog-client.ts";
 import "../../styles/templates-catalog.css";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
@@ -102,13 +103,6 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
         contents().skills.map((item) => ({
           name: item.name,
           description: item.excerpt,
-          trailing: (
-            <span class="muted">
-              {item.source === "bundled"
-                ? t("templatesCatalog.dependencyBundled")
-                : t("templatesCatalog.dependencyClawHub", { version: item.version })}
-            </span>
-          ),
           onOpen: () => props.view.onOpenPreview("skill", item.name),
         })),
         () => (
@@ -118,13 +112,15 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
       {renderPluginCapabilitySection(
         t("templatesCatalog.integrations"),
         contents().integrations.map((item) => ({
-          name: item.name,
-          description:
+          name:
             item.kind === "plugin"
-              ? item.source === "bundled"
-                ? t("templatesCatalog.dependencyBundled")
-                : t("templatesCatalog.dependencyClawHub", { version: item.version })
-              : t("tabs.mcp"),
+              ? (props.view.pluginPresentation?.[item.name]?.name ?? item.name)
+              : item.name,
+          icon:
+            item.kind === "plugin"
+              ? () => <TemplatePluginIcon plugin={props.view.pluginPresentation?.[item.name]} />
+              : undefined,
+          description: item.kind === "plugin" ? undefined : t("tabs.mcp"),
           trailing:
             item.kind === "plugin" &&
             item.source === "clawhub" &&
