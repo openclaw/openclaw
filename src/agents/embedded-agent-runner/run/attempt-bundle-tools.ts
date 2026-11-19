@@ -7,6 +7,7 @@ import {
   acquireSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
+import { isAgentToolExecutionAvailable } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
@@ -236,19 +237,24 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         preserveToolNames: localModelLeanPreserveToolNames,
       });
       const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
+      // Listed tools this turn refuses are never delegated or captured as authority.
+      const denied = new Set(
+        coreTools.filter((tool) => !isAgentToolExecutionAvailable(tool)).map((tool) => tool.name),
+      );
+      const executable = schemaProjection.tools.filter((tool) => !denied.has(tool.name));
       // Cron is constructed before bundled tools; capture only the executable
       // surface that survived provider normalization and schema quarantine.
       captureFinalEffectiveCronCreatorToolAllowlist(
         cronCreatorToolAllowlist,
         cronCreatorToolAllowlistCaptureRef,
-        schemaProjection.tools,
+        executable,
         (tool) => getPluginToolMeta(tool),
       );
       if (inheritedToolAllowlist?.length) {
         // Runtime availability limits this turn; independently approved workspace
         // capabilities remain delegable under the same final runtime cap.
         replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, [
-          ...schemaProjection.tools,
+          ...executable,
           ...applyEmbeddedAttemptToolsAllow(
             toolsEnabled ? additionalInheritedToolNamesRef.map((name) => ({ name })) : [],
             effectiveToolsAllow,
