@@ -270,13 +270,17 @@ export class ComposerDictationOwner extends EventTarget {
     void this.stop({ commit: false });
   };
 
-  private readonly handleVisibilityChange = (): void => {
-    if (document.visibilityState === "hidden") {
-      this.handleWindowBlur();
+  // Permission prompts blur the window while microphone access is pending.
+  // A hidden page still ends capture; switching apps during startup can keep
+  // that startup pending until permission settles.
+  private readonly handleWindowLeave = (event: Event): void => {
+    if (
+      event.type === "visibilitychange" ? document.visibilityState !== "hidden" : this.connecting
+    ) {
+      return;
     }
+    this.cancel();
   };
-
-  private readonly handleWindowBlur = (): void => this.cancel();
 
   private canHold(): boolean {
     return (
@@ -474,8 +478,8 @@ export class ComposerDictationOwner extends EventTarget {
       this.cancellationListeners = new AbortController();
       const options = { signal: this.cancellationListeners.signal };
       listen(document, "keydown", this.handleDocumentKeyDown, options);
-      listen(document, "visibilitychange", this.handleVisibilityChange, options);
-      listen(window, "blur", this.handleWindowBlur, options);
+      listen(document, "visibilitychange", this.handleWindowLeave, options);
+      listen(window, "blur", this.handleWindowLeave, options);
     } else {
       this.cancellationListeners?.abort();
       this.cancellationListeners = null;

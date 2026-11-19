@@ -101,6 +101,13 @@ describe("new-session placeholder animation", () => {
 });
 
 describe("new-session submission preview", () => {
+  it("shows dictation failures inside the composer", () => {
+    const { composer } = renderComposer({ dictationError: "Microphone access blocked" });
+    expect(composer.querySelector('[role="alert"]')?.textContent).toContain(
+      "Microphone access blocked",
+    );
+  });
+
   it("removes new-session file inputs and blocks dropped files under the Gateway upload policy", () => {
     const context = composerContext({ client: null });
     context.config.current.uploadsEnabled = false;

@@ -99,6 +99,7 @@ export type NewSessionComposerOptions = {
   dictationActive?: boolean;
   dictationPreview?: string;
   dictationStatus?: JSX.Element;
+  dictationError?: string | null;
   nativeTerminal?: boolean;
   onUnsupportedAttachment?: () => void;
   submitting: boolean;
@@ -502,6 +503,16 @@ export function NewSessionComposer(props: {
         />
         <AttachmentPreview {...frame().attachmentProps} readRevision={frame()} />
         <AttachmentReadStatus pendingReads={options().attachmentDraft.reads.pendingReads} />
+        <Show when={options().dictationError}>
+          {(error) => (
+            <div
+              class="callout danger new-session-page__error new-session-page__alert"
+              role="alert"
+            >
+              {error()}
+            </div>
+          )}
+        </Show>
         <div class="agent-chat__composer-lede">{options().dictationStatus}</div>
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">
