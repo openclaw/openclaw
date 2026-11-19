@@ -155,7 +155,7 @@ export function createCompactionTracker(
 }
 
 /** Keep immutable transport publication scoped to the host active when each row is read. */
-export function createOpenAIResponsesCompactionSourceReader(
+function createOpenAIResponsesCompactionSourceReader(
   model: Model,
   options?: Pick<BaseOpenAIStreamOptions, "sessionId">,
 ) {

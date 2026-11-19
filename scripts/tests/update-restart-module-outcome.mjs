@@ -218,6 +218,8 @@ async function fixture({
       return verification;
     },
     withOwnedManagedUpdateEnv: async (_env, action) => action(),
+    // No shared-state handles exist in this fixture; the restart runs unchanged.
+    withUpdateStateReleasedAcrossRestart: async (_run, restart) => restart(),
     acquireWithWait: ({ acquire }) => acquire(),
     readConfigFileSnapshot: async () => ({}),
     prepareUpdateRestart: async () => restartContext,

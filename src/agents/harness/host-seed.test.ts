@@ -23,7 +23,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { compactEmbeddedAgentSessionDirect as compactSession } from "../embedded-agent-runner/compact.js";
 import { readCompactionAccountingRecorder } from "../embedded-agent-runner/run/compaction-accounting-bridge.js";
-import { resolveCompactionRetentionBudget } from "../sessions/compaction/request-budget.js";
+import { resolveCompactionRetentionBudgetFromTokens } from "../sessions/compaction/request-budget.js";
 import { estimateCompactionHistoryTokens } from "../sessions/context-token-pressure.js";
 import { withSessionCompactionPersistenceAsync as persistCompaction } from "../sessions/session-compaction-persistence.js";
 import { SessionManager } from "../sessions/session-manager.js";
@@ -225,7 +225,7 @@ it.each<SeedCase>([
               : undefined,
             budget: budget
               ? {
-                  ...resolveCompactionRetentionBudget(budget, []),
+                  ...resolveCompactionRetentionBudgetFromTokens(budget, 0),
                   estimateTokens: (message: AgentMessage) =>
                     estimateCompactionHistoryTokens([message], budget),
                 }

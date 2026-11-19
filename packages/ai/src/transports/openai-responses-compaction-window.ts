@@ -3,11 +3,9 @@ import { COMPACTION_WINDOW_MAX_BYTES } from "./openai-responses-compaction-check
 
 export {
   getResponsesCompactionInputIdentity,
-  publishResponsesCompactionInput,
   tagResponsesCompactionInput,
   isOpenAIResponsesCompactionOutput,
   getOpenAIResponsesCompactionOutputError,
-  getOpenAIResponsesCompactionWindowReplayBytesAvailable,
   readOpenAIResponsesCompactionWindow,
   type OpenAIResponsesCompactionOutput,
   type OpenAIResponsesCompactedWindow,

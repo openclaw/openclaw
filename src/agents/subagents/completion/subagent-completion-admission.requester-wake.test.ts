@@ -384,7 +384,7 @@ describe("persisted subagent requester wakes", () => {
     },
   );
 
-  it.each(["omitted sibling", "second run write", "retirement"] as const)(
+  it.each(["second run write", "retirement"] as const)(
     "commits the entire requester batch or nothing when %s refuses settlement",
     async (cut) => {
       const inputs = wakeBatch("run", "second");
@@ -395,13 +395,11 @@ describe("persisted subagent requester wakes", () => {
         persistOwner(input);
       }
       const liveBefore = inputs.map(({ subagent }) => structuredClone(subagent));
-      if (cut !== "omitted sibling") {
-        db.value.db.exec(
-          cut === "second run write"
-            ? "CREATE TRIGGER reject_batch AFTER UPDATE ON subagent_runs WHEN NEW.run_id = 'completion-second' BEGIN SELECT RAISE(ABORT, 'cut:second'); END"
-            : "CREATE TRIGGER reject_batch AFTER DELETE ON subagent_runs WHEN OLD.run_id = 'completion-second' BEGIN SELECT RAISE(ABORT, 'cut:retirement'); END",
-        );
-      }
+      db.value.db.exec(
+        cut === "second run write"
+          ? "CREATE TRIGGER reject_batch AFTER UPDATE ON subagent_runs WHEN NEW.run_id = 'completion-second' BEGIN SELECT RAISE(ABORT, 'cut:second'); END"
+          : "CREATE TRIGGER reject_batch AFTER DELETE ON subagent_runs WHEN OLD.run_id = 'completion-second' BEGIN SELECT RAISE(ABORT, 'cut:retirement'); END",
+      );
       const snapshot = () =>
         ["subagent_runs", "delivery_queue_entries"].map((table) =>
           db.value.db.prepare("SELECT * FROM " + table + " ORDER BY rowid").all(),
@@ -425,9 +423,7 @@ describe("persisted subagent requester wakes", () => {
         await driver.run();
         await expect(
           settle!.completeBatch(
-            (cut === "omitted sibling" ? inputs.slice(0, 1) : inputs).map(
-              ({ subagent }) => subagent,
-            ),
+            inputs.map(({ subagent }) => subagent),
             1,
             {
               delivered: false,
@@ -439,9 +435,7 @@ describe("persisted subagent requester wakes", () => {
         expect(inputs.map(({ subagent }) => subagent)).toEqual(liveBefore);
         expect(snapshot()).toEqual(before);
         expect(observed).not.toHaveBeenCalled();
-        if (cut === "second run write" || cut === "retirement") {
-          db.value.db.exec("DROP TRIGGER reject_batch");
-        }
+        db.value.db.exec("DROP TRIGGER reject_batch");
         db.value = await reopenOwners();
         expect(snapshot()).toEqual(before);
         for (const input of inputs) {

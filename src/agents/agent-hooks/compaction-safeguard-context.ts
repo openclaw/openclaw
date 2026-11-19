@@ -299,7 +299,7 @@ export function buildPreservedTurnsSectionFromFacts(
   });
 }
 
-export function buildSplitTurnContextSectionFromFacts(
+function buildSplitTurnContextSectionFromFacts(
   messages: readonly CompactionContextMessageFact[],
   maxChars = MAX_SPLIT_TURN_CONTEXT_CHARS,
 ): ContextSection {

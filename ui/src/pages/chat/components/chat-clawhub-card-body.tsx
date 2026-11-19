@@ -20,7 +20,7 @@ import { loadSkillStatusReport } from "../../../lib/skills/status-report.ts";
 import { pluginInstallOperations } from "../../plugins/install-progress.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "../../plugins/plugin-icon-owner.ts";
 import { createPluginMcpLogin } from "../../plugins/plugin-mcp-login.ts";
-import { resolvePluginCatalogIconUrl } from "../../plugins/presentation.ts";
+import { resolvePluginCatalogIconUrl } from "../../plugins/presentation.tsx";
 import { subscribeClawHubCardUpdates } from "./chat-clawhub-card-updates.ts";
 import type { ChatClawHubCardProps } from "./chat-clawhub-card.tsx";
 

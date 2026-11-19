@@ -7,6 +7,7 @@ import type {
 } from "../../../../src/templates/clawhub-source.ts";
 import { pathForPluginCatalogEntry } from "../../app-route-paths.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
+import { iconData } from "../../components/icon-data.ts";
 import { inspection } from "../../e2e/plugins-settings-admin.test-support.ts";
 import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
@@ -353,6 +354,14 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     });
     const detail = await openDetail(page);
     await capture(page, "dependency-provenance", detail.getByRole("heading", { name: "Skills" }));
+    // Skill rows carry the Skills navigation glyph, not the docs book.
+    expect(
+      await detail
+        .locator(".plugin-capabilities")
+        .filter({ has: page.getByRole("heading", { name: "Skills" }) })
+        .locator(".plugin-capability__icon path")
+        .evaluateAll((paths) => paths.map((path) => path.getAttribute("d"))),
+    ).toEqual(iconData.sparkles.children.map(([, attributes]) => attributes.d));
     await detail.getByText("ClawHub · Version 2.0.0", { exact: true }).waitFor();
     await detail.getByText("ClawHub · Version 1.2.0", { exact: true }).waitFor();
     expect(await detail.getByText("Installed", { exact: true }).count()).toBe(0);

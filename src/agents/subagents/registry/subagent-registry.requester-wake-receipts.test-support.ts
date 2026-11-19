@@ -519,7 +519,12 @@ export function registerRequesterWakeReceiptBoundaryTests({
               ? { lifecycleRunId: requesterTurnRunId, activeWriterRunId: requesterTurnRunId }
               : { status: "failed", lastRunId: requesterTurnRunId },
       );
-      if (scenario === "rejected wake" || stableBatch || rejectPersistence) {
+      if (
+        scenario === "rejected wake" ||
+        stableBatch ||
+        rejectPersistence ||
+        scenario === "rejected newer yield"
+      ) {
         const events = readTranscriptEventRows(
           openOpenClawAgentDatabase({ agentId: "main" }),
           entry!.sessionId,
