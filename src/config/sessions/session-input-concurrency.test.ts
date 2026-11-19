@@ -378,12 +378,13 @@ it.each([
         ),
         "admitted session actor",
       );
+      const entry = expectDefined(f.read(), "initial session entry");
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "Keep the original admission", idempotencyKey: "fenced-input" },
         ...(change === "lifecycle"
-          ? { expectedSessionState: buildSessionTranscriptTurnExpectedState(f.read()) }
+          ? { expectedSessionState: buildSessionTranscriptTurnExpectedState(entry) }
           : {}),
-        target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: f.read() },
+        target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: entry },
         updateMode: "none",
       });
       await input.actor.read({ assertCurrent, authorize: assertCurrent });

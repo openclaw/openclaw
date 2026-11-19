@@ -239,11 +239,12 @@ it.each([
       const prepare = vi.fn<
         NonNullable<Parameters<typeof createUserTurnTranscriptRecorder>[0]["beforeMessageWrite"]>
       >(({ message: preparedMessage }) => preparedMessage);
+      const entry = expectDefined(f.read(), "initial session entry");
       const recorder = createUserTurnTranscriptRecorder({
         message,
-        target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: f.read() },
+        target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: entry },
         ...(change === "lifecycle"
-          ? { expectedSessionState: buildSessionTranscriptTurnExpectedState(f.read()) }
+          ? { expectedSessionState: buildSessionTranscriptTurnExpectedState(entry) }
           : {}),
         beforeMessageWrite: prepare,
         updateMode: "none",
