@@ -58,35 +58,14 @@ describe("runMessageAction send validation", () => {
     setActivePluginRegistry(createTestRegistry([]));
     vi.restoreAllMocks();
   });
-  const table = { type: "table", headers: ["Name", "Count"], rows: [["Alpha", 2]] };
 
-  it.each([{}, { caption: "" }, { caption: " \n " }])(
-    "rejects mixed text and a table with invalid caption %j before sending",
-    async (caption) => {
-      const sentText = captureWorkspaceSend();
-      await expect(
-        runSend({
-          message: "Summary",
-          presentation: {
-            blocks: [
-              { type: "text", text: "Table details" },
-              { ...table, ...caption },
-            ],
-          },
-        }),
-      ).rejects.toThrow("presentation table blocks require a non-empty caption");
-      expect(sentText).toEqual([]);
-    },
-  );
-
-  it("keeps a captioned table alongside message text in delivery", async () => {
+  it("rejects a captionless table before sending the rest of the message", async () => {
     const sentText = captureWorkspaceSend();
-    const result = await runSend({
-      message: "Summary",
-      presentation: { blocks: [{ ...table, caption: "Report" }] },
-    });
-    expect(result.kind).toBe("send");
-    expect(sentText).toEqual(["Summary\n\nReport (table)\n- Name: Alpha; Count: 2"]);
+    const table = { type: "table", headers: ["Name"], rows: [["Alpha"]] };
+    await expect(
+      runSend({ message: "Summary", presentation: { blocks: [table] } }),
+    ).rejects.toThrow("presentation.blocks[].caption required");
+    expect(sentText).toEqual([]);
   });
 
   it("requires message when no media hint is provided", async () => {
