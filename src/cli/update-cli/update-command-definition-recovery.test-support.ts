@@ -188,6 +188,21 @@ export function registerUnverifiedDefinitionRecoveryTests({
       expect(report).toContain(reportedDetail);
     },
   );
+  it("keeps the migrated block when the candidate restart never launched", async () => {
+    const params = fixture();
+    // The native restart command fails before the service manager launches the candidate.
+    mocks.restart.mockImplementationOnce(async ({ onGatewayStartAttempted }) => {
+      onGatewayStartAttempted?.();
+      return "failed";
+    });
+    const outcome = await finish(params);
+    assert(outcome instanceof UpdateCommandFailure);
+    expect(mocks.rollback).toHaveBeenCalledOnce();
+    expectRisk(outcome.result.recovery, "state-migrated-no-rollback");
+    const recorded = getUpdateRun(params.opts.run!.runId, { env: params.opts.run!.env });
+    expectRisk(recorded?.verification.recovery, "state-migrated-no-rollback");
+    expect(recorded?.origin.nextAction).toContain("data at risk (state-migrated-no-rollback)");
+  });
   it("preserves a named Doctor risk when rollback adds a generic migration refusal", async () => {
     const { params } = await swappedFixture();
     params.rollbackBlockedReason = "state-migrated-no-rollback";

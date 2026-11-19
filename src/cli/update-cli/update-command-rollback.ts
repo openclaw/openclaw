@@ -335,10 +335,12 @@ export async function rollbackFailedUpdate(params: {
       // PostgreSQL state has no pre-activation baseline; the candidate remains installed.
       return failed("rollback-state-unverified");
     }
-    // Restored databases are a live mutation; an unreadable recheck leaves them unverified.
+    // Restored databases or plugin cohort state are a live mutation; an unreadable recheck
+    // leaves them unverified.
     let databasesRestored = false;
     const restoredStateUnchanged = async () => {
-      dataAtRisk = databasesRestored ? "rollback-state-unverified" : undefined;
+      dataAtRisk =
+        databasesRestored || cohortConfigSettled ? "rollback-state-unverified" : undefined;
       const unchanged = await stateUnchanged();
       dataAtRisk = undefined;
       return unchanged;

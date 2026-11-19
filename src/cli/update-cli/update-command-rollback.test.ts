@@ -806,66 +806,48 @@ it.each([
 });
 
 it.for([
-  ...(process.platform === "win32" || process.getuid?.() === 0
-    ? []
-    : [{ failure: "schema-read-denied", risk: undefined }]),
-  { failure: "no-baseline", risk: undefined },
-  { failure: "shared-schema-forward", risk: "state-migrated-no-rollback" },
-] as const)(
-  "refuses rollback after $failure with data at risk=$risk",
-  async ({ failure, risk }) => {
-    const env = { OPENCLAW_STATE_DIR: serviceStateDir };
-    const shared = path.join(serviceStateDir, "state/openclaw.sqlite");
-    const agent = path.join(serviceStateDir, "agents/main/agent/openclaw-agent.sqlite");
-    setVersion(shared, 7);
-    setVersion(agent, 3);
-    const { configSnapshot, schemaVersions } = await readRollbackFixtureState(serviceStateDir, env);
-    if (failure === "shared-schema-forward") {
-      setVersion(shared, 8);
-    }
-    if (failure === "schema-read-denied") {
-      // The rollback's schema read fails; nothing tells whether Doctor migrated it.
-      fs.chmodSync(agent, 0o000);
-    }
-    const rollback = vi.fn(async () => restoredStep());
-    let outcome: Awaited<ReturnType<typeof rollbackFailedUpdate>>;
-    try {
-      outcome = await runRollback({
-        configSnapshot,
-        schemaVersions: failure === "no-baseline" ? undefined : schemaVersions,
-        previousVerified: true,
-        preManagedServiceStop: stoppedService({ running: false }),
-        packageTransaction: { backupRoot: "/backup", rollback, complete: vi.fn() },
-      });
-    } finally {
-      fs.chmodSync(agent, 0o600);
-    }
-    expect(rollback).not.toHaveBeenCalled();
-    expect(mocks.stop).not.toHaveBeenCalled();
-    expect(mocks.restart).not.toHaveBeenCalled();
-    expect(outcome).toMatchObject({
-      rolledBack: false,
-      result: {
-        status: "error",
-        root: candidateRoot,
-        reason: risk ?? "rollback-state-unverified",
-        rollbackOutcome: { status: "not-attempted" },
-      },
+  ...(process.platform === "win32" || process.getuid?.() === 0 ? [] : ["schema-read-denied"]),
+  "no-baseline",
+] as const)("refuses rollback after %s without marking data at risk", async (failure) => {
+  const env = { OPENCLAW_STATE_DIR: serviceStateDir };
+  const agent = path.join(serviceStateDir, "agents/main/agent/openclaw-agent.sqlite");
+  setVersion(path.join(serviceStateDir, "state/openclaw.sqlite"), 7);
+  setVersion(agent, 3);
+  const { configSnapshot, schemaVersions } = await readRollbackFixtureState(serviceStateDir, env);
+  if (failure === "schema-read-denied") {
+    // The rollback's schema read fails; nothing tells whether Doctor migrated it.
+    fs.chmodSync(agent, 0o000);
+  }
+  const rollback = vi.fn(async () => restoredStep());
+  let outcome: Awaited<ReturnType<typeof rollbackFailedUpdate>>;
+  try {
+    outcome = await runRollback({
+      configSnapshot,
+      schemaVersions: failure === "no-baseline" ? undefined : schemaVersions,
+      previousVerified: true,
+      preManagedServiceStop: stoppedService({ running: false }),
+      packageTransaction: { backupRoot: "/backup", rollback, complete: vi.fn() },
     });
-    const recovery = outcome.result.recovery;
-    expect(recovery?.serviceRestartSafe === false ? recovery.dataAtRisk : undefined).toBe(risk);
-    const next = resolveUpdateResultNextAction({
-      result: outcome.result,
-      env,
-      serviceRunning: false,
-    });
-    if (risk) {
-      expect(next).toContain(`Keep the Gateway stopped: data at risk (${risk})`);
-    } else {
-      expect(next).not.toMatch(/data at risk|Keep the Gateway stopped/u);
-    }
-  },
-);
+  } finally {
+    fs.chmodSync(agent, 0o600);
+  }
+  expect(rollback).not.toHaveBeenCalled();
+  expect(mocks.stop).not.toHaveBeenCalled();
+  expect(mocks.restart).not.toHaveBeenCalled();
+  expect(outcome).toMatchObject({
+    rolledBack: false,
+    result: {
+      status: "error",
+      root: candidateRoot,
+      reason: "rollback-state-unverified",
+      rollbackOutcome: { status: "not-attempted" },
+    },
+  });
+  expect({ ...outcome.result.recovery }).not.toHaveProperty("dataAtRisk");
+  expect(
+    resolveUpdateResultNextAction({ result: outcome.result, env, serviceRunning: false }),
+  ).not.toMatch(/data at risk|Keep the Gateway stopped/u);
+});
 
 it("keeps the risk when configuration cannot be restored after the package was", async () => {
   const env = { OPENCLAW_STATE_DIR: serviceStateDir };

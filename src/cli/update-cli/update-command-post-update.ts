@@ -538,15 +538,6 @@ async function finishSettledUpdate(
         await restoreWindowsAutoStart(resultWithPostUpdate);
       }
       let verificationFailure = "restart-unhealthy";
-      // Once a start is attempted the candidate owns the migrated state, even when the
-      // restart then throws. Later failures concern its runtime, not the refused rollback;
-      // only the owners that observe a data risk may record one.
-      const releaseRollbackBlock = () => {
-        if (gatewayStartAttempted && params.rollbackBlockedReason) {
-          params.rollbackBlockedReason = undefined;
-          candidateOwnsMigratedState = true;
-        }
-      };
       const restart = async () => {
         const restarted = await forward(() =>
           maybeRestartService({
@@ -582,7 +573,14 @@ async function finishSettledUpdate(
               recordVerifiedDowntime(verifiedAtMs);
             },
           }),
-        ).finally(releaseRollbackBlock);
+        );
+        if (gatewayStartAttempted && restarted !== "failed" && params.rollbackBlockedReason) {
+          // The service manager launched the candidate, so it owns the migrated state. Its
+          // readiness failure concerns that runtime, not the refused rollback; only owners
+          // that observe a data risk may record one. A start that never launched keeps it.
+          params.rollbackBlockedReason = undefined;
+          candidateOwnsMigratedState = true;
+        }
         if (restarted !== "failed" && restarted !== "restart-health-failed") {
           return restarted === "ok";
         }

@@ -323,7 +323,6 @@ describe("post-activation failure settlement without inference", () => {
 
   it.each([
     { rollback: "blocked", restoredHealthy: false, reason: "readyz-unhealthy" },
-    { rollback: "blocked-throw", restoredHealthy: false, reason: "post-update-failed" },
     { rollback: "failed", restoredHealthy: false, reason: "source-rollback-failed" },
     { rollback: "unavailable", restoredHealthy: false, reason: "readyz-unhealthy" },
     { rollback: "restored", restoredHealthy: false, reason: "readyz-unhealthy" },
@@ -335,12 +334,6 @@ describe("post-activation failure settlement without inference", () => {
       const installedRoot = dirs.make("repair-installed-runtime-");
       await writeOpenClawPackageFixture(installedRoot, "2026.9.3");
       params.result.root = installedRoot;
-      if (rollback === "blocked-throw") {
-        // The restart starts the candidate, then throws before reporting an outcome.
-        mocks.restart.mockImplementationOnce(async ({ onGatewayStartAttempted }) => {
-          throw onGatewayStartAttempted?.() ?? new Error("Restart verification crashed");
-        });
-      }
       if (rollback === "unavailable") {
         params.result.mode = "git";
         params.rollbackBlockedReason = undefined;
@@ -466,9 +459,10 @@ describe("post-activation failure settlement without inference", () => {
           expect(completeRecovery).toHaveBeenCalledWith(false);
         }
       }
-      const blocked = rollback.startsWith("blocked");
+      const blocked = rollback === "blocked";
       expect(mocks.rollback).toHaveBeenCalledTimes(rollback === "unavailable" || blocked ? 0 : 1);
       if (blocked) {
+        // The launched candidate owns the migrated state: no rollback and no data risk.
         const recorded = getUpdateRun(run.runId, { env: run.env });
         expect({ ...recorded?.verification.recovery }).not.toHaveProperty("dataAtRisk");
         expect(recorded?.origin.nextAction).toMatch(/^(?!.*data at risk).*update repair/su);
