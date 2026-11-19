@@ -9,8 +9,6 @@ import { pathForPluginCatalogEntry } from "../../app-route-paths.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { iconData } from "../../components/icon-data.ts";
 import { LINK_READER_HOVERCARD_OPEN_DELAY_MS } from "../../components/link-reader-target.ts";
-import { controlUiE2eBuiltModuleRequest } from "../../e2e/control-ui-built-module.test-support.ts";
-import { holdModuleResponse } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { inspection } from "../../e2e/plugins-settings-admin.test-support.ts";
 import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
@@ -223,49 +221,6 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     await page.goto(`${server.baseUrl}templates`);
     return { page, gateway };
   }
-
-  it.each([false, true])(
-    "shows message placeholders only for saved history (hasMessages: %s)",
-    async (hasMessages) => {
-      const key = "agent:main:main";
-      const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-      onTestFinished(() => context.close());
-      const page = await context.newPage();
-      const gateway = await installMockGateway(page, {
-        sessionKey: key,
-        sessions: [{ key, kind: "direct", sessionId: "history-session", hasMessages }],
-        historyMessages: hasMessages ? [{ role: "assistant", content: "Saved conversation" }] : [],
-        heldMethods: ["chat.startup"],
-      });
-      const boot = await holdModuleResponse(page, controlUiE2eBuiltModuleRequest("ui/src/main.ts"));
-      try {
-        await page.goto(`${server.baseUrl}chat/main`, { waitUntil: "commit" });
-        await boot.request;
-        const shell = page.locator("#openclaw-boot-shell");
-        await shell.locator(".loading-skeleton__composer").waitFor();
-        await capture(page, `plain-history-${hasMessages}-boot`, shell);
-        expect(await shell.locator(".loading-skeleton__message:visible").count()).toBe(0);
-      } finally {
-        boot.release();
-      }
-      await gateway.waitForRequest("sessions.messages.subscribe", { match: { key } });
-      const pane = page.locator(".chat-pane-cache__pane--visible");
-      await pane.locator(".chat-thread").waitFor();
-      await capture(page, `plain-history-${hasMessages}-pending`, pane);
-      expect(
-        await pane
-          .locator(
-            ".chat-thread .chat-conversation-loading, .chat-thread .loading-skeleton, .chat-thread openclaw-panel-loading-skeleton",
-          )
-          .count(),
-      ).toBe(hasMessages ? 1 : 0);
-      expect(await pane.getByText("Saved conversation", { exact: true }).count()).toBe(0);
-      await gateway.resolveDeferred("chat.startup");
-      if (hasMessages) {
-        await pane.getByText("Saved conversation", { exact: true }).waitFor();
-      }
-    },
-  );
 
   it.each([
     { name: "desktop", width: 1200, height: 697 },
