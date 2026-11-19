@@ -4,7 +4,7 @@ import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
 import { getBoundLegacyPluginSdkResourceHost } from "./legacy-sdk-resource-host.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
-import type { PluginInstanceHandle } from "./plugin-instance-scope.js";
+import { pluginInvocationContext, type PluginInstanceHandle } from "./plugin-instance-scope.js";
 import { getPluginRecordRegistry } from "./registry-lifecycle.js";
 import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
@@ -12,6 +12,7 @@ import {
   getGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
 } from "./runtime/gateway-request-scope.js";
+import { runOutsidePluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 
 export function createPluginServiceSchedulerRunner(owner: {
   registry: PluginRegistry;
@@ -51,4 +52,13 @@ export function createPluginServiceSchedulerRunner(owner: {
         }),
       ),
     );
+}
+
+/** Service startup owns its callbacks, not the finite RPC or tool that requested reload. */
+export function runOutsidePluginServiceCallerContext<T>(run: () => T): T {
+  return runOutsideOperatorToolGatewayAuthority(() =>
+    runOutsidePluginRuntimeGenerationScope(() =>
+      pluginInvocationContext.exit(() => pluginInstanceInvocation.exit(run)),
+    ),
+  );
 }

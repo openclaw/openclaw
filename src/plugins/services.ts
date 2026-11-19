@@ -1,6 +1,5 @@
 import { STATE_DIR } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { runOutsideOperatorToolGatewayAuthority } from "../gateway/operator-tool-gateway-authority.js";
 import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
 import { waitForDiagnosticEventsDrained } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -11,7 +10,6 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { createPluginRuntimeCapabilityLease } from "./capability-lease.js";
 import { createPluginServiceGatewayEvents } from "./gateway-events.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
-import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { getPluginInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import { withPluginRetentionOwner } from "./plugin-retention-diagnostics.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
@@ -20,7 +18,6 @@ import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
 import type { PluginRegistry } from "./registry.js";
 import { getGatewayContextResolver } from "./runtime/gateway-request-scope.js";
-import { runOutsidePluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 import { pluginRuntimeLoaderLogger } from "./runtime/load-context.js";
 import { createPluginServiceAutomationCapabilities } from "./service-automation-capabilities.js";
 import { createPluginServiceControlUiIngress } from "./service-control-ui-ingress.js";
@@ -34,7 +31,10 @@ import type {
 } from "./service-lifecycle.types.js";
 import { createPluginServiceNodeInvoker } from "./service-nodes.js";
 import { withPluginServiceScheduler } from "./service-scheduler-binding.js";
-import { createPluginServiceSchedulerRunner } from "./service-scheduler-context.js";
+import {
+  createPluginServiceSchedulerRunner,
+  runOutsidePluginServiceCallerContext,
+} from "./service-scheduler-context.js";
 import { createPluginServiceScheduler } from "./service-scheduler.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { OpenClawPluginServiceContextV2 } from "./types.js";
@@ -646,19 +646,13 @@ async function startPreparedPluginServices({
             );
           // Reload may originate in an RPC or tool; background work captures
           // service-owned Gateway/worker context, never that caller's authority or generation.
-          await runOutsideOperatorToolGatewayAuthority(() =>
-            runOutsidePluginRuntimeGenerationScope(() =>
-              pluginInstanceInvocation.exit(() =>
-                runServiceStart(async () =>
-                  withPluginHttpRouteRegistry(
-                    registry,
-                    () =>
-                      ownedService.startupConsumer
-                        ? ownedService.startupConsumer.run(start)
-                        : start(),
-                    lease,
-                  ),
-                ),
+          await runOutsidePluginServiceCallerContext(() =>
+            runServiceStart(async () =>
+              withPluginHttpRouteRegistry(
+                registry,
+                () =>
+                  ownedService.startupConsumer ? ownedService.startupConsumer.run(start) : start(),
+                lease,
               ),
             ),
           );
