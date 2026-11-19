@@ -19,6 +19,8 @@ const target = vi.hoisted(() => ({
   revision: undefined as string | undefined,
   /** Candidate builds the target selection started. */
   builds: 0,
+  /** Targets the update admitted through its inspection hook. */
+  inspected: [] as (string | undefined)[],
   /** Release roots whose runtime artifacts do not verify. */
   broken: [] as string[],
 }));
@@ -45,7 +47,11 @@ vi.mock("./update-runner-git-preflight.js", () => ({
 vi.mock("./update-runner-git-target.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-runner-git-target.js")>()),
   fetchGitUpdateTarget: async () => ({ ok: true, refreshedRemotes: [] }),
-  prepareGitMutation: async () => {},
+  // The caller's admission hook sees each target, as the real one does.
+  prepareGitMutation: async (params: {
+    revision: string;
+    beforeGitMutation: (target: { sha?: string }) => Promise<void>;
+  }) => params.beforeGitMutation({ sha: params.revision }),
   // The candidate (by default the checkout's HEAD) is built into the new release worktree;
   // like the real preflight, a verified serving release at that commit is current.
   selectGitInspectionTarget: async (params: {
@@ -102,6 +108,7 @@ afterEach(async () => {
   target.runningRoot = "";
   target.revision = undefined;
   target.builds = 0;
+  target.inspected.length = 0;
   target.broken.length = 0;
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
@@ -353,7 +360,9 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
           startedAt: Date.now(),
           opts: {
             channel: "dev",
-            inspectGitTarget: async () => {},
+            inspectGitTarget: async (inspected) => {
+              target.inspected.push(inspected.sha);
+            },
             validateCandidate: async () => [],
             beforeGitMutation: async () => {},
             runGitDoctor: async () => null,
@@ -381,7 +390,9 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     expect(result.before).toMatchObject({ sha: install.commits["1.0.0"], version: "1.0.0" });
     expect(result.after).toMatchObject({ sha: install.commits["2.0.0"], version: "2.0.0" });
     // The placed release is reused, not rebuilt, and its trial still falls back to 1.0.0.
+    // The target is still admitted, so the caller observes the service it restarts.
     expect(target.builds).toBe(0);
+    expect(target.inspected).toEqual([install.commits["2.0.0"]]);
     expect(await fs.realpath(install.slot)).toBe(install.unserved);
     expect(await install.releaseCount()).toBe(2);
     expect(await install.readTrial()).toEqual({

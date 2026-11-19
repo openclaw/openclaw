@@ -376,9 +376,7 @@ export async function updateGitRelease(params: {
       validateCandidate: opts.validateCandidate,
       needsCheckoutMain: channel === "dev" && !opts.devTarget && branch !== DEV_BRANCH,
       beforeCandidate: async (revision) => {
-        if (placedTree && (await treeOf(revision)) === placedTree) {
-          throw new PlacedReleaseMatch();
-        }
+        // The caller admits the target and observes its service here, reused release or not.
         await prepareGitMutation({
           runCommand,
           root: gitRoot,
@@ -386,6 +384,9 @@ export async function updateGitRelease(params: {
           timeoutMs,
           beforeGitMutation: opts.inspectGitTarget,
         });
+        if (placedTree && (await treeOf(revision)) === placedTree) {
+          throw new PlacedReleaseMatch();
+        }
       },
     }),
   );
