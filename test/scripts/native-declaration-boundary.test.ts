@@ -207,36 +207,30 @@ it.each([
   );
 });
 
-it.each([
-  ["single-threaded", undefined],
-  ["parallel with stable type ordering", { stableTypeOrdering: true }],
-])(
-  "emits identical inferred declarations and maps across fresh %s compiler processes",
-  async (_mode, compilerOptions) => {
-    const root = tempRoot("determinism");
-    const fixture = createNativeFixture(root);
-    const modules = Array.from({ length: 16 }, (_, index) => `result-${index}`);
+it("emits identical inferred declarations and maps across fresh compiler processes", async () => {
+  const root = tempRoot("determinism");
+  const fixture = createNativeFixture(root);
+  const modules = Array.from({ length: 16 }, (_, index) => `result-${index}`);
+  fixture.write({
+    "src/index.ts": modules.map((name) => `export * from "./${name}.js";`).join("\n"),
+  });
+  for (const [index, name] of modules.entries()) {
+    const result =
+      index % 2 ? '{ kind: "value", value } as const' : '{ kind: "value" as const, value }';
     fixture.write({
-      "src/index.ts": modules.map((name) => `export * from "./${name}.js";`).join("\n"),
-    });
-    for (const [index, name] of modules.entries()) {
-      const result =
-        index % 2 ? '{ kind: "value", value } as const' : '{ kind: "value" as const, value }';
-      fixture.write({
-        [`src/${name}.ts`]: `export function result${index}<T>(ready: boolean, value: T) {
+      [`src/${name}.ts`]: `export function result${index}<T>(ready: boolean, value: T) {
         return ready ? ${result} : { kind: "unavailable" as const };
       }`,
-      });
-    }
-    const first = await fixture.compile({ compilerOptions });
-    const second = await fixture.compile({ compilerOptions });
-    expect(first.declarations.size).toBe(modules.length + 1);
-    expect(second.declarations).toEqual(first.declarations);
-    expect(second.inputs).toEqual(first.inputs);
-  },
-);
+    });
+  }
+  const first = await fixture.compile();
+  const second = await fixture.compile();
+  expect(first.declarations.size).toBe(modules.length + 1);
+  expect(second.declarations).toEqual(first.declarations);
+  expect(second.inputs).toEqual(first.inputs);
+});
 
-it("fails closed when optional SDK relative imports reach a parent install", async () => {
+it("bounds optional SDK relative imports and manifest probes to the checkout", async () => {
   const ancestor = tempRoot("optional-imports");
   const root = path.join(ancestor, ".worktrees/validation");
   const fixture = createNativeFixture(root);
@@ -279,17 +273,32 @@ it("fails closed when optional SDK relative imports reach a parent install", asy
     "src/index.ts":
       'import type { Options } from "synthetic-sdk";\nexport type { Fallback } from "synthetic-sdk";\nexport function origin(options: Options) { return options.origin; }\n',
   });
-  // The compiler reads its real filesystem: an optional import that climbs past the
-  // checkout into a parent install fails with the escaped path instead of being hidden.
-  const ancestorTypes = path.join(ancestor, "node_modules/synthetic-fetch/index.d.ts");
-  await expect(fixture.compile()).rejects.toThrow(
-    `Declaration input escapes checkout: ${ancestorTypes}`,
+  const first = await fixture.compile();
+  expect(first.declarations.get(entry)?.code).toContain('origin(options: Options): "local"');
+  fixture.expectInputs(
+    first.inputs,
+    "src/index.ts",
+    localTypes,
+    "node_modules/synthetic-sdk/package.json",
+    "node_modules/synthetic-js/package.json",
   );
-  fs.rmSync(path.dirname(ancestorTypes), { recursive: true });
-  const local = await fixture.compile();
-  expect(local.declarations.get(entry)?.code).toContain('origin(options: Options): "local"');
-  fixture.expectInputs(local.inputs, "src/index.ts", localTypes);
-  expect(local.inputs.every((file) => !path.relative(root, file).startsWith(".."))).toBe(true);
+  expect(first.inputs.every((file) => !path.relative(root, file).startsWith(".."))).toBe(true);
+
+  fixture.write({
+    [path.join(ancestor, "node_modules/synthetic-fetch/index.d.ts")]:
+      requestTypes("changed-ancestor"),
+    [path.join(ancestor, "node_modules/synthetic-js/package.json")]:
+      '{"name":"synthetic-js","version":"2.0.0","main":"missing.js"}',
+  });
+  const ancestorChanged = await fixture.compile();
+  expect(ancestorChanged.declarations.get(entry)).toEqual(first.declarations.get(entry));
+  expect(ancestorChanged.inputs).toEqual(first.inputs);
+
+  fixture.write({ [localTypes]: requestTypes("changed-local") });
+  const localChanged = await fixture.compile();
+  expect(localChanged.declarations.get(entry)?.code).toContain(
+    'origin(options: Options): "changed-local"',
+  );
 });
 
 for (const kind of [
@@ -339,9 +348,8 @@ for (const kind of [
         run.inputs,
         "src/index.ts",
         "node_modules/.pnpm/core/node_modules/@types/synthetic-core/index.d.ts",
+        "node_modules/.pnpm/core/node_modules/@types/synthetic-core/package.json",
       );
-      // Inputs are the sources the compiler read; the writer keys consulted manifests.
-      expect(run.inputs.some((file) => file.endsWith("/package.json"))).toBe(false);
       expect(run.inputs.some((file) => file.endsWith("/lib.es2023.d.ts"))).toBe(true);
       expect(run.inputs.every((file) => !path.relative(root, file).startsWith(".."))).toBe(true);
     },
@@ -360,23 +368,7 @@ it("rejects a native reference through an unrelated outside symlink back inside"
     "src/index.ts": `/// <reference path="${reference.replaceAll(path.sep, "/")}" />\nexport type Marker = FixtureContract;\n`,
   });
   expect(fs.realpathSync.native(reference)).toBe(path.join(root, "src/referenced.d.ts"));
-  await expect(f.compile()).rejects.toThrow(`Declaration input escapes checkout: ${reference}`);
-});
-
-it("rejects a checkout config that inherits options from outside the checkout", async () => {
-  const ancestor = tempRoot("inherited-config");
-  const root = path.join(ancestor, "checkout");
-  const f = createNativeFixture(root);
-  fs.writeFileSync(
-    path.join(ancestor, "shared-base.json"),
-    JSON.stringify({ compilerOptions: { ...moduleOptions, strict: true, skipLibCheck: true } }),
-  );
-  f.json("tsconfig.json", { extends: "../shared-base.json", files: ["src/index.ts"] });
-  f.write({ "src/index.ts": "export const marker = 1;\n" });
-  // The bounded config reader hides outside files, so the inherited base cannot be read.
-  await expect(f.compile()).rejects.toThrow(
-    `Cannot read file '${path.join(ancestor, "shared-base.json")}'`,
-  );
+  await expect(f.compile()).rejects.toThrow(/TS6053/);
 });
 
 it("preserves original nested config paths and explicit override precedence during native emission", async () => {

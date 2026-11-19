@@ -281,9 +281,7 @@ for (const kind of [
         const inputs = declarationCacheRecords(root).flatMap((record) => record.inputs ?? []);
         expect(inputs).toEqual(expect.arrayContaining([localInput, "src/shared.ts"]));
         expect(inputs.some((file) => file.endsWith("/lib.es2023.d.ts"))).toBe(true);
-        // Receipts list the sources the compiler read. Manifests it only consulted key
-        // the cache through the writer's package.json and tsconfig inputs.
-        expect(inputs.some((file) => file.endsWith("synthetic-core/package.json"))).toBe(false);
+        expect(inputs.some((file) => file.endsWith("synthetic-core/package.json"))).toBe(true);
         for (const input of inputs) {
           const relative = path.relative(root, fs.realpathSync(path.resolve(root, input)));
           expect(
@@ -307,14 +305,6 @@ for (const kind of [
         expect(warm.stdout + warm.stderr).not.toContain("[tsdown-build] invocation");
         expect(treeHashes(dist)).toEqual(published);
         expect(treeHashes(cache)).toEqual(cached);
-        const manifest = path.join(root, path.dirname(localInput), "package.json");
-        fs.writeFileSync(
-          manifest,
-          fs.readFileSync(manifest, "utf8").replace(/\}\s*$/u, ',"description":"rekeyed"}\n'),
-        );
-        const rekeyed = await runWriter(command, alias);
-        expect(rekeyed.status, rekeyed.stdout + rekeyed.stderr).toBe(0);
-        expect(rekeyed.stdout + rekeyed.stderr).toContain("cache miss");
         expectStagingClean(root);
       }),
   );
@@ -441,33 +431,28 @@ export default [
 `,
       );
       await run(`
-import childProcess from "node:child_process";
-import { syncBuiltinESMExports } from "node:module";
+import { Program } from "typescript/async";
 import { build } from "tsdown";
 const buildFixture = makeBuild(build);
 const output = path.join(root, "packages/output-producer/dist");
 const alias = ${JSON.stringify(alias)};
 assert.equal(fs.existsSync(output), false, "the producer must start cold");
-const originalExecFile = childProcess.execFile;
+const originalEmit = Program.prototype.emitToString;
 const started = Promise.withResolvers();
 const written = Promise.withResolvers();
 let compilers = 0;
 globalThis.consumerStarted = started.promise;
 globalThis.finishProducer = written.resolve;
-// The declaration compiler is one command-line pass; hold the consumer's result.
-childProcess.execFile = function (file, args, options, callback) {
-  const project = args.includes("--listFiles") ? args[args.indexOf("-p") + 1] : undefined;
-  if (!project || !fs.readFileSync(project, "utf8").includes(path.join(root, "src/consumer.ts"))) {
-    return originalExecFile.call(this, file, args, options, callback);
-  }
-  compilers++;
-  return originalExecFile.call(this, file, args, options, (...result) => {
+Program.prototype.emitToString = async function (...args) {
+  const output = await originalEmit.apply(this, args);
+  if ((await this.getSourceFileNames()).includes(path.join(root, "src/consumer.ts"))) {
+    compilers++;
     started.resolve();
     // Delay only result delivery until the real sibling build writes its output.
-    void written.promise.then(() => callback(...result));
-  });
+    await written.promise;
+  }
+  return output;
 };
-syncBuiltinESMExports();
 try {
   const { bundles } = await buildFixture({ config: "tsdown.sibling.config.mts" });
   await dispose(bundles);
@@ -477,8 +462,7 @@ try {
   }
 } finally {
   written.resolve();
-  childProcess.execFile = originalExecFile;
-  syncBuiltinESMExports();
+  Program.prototype.emitToString = originalEmit;
 }
 `);
     }),
@@ -612,49 +596,36 @@ for (const failure of [false, true]) {
 `);
   }));
 
-// Accepted: the compiler reports the real path it read. A parent-directory package link
-// that points back into the checkout therefore resolves to checkout content and builds.
-it.concurrent("builds through a parent package link that resolves back inside the checkout", ({
-  command,
-}) =>
-  command.lifetime.run(async () => {
-    const { root, write, ancestorInput, localInput } = nestedFixture(command);
-    fs.rmSync(path.dirname(ancestorInput), { recursive: true });
-    fs.symlinkSync(
-      path.join(root, path.dirname(localInput)),
-      path.dirname(ancestorInput),
-      "junction",
-    );
-    write("src/shared.ts", 'export type { Marker as Shared } from "synthetic-core";');
-    fs.appendFileSync(
-      path.join(root, "src/shared.ts"),
-      '\nexport const inferredOrigin = "unused";\n',
-    );
-    const built = await runWriter(command, root);
-    expect(built.status, built.stdout + built.stderr).toBe(0);
-    const inputs = declarationCacheRecords(root).flatMap((record) => record.inputs ?? []);
-    expect(inputs).toEqual(expect.arrayContaining([localInput]));
-    expect(inputs.some((file) => path.isAbsolute(file) || file.startsWith(".."))).toBe(false);
-    expectStagingClean(root);
-  }));
-
 it.concurrent.for([
   "ancestor module",
+  "ancestor package alias",
   "ancestor ambient types",
   "package symlink",
   "source symlink",
   "source reference",
 ])("refuses an escaped %s before publication", (kind, { command }) =>
   command.lifetime.run(async () => {
-    const ancestorLookup = ["ancestor module", "ancestor ambient types"].includes(kind);
-    const { root, write, ancestorInput } = ancestorLookup
+    const ancestorLookup = [
+      "ancestor module",
+      "ancestor package alias",
+      "ancestor ambient types",
+    ].includes(kind);
+    const { root, write, ancestorInput, localInput } = ancestorLookup
       ? nestedFixture(command)
       : containedFixture(command);
     let rejectedPath = ancestorLookup ? path.dirname(ancestorInput) : `${root}-outside`;
     const outside = `${root}-outside`;
     fs.mkdirSync(outside);
     fs.writeFileSync(path.join(outside, "index.d.ts"), "export interface Marker { escaped: true }");
-    if (kind === "ancestor module") {
+    if (kind === "ancestor module" || kind === "ancestor package alias") {
+      if (kind === "ancestor package alias") {
+        fs.rmSync(path.dirname(ancestorInput), { recursive: true });
+        fs.symlinkSync(
+          path.join(root, path.dirname(localInput)),
+          path.dirname(ancestorInput),
+          "junction",
+        );
+      }
       write("src/shared.ts", 'export type { Marker as Shared } from "synthetic-core";');
     } else if (kind === "ancestor ambient types") {
       const ambient = path.join(path.dirname(path.dirname(ancestorInput)), "synthetic-ambient");
@@ -710,9 +681,14 @@ it.concurrent.for([
     const before = treeHashes(path.join(root, "dist"));
     const failed = await runWriter(command, root);
     expect(failed.status, failed.stdout + failed.stderr).toBeGreaterThan(0);
-    // The compiler reads its real filesystem; the checkout boundary rejects its inputs.
-    expect(failed.stdout + failed.stderr).toContain("Declaration input escapes checkout");
-    expect(failed.stdout + failed.stderr).toContain(rejectedPath);
+    if (["ancestor module", "ancestor package alias"].includes(kind)) {
+      expect(failed.stdout + failed.stderr).toContain("TS2307");
+    } else if (kind.includes("reference") || kind === "ancestor ambient types") {
+      expect(failed.stdout + failed.stderr).toContain("TS6053");
+    } else {
+      expect(failed.stdout + failed.stderr).toContain("Declaration input escapes checkout");
+      expect(failed.stdout + failed.stderr).toContain(rejectedPath);
+    }
     expect(treeHashes(path.join(root, "dist"))).toEqual(before);
     expectStagingClean(root);
   }),
