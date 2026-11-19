@@ -1367,11 +1367,21 @@ it.skipIf(process.platform === "win32").for([true, false])(
           provider.release(cycle);
           const expectedReplies: Array<{ name: Case; text: string }> = [
             ...cases
-              .filter((name) => name !== "stream" && name !== "idle" && name !== "background")
+              .filter(
+                (name) =>
+                  name !== "stream" &&
+                  name !== "idle" &&
+                  name !== "background" &&
+                  name !== "parent",
+              )
               .map((name) => ({ name, text: `RESUMED_${cycle}_${name}` })),
             // The stopped background command is reported as its own input, not as a resume.
             ...(cases.includes("background")
               ? [{ name: "background" as const, text: "HANDLED_NEW_INPUT" }]
+              : []),
+            // A yielded parent receives its interrupted child's restored completion.
+            ...(cases.includes("parent")
+              ? [{ name: "parent" as const, text: "HANDLED_NEW_INPUT" }]
               : []),
             { name: "stream", text: "HANDLED_LITERAL_STOP" },
             { name: "stream", text: `HANDLED_${queued(cycle, 2)}` },
@@ -1416,10 +1426,17 @@ it.skipIf(process.platform === "win32").for([true, false])(
                 ),
               ).toBe(true);
             }
+            if (name === "parent") {
+              const completions = calls.filter((call) =>
+                call.current.includes("status: error: Gateway stopped"),
+              );
+              expect(completions).toHaveLength(1);
+              expect(completions[0]?.current).toContain(`restart_child_${cycle}`);
+            }
             expect(
               resumes,
               `${name}: ${JSON.stringify(calls.map((call) => call.current.slice(-4_000)))}`,
-            ).toHaveLength(name === "idle" || name === "background" ? 0 : 1);
+            ).toHaveLength(name === "idle" || name === "background" || name === "parent" ? 0 : 1);
             const result = await history(key(cycle, name));
             expectCleanHistory(result.messages);
             expect(

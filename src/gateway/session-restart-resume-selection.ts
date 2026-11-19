@@ -19,7 +19,7 @@ import { getSessionControllerEntryForOperation } from "../sessions/session-contr
 import { findSessionControllerOperationByRunId } from "../sessions/session-controller.queries.js";
 import {
   activeSessionOperations,
-  getAttachedBackend,
+  getOperationBackendRunIds,
   hasCommittedReplyOperationOutcome,
 } from "../sessions/session-controller.state.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
@@ -99,12 +99,18 @@ export function selectLiveRestartResumeSessions(
       continue;
     }
     const { target, mailbox } = getSessionControllerEntryForOperation(operation);
-    const runId = getAttachedBackend(operation)?.runId;
     // Cron owns interrupted occurrences, including those targeting an ordinary conversation.
-    const scheduledAutomation =
+    let scheduledAutomation =
       mailbox?.claim?.operation === operation &&
-      mailbox.claim.sources.some((source) => source.run.scheduledAutomation) &&
-      !(runId && getAgentRunContext(runId)?.acceptedUserReply);
+      mailbox.claim.sources.some((source) => source.run.scheduledAutomation);
+    if (scheduledAutomation) {
+      for (const runId of getOperationBackendRunIds(operation) ?? []) {
+        if (getAgentRunContext(runId)?.acceptedUserReply) {
+          scheduledAutomation = false;
+          break;
+        }
+      }
+    }
     add({
       sessionKey: operation.key,
       agentId: operation.agentId,
