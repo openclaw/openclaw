@@ -143,7 +143,13 @@ export function wrapOpenAIResponsesStream(ctx: ProviderWrapStreamFnContext) {
             return request;
           },
         };
-        return underlying(model, context, sharingOptions);
+        // SIWC needs affinity on the Platform route; explicit model policy wins.
+        // The transport still owns caller headers and cache-disabled turns.
+        const sharingModel =
+          model.compat && "sendSessionIdHeader" in model.compat
+            ? model
+            : { ...model, compat: { ...model.compat, sendSessionIdHeader: true } };
+        return underlying(sharingModel, context, sharingOptions);
       },
     };
   }
