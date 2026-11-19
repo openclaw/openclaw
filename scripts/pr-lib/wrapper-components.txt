@@ -2998,6 +2998,9 @@ src/commands/doctor/shared/update-phase.ts
 src/infra/session-sqlite-migration-artifact.ts
 src/infra/session-sqlite-migration-issues.ts
 src/infra/session-sqlite-migration-manifest.ts
+src/infra/update-displaced-database-receipt.ts
+src/infra/update-run-reader.ts
+src/state/openclaw-state-db-current-reader.ts
 src/infra/sqlite-integrity-operation.ts
 src/infra/sqlite-migration-scoped-snapshot.ts
 src/infra/update-candidate-plugin-code-links.ts

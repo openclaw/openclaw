@@ -32,6 +32,10 @@ import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.j
 import type { AgentMessage } from "../runtime/index.js";
 import { sanitizeToolUseResultPairingForModel } from "../session-transcript-repair.js";
 import {
+  createFixedRequestTokenEstimator,
+  type FixedRequestTokenPressure,
+} from "../sessions/context-token-pressure.js";
+import {
   completedTurnMessageAnchor,
   type CompletedTurnMessageAnchor,
 } from "../sessions/session-manager-message-anchor.js";
@@ -228,7 +232,10 @@ export async function assembleHarnessContextEngine(params: HarnessContextEngineA
   return assembled.result;
 }
 
-function resolveAssemblyHistoryTokenBudget(params: HarnessContextEngineAssemblyParams) {
+function resolveAssemblyHistoryTokenBudget(
+  params: HarnessContextEngineAssemblyParams,
+  fixedTokenPressure?: FixedRequestTokenPressure,
+) {
   const explicitBudget = params.runtimeSettings?.limits.promptTokenBudget ?? params.tokenBudget;
   const tokenBudget =
     params.tokenBudget === undefined
@@ -251,7 +258,7 @@ function resolveAssemblyHistoryTokenBudget(params: HarnessContextEngineAssemblyP
     1,
     Math.max(1, budget - Math.max(0, Math.floor(reserveTokens))) -
       Math.max(0, Math.floor(inputTokens)) -
-      estimateRenderedLlmBoundaryTokenPressure({ systemPrompt, prompt }),
+      estimateRenderedLlmBoundaryTokenPressure({ systemPrompt, prompt, fixedTokenPressure }),
   );
   return tokenBudget === undefined ? historyBudget : Math.min(tokenBudget, historyBudget);
 }
@@ -319,6 +326,7 @@ async function assembleHarnessContextEngineWithinSourceScope(
 }
 
 type PreparedHarnessContextEnginePrompt = {
+  estimateFixedRequest: ReturnType<typeof createFixedRequestTokenEstimator>;
   messages: AgentMessage[];
   systemPrompt: string;
   contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]>;
@@ -335,6 +343,7 @@ export async function prepareHarnessContextEnginePrompt(
 ): Promise<PreparedHarnessContextEnginePrompt> {
   clearContextEngineAssemblySnapshot();
   const initial: PreparedHarnessContextEnginePrompt = {
+    estimateFixedRequest: createFixedRequestTokenEstimator(),
     messages: params.messages,
     systemPrompt: params.promptBudget.systemPrompt,
     contextEnginePromptAuthority: "assembled",
@@ -350,7 +359,10 @@ export async function prepareHarnessContextEnginePrompt(
   }
   let snapshot: ContextEngineAssemblySnapshot | undefined;
   const prepared = await runWithHarnessSourceFence(params, async () => {
-    const tokenBudget = resolveAssemblyHistoryTokenBudget(params);
+    const tokenBudget = resolveAssemblyHistoryTokenBudget(
+      params,
+      initial.estimateFixedRequest({ systemPrompt: params.promptBudget.systemPrompt }),
+    );
     // Windowing and replay hooks can leave orphaned results before assembly.
     const pipelineMessages = params.repairToolUseResultPairing
       ? sanitizeToolUseResultPairingForModel(params.messages, params.isOpenAIResponsesApi)
@@ -387,6 +399,7 @@ export async function prepareHarnessContextEnginePrompt(
     }
     const authority = bounded.promptAuthority ?? "assembled";
     return {
+      estimateFixedRequest: initial.estimateFixedRequest,
       messages: bounded.messages,
       systemPrompt: bounded.systemPromptAddition
         ? prependSystemPromptAdditionAfterCacheBoundary({
