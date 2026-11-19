@@ -96,7 +96,7 @@ describe("canonical session numeric metadata", () => {
   });
 
   it("keeps a graceful resume marker private and scoped to its current incarnation", () => {
-    const resumeAfterRestart = { queuedInputIds: ["accepted-before-shutdown"] };
+    const resumeAfterRestart = { resumeTurn: false, queuedInputIds: ["accepted-before-shutdown"] };
     const entry = admitCanonicalSessionEntry({
       sessionId: "session",
       lifecycleRevision: "incarnation",

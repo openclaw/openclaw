@@ -1,18 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
-import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
-import {
-  resolveSessionYieldWait,
-  listLiveSubagentRootSessions,
-  listYieldWaitingSessions,
-  resolveRootSubagentRequester,
-} from "../agents/subagents/registry/subagent-registry-read.js";
+import { resolveSessionYieldWait } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "../auto-reply/reply/session-event-handoff.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   applySessionEntryReplacements,
   patchSessionEntryCore,
@@ -29,29 +21,18 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import {
-  getAgentRunContext,
-  hasAgentRunContextExecutionOwner,
-  listLiveAgentRunIds,
-} from "../infra/agent-run-registry.js";
+import { hasAgentRunContextExecutionOwner } from "../infra/agent-run-registry.js";
 import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { completeGatewayAgentRestartRecovery } from "../infra/gateway-boot-lifecycle.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { getSessionControllerEntryForOperation } from "../sessions/session-controller.identity.js";
-import { findSessionControllerOperationByRunId } from "../sessions/session-controller.queries.js";
-import {
-  activeSessionOperations,
-  hasCommittedReplyOperationOutcome,
-} from "../sessions/session-controller.state.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
 import {
   waitForAgentInputAdmission,
   withAgentInputRecovery,
 } from "../state/agent-database-preparation-context.js";
-import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -74,24 +55,15 @@ import {
 import { createRestartResumeSummary } from "./session-restart-resume-log.js";
 import { GATEWAY_RESTART_RESUME_TEXT } from "./session-restart-resume-prompt.js";
 import {
-  captureSessionRestartOperatorSource,
-  prepareSessionSystemTurnAuthority,
-} from "./session-system-turn-authority.js";
+  selectLiveRestartResumeSessions,
+  type SessionIdentity,
+} from "./session-restart-resume-selection.js";
+import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
 // Old shutdown bumped updatedAt, but abandoned cycles can survive for weeks. Limit adoption
 // to six hours before process start; longer stops lose this one-time upgrade resume.
 // Remove this bridge once stable includes the graceful-restart redesign (#185730).
 const LEGACY_RESTART_RESUME_WINDOW_MS = 6 * 60 * 60 * 1000;
-
-type SessionIdentity = {
-  agentId: string;
-  sessionKey: string;
-  storePath: string;
-  sessionId?: string;
-  needsResume: boolean;
-  parked?: boolean;
-  operatorSource?: NonNullable<InternalSessionEntry["resumeAfterRestart"]>["operatorSource"];
-};
 
 /** Snapshot only live owners after admission closes, before shutdown aborts them. */
 export async function persistRunningSessionsForRestart(params: {
@@ -116,90 +88,7 @@ async function persistRunningSessions(
   const assertCurrent = () => params.signal?.throwIfAborted();
   // Enumeration is synchronous; persistence checks custody again at the write boundary.
   assertCurrent();
-  const sessions = new Map<string, SessionIdentity>();
-  const add = (input: Partial<SessionIdentity> & { sessionKey: string }) => {
-    const root = input.parked
-      ? input
-      : resolveRootSubagentRequester(input.sessionKey, input.agentId);
-    const agentId =
-      root.agentId ??
-      parseAgentSessionKey(root.sessionKey)?.agentId ??
-      resolveDefaultAgentId(params.cfg);
-    const storePath =
-      root.storePath ??
-      (root.sessionKey === input.sessionKey ? input.storePath : undefined) ??
-      resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-    const skip =
-      (resolveExplicitIncognitoAgentSqliteTarget(storePath, { agentId })
-        ? "incognito"
-        : undefined) ?? restartResumeSkipReason(root.sessionKey);
-    if (skip && !(skip === "subagent" && input.parked)) {
-      summary.record(agentId, root.sessionKey, skip);
-      return;
-    }
-    const key = JSON.stringify([agentId, root.sessionKey]);
-    const existing = sessions.get(key);
-    if (!existing) {
-      summary.record(agentId, root.sessionKey, "persistence-incomplete");
-      sessions.set(key, {
-        agentId,
-        storePath,
-        sessionKey: root.sessionKey,
-        sessionId: root.sessionKey === input.sessionKey ? input.sessionId : undefined,
-        needsResume: input.needsResume !== false,
-        parked: input.parked,
-        operatorSource: root.sessionKey === input.sessionKey ? input.operatorSource : undefined,
-      });
-    } else {
-      existing.needsResume ||= !input.parked && input.needsResume !== false;
-      if (root.sessionKey === input.sessionKey && input.operatorSource) {
-        existing.operatorSource = input.operatorSource;
-      }
-    }
-  };
-  for (const operation of activeSessionOperations()) {
-    const restartAborted = isAgentRunRestartAbortReason(operation.abortSignal.reason);
-    if (operation.abortSignal.aborted && !restartAborted) {
-      summary.record(
-        operation.agentId ??
-          parseAgentSessionKey(operation.key)?.agentId ??
-          resolveDefaultAgentId(params.cfg),
-        operation.key,
-        "already-aborted",
-      );
-      continue;
-    }
-    const target = getSessionControllerEntryForOperation(operation).target;
-    add({
-      sessionKey: operation.key,
-      agentId: operation.agentId,
-      sessionId: operation.sessionId,
-      storePath: target?.physicalStorePath ?? target?.storeScope,
-      operatorSource: captureSessionRestartOperatorSource(operation),
-      // Completed replies can retain execution custody only to settle workspace uploads.
-      needsResume:
-        (!operation.result || restartAborted) && !hasCommittedReplyOperationOutcome(operation),
-    });
-  }
-  for (const runId of listLiveAgentRunIds()) {
-    if (!hasAgentRunContextExecutionOwner(runId)) {
-      continue;
-    }
-    const operation = findSessionControllerOperationByRunId(runId);
-    if (operation && hasCommittedReplyOperationOutcome(operation)) {
-      continue;
-    }
-    const run = getAgentRunContext(runId);
-    if (run?.sessionKey) {
-      add({ sessionKey: run.sessionKey, agentId: run.agentId, sessionId: run.sessionId });
-    }
-  }
-  for (const root of listLiveSubagentRootSessions()) {
-    add(root);
-  }
-  for (const session of listYieldWaitingSessions()) {
-    add(session);
-  }
+  const sessions = selectLiveRestartResumeSessions(params.cfg, summary);
   const selectors = new Map<string, { first: SessionIdentity; batch: SessionIdentity[] }>();
   for (const session of sessions.values()) {
     const key = JSON.stringify([session.agentId, session.storePath]);
@@ -250,14 +139,21 @@ async function persistRunningSessions(
               sessionId: entry.sessionId,
             });
             if (!session.needsResume && queued.queuedInputIds.length === 0) {
-              summary.record(session.agentId, sessionKey, "reply-completed");
+              summary.record(
+                session.agentId,
+                sessionKey,
+                session.scheduledAutomation ? "automation-owned" : "reply-completed",
+              );
               continue;
             }
+            preserve.push({ session, preserve: queued.preserve });
             replacements.push({
               sessionKey,
               entry: {
                 ...entry,
                 resumeAfterRestart: {
+                  // Cron retains its occurrence; only the accepted human queue restarts here.
+                  ...(session.scheduledAutomation ? { resumeTurn: false as const } : {}),
                   queuedInputIds: queued.queuedInputIds,
                   queuedInputSources: queued.queuedInputSources,
                   operatorSource:
@@ -265,7 +161,6 @@ async function persistRunningSessions(
                 },
               },
             });
-            preserve.push({ session, preserve: queued.preserve });
           }
           return { result: preserve, replacements };
         },
@@ -611,78 +506,82 @@ async function resumeRestartStore(
           );
         } else {
           try {
-            authority = await prepareSessionSystemTurnAuthority({
-              context,
-              ...target,
-              agentId,
-              sessionKey,
-              sessionId: entry.sessionId,
-              preserveRecordedSource: true,
-              operatorSource: marker.operatorSource,
-              assertCurrent: () => signal.throwIfAborted(),
-            });
-            admissionStage = "target";
-            const captured = await captureSessionEventTargetForHost(agentId, sessionKey, {
-              operatorAuthority: authority?.authority,
-              assertCurrent: () => signal.throwIfAborted(),
-            });
-            if (captured.sessionId !== entry.sessionId) {
-              throw new Error("Session changed before restart resume admission");
-            }
-            if (entry.pendingWorktree || entry.pendingProjectGitUrl !== undefined) {
-              admissionStage = "workspace";
-              const blocked = resolveSessionWorkStartBlock(sessionKey, entry, {
-                allowPendingWorkspace: true,
-              });
-              if (blocked) {
-                throw blocked;
-              }
-              const { prepareSessionWorkspaceForRun } =
-                await import("./server-methods/session-create-project.js");
-              // The previous turn's readiness scope died with the process. The
-              // workspace owner rejoins preparation and publishes the ready binding.
-              await prepareSessionWorkspaceForRun({
-                entry,
-                cfg: context.getRuntimeConfig(),
+            if (marker.resumeTurn !== false) {
+              authority = await prepareSessionSystemTurnAuthority({
+                context,
+                ...target,
                 agentId,
                 sessionKey,
-                storePath: target.storePath,
-                context,
-                signal,
-                runId: randomUUID(),
-                assertCurrent: composeSessionSourceAssertion(
-                  [authority?.authority.assertCurrent],
-                  (assertSources) => {
-                    assertRecoveryCurrent();
-                    assertSources();
-                  },
-                ),
-                runSetupScript: authority?.authority.scopes.includes(ADMIN_SCOPE) === true,
+                sessionId: entry.sessionId,
+                preserveRecordedSource: true,
+                operatorSource: marker.operatorSource,
+                assertCurrent: () => signal.throwIfAborted(),
               });
-            }
-            admissionStage = "session-event";
-            const receipt = withPluginRuntimeGatewayContextResolver(
-              context.resolveGatewayContext,
-              () =>
-                enqueueSessionEventForHost(GATEWAY_RESTART_RESUME_TEXT, {
+              admissionStage = "target";
+              const captured = await captureSessionEventTargetForHost(agentId, sessionKey, {
+                operatorAuthority: authority?.authority,
+                assertCurrent: () => signal.throwIfAborted(),
+              });
+              if (captured.sessionId !== entry.sessionId) {
+                throw new Error("Session changed before restart resume admission");
+              }
+              if (entry.pendingWorktree || entry.pendingProjectGitUrl !== undefined) {
+                admissionStage = "workspace";
+                const blocked = resolveSessionWorkStartBlock(sessionKey, entry, {
+                  allowPendingWorkspace: true,
+                });
+                if (blocked) {
+                  throw blocked;
+                }
+                const { prepareSessionWorkspaceForRun } =
+                  await import("./server-methods/session-create-project.js");
+                // The previous turn's readiness scope died with the process. The
+                // workspace owner rejoins preparation and publishes the ready binding.
+                await prepareSessionWorkspaceForRun({
+                  entry,
+                  cfg: context.getRuntimeConfig(),
                   agentId,
                   sessionKey,
-                  source: "restart",
-                  expectedTarget: captured,
-                  abortSignal: signal,
-                }),
-            );
-            const accepted = acceptRestartResumeReceipt(receipt, sessionKey, authority, log);
-            authority = undefined;
-            await accepted;
-            summary.record(agentId, sessionKey, "resumed");
+                  storePath: target.storePath,
+                  context,
+                  signal,
+                  runId: randomUUID(),
+                  assertCurrent: composeSessionSourceAssertion(
+                    [authority?.authority.assertCurrent],
+                    (assertSources) => {
+                      assertRecoveryCurrent();
+                      assertSources();
+                    },
+                  ),
+                  runSetupScript: authority?.authority.scopes.includes(ADMIN_SCOPE) === true,
+                });
+              }
+              admissionStage = "session-event";
+              const receipt = withPluginRuntimeGatewayContextResolver(
+                context.resolveGatewayContext,
+                () =>
+                  enqueueSessionEventForHost(GATEWAY_RESTART_RESUME_TEXT, {
+                    agentId,
+                    sessionKey,
+                    source: "restart",
+                    expectedTarget: captured,
+                    abortSignal: signal,
+                  }),
+              );
+              const accepted = acceptRestartResumeReceipt(receipt, sessionKey, authority, log);
+              authority = undefined;
+              await accepted;
+              summary.record(agentId, sessionKey, "resumed");
+            } else {
+              summary.record(agentId, sessionKey, "automation-owned");
+            }
           } catch (error) {
             signal.throwIfAborted();
             summary.record(agentId, sessionKey, "admission-failed");
             await recordRestartResumeFailure({
               target: { ...target, agentId, sessionKey },
               entry,
-              runId: snapshotEntry.lifecycleRunId ?? entry.lastRunId,
+              runId: snapshotEntry.activeWriterRunId ?? snapshotEntry.lifecycleRunId,
               admissionStage,
               error,
               signal,

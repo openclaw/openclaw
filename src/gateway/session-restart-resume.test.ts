@@ -8,6 +8,7 @@ import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../packages/gateway-protoc
 import { withinTest } from "../../test/helpers/promise.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -23,8 +24,18 @@ import {
 import * as pendingInputWithdrawal from "../config/sessions/session-pending-input-withdrawal.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { makeCronJob } from "../cron/delivery.test-helpers.js";
+import { TEST_SCHEDULED_TURN } from "../cron/scheduled-occurrence.test-support.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
+import { attachSessionControllerInputOperation } from "../sessions/session-controller.mailbox-claim.js";
+import {
+  bindSessionControllerSource,
+  releaseSessionControllerClaim,
+  reserveSessionControllerSource,
+} from "../sessions/session-controller.mailbox.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
+import { captureSessionTarget } from "../sessions/session-controller.target.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   readAgentDatabaseAdmissionRefusal,
@@ -37,9 +48,11 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
+import * as queuedChatInputs from "./queued-chat-inputs.js";
 import * as gatewayDispatch from "./server-in-process-dispatch.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
+import * as restartResumeLog from "./session-restart-resume-log.js";
 import {
   persistRunningSessionsForRestart,
   prepareAgentRestartRecovery,
@@ -539,6 +552,19 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
     });
     const runClaim = claimAgentRunContext(runId, target, { trackOwner: true, ownsContext: true });
     let queued: Awaited<ReturnType<typeof stageSessionPendingInput>> | undefined;
+    const recorded: unknown[][] = [];
+    const createSummary = restartResumeLog.createRestartResumeSummary;
+    const summarySpy = vi
+      .spyOn(restartResumeLog, "createRestartResumeSummary")
+      .mockImplementation((phase) => {
+        const summary = createSummary(phase);
+        const record = summary.record.bind(summary);
+        summary.record = (...args) => {
+          recorded.push(args);
+          record(...args);
+        };
+        return summary;
+      });
     try {
       await persistRunningSessionsForRestart({ cfg: {} });
       expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
@@ -554,7 +580,9 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
         assertCurrent() {},
       });
       assert(queued, "Queued fixture input was not admitted");
+      recorded.length = 0;
       await persistRunningSessionsForRestart({ cfg: {} });
+      expect(recorded.at(-1)).toEqual([target.agentId, target.sessionKey, "marked"]);
       expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
         queuedInputIds: [queued.inputId],
         queuedInputSources: {
@@ -565,6 +593,7 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
         },
       });
     } finally {
+      summarySpy.mockRestore();
       queued?.finish("interrupted");
       await queued?.settled?.();
       releaseExecution();
@@ -576,10 +605,16 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
 it("marks ordinary conversations without inheriting cron or external execution ownership", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
-    const cases: Array<{ sessionKey: string; resumable?: true; entry?: Partial<SessionEntry> }> = [
+    const cases: Array<{
+      sessionKey: string;
+      resumable?: true;
+      automation?: true;
+      entry?: Partial<SessionEntry>;
+    }> = [
       { sessionKey: "agent:other:main", resumable: true },
       { sessionKey: "agent:other:main:thread:123.456", resumable: true },
       { sessionKey: "agent:main:cron:scheduled:run:occurrence" },
+      { sessionKey: "agent:main:dashboard-automation", automation: true },
       { sessionKey: "agent:main:acp:external" },
       {
         sessionKey: "agent:main:external-acp-binding",
@@ -598,7 +633,7 @@ it("marks ordinary conversations without inheriting cron or external execution o
     ];
     const claims: Array<[string, string | undefined]> = [];
     try {
-      for (const { sessionKey, entry, resumable } of cases) {
+      for (const { sessionKey, entry, resumable, automation } of cases) {
         const agentId = resumable ? "other" : "main";
         replaceSessionEntrySync(
           { agentId, sessionKey },
@@ -621,7 +656,14 @@ it("marks ordinary conversations without inheriting cron or external execution o
           runId,
           claimAgentRunContext(
             runId,
-            { agentId, sessionKey, sessionId: sessionKey },
+            {
+              agentId,
+              sessionKey,
+              sessionId: sessionKey,
+              ...(automation
+                ? { cronRunsByJobId: new Map([["scheduled-job", { nextCheckEnabled: false }]]) }
+                : {}),
+            },
             { trackOwner: true, ownsContext: true },
           ),
         ]);
@@ -859,5 +901,107 @@ it("resumes recent interrupted legacy cycles once and settles crash inputs", () 
       dispatch.mockRestore();
       live!.finish("cancelled");
       await live!.settled?.();
+    }
+  }));
+
+it("preserves queued user work behind an automation without resuming its turn", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:queued-cron",
+      sessionId: "queued-cron",
+    };
+    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const target = captureSessionTarget({
+      ...scope,
+      incarnation: scope.sessionId,
+      storeScope: resolveSessionStorePathCore(undefined, { agentId: scope.agentId }),
+    });
+    const operation = createReplyOperation({ ...scope, target, resetTriggered: false });
+    const source = createQueueTestRun(
+      { prompt: "Scheduled work" },
+      {
+        ...scope,
+        scheduledAutomation: { ...TEST_SCHEDULED_TURN, job: makeCronJob({}) },
+      },
+    );
+    const input = reserveSessionControllerSource(scope.sessionKey, {
+      target,
+      policy: { mode: "followup" },
+    });
+    bindSessionControllerSource(input, source);
+    attachSessionControllerInputOperation(source, operation);
+    const runId = "queued-cron-attempt";
+    const claim = claimAgentRunContext(
+      runId,
+      {
+        ...scope,
+        cronRunsByJobId: new Map([
+          [source.run.scheduledAutomation!.job.id, { nextCheckEnabled: false }],
+        ]),
+      },
+      { trackOwner: true, ownsContext: true },
+    );
+    let queued: Awaited<ReturnType<typeof stageSessionPendingInput>>;
+    let released = false;
+    try {
+      operation.attachBackend({ kind: "embedded", runId, cancel() {} });
+      queued = await stageSessionPendingInput(scope, {
+        runId: "human-followup",
+        message: {
+          role: "user",
+          content: "Human followup",
+          timestamp: 2,
+          idempotencyKey: "human-followup",
+        },
+        assertCurrent() {},
+      });
+      assert(queued, "Expected accepted followup");
+      await persistRunningSessionsForRestart({ cfg });
+      const marker = loadExactSessionEntry(scope)?.entry.resumeAfterRestart;
+      expect(marker?.queuedInputIds).toEqual([queued.inputId]);
+      expect(marker?.resumeTurn).toBe(false);
+      // Finish the old process's owners, as real shutdown does before startup.
+      queued.finish("interrupted");
+      await queued.settled?.();
+      operation.complete();
+      releaseSessionControllerClaim(input.claim!);
+      await input.claim!.settlement.promise;
+      releaseAgentRunContext(runId, claim);
+      released = true;
+      const resume = vi.spyOn(systemTurnAuthority, "prepareSessionSystemTurnAuthority");
+      const queuedInputs = vi.spyOn(queuedChatInputs, "continueSessionQueuedInputs");
+      try {
+        await resumeMarkedSessions({
+          context: createContext([], () => cfg),
+          signal: new AbortController().signal,
+          log: { warn() {} },
+        });
+        expect(resume).not.toHaveBeenCalled();
+        expect(queuedInputs).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining(scope),
+          expect.objectContaining({ queuedInputIds: [queued.inputId] }),
+        );
+        expect(loadExactSessionEntry(scope)?.entry.resumeAfterRestart).toBeUndefined();
+        // The synthetic input has no recorded principal; the real consumer refuses it.
+        expect(await readSessionPendingInput(scope, queued.inputId)).toMatchObject({
+          state: "cancelled",
+        });
+      } finally {
+        resume.mockRestore();
+        queuedInputs.mockRestore();
+      }
+    } finally {
+      queued?.finish("interrupted");
+      await queued?.settled?.();
+      if (!released) {
+        operation.complete();
+        releaseSessionControllerClaim(input.claim!);
+        await input.claim!.settlement.promise;
+        releaseAgentRunContext(runId, claim);
+      }
     }
   }));
