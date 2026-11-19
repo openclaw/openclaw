@@ -28,6 +28,8 @@ mod keep_awake;
 mod keep_awake_platform;
 #[cfg(test)]
 mod keep_awake_tests;
+#[cfg(target_os = "linux")]
+mod microphone_linux;
 mod native_browser;
 mod native_browser_bridge;
 mod native_browser_platform;

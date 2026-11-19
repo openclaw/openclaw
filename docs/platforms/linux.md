@@ -132,9 +132,19 @@ Global shortcuts are available on X11. On Wayland, use the tray's **Quick Chat**
 entry when your desktop provides a tray host; global shortcuts are unavailable.
 Tray access is a shortcut fallback, not a native Wayland compatibility guarantee.
 
-The shell does not grant microphone capture to its embedded WebKitGTK WebView,
-so `getUserMedia` is expected to fail there. Open the Gateway's Control UI in a
-regular browser for [Talk mode](/nodes/talk).
+The Linux companion asks before allowing microphone capture in a Gateway
+dashboard. Choose **Allow** in the native **Microphone access** dialog to use
+voice input, or **Deny** to keep capture blocked.
+The dialog identifies the requesting Gateway origin. Pending requests are
+cancelled when the dashboard navigates or closes. Camera and screen capture
+are not granted by this microphone prompt; embedded reading tabs and widgets
+do not receive it. Browser secure-context requirements still apply: use HTTPS
+or a loopback Gateway address.
+
+[Talk mode](/nodes/talk) also requires WebRTC support in the system WebKitGTK
+runtime. Microphone permission alone does not provide it. If the embedded
+runtime lacks `RTCPeerConnection`, use the Gateway dashboard in a WebRTC-capable
+browser for Realtime Talk.
 
 The desktop connects as a Gateway operator and uses the local CLI to share this
 computer's desktop with its Primary Gateway. Its app-owned node exposes desktop
