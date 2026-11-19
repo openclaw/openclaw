@@ -537,13 +537,11 @@ suite.define(() => {
       expect(await securityAudit.getAttribute("href")).toBe(
         "https://clawhub.ai/openclaw/plugins/workboard/security-audit",
       );
-      expect(await securityAudit.getAttribute("class")).toContain(
+      expect(await securityAudit.locator("..").getAttribute("class")).toContain(
         "plugin-catalog-detail__security--pass",
       );
       expect(await securityAudit.getByText("Clean", { exact: true }).count()).toBe(1);
-      expect(
-        await securityAudit.locator(".plugin-catalog-detail__security-score > span").count(),
-      ).toBe(3);
+      expect(await securityAudit.locator(":scope > span").count()).toBe(3);
       expect(await securityAudit.getByText("clean", { exact: true }).count()).toBe(0);
       expect(await page.getByRole("tab").count()).toBe(0);
       await page
