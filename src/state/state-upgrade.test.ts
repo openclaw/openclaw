@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { load as loadSqliteVec } from "sqlite-vec";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import * as diskSpace from "../infra/disk-space.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import * as sqliteFileCopy from "../infra/sqlite-file-copy.js";
@@ -420,8 +421,8 @@ describe("startup pre-images", () => {
 
     expect(result).toMatchObject({ status: "upgraded", mode: "chain", pinned: false });
     const generation = preImage("");
-    const images = fs
-      .readdirSync(stateDir, { recursive: true, encoding: "utf8" })
+    const images = listDirectoryTreeStrictSync(stateDir)
+      .map(({ relativePath }) => relativePath)
       .filter((name) => name.endsWith(generation));
     expect(images.toSorted()).toEqual(
       [

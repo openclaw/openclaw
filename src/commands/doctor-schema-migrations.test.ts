@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import * as sqlite from "../infra/node-sqlite.js";
 import { readSqliteDatabaseIntegrityVerification } from "../infra/sqlite-database-admission.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
@@ -710,8 +711,8 @@ it.each([undefined, "state-upgrade"] as const)(
       const pathname = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
       openLegacyDatabase(pathname).close();
       const backups = () =>
-        fs
-          .readdirSync(state.stateDir, { recursive: true, encoding: "utf8" })
+        listDirectoryTreeStrictSync(state.stateDir)
+          .map(({ relativePath }) => relativePath)
           .filter((name) => name.endsWith(".bak"));
 
       const result = await withMaintenance(() =>
