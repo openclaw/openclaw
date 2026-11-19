@@ -16,6 +16,7 @@ import {
   parseAgentSessionKey,
 } from "../../sessions/session-key-utils.js";
 import {
+  isMessageActionTurnCurrent,
   readMessageActionInvocationConfig,
   resolveMessageActionTurnAuthorization,
   selectMessageActionRequesterIdentity,
@@ -58,13 +59,21 @@ export type MessageActionCallerAuthority = {
 export function createMessageActionRuntimeAuthority(
   params: Pick<
     Parameters<GatewayRequestHandlers["message.action"]>[0],
-    "sessionMutationCommitGuard"
+    "client" | "sessionMutationCommitGuard"
   > & {
     request: Pick<MessageActionParams, "action" | "accountId" | "params">;
     authorization?: MessageActionAuthorization;
     assertClientUploadAllowed?: () => void;
   },
 ) {
+  const identity = params.client?.internal?.agentRuntimeIdentity;
+  const assertTurnCurrent = identity?.messageActionContext
+    ? () => {
+        if (!isMessageActionTurnCurrent(identity)) {
+          throw new Error("message action authority is no longer active");
+        }
+      }
+    : undefined;
   const assertScheduledSourceCurrent =
     params.authorization?.scheduled?.assertSourceCurrent ??
     params.authorization?.scheduled?.assertCurrent;
@@ -86,8 +95,9 @@ export function createMessageActionRuntimeAuthority(
       ? params.authorization?.scheduled?.policy
       : undefined;
   const assertAdmissionCurrent =
-    assertActionCurrent || assertDeliveryCurrent
+    assertTurnCurrent || assertActionCurrent || assertDeliveryCurrent
       ? () => {
+          assertTurnCurrent?.();
           params.sessionMutationCommitGuard?.();
           assertActionCurrent?.();
           assertDeliveryCurrent?.();

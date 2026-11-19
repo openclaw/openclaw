@@ -21,6 +21,7 @@ import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel-normalize.js";
+import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import type { CronAuthenticatedChannelRequester } from "./cron-creator-authority-grant.types.js";
 
 const DEFAULT_TTL_MS = 15 * 60_000;
@@ -387,6 +388,25 @@ export function resolveMessageActionTurnCapability(
     return undefined;
   }
   return copyMessageActionTurnContext(capability);
+}
+
+export function isMessageActionTurnCurrent(identity: AgentRuntimeIdentity): boolean {
+  const messageActionContext = identity.messageActionContext;
+  if (!messageActionContext) {
+    return true;
+  }
+  if (!messageActionContext.turnCapability) {
+    return false;
+  }
+  return Boolean(
+    resolveMessageActionTurnCapability({
+      token: messageActionContext.turnCapability,
+      agentId: identity.agentId,
+      runId: identity.operationalRunInstance.runId,
+      sessionKey: identity.sessionKey,
+      sessionId: messageActionContext.sessionId,
+    }),
+  );
 }
 
 function copyMessageActionTurnContext(

@@ -105,6 +105,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       requestedOrigin: request.conversationReadOrigin,
     });
     const messageAuthority = createMessageActionRuntimeAuthority({
+      client,
       sessionMutationCommitGuard,
       request,
       authorization: trustedContext.messageActionAuthorization,
@@ -421,6 +422,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     const messageActionAuthorization = resolveAgentRuntimeMessageActionAuthorization(client);
     const messageActionConfig = resolveAgentRuntimeMessageActionConfig(client);
     const messageAuthority = createMessageActionRuntimeAuthority({
+      client,
       sessionMutationCommitGuard,
       request: { action: "send", accountId: request.accountId, params: {} },
       authorization: messageActionAuthorization,

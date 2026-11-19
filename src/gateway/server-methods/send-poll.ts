@@ -33,6 +33,7 @@ export const pollHandler: GatewayRequestHandlers["poll"] = async ({
     return;
   }
   const messageAuthority = createMessageActionRuntimeAuthority({
+    client,
     sessionMutationCommitGuard,
     request: { action: "poll", accountId: request.accountId, params: {} },
     authorization: resolveAgentRuntimeMessageActionAuthorization(client),

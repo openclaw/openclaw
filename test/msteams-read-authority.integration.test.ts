@@ -362,17 +362,6 @@ async function createFixture(
         respond,
         context,
         client,
-        // Manual handler invocation retains the caller-turn fence, not runtime admission.
-        sessionMutationCommitGuard: () => {
-          if (
-            !resolveMessageActionTurnCapability({
-              ...capabilityParams,
-              token: turnCapability,
-            })
-          ) {
-            throw new Error("Message-read turn authority is no longer active");
-          }
-        },
         req: { type: "req", id: `teams-rpc-${sequence}`, method: "message.action" },
         isWebchatConnect: () => false,
       });

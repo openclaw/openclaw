@@ -581,8 +581,6 @@ async function withDownloadFixture(
                     },
                     context: gatewayContext,
                     client: run.client,
-                    // Keep the outer read scope alive through mirror and artifact completion.
-                    sessionMutationCommitGuard: run.assert,
                     isWebchatConnect: () => false,
                   });
                   const response = gatewayResponses[responseOffset];
