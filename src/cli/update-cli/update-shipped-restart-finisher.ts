@@ -17,6 +17,7 @@ import { readPackageName, readPackageVersion } from "../../infra/package-json.js
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { listActivePnpmIsolatedGlobalPackages } from "../../infra/update-global.js";
+import { resolveSystemdScopeLauncher } from "../../infra/update-managed-service-handoff-launcher.js";
 import {
   inspectUpdateRunDriver,
   readUpdateRunDriver,
@@ -29,6 +30,7 @@ import {
   recordUpdateRunDiagnostic,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
+import { SHIPPED_RESTART_FINISHER_STEP } from "../../infra/update-run-restart-finished.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { runCommandWithTimeout } from "../../process/exec-runner.js";
 import { sleep } from "../../utils/sleep.js";
@@ -63,8 +65,9 @@ const DRIVER_EXIT_WAIT_MS = 2 * DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 // `gateway start` waits for readiness itself; this bounds each command on slow hosts.
 const SERVICE_COMMAND_TIMEOUT_MS = 10 * 60_000;
 const POLL_MS = 2_000;
-// A finished run accepts only diagnostics; a `warning:` row is shown in that run's report.
-const RECOVERY_STEP = "warning:gateway-restart";
+// A finished run accepts only diagnostics; a `warning:` row is shown in that run's report,
+// and with the verification below it lets readers present the update as completed.
+const RECOVERY_STEP = SHIPPED_RESTART_FINISHER_STEP;
 const FINISHER_COMMAND = "finish-gateway-restart";
 export const FINISHER_NOTICE =
   "If this updater leaves the Gateway stopped, OpenClaw will try to restart it after the updater exits.";
@@ -78,7 +81,7 @@ export type FinisherDeps = {
   /** Ledger and child environment: the Doctor's, without the updater's markers. */
   env: NodeJS.ProcessEnv;
   inspectService: (root: string) => Promise<ServiceFacts | undefined>;
-  probeGateway: () => Promise<{ version?: string; ready: boolean } | undefined>;
+  probeGateway: () => Promise<{ version?: string; ready: boolean; port?: number } | undefined>;
   runCli: (args: string[]) => Promise<{ code: number | null; output: string }>;
   withServiceLock: <T>(operation: () => Promise<T>) => Promise<T>;
   lockDir: string;
@@ -181,6 +184,13 @@ export async function runShippedRestartFinisher(params: {
   const { runId, deps } = params;
   const options = { env: deps.env };
   let lock: Awaited<ReturnType<typeof acquireFileLock>>;
+  // One finisher per run, without blocking anyone else. The existing owners are exclusive per
+  // installation or service, so holding one through the wait would refuse the very `openclaw
+  // update` or `gateway restart` this finisher must yield to: the update executor and the
+  // managed-handoff lease refuse a new update while held (and the lease has no row kind for
+  // this), and the service operation lock serializes every Gateway command and is
+  // taken only around the recheck below. A file lock keyed by run id excludes only a twin
+  // finisher, and is reclaimed only after its holder is definitely dead.
   try {
     await fs.mkdir(deps.lockDir, { recursive: true, mode: 0o700 });
     lock = await acquireFileLock(path.join(deps.lockDir, `gateway-finisher-${sha256Hex(runId)}`), {
@@ -274,6 +284,8 @@ export async function runShippedRestartFinisher(params: {
         versionMatch: true,
         readyz: true,
         settled: true,
+        // `update status` probes this port to show current health beside the record.
+        ...(serving.port ? { port: serving.port } : {}),
       },
       options,
     );
@@ -362,9 +374,28 @@ async function spawnFinisher(root: string, runId: string): Promise<boolean> {
   if (!entry) {
     return false;
   }
-  const child = spawn(process.execPath, [entry, "update", FINISHER_COMMAND, "--run-id", runId], {
+  const env = stripUpdaterEnv(process.env);
+  const args = [entry, "update", FINISHER_COMMAND, "--run-id", runId];
+  // A Gateway-initiated update runs this Doctor inside the shipped helper's transient
+  // `openclaw-update-*.service`, whose KillMode=control-group would kill the finisher with it.
+  const launcher =
+    process.platform === "linux"
+      ? (() => {
+          try {
+            return resolveSystemdScopeLauncher({
+              serviceEnv: env,
+              unit: `openclaw-update-restart-${runId.replace(/[^A-Za-z0-9_.:@-]+/gu, "-")}.scope`,
+              executable: process.execPath,
+              args,
+            });
+          } catch {
+            return undefined;
+          }
+        })()
+      : undefined;
+  const child = spawn(launcher?.command ?? process.execPath, launcher?.args ?? args, {
     cwd: os.homedir(),
-    env: stripUpdaterEnv(process.env),
+    env,
     detached: true,
     stdio: ["ignore", "ignore", "ignore", "ipc"],
   });
@@ -429,6 +460,7 @@ export async function finishShippedRestartCommand(runId: string): Promise<void> 
         return {
           version: gateway.gatewayVersion ?? undefined,
           ready: http.coreReady ?? (http.healthz === 200 && http.readyz === 200),
+          port,
         };
       },
       runCli: async (args) => {

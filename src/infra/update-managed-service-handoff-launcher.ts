@@ -36,14 +36,7 @@ export function resolveSystemdHandoffLauncher(params: {
   executable: string;
   args: string[];
 }) {
-  const systemdRun = resolveExecutableFromPathEnv(
-    "systemd-run",
-    [params.serviceEnv.PATH ?? "", "/usr/bin", "/bin"].join(path.delimiter),
-    params.serviceEnv,
-  );
-  if (!systemdRun) {
-    throw new Error("systemd-run is required to launch a transient user unit");
-  }
+  const systemdRun = resolveSystemdRun(params.serviceEnv);
   const normalized = params.handoffId.trim().replace(/[^A-Za-z0-9_.:@-]+/gu, "-");
   const suffix = normalized.replace(/^-+|-+$/gu, "").slice(0, 80) || `${process.pid}-${Date.now()}`;
   const unit = `openclaw-${params.triage ? "triage" : "update"}-${suffix}.${params.triage ? "scope" : "service"}`;
@@ -70,6 +63,43 @@ export function resolveSystemdHandoffLauncher(params: {
       ...(params.triage
         ? [`--property=PartOf=${resolveSystemdServiceName(params.serviceEnv)}.service`]
         : []),
+      params.executable,
+      ...params.args,
+    ],
+  };
+}
+
+function resolveSystemdRun(serviceEnv: NodeJS.ProcessEnv): string {
+  const systemdRun = resolveExecutableFromPathEnv(
+    "systemd-run",
+    [serviceEnv.PATH ?? "", "/usr/bin", "/bin"].join(path.delimiter),
+    serviceEnv,
+  );
+  if (!systemdRun) {
+    throw new Error("systemd-run is required to launch a transient user unit");
+  }
+  return systemdRun;
+}
+
+/**
+ * Run a command in its own transient user scope, so it outlives the unit it was started from:
+ * the transient update service's `KillMode=control-group` kills every process left in its
+ * cgroup when the helper exits, whatever their process group. The command is executed by
+ * `systemd-run` itself, keeping the caller's environment and inherited descriptors.
+ */
+export function resolveSystemdScopeLauncher(params: {
+  serviceEnv: NodeJS.ProcessEnv;
+  unit: string;
+  executable: string;
+  args: string[];
+}) {
+  return {
+    command: resolveSystemdRun(params.serviceEnv),
+    args: [
+      "--user",
+      "--scope",
+      "--collect",
+      `--unit=${params.unit}`,
       params.executable,
       ...params.args,
     ],

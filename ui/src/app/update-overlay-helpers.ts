@@ -4,6 +4,7 @@ import {
   isAcknowledgedAbandonedUpdateRun,
   type UpdateRunRecord,
 } from "../../../src/infra/update-run-record.js";
+import { isRefusedRestartFinishedLater } from "../../../src/infra/update-run-restart-finished.js";
 import { classifyUpdateOutcome } from "../../../src/shared/update-outcome-classification.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
@@ -303,6 +304,7 @@ export async function projectUpdateRunFailure(
 ): Promise<UpdateFailureTriage | null> {
   if (
     isAcknowledgedAbandonedUpdateRun(run) ||
+    isRefusedRestartFinishedLater(run) ||
     (run.status !== "failed" && run.status !== "rolled-back")
   ) {
     return null;
