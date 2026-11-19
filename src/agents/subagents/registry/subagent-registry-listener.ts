@@ -5,6 +5,7 @@ import {
 } from "../../../infra/agent-events.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { isAgentLifecycleYieldedWaiting } from "../../agent-lifecycle-parent-state.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
@@ -14,13 +15,16 @@ import {
 } from "./subagent-lifecycle-events.js";
 import { prepareSubagentTerminalObservation } from "./subagent-registry-completion-runtime.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
+import { getSubagentRunsForRequesterSession } from "./subagent-registry-memory.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,
 } from "./subagent-registry-persistence.js";
+import { settleUnreachableYieldedSubagentRun } from "./subagent-registry-sweep-settle.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import { isYieldedSubagentRun } from "./subagent-run-liveness.js";
 import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
 
 export function createSubagentRegistryListener(config: {
@@ -53,6 +57,24 @@ export function createSubagentRegistryListener(config: {
       // Own lifecycle writes before their first await.
       void runWithGatewayIndependentRootWorkContinuation(async () => {
         const phase = evt.data?.phase;
+        if (
+          (phase === "end" || phase === "error") &&
+          evt.data.executionStarted !== false &&
+          !isAgentLifecycleYieldedWaiting(evt.data) &&
+          evt.data.stopReason !== "restart" &&
+          evt.sessionKey
+        ) {
+          for (const child of getSubagentRunsForRequesterSession(evt.sessionKey)) {
+            if (child.waitForMessage && isYieldedSubagentRun(child)) {
+              await settleUnreachableYieldedSubagentRun({
+                runId: child.runId,
+                entry: child,
+                complete: completeSubagentRunWithRecovery,
+                requesterEnded: true,
+              });
+            }
+          }
+        }
         let entry = runs.get(evt.runId);
         if (!entry) {
           if (phase === "end" && typeof evt.sessionKey === "string") {

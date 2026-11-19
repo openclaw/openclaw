@@ -62,10 +62,15 @@ An outcome the yield already recorded stays: a collector an earlier version left
 `ok` settles as done with the reply its yielded turn ended on, the same result a
 collector that yields now gets. Only a run with no recorded outcome settles as an
 `error` that says why, and its collector completion carries
-`reason: "yielded_without_result"`. Every other paused run stays continuable however long it has been
-paused: a declared message wait, a leaf that an earlier version left paused, and an
-orchestrator waiting on descendants are not bounded by this settlement. A kill
+`reason: "yielded_without_result"`. Other paused runs with a surviving continuation stay continuable however long they
+have been paused: a declared message wait with a live requester or an orchestrator
+waiting on reachable descendants is not bounded by this settlement. A kill
 claim on a paused run is never settled over; cancellation stays with the kill path.
+A retired child with no reachable descendant completion is settled through that
+same completion owner, rather than parked forever. Yield batches retain their
+original requester run ID after releasing execution. Permanent delivery failure
+ends only that exact parked lifecycle; legacy batches without the ID record a
+scoped failure notice without assigning the current writer to the old batch.
 
 Session rows show a continuable paused run as `subagentRunState: "paused"`
 while its recorded `status` stays unchanged, so the parent's lists can tell it

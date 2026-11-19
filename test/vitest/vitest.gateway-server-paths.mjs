@@ -287,6 +287,8 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-repository-publication-handoff.test.ts",
   "src/gateway/session-restart-resume-custody.test.ts",
   "src/gateway/session-restart-resume.test.ts",
+  "src/gateway/session-restart-resume.yield.test.ts",
+  "src/gateway/session-restart-resume.upgrade.test.ts",
   "src/gateway/session-restart-resume.workspace.test.ts",
   "src/gateway/session-row-event-ancestor-placement.test.ts",
   "src/gateway/session-row-event-trees.test.ts",

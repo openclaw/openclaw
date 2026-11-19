@@ -8,9 +8,11 @@ read_when:
 title: "Restart recovery"
 ---
 
-A graceful Gateway stop or restart records which root sessions are working, then
-aborts that work promptly. At the next startup, each marked session gets one
-ordinary system input asking the agent to inspect current state and continue.
+A graceful Gateway stop or restart records which root sessions are working or
+waiting, then aborts executing work promptly. At the next startup, an interrupted
+root gets one ordinary system input asking the agent to inspect current state and
+continue. A recorded yield with a surviving wake source stays parked; a lost
+source produces a visible failure instead.
 The transcript remains the agent's context; the Gateway does not reconstruct or
 replay the old execution.
 
@@ -61,6 +63,10 @@ A session counts as running when its own agent loop is active, a descendant
 sub-agent is running, or it owns a running background process. The Gateway reads
 these facts from their live in-memory owners during shutdown. A child contributes
 to its top-level requester; the child does not receive an independent resume input.
+Recorded yield waits retain their exact requester lifecycle, including dashboard
+roots. Surviving child or message waits do not run the model at startup. Stopped
+descendants instead trigger the root resume input to reconcile their saved work.
+Spawned children stay with their requester, not an independent root recovery.
 Idle and finished sessions are not marked. Cron occurrence sessions and
 ACP/external-harness sessions are excluded.
 
@@ -76,8 +82,14 @@ written and the session owner stops them for restart. A real grant revocation or
 permission change during that interval still cancels the affected work. At startup,
 queued inputs must regain current authority before they can execute.
 
-There are no restart checkpoints written per turn or tool call, startup orphan
-scans, or crash-time execution reconstruction.
+Older serialized yield waits without shutdown markers are reconciled from the
+existing registry and session identities. This does not replay arbitrary running
+turns after a crash or add per-turn restart checkpoints.
+
+A permanently failed child-completion handoff records actionable failure guidance.
+Only its original parked requester can receive the terminal event; a newer turn,
+Stop, or reset cannot inherit it. Older batches without the requester run ID get
+a batch-scoped notice without changing the current lifecycle.
 
 <a id="graceful-restarts-drain-first" />
 

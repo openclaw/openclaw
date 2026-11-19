@@ -43,7 +43,6 @@ import {
   resumeSubagentAfterDrain,
 } from "./subagent-registry-lifecycle-finalize-cleanup.js";
 import {
-  hasPendingRequesterSettlement,
   retireSubagentObligationsInContext,
   scheduleRequesterSettleWake,
 } from "./subagent-registry-lifecycle-wake.js";
@@ -54,6 +53,7 @@ import {
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
+import { hasPendingRequesterSettlement } from "./subagent-registry-requester-wake-mutation.js";
 import {
   adoptSubagentRunForRequesterTurnInRuns,
   commitRequesterTransfer,

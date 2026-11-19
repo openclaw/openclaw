@@ -199,7 +199,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
   );
   const { failedRun } = effects ?? {};
   if (persisted && failedRun) {
-    const { runId, error, errorKind, suppressErrorNotice } = failedRun;
+    const { runId, error, errorKind, suppressErrorNotice, notice } = failedRun;
     // Only accepted errors pay for branch navigation; assistant detection and
     // report deduplication share the appender's authoritative write snapshot.
     const receipt = {
@@ -215,6 +215,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
       error,
       errorKind,
       suppressErrorNotice,
+      notice,
       assertCommitAllowed: params.assertCommitAllowed,
     };
     // An accepted terminal owns its receipt, independently of an ambient requester turn.

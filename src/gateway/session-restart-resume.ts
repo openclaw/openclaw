@@ -3,6 +3,8 @@ import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { listRunningSessions } from "../agents/bash-process-registry.js";
 import {
   listLiveSubagentRootSessions,
+  listYieldWaitingSessions,
+  resolveSessionYieldWait,
   resolveRootSubagentRequester,
 } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
@@ -20,6 +22,7 @@ import {
   interruptOrphanedSessionPendingInputs,
   listOrphanedSessionPendingInputTargets,
 } from "../config/sessions/session-pending-input-withdrawal.js";
+import { derivePersistedSessionLifecyclePatch } from "../config/sessions/session-run-lifecycle-projection.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import {
   captureSessionStoreEnvironment,
@@ -34,6 +37,7 @@ import { resolveSessionWorkStartBlock } from "../config/sessions/session-work-st
 import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets-configured-agents.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import {
   getAgentRunContext,
   hasAgentRunContextExecutionOwner,
@@ -57,6 +61,7 @@ import {
   activeSessionOperations,
   hasCommittedReplyOperationOutcome,
 } from "../sessions/session-controller.state.js";
+import { waitForAgentDatabaseWriteAdmission } from "../state/agent-database-preparation-context.js";
 import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
@@ -64,6 +69,7 @@ import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { prepareRestartCompletionCustody } from "./session-restart-resume-custody.js";
 import { GATEWAY_RESTART_RESUME_TEXT } from "./session-restart-resume-prompt.js";
+import { recordRestartYieldFailure } from "./session-restart-yield.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
 const BACKGROUND_EXEC_STOPPED_TEXT =
@@ -80,13 +86,18 @@ type SessionIdentity = {
   sessionId?: string;
   hadBackgroundExec?: true;
   needsResume: boolean;
+  parked?: boolean;
 };
 
-function canResumeSession(sessionKey: string, entry: InternalSessionEntry): boolean {
+function canResumeSession(
+  sessionKey: string,
+  entry: InternalSessionEntry,
+  parked = false,
+): boolean {
   return (
     !isCronSessionKey(sessionKey) &&
     !isAcpSessionKey(sessionKey) &&
-    !isSubagentSessionKey(sessionKey) &&
+    (parked || (!isSubagentSessionKey(sessionKey) && entry.createdVia !== "spawn")) &&
     !entry.acp &&
     !entry.modelSelectionLocked &&
     entry.archivedAt === undefined
@@ -108,8 +119,11 @@ export async function persistRunningSessionsForRestart(params: {
     sessionId?: string;
     hadBackgroundExec?: true;
     needsResume?: boolean;
+    parked?: boolean;
   }) => {
-    const root = resolveRootSubagentRequester(input.sessionKey, input.agentId);
+    const root = input.parked
+      ? input
+      : resolveRootSubagentRequester(input.sessionKey, input.agentId);
     const agentId =
       root.agentId ??
       parseAgentSessionKey(root.sessionKey)?.agentId ??
@@ -121,7 +135,7 @@ export async function persistRunningSessionsForRestart(params: {
     if (
       isCronSessionKey(root.sessionKey) ||
       isAcpSessionKey(root.sessionKey) ||
-      isSubagentSessionKey(root.sessionKey) ||
+      (isSubagentSessionKey(root.sessionKey) && !input.parked) ||
       resolveExplicitIncognitoAgentSqliteTarget(storePath, { agentId })
     ) {
       return;
@@ -136,9 +150,10 @@ export async function persistRunningSessionsForRestart(params: {
         sessionId: root.sessionKey === input.sessionKey ? input.sessionId : undefined,
         hadBackgroundExec: input.hadBackgroundExec,
         needsResume: input.needsResume !== false,
+        parked: input.parked,
       });
     } else {
-      existing.needsResume ||= input.needsResume !== false;
+      existing.needsResume ||= !input.parked && input.needsResume !== false;
       if (input.hadBackgroundExec) {
         existing.hadBackgroundExec = true;
       }
@@ -183,6 +198,9 @@ export async function persistRunningSessionsForRestart(params: {
     if (sessionKey) {
       add({ sessionKey, agentId: process.agentId, hadBackgroundExec: true });
     }
+  }
+  for (const session of listYieldWaitingSessions()) {
+    add(session);
   }
   const selectors = new Map<string, SessionIdentity[]>();
   for (const session of sessions.values()) {
@@ -239,7 +257,8 @@ export async function persistRunningSessionsForRestart(params: {
           const session = selected.get(sessionKey);
           if (
             !session ||
-            !canResumeSession(sessionKey, entry) ||
+            !canResumeSession(sessionKey, entry, session.parked) ||
+            (session.parked && !resolveSessionYieldWait(sessionKey, entry, session.agentId)) ||
             (session.sessionId && session.sessionId !== entry.sessionId)
           ) {
             continue;
@@ -384,15 +403,26 @@ async function resumeAgentSessions(
       );
     }
     for (const { sessionKey, entry: marked } of entries) {
-      if (!marked.resumeAfterRestart && !marked.mainRestartRecovery) {
+      const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId;
+      if (
+        !marked.resumeAfterRestart &&
+        !marked.mainRestartRecovery &&
+        !resolveSessionYieldWait(sessionKey, marked, agentId)
+      ) {
         continue;
       }
       let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>> | undefined;
       try {
+        await waitForAgentDatabaseWriteAdmission(agentId, {
+          env: target.env,
+          signal,
+          owner: getAgentDatabaseStartupAdmission(),
+        });
         const resumed = await applySessionEntryReplacements<
           | {
               entry: InternalSessionEntry;
               marker: NonNullable<InternalSessionEntry["resumeAfterRestart"]>;
+              parked: ReturnType<typeof resolveSessionYieldWait>;
             }
           | undefined
         >({
@@ -402,11 +432,25 @@ async function resumeAgentSessions(
           requireWriteSuccess: true,
           update: (current) => {
             const selected = current.find((row) => row.sessionKey === sessionKey)?.entry;
-            if (!selected || (!selected.resumeAfterRestart && !selected.mainRestartRecovery)) {
+            if (!selected) {
+              return { result: undefined };
+            }
+            const parked = resolveSessionYieldWait(sessionKey, selected, agentId);
+            // Markerless waiting rows already retain their durable continuation.
+            // Do not manufacture a write that changes their activity timestamp.
+            if (
+              parked === "waiting" &&
+              !selected.resumeAfterRestart &&
+              !selected.mainRestartRecovery
+            ) {
+              return { result: undefined };
+            }
+            if (!parked && !selected.resumeAfterRestart && !selected.mainRestartRecovery) {
               return { result: undefined };
             }
             const marker: InternalSessionEntry["resumeAfterRestart"] =
               selected.resumeAfterRestart ??
+              (parked ? { queuedInputIds: [] } : undefined) ??
               (selected.mainRestartRecovery &&
               selected.abortedLastRun === true &&
               selected.status === "interrupted" &&
@@ -416,14 +460,28 @@ async function resumeAgentSessions(
                 : undefined);
             const entry = {
               ...selected,
+              ...(parked === "resume"
+                ? derivePersistedSessionLifecyclePatch({
+                    entry: selected,
+                    currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
+                    event: {
+                      runId: selected.lifecycleRunId!,
+                      ts: Date.now(),
+                      data: { phase: "end", aborted: true, stopReason: "restart" },
+                    },
+                  })
+                : {}),
               // Retain durable custody until admission, including another restart
               // while the workspace owner is still preparing the binding.
-              resumeAfterRestart: canResumeSession(sessionKey, selected) ? marker : undefined,
+              resumeAfterRestart: canResumeSession(sessionKey, selected, Boolean(parked))
+                ? marker
+                : undefined,
               mainRestartRecovery: undefined,
             };
             return {
-              result: marker ? { entry, marker } : undefined,
+              result: marker ? { entry, marker, parked } : undefined,
               replacements:
+                parked === "resume" ||
                 selected.mainRestartRecovery ||
                 entry.resumeAfterRestart !== selected.resumeAfterRestart
                   ? [{ sessionKey, entry }]
@@ -434,97 +492,100 @@ async function resumeAgentSessions(
         if (!resumed) {
           continue;
         }
-        const { entry, marker } = resumed;
-        const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId;
-        if (!canResumeSession(sessionKey, entry)) {
+        const { entry, marker, parked } = resumed;
+        if (!canResumeSession(sessionKey, entry, Boolean(parked))) {
           log.warn(
             `Skipped restart resume for ${sessionKey}: session is archived or has another execution owner`,
           );
           continue;
         }
-        try {
-          authority = await prepareSessionSystemTurnAuthority({
-            context,
-            ...target,
-            agentId,
-            sessionKey,
-            sessionId: entry.sessionId,
-            assertCurrent: () => signal.throwIfAborted(),
-          });
-          const captured = await captureSessionEventTargetForHost(agentId, sessionKey, {
-            operatorAuthority: authority?.authority,
-            assertCurrent: () => signal.throwIfAborted(),
-          });
-          if (captured.sessionId !== entry.sessionId) {
-            throw new Error("Session changed before restart resume admission");
-          }
-          if (entry.pendingWorktree || entry.pendingProjectGitUrl !== undefined) {
-            const blocked = resolveSessionWorkStartBlock(sessionKey, entry, {
-              allowPendingWorkspace: true,
-            });
-            if (blocked) {
-              throw blocked;
-            }
-            const { prepareSessionWorkspaceForRun } =
-              await import("./server-methods/session-create-project.js");
-            // The old readiness scope died with the process. Rejoin its owner,
-            // which publishes the prepared workspace under current authority.
-            await prepareSessionWorkspaceForRun({
-              entry,
-              cfg: context.getRuntimeConfig(),
+        if (parked === "unreachable") {
+          await recordRestartYieldFailure({ sessionKey, agentId, entry, signal });
+        } else if (parked !== "waiting") {
+          try {
+            authority = await prepareSessionSystemTurnAuthority({
+              context,
+              ...target,
               agentId,
               sessionKey,
-              storePath: target.storePath,
-              context,
-              signal,
-              runId: randomUUID(),
-              assertCurrent: composeSessionSourceAssertion(
-                [authority?.authority.assertCurrent],
-                (assertSources) => {
-                  assertRecoveryCurrent();
-                  assertSources();
-                },
-              ),
-              runSetupScript: authority?.authority.scopes.includes(ADMIN_SCOPE) === true,
+              sessionId: entry.sessionId,
+              assertCurrent: () => signal.throwIfAborted(),
             });
-          }
-          const receipt = withPluginRuntimeGatewayContextResolver(
-            context.resolveGatewayContext,
-            () =>
-              enqueueSessionEventForHost(
-                marker.hadBackgroundExec
-                  ? `${GATEWAY_RESTART_RESUME_TEXT} ${BACKGROUND_EXEC_STOPPED_TEXT}`
-                  : GATEWAY_RESTART_RESUME_TEXT,
-                {
-                  agentId,
-                  sessionKey,
-                  source: "restart",
-                  expectedTarget: captured,
-                  abortSignal: signal,
-                },
-              ),
-          );
-          const retained = authority;
-          authority = undefined;
-          void receipt.settled
-            .then((outcome) => {
-              if (outcome.status === "failed") {
-                log.warn(
-                  `Restart resume input failed for ${sessionKey}: ${outcome.error ?? "unknown error"}`,
-                );
+            const captured = await captureSessionEventTargetForHost(agentId, sessionKey, {
+              operatorAuthority: authority?.authority,
+              assertCurrent: () => signal.throwIfAborted(),
+            });
+            if (captured.sessionId !== entry.sessionId) {
+              throw new Error("Session changed before restart resume admission");
+            }
+            if (entry.pendingWorktree || entry.pendingProjectGitUrl !== undefined) {
+              const blocked = resolveSessionWorkStartBlock(sessionKey, entry, {
+                allowPendingWorkspace: true,
+              });
+              if (blocked) {
+                throw blocked;
               }
-            })
-            .finally(() => retained?.release())
-            .catch((error: unknown) => {
-              log.warn(`Restart resume input failed for ${sessionKey}: ${String(error)}`);
-            });
-          const accepted = await receipt.accepted;
-          if (!accepted.ok) {
-            throw new Error(accepted.error);
+              const { prepareSessionWorkspaceForRun } =
+                await import("./server-methods/session-create-project.js");
+              // The old readiness scope died with the process. Rejoin its owner,
+              // which publishes the prepared workspace under current authority.
+              await prepareSessionWorkspaceForRun({
+                entry,
+                cfg: context.getRuntimeConfig(),
+                agentId,
+                sessionKey,
+                storePath: target.storePath,
+                context,
+                signal,
+                runId: randomUUID(),
+                assertCurrent: composeSessionSourceAssertion(
+                  [authority?.authority.assertCurrent],
+                  (assertSources) => {
+                    assertRecoveryCurrent();
+                    assertSources();
+                  },
+                ),
+                runSetupScript: authority?.authority.scopes.includes(ADMIN_SCOPE) === true,
+              });
+            }
+            const receipt = withPluginRuntimeGatewayContextResolver(
+              context.resolveGatewayContext,
+              () =>
+                enqueueSessionEventForHost(
+                  marker.hadBackgroundExec
+                    ? `${GATEWAY_RESTART_RESUME_TEXT} ${BACKGROUND_EXEC_STOPPED_TEXT}`
+                    : GATEWAY_RESTART_RESUME_TEXT,
+                  {
+                    agentId,
+                    sessionKey,
+                    source: "restart",
+                    expectedTarget: captured,
+                    abortSignal: signal,
+                  },
+                ),
+            );
+            const retained = authority;
+            authority = undefined;
+            void receipt.settled
+              .then((outcome) => {
+                if (outcome.status === "failed") {
+                  log.warn(
+                    `Restart resume input failed for ${sessionKey}: ${outcome.error ?? "unknown error"}`,
+                  );
+                }
+              })
+              .finally(() => retained?.release())
+              .catch((error: unknown) => {
+                log.warn(`Restart resume input failed for ${sessionKey}: ${String(error)}`);
+              });
+            const accepted = await receipt.accepted;
+            if (!accepted.ok) {
+              throw new Error(accepted.error);
+            }
+          } catch (error) {
+            signal.throwIfAborted();
+            log.warn(`Skipped restart resume for ${sessionKey}: ${String(error)}`);
           }
-        } catch (error) {
-          signal.throwIfAborted();
-          log.warn(`Skipped restart resume for ${sessionKey}: ${String(error)}`);
         }
         await patchSessionEntryCore(
           { ...target, agentId, sessionKey },

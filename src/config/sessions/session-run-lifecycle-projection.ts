@@ -38,6 +38,7 @@ export type SessionLifecyclePatchEffects = {
     error: unknown;
     errorKind?: "state_contention";
     suppressErrorNotice?: boolean;
+    notice?: string;
   };
 };
 
@@ -57,6 +58,7 @@ export type LifecycleEventLike = { ts: number; sessionId?: string } & {
     stopReason?: unknown;
     error?: unknown;
     errorKind?: unknown;
+    errorNotice?: unknown;
     suppressErrorNotice?: unknown;
     executionStarted?: unknown;
     livenessState?: unknown;
@@ -427,6 +429,10 @@ export function projectSessionLifecyclePatch(
   ) {
     effects.failedRun = {
       runId: eventRunId,
+      notice:
+        typeof params.event.data?.errorNotice === "string"
+          ? params.event.data.errorNotice
+          : undefined,
       suppressErrorNotice: params.event.data?.suppressErrorNotice === true,
       errorKind:
         params.event.data?.errorKind === "state_contention" ? "state_contention" : undefined,
