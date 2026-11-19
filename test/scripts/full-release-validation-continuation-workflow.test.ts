@@ -31,28 +31,22 @@ function step(job: string, name: string) {
   return match;
 }
 
-it("pins both hosted callers to the Q-ledger-aware watcher definition", () => {
-  const revision = "b720fcdb58b62c90eaae10c2d1ba99ba813adb36";
-  for (const name of ["release_decision", "diagnostic_drain"]) {
-    expect((workflowJob(name) as { uses?: string }).uses).toBe(
-      "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@" + revision,
+it("binds both inline watchers to Q policy without replacing their owner", () => {
+  for (const [job, name] of [
+    ["release_decision", "Evaluate release decision"],
+    ["diagnostic_drain", "Drain child diagnostics"],
+  ]) {
+    const env = step(job, name).env as Record<string, string>;
+    expect(env.OPENCLAW_RELEASE_WAIVERS_PATH).toBe(
+      "${{ github.workspace }}/scripts/lib/release-validation-waivers.json",
+    );
+    expect(step(job, name).run).toContain(
+      'node "$RELEASE_STATE_SCRIPT" "$FULL_RELEASE_STATE_MODE"',
+    );
+    expect(workflow.jobs[job]?.steps).toContainEqual(
+      expect.objectContaining({ name: "Checkout qualification evidence verifier" }),
     );
   }
-  // Independently verified against the immutable selected revision; no Git-history
-  // dependency in shallow CI checkouts. A changed watcher needs a new verified pin.
-  const selectedSource = readFileSync(".github/workflows/full-release-state-watcher.yml", "utf8");
-  expect(createHash("sha256").update(selectedSource).digest("hex")).toBe(
-    "4ee76e74a50fa5d0939b67010e0b334bf0a7bda604c0e81de079f05291ce561f",
-  );
-  const selected = parse(selectedSource);
-  expect(selected.jobs.watch.env.OPENCLAW_RELEASE_WAIVERS_PATH).toBe(
-    "${{ github.workspace }}/scripts/lib/release-validation-waivers.json",
-  );
-  expect(
-    selected.jobs.watch.steps.find(
-      (entry: { name: string }) => entry.name === "Checkout release state tooling",
-    ).if,
-  ).toBeUndefined();
 });
 
 it("runs release tooling only from the trusted revision without persisted credentials", () => {
