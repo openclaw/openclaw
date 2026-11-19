@@ -51,6 +51,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import java.io.IOException
+import java.net.SocketTimeoutException
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.MessageDigest
@@ -690,19 +691,20 @@ class GatewaySessionCustomHeadersTest {
       val connected = CompletableDeferred<Unit>()
       val fileArtifactId = "artifact_managed_media_44444444-4444-4444-8444-444444444444"
       val filePath = "/api/chat/media/outgoing/main/44444444-4444-4444-8444-444444444444/full?mediaTicket=file-ticket"
-      val fileBytes = ByteArray(8192) { it.toByte() }
+      val fileBytes = ByteArray(24 * 1024) { it.toByte() }
       val server =
         MockWebServer().apply {
           dispatcher =
             object : Dispatcher() {
               override fun dispatch(request: RecordedRequest): MockResponse {
                 if (request.path?.startsWith("/api/chat/media/outgoing/") == true) {
-                  val body = Buffer().write(fileBytes)
-                  // Slow but moving: about 800 ms in total, never 400 ms without a byte.
-                  if (request.requestUrl?.queryParameter("test") != "stalled") {
-                    return MockResponse().setHeader("Content-Type", "application/pdf").setBody(body).throttleBody(1024, 100, TimeUnit.MILLISECONDS)
+                  val response = MockResponse().setHeader("Content-Type", "application/pdf")
+                  if (request.requestUrl?.queryParameter("test") == "stalled") {
+                    // The second chunk arrives after the idle budget, even if the timeout regresses.
+                    return response.setBody(Buffer().write(fileBytes, 0, 2048)).throttleBody(1024, 30, TimeUnit.SECONDS)
                   }
-                  return MockResponse().setHeader("Content-Type", "application/pdf").setBody(body).throttleBody(1, 5, TimeUnit.SECONDS)
+                  // Send 24 chunks one second apart to exceed the shipped 20-second call budget.
+                  return response.setBody(Buffer().write(fileBytes)).throttleBody(1024, 1, TimeUnit.SECONDS)
                 }
                 return MockResponse().withWebSocketUpgrade(
                   object : WebSocketListener() {
@@ -760,7 +762,6 @@ class GatewaySessionCustomHeadersTest {
           onConnected = { if (!connected.isCompleted) connected.complete(Unit) },
           onDisconnected = {},
           onEvent = { _, _ -> },
-          mediaIdleTimeoutMs = 400,
         )
 
       try {
@@ -792,11 +793,18 @@ class GatewaySessionCustomHeadersTest {
         )
         withTimeout(TEST_TIMEOUT_MS) { connected.await() }
 
+        val slowStarted = System.nanoTime()
         val slow = session.loadMediaArtifact(stableId, "main", "main", fileArtifactId, GatewayMediaKind.File) as? GatewayLoadedMedia.Buffered
+        val slowElapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - slowStarted)
         assertArrayEquals(fileBytes, slow?.bytes)
-        // A stalled transfer still fails fast, as an IOException or no result.
+        assertTrue("Healthy transfer finished in ${slowElapsedMs}ms", slowElapsedMs > 20_000)
+
+        val stalledStarted = System.nanoTime()
         val stalled = runCatching { session.loadMediaArtifact(stableId, "main", "main", "stalled", GatewayMediaKind.File) }
-        assertTrue(stalled.exceptionOrNull() is IOException || stalled.getOrNull() == null)
+        val stalledElapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - stalledStarted)
+        val failure = stalled.exceptionOrNull()
+        assertTrue("Expected a socket read timeout, got $failure", failure is SocketTimeoutException)
+        assertTrue("Stalled transfer failed in ${stalledElapsedMs}ms", stalledElapsedMs in 19_500..25_000)
       } finally {
         session.disconnectAndJoin()
         scope.cancel()
