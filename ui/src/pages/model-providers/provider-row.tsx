@@ -383,6 +383,11 @@ function removalPlan(card: ModelProviderCard): {
 function ProviderActions(props: ProviderRowProps) {
   const removal = () => removalPlan(props.card);
   const defaultModels = () => defaultModelsUsing(props);
+  const removalLabel = (key: string) =>
+    t("modelProviders.actionNamed", {
+      action: t("modelProviders.remove.action"),
+      name: props.card.configKeys.length > 1 ? key : providerName(props.card),
+    });
   const connected = () => isProviderUsable(props.card) || props.card.profiles.length > 0;
   const connectName = () =>
     t(connected() ? "modelProviders.profiles.addAccount" : "modelProviders.login.action");
@@ -396,7 +401,7 @@ function ProviderActions(props: ProviderRowProps) {
     );
   return (
     <div class="model-providers__card-actions provider-row__footer">
-      <Show when={props.card.configKey}>
+      <For each={props.card.configKeys}>
         {(configKey) => (
           <button
             class="btn btn--sm btn--ghost danger"
@@ -404,23 +409,22 @@ function ProviderActions(props: ProviderRowProps) {
               configMutationDisabled(props) || Boolean(props.busy["logout:" + props.card.id])
             }
             title={props.mutationBlockedReason ?? ""}
-            aria-label={t("modelProviders.actionNamed", {
-              action: t("modelProviders.remove.action"),
-              name: providerName(props.card),
-            })}
+            aria-label={removalLabel(configKey)}
             onClick={() =>
               props.onRequestLogout({
                 cardId: props.card.id,
                 label: providerName(props.card),
-                removeConfigKey: configKey(),
+                removeConfigKey: configKey,
                 defaultModels: defaultModels(),
               })
             }
           >
-            {t("modelProviders.remove.action")}
+            {props.card.configKeys.length > 1
+              ? removalLabel(configKey)
+              : t("modelProviders.remove.action")}
           </button>
         )}
-      </Show>
+      </For>
       <Show when={removal().removeTargets.length > 0}>
         <button
           class="btn btn--sm btn--ghost danger provider-row__remove"

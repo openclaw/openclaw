@@ -20,6 +20,7 @@ const providerCards = [
   card({
     displayName: "openai",
     configKey: "openai",
+    configKeys: ["openai"],
     apiKey: { source: "config" },
     configApiKeys: [{ key: "openai", reference: false }],
   }),

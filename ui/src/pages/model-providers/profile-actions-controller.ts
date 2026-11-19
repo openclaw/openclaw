@@ -433,6 +433,13 @@ export function createModelProviderProfileActions(options: {
           if (patched) {
             invalidateModelAuthStatusRequests(client);
             await options.refresh();
+          } else if (config.state.configAutoSaveStatus === "conflict") {
+            await config.refresh();
+            if (isCurrent()) {
+              showProfileActionError(
+                config.state.lastError ?? t("modelProviders.remove.configChanged"),
+              );
+            }
           } else {
             showProfileActionError(config.state.lastError ?? t("modelProviders.configUnavailable"));
           }

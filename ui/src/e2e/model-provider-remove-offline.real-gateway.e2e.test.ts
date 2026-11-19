@@ -34,6 +34,17 @@ const suite = createControlUiE2eSuite({
         agents: { entries: { main: {} }, defaults: { model: "fixture/current" } },
         models: {
           providers: {
+            minimax: {
+              api: "openai-completions",
+              apiKey: "synthetic-minimax-key",
+              baseUrl: "http://127.0.0.1:9/v1",
+              models: [{ id: "global", name: "Global" }],
+            },
+            "minimax-cn": {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:9/v1",
+              models: [{ id: "regional", name: "Regional" }],
+            },
             fixture: {
               api: "openai-completions",
               apiKey: "synthetic-fixture-key",
@@ -69,7 +80,7 @@ async function persistedConfig(): Promise<OpenClawConfig> {
 }
 
 suite.define(() => {
-  it("removes the Ollama entry after confirmation and reload without changing the default", async () => {
+  it("removes only the confirmed offline or grouped entry and preserves the default after reload", async () => {
     const handoff = await instance.cli(["dashboard", "--json"]);
     expect(handoff.code, handoff.stderr).toBe(0);
     const { browserUrl }: { browserUrl: string } = JSON.parse(handoff.stdout);
@@ -84,7 +95,8 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         const card = await expandProvider(page, "ollama");
         const before = await persistedConfig();
-        expect(before.models?.providers?.ollama?.models).toHaveLength(2);
+        const { ollama, ...siblings } = before.models!.providers!;
+        expect(ollama?.models).toHaveLength(2);
         await capture("before-click.png", card);
 
         await card.getByRole("button", { name: "Remove provider: Ollama", exact: true }).click();
@@ -103,8 +115,33 @@ suite.define(() => {
         await capture("after-reload.png", fixture);
         expect(await card.count()).toBe(0);
         const after = await persistedConfig();
-        expect(after.models?.providers).toEqual({ fixture: before.models?.providers?.fixture });
+        expect(after.models?.providers).toEqual(siblings);
         expect(after.agents?.defaults?.model).toBe("fixture/current");
+
+        const grouped = await expandProvider(page, "minimax");
+        await grouped.locator(".provider-row__footer").scrollIntoViewIfNeeded();
+        await capture("grouped-entries.png", grouped);
+        const regional = grouped.getByRole("button", {
+          name: "Remove provider: minimax-cn",
+          exact: true,
+        });
+        expect(await regional.count()).toBe(1);
+        await regional.click();
+        expect(await dialog.textContent()).toContain("minimax-cn");
+        await confirm.click();
+        await expect
+          .poll(async () => (await persistedConfig()).models?.providers?.["minimax-cn"])
+          .toBeUndefined();
+        await page.reload();
+        await waitForControlUiGatewayReady(page);
+        const remaining = await expandProvider(page, "minimax");
+        expect(await remaining.getByRole("button", { name: /^Remove provider:/ }).count()).toBe(1);
+        const final = await persistedConfig();
+        expect(final.models?.providers).toEqual({
+          fixture: siblings.fixture,
+          minimax: siblings.minimax,
+        });
+        expect(final.agents?.defaults?.model).toBe("fixture/current");
       },
     );
   });
