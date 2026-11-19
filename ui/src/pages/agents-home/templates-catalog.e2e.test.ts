@@ -435,6 +435,11 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       const audit = detail.locator(".plugin-catalog-detail__security");
       const hint = page.getByRole("tooltip").filter({ hasText: /\S/u });
       const info = audit.getByRole("button");
+      await page.keyboard.press("Tab");
+      await info.focus();
+      await hint.waitFor();
+      await page.keyboard.press("Escape");
+      await hint.waitFor({ state: "hidden" });
       await info.hover();
       await hint.waitFor();
       // The audit link's page preview must not replace the hint once its delay passes.
