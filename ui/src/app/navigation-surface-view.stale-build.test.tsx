@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
 
-// A Gateway replaced by a newer build answers 404 for the lazy card chunk of this tab's build.
+// mock-isolation: a Gateway replaced by a newer build answers 404 for this tab's card chunk.
 vi.mock("../components/sidebar-update-card.tsx", () => {
   throw new TypeError("Failed to fetch dynamically imported module: /assets/sidebar-update-card.js");
 });
