@@ -103,7 +103,7 @@ it
               return;
             }
             if (text.includes("CUSTODY_ROOT_TASK")) {
-              rootReceivedRecovery ||= text.includes("Child runs do not resume independently.");
+              rootReceivedRecovery ||= text.includes("The Gateway restarted while you were working.");
               rootReceivedChildError ||= text.includes("Gateway stopped");
               const receipts = input.flatMap((item) =>
                 isRecord(item) && item.type === "function_call_output"
@@ -230,6 +230,10 @@ it
             }
             assert(text.includes("CUSTODY_LEAF_TASK"), "Unexpected synthetic request");
             leafStarted = true;
+            if (restarted) {
+              // The interrupted leaf resumes itself after the restart.
+              reply("CUSTODY_LEAF_RESULT");
+            }
           },
           { ignoreAborted: true },
         ),
@@ -477,9 +481,8 @@ it
           });
         }
         if (kind === "captured") {
-          expect(readRun(childRunId)).toMatchObject({
-            execution: { outcome: { status: "error", error: "Gateway stopped" } },
-          });
+          // Shutdown leaves the interrupted child unended; the child resumes its own task.
+          expect(readRun(childRunId)).not.toHaveProperty(["execution", "endedAt"]);
         }
         if (kind === "unmarked-requester" || kind === "stale-settle-requester") {
           // Recreate the persisted incident state: a settled, unmarked requester still owes
@@ -566,8 +569,8 @@ it
         if (interruptAnnounce) {
           expect(completedReplies).toBe(1);
         } else if (kind === "captured") {
-          expect(rootReceivedChildError).toBe(true);
-          expect(resumedChildRequests).toBe(0);
+          expect(rootReceivedChildError).toBe(false);
+          expect(resumedChildRequests).toBe(1);
         }
       },
       async () => {
