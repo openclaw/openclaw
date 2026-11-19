@@ -24,12 +24,14 @@ export function buildOpenClawControlSection({
     setupIssue
       ? setupIssue
       : hasOpenClaw
-        ? hasGateway
-          ? "For the Gateway hosting this session, config writes, channels, plugins, agents, models/providers: ask `openclaw`."
-          : "For the Gateway hosting this session, restart, config, channels, plugins, agents, models/providers: ask `openclaw`."
+        ? "For the Gateway hosting this session, config writes, channels, plugins, agents, models/providers: ask `openclaw`."
         : hasGateway
           ? `Config read: \`gateway\` (\`config.get|config.schema.lookup\`) only when those actions are exposed by its schema. Config writes need the \`openclaw\` tool.`
           : "",
+    hasOpenClaw && !setupIssue
+      ? "For an exact config change, send `openclaw` a `message` such as `config set <path> <value>`, `config unset <path>`, `config get <path>`, `config schema <path>`, or `config validate`. These commands do not need helper inference; existing approval and config-write checks still apply."
+      : "",
+    "Config recovery: if broken config or an operationally unavailable setup tool blocks an explicitly requested local repair, use available file/exec tools within their existing permissions. Prefer validated `openclaw config` commands; if they cannot load the config, inspect the actual file, preserve a rollback copy, make the narrow repair, then validate and read back. Recovery must not override an approval decision, readonly config, containment, or disabled tools. Do not use this fallback to change access, approval, or ownership policies; those changes still require the authorized control path.",
     ...(!hasOpenClaw || setupIssue
       ? [
           "`/openclaw` rescue accepts supported commands, not a free-form substitute for the missing setup tool. Do not tell the user to enable tools by sending arbitrary setup instructions to it.",
@@ -37,24 +39,20 @@ export function buildOpenClawControlSection({
       : []),
     [
       "For the Gateway hosting this session:",
+      "Use the built-in updater by default. For a source installation, use Git only if the operator explicitly requests an exact revision and the host authorizes maintenance for this caller. Shell access alone is not update authority.",
       ...(restartCommandsEnabled
         ? [
             "In a connected chat, the owner can send `/update` with commands.restart enabled (the default), regardless of the agent's tool profile.",
           ]
         : []),
       hasGateway
-        ? "On an explicit owner request or operator-scheduled maintenance, perform the work with `gateway`: update.run updates with supervised restart and completion notices; restart schedules a safe restart; update.cleanup retires eligible recovery copies while the Gateway keeps running (dryRun previews). Cleanup permanently removes eligible rollback copies, so require a cleanup request, not merely an update request. Do not redirect the owner to slash commands or a terminal when these actions are available. Report accepted or deferred work accurately; scheduling is not completion."
-        : restartCommandsEnabled
-          ? "For a chat update request, direct the user to `/update`. Outside chat, use the Control UI or ask the operator to run `openclaw update` in a terminal."
-          : "For an update request, use the Control UI or ask the operator to run `openclaw update` in a terminal.",
+        ? "On an explicit owner request or operator-scheduled maintenance, `gateway`: update.run updates with supervised restart and completion notices; restart schedules a safe restart; update.cleanup retires eligible recovery copies while the Gateway keeps running (dryRun previews). Cleanup permanently removes eligible rollback copies, so require a cleanup request, not merely an update request. Report accepted or deferred work accurately; scheduling is not completion."
+        : "",
       "Missing chat ownership needs owner setup in the Control UI or help from the Gateway operator.",
-      "Use runtime-supervised maintenance: the Gateway must retain a working restart path before it stops. For this Gateway, use maintenance tools, not exec or detached jobs, for updates, installation replacement, or service stop/restart. If runtime admission refuses, report the concrete blocker; do not bypass owner/operator authorization or retry the denied operation through exec.",
+      "The Gateway must retain a working restart path before it stops. If runtime admission refuses, report the concrete blocker; do not bypass owner/operator authorization or retry the denied operation through exec.",
     ].join(" "),
     hasExec
-      ? "For explicitly authorized non-disruptive component builds (such as `pnpm build:iroh`), dependency work, or repairs with no dedicated maintenance action, use exec under normal permissions and approvals. Do not refuse solely because the work is on the Gateway host or no maintenance action exists."
-      : "",
-    hasExec
-      ? "For user-requested setup or repair on another host, verify it is not this Gateway, then use available exec/SSH tools; normal exec approvals still apply. The local `openclaw` helper does not target remote Gateways. Do not block that separately authorized remote task on local agent-ID migration. For updates there, use `openclaw update --yes`."
+      ? "For user-requested setup or repair on another host, verify it is not this Gateway, then use available exec/SSH tools; normal exec approvals still apply. The local `openclaw` helper does not target remote Gateways. Do not block that separately authorized remote task on local agent-ID migration."
       : "",
     "",
   ];

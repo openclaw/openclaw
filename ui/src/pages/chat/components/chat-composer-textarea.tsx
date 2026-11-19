@@ -7,11 +7,11 @@ import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { insertComposerDictation } from "../composer-dictation.ts";
 import { handleChatAttachmentPaste } from "./chat-attachments.ts";
 import {
   handleTextareaOverflowInteraction,
   handleTextareaOverflowScroll,
+  paneDomId,
 } from "./chat-composer-dom.ts";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { ComposerPluginPromptSlot } from "./chat-composer-plugin-prompt-slot.tsx";
@@ -36,12 +36,11 @@ export function renderComposerTextarea(
     const draft = context().visibleDraft;
     const dictation = context().dictation;
     return dictation?.active
-      ? insertComposerDictation(
-          state.dictationSelection?.value ?? draft,
-          dictation.transcript,
-          state.dictationSelection?.start ?? draft.length,
-          state.dictationSelection?.end ?? draft.length,
-        ).value
+      ? (dictation.placeTranscript(dictation.transcript, state.dictationSelection, {
+          start: draft.length,
+          end: draft.length,
+          value: draft,
+        })?.value ?? draft)
       : draft;
   });
   const valueRef = liveValue(() => {
@@ -64,9 +63,19 @@ export function renderComposerTextarea(
       }
     };
   });
+  const inputId = paneDomId(composer.paneId, "input");
   return (
     <>
+      {/* Safari AutoFill guesses a field's type from nearby page text unless a label
+          element names it; aria-label and autocomplete="off" do not stop that guess, so
+          contact words in a streaming reply put AutoFill Contact over the iPhone
+          keyboard. aria-label stays the accessible name (the mention editor copies it),
+          so this label is hidden from assistive technology. */}
+      <label class="sr-only" for={inputId} aria-hidden="true">
+        {t("chat.composer.composerInput")}
+      </label>
       <textarea
+        id={inputId}
         data-composer-mentions={JSON.stringify(composer.mentions)}
         ref={[textareaRef, editorRef]}
 

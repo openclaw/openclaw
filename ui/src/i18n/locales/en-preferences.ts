@@ -14,9 +14,14 @@ const enPreferences = {
       modelPolicy: "Model policy",
       thinkingLevels: {
         off: "Off",
+        minimal: "Minimal",
         low: "Low",
         medium: "Medium",
         high: "High",
+        xhigh: "Extra high",
+        adaptive: "Adaptive",
+        max: "Maximum",
+        ultra: "Ultra",
       },
       fastModes: {
         auto: "Auto",

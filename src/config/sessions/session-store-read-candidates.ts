@@ -5,7 +5,7 @@ import {
   matchesAgentDatabaseReadCandidatePath,
   type AgentDatabaseReadCandidate,
 } from "../../infra/agent-database-readers.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/path-existence.js";
 import {
   assertDatabasePathIdentity,
   assertExistingDatabaseIdentity,

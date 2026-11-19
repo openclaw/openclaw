@@ -444,3 +444,126 @@ describe.skipIf(!connection)("PostgreSQL vector decoder migration", () => {
     });
   });
 });
+
+describe.skipIf(!connection)("PostgreSQL pending-input endings migration", () => {
+  it.each([false, true])(
+    "upgrades v42 pending-input endings (absent optional table: %s)",
+    (absentPendingTable) => {
+      withEngineStoreAdmission(() => {
+        const pathname = path.join(dirs.make("pg-pending-endings-"), "agent.sqlite");
+        using anchor = openNodeSqliteDatabase(pathname);
+        const migration = agentEngineSchema.postgresMigrations!.find(
+          (step) => step.version === 43,
+        )!;
+        // This predecessor's runtime DDL matches origin/main v42 exactly: neither new column exists.
+        const predecessor: StoreSchema = {
+          ...agentEngineSchema,
+          ...migration.fromSchema,
+          version: 42,
+        };
+        const opened: PostgresSqlConnection[] = [];
+        const open = (schema: StoreSchema) => {
+          const result = openEngineStore({
+            anchor,
+            schema,
+            input: { connection: connection!, schemaPrefix: "pending_endings_migration" },
+            inspectSqlite: () => ({ hasExistingData: false, hasEngineAnchor: false }),
+            prepareAnchor() {},
+            openSqlite() {
+              throw new Error("Expected PostgreSQL");
+            },
+          });
+          if (!isPostgresSqlConnection(result)) {
+            throw new Error("Expected PostgreSQL");
+          }
+          opened.push(result);
+          return result;
+        };
+        let db = open(predecessor);
+        const namespace = getPostgresPhysicalFacts(db)!.namespace;
+        try {
+          db.exec("INSERT INTO schema_meta VALUES ('primary', 'agent', 42, 'main', NULL, 1, 1)");
+          expect(
+            db
+              .prepare(`SELECT column_name FROM information_schema.columns
+              WHERE table_schema = ? AND table_name = 'session_pending_inputs'
+              AND column_name IN ('end_cause', 'origin_source_json')`)
+              .all(namespace),
+          ).toEqual([]);
+          if (absentPendingTable) {
+            // PostgreSQL admission requires the full catalog. Exercise the migration's
+            // missing-table guard directly, without claiming that drift is admissible.
+            db.runTransaction(() => {
+              db.exec("DROP TABLE session_pending_inputs");
+              db.exec(migration.sql);
+            });
+            expect(
+              db.prepare("SELECT to_regclass('session_pending_inputs') AS pending").get(),
+            ).toEqual({ pending: null });
+          } else {
+            db.exec(`INSERT INTO session_nodes
+              (session_key, current_session_id, entry_json, updated_at)
+              VALUES ('agent:main:retained', 'retained', '{"sessionId":"retained"}', 1);
+              INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
+              VALUES ('retained', 'agent:main:retained', 1, 1);`);
+            const rows = [
+              [
+                "nested-stop",
+                "cancelled",
+                { __openclaw: { pendingInputCancelledByUser: true } },
+                "user-stop",
+              ],
+              ["hidden", "cancelled", { display: false }, "user-stop"],
+              ["ordinary", "cancelled", { content: "Retained cancellation" }, null],
+              ["queued", "queued", { display: false }, null],
+            ] as const;
+            const insert = db.prepare(`INSERT INTO session_pending_inputs
+              (input_id, session_key, session_id, idempotency_key, run_id, request_hash,
+               message_json, lifecycle_generation, state, accepted_at)
+              VALUES (?, 'agent:main:retained', 'retained', ?, ?, 'hash', ?, 'old', ?, 1)`);
+            for (const [id, state, message] of rows) {
+              insert.run(id, id, id, JSON.stringify(message), state);
+            }
+            db.close();
+            publishSqliteDatabaseSchemaChange(anchor);
+            db = open(agentEngineSchema);
+            expect(getPostgresPhysicalFacts(db)?.version).toBe(43);
+            expect(
+              db
+                .prepare(`SELECT column_name, data_type, is_nullable
+                FROM information_schema.columns
+                WHERE table_schema = ? AND table_name = 'session_pending_inputs'
+                AND column_name IN ('end_cause', 'origin_source_json')
+                ORDER BY column_name`)
+                .all(namespace),
+            ).toEqual([
+              { column_name: "end_cause", data_type: "text", is_nullable: "YES" },
+              { column_name: "origin_source_json", data_type: "text", is_nullable: "YES" },
+            ]);
+            expect(
+              db
+                .prepare(`SELECT input_id, message_json, end_cause, origin_source_json
+                FROM session_pending_inputs ORDER BY seq`)
+                .all(),
+            ).toEqual(
+              rows.map(([id, , message, endCause]) => ({
+                input_id: id,
+                message_json: JSON.stringify(message),
+                end_cause: endCause,
+                origin_source_json: null,
+              })),
+            );
+          }
+          expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
+            schema_version: 43,
+          });
+        } finally {
+          if (db.isOpen) {
+            db.exec(`DROP SCHEMA "${namespace}" CASCADE`);
+          }
+          opened.forEach((item) => item.close());
+        }
+      });
+    },
+  );
+});

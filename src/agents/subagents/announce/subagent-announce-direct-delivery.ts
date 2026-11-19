@@ -24,7 +24,6 @@ import {
   isEmbeddedAgentRunHandleActive,
   resolveEmbeddedRunAbandonment,
 } from "../../embedded-agent-runner/runs.js";
-import { isReplaySafeTranscriptConflict } from "../../embedded-agent-runner/transcript-conflict.js";
 import {
   hasFailedSubagentNoOutputCompletion,
   hasVisibleCompletionResult,
@@ -45,12 +44,10 @@ import {
 } from "./subagent-announce-completion-delivery.js";
 import {
   hasAnnounceSendEvidence,
-  isAnnounceSavedStateConflict,
+  classifyAnnounceDeliveryError,
   isIncompleteAnnounceAgentResultError,
-  isPermanentAnnounceDeliveryError,
   resolveSubagentAnnounceTimeoutMs,
   SourceOwnerChangedError,
-  summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
 import {
   getSubagentRequesterSessionActivity as resolveRequesterSessionActivity,
@@ -93,9 +90,16 @@ async function sendSubagentAnnounceDirectlyBound(
   params: Parameters<typeof sendSubagentAnnounceDirectly>[0],
 ): ReturnType<typeof sendSubagentAnnounceDirectly> {
   if (params.signal?.aborted) {
-    return { delivered: false, path: "none" };
+    return classifyAnnounceDeliveryError(params.signal.reason, {
+      path: "none",
+      interruption: "requester_aborted",
+      replaySafe: true,
+    });
   }
   const parentOnly = params.completionTarget === "parent";
+  const sourceToolId =
+    normalizeOptionalLowercaseString(params.sourceTool) ??
+    (params.expectsCompletionMessage ? "subagent_announce" : "");
   const cfg = getSubagentAnnounceRuntimeConfig();
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const runtimeContextFragments = buildAgentInternalEventContext(params.internalEvents);
@@ -103,6 +107,9 @@ async function sendSubagentAnnounceDirectlyBound(
     ? RUNTIME_EVENT_USER_PROMPT
     : params.triggerMessage;
   let dispatchPrepared = params.onBeforeDispatch === undefined;
+  let executionStarted = false;
+  let accepted = false;
+  const beforeAdmission = () => !accepted && !params.controllerInput?.custody.rpcAdopted;
   const canonicalRequesterSessionKey = resolveRequesterStoreKey(
     cfg,
     params.targetRequesterSessionKey,
@@ -136,9 +143,6 @@ async function sendSubagentAnnounceDirectlyBound(
       isGatewayMessageChannel(normalizedSessionOnlyOriginChannel)
         ? normalizedSessionOnlyOriginChannel
         : undefined;
-    const sourceToolId =
-      normalizeOptionalLowercaseString(params.sourceTool) ??
-      (params.expectsCompletionMessage ? "subagent_announce" : "");
     const isSubagentCompletion = sourceToolId === "subagent_announce";
     const trustedCompletionEvent = resolveExactSubagentCompletionEvent({
       inputProvenance: {
@@ -317,12 +321,13 @@ async function sendSubagentAnnounceDirectlyBound(
         }
         throw error;
       }
-      // Steering consumes admission; its result remains valid while the delivery owner is current.
-      if (!isCompletionDeliveryAllowed()) {
-        return sourceOwnerChangedResult();
-      }
+      // A committed steer delivered the result; a later owner change cannot undo that.
       if (steer.status === "accepted") {
         return { delivered: true, path: "steered" };
+      }
+      // Otherwise steering consumed admission; its outcome counts while the owner is current.
+      if (!isCompletionDeliveryAllowed()) {
+        return sourceOwnerChangedResult();
       }
       if (steer.status === "indeterminate") {
         // The input was consumed without a confirmed commit; it is never replayed.
@@ -353,7 +358,11 @@ async function sendSubagentAnnounceDirectlyBound(
       }
     }
     if (params.signal?.aborted) {
-      return { delivered: false, path: "none" };
+      return classifyAnnounceDeliveryError(params.signal.reason, {
+        path: "none",
+        interruption: "requester_aborted",
+        replaySafe: true,
+      });
     }
     const directAgentOrigin = shouldDeliverAgentFinal
       ? deliveryTarget
@@ -441,6 +450,7 @@ async function sendSubagentAnnounceDirectlyBound(
       }
       directAnnounceResponse = await runAnnounceAgentCall({
         agentParams: directAgentParams,
+        subagentCompletions: params.subagentCompletions,
         controllerInput: params.controllerInput,
         replyExpectation: inputReplyExpectation,
         // A resumed parent has no inbound channel dispatcher to keep activity visible.
@@ -489,8 +499,14 @@ async function sendSubagentAnnounceDirectlyBound(
             : undefined,
         expectFinal: true,
         signal: params.signal,
-        onAccepted: params.onAccepted,
-        onExecutionStarted: params.onExecutionStarted,
+        onAccepted: (payload) => {
+          accepted = true;
+          params.onAccepted?.(payload);
+        },
+        onExecutionStarted: () => {
+          executionStarted = true;
+          params.onExecutionStarted?.();
+        },
         onBeforeDispatch: params.onBeforeDispatch
           ? async () => {
               await params.onBeforeDispatch!();
@@ -517,9 +533,6 @@ async function sendSubagentAnnounceDirectlyBound(
       if (hasAnnounceSendEvidence(err)) {
         throw err;
       }
-      if (params.signal?.aborted) {
-        return { delivered: false, path: "none" };
-      }
       const directCompletionFallbackKind = hasFailedTrustedSubagentCompletion
         ? "failed_notice"
         : isIncompleteAnnounceAgentResultError(err)
@@ -537,22 +550,12 @@ async function sendSubagentAnnounceDirectlyBound(
         }
       }
       params.onDeliveryError?.(err);
-      const retryTranscriptConflict =
-        sourceToolId === "subagent_settle" && isReplaySafeTranscriptConflict(err);
-      directFailure = {
-        delivered: false,
-        path: "direct",
-        ...(retryTranscriptConflict
-          ? { reason: "requester_transcript_conflict" as const }
-          : isAnnounceSavedStateConflict(err)
-            ? { reason: "requester_state_conflict" as const }
-            : {}),
-        error: summarizeDeliveryError(err),
-        disposition:
-          !retryTranscriptConflict && isPermanentAnnounceDeliveryError(err)
-            ? "permanent_failure"
-            : "retryable",
-      };
+      directFailure = classifyAnnounceDeliveryError(err, {
+        requesterSettle: sourceToolId === "subagent_settle",
+        replaySafe: !executionStarted,
+        beforeAdmission: beforeAdmission(),
+        ...(params.signal?.aborted ? { interruption: "requester_aborted" } : {}),
+      });
     }
 
     const classified = directFailure ?? classifyResponse(directAnnounceResponse);
@@ -563,16 +566,10 @@ async function sendSubagentAnnounceDirectlyBound(
       throw err;
     }
     params.onDeliveryError?.(err);
-    const disposition = hasAnnounceSendEvidence(err)
-      ? "ambiguous"
-      : isPermanentAnnounceDeliveryError(err)
-        ? "permanent_failure"
-        : "retryable";
-    return {
-      delivered: false,
-      path: "direct",
-      error: summarizeDeliveryError(err),
-      disposition,
-    };
+    return classifyAnnounceDeliveryError(err, {
+      requesterSettle: sourceToolId === "subagent_settle",
+      replaySafe: !executionStarted,
+      beforeAdmission: beforeAdmission(),
+    });
   }
 }

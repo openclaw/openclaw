@@ -219,10 +219,6 @@ export function createControlUiMockResponses(
     for (const field of [
       "messages",
       "activity",
-      "skillsUsed",
-      "hasMore",
-      "nextOffset",
-      "totalMessages",
       "sessionId",
       "sessionInfo",
       "inFlightRun",

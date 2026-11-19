@@ -38,6 +38,7 @@ type Scenario = {
   permissionMode?: "full";
   operation: { path: string; value: string };
   approval?: "allow-once" | "deny";
+  exactConfig?: boolean;
   logging: string;
 };
 
@@ -107,7 +108,13 @@ it(
   },
   async ({ signal, onTestFailed }) => {
     let active:
-      | { scenario: Scenario; regularCalls: number; systemCalls: number; reply?: string }
+      | {
+          scenario: Scenario;
+          regularCalls: number;
+          systemCalls: number;
+          helperCalls: number;
+          reply?: string;
+        }
       | undefined;
     let requested = createDeferred<string>();
     const approvals: Record<string, unknown>[] = [];
@@ -127,6 +134,12 @@ it(
         const properties = isRecord(parameters.properties) ? parameters.properties : {};
         const regular = "message" in properties;
         const system = "action" in properties;
+        if (active?.scenario.exactConfig && !regular) {
+          active.helperCalls++;
+          response.writeHead(503, { "content-type": "application/json" });
+          response.end(JSON.stringify({ error: { message: "Synthetic helper outage" } }));
+          return;
+        }
         if (!regular && !system) {
           text(response, "OK");
           return;
@@ -165,7 +178,9 @@ it(
             }
           }
           call(response, {
-            message: `Apply the requested configuration for ${active.scenario.name}.`,
+            message: active.scenario.exactConfig
+              ? `config set ${active.scenario.operation.path} ${active.scenario.operation.value}`
+              : `Apply the requested configuration for ${active.scenario.name}.`,
           });
         } else {
           expect(++active.systemCalls).toBe(1);
@@ -331,9 +346,32 @@ it(
             logging: "info",
           },
           {
+            name: "exact command preserves explicit off during helper outage",
+            agent: "off",
+            execAvailable: true,
+            permissionMode: "full",
+            exactConfig: true,
+            operation: { path: "logging.level", value: "warn" },
+            approval: "deny",
+            logging: "info",
+          },
+          {
+            name: "exact command grant expansion denied during helper outage",
+            agent: "grant",
+            execAvailable: false,
+            exactConfig: true,
+            operation: {
+              path: "agents.entries.off.tools.openclaw.autoApproveChanges",
+              value: "true",
+            },
+            approval: "deny",
+            logging: "info",
+          },
+          {
             name: "grant expansion through a parent config object",
             agent: "grant",
             execAvailable: false,
+            exactConfig: true,
             operation: {
               path: "agents.entries.off.tools.openclaw",
               value: '{"autoApproveChanges":true}',
@@ -345,6 +383,7 @@ it(
             name: "revoking its own standing grant",
             agent: "grant",
             execAvailable: false,
+            exactConfig: true,
             operation: {
               path: "agents.entries.grant.tools.openclaw.autoApproveChanges",
               value: "false",
@@ -353,7 +392,7 @@ it(
           },
         ];
         for (const scenario of scenarios) {
-          active = { scenario, regularCalls: 0, systemCalls: 0 };
+          active = { scenario, regularCalls: 0, systemCalls: 0, helperCalls: 0 };
           requested = createDeferred<string>();
           const approvalCount = approvals.length;
           const before = await readConfig();
@@ -406,7 +445,8 @@ it(
           expect(after.logging.level).toBe(scenario.logging);
           expect(approvals).toHaveLength(approvalCount + (scenario.approval ? 1 : 0));
           expect(active.regularCalls).toBe(1);
-          expect(active.systemCalls).toBe(1);
+          expect(active.systemCalls).toBe(scenario.exactConfig ? 0 : 1);
+          expect(active.helperCalls).toBe(0);
           expect(active.reply).toBeDefined();
           expect(active.reply).not.toMatch(/unconfirmed|did not go through|failed to complete/i);
           expect(active.reply).toContain(

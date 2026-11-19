@@ -94,7 +94,15 @@ async function createContainerSandboxBackend(
         ? { requireCurrentConfig: params.requireCurrentConfig }
         : {}),
     },
-    async ({ containerName, containerId, configHash, mountPlan, currentConfig, podmanTarget }) => {
+    async ({
+      containerName,
+      containerId,
+      configHash,
+      mountPlan,
+      mounts,
+      currentConfig,
+      podmanTarget,
+    }) => {
       assertCurrent();
       const boundEngine = podmanTarget
         ? { ...bindPodmanSandboxEngine(podmanTarget), stateGuard }
@@ -106,6 +114,7 @@ async function createContainerSandboxBackend(
         engine: boundEngine,
         containerName: containerId,
         assertCurrent,
+        mounts,
       });
       assertCurrent();
       phases.mark("attempt.setup.sandbox.backend.bridge_import");

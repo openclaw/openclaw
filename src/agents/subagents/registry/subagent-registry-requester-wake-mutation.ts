@@ -1,8 +1,6 @@
 import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { recordGatewaySessionRunFailure } from "../../../sessions/session-run-error.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import { renderRuntimeCoordinationFailureCopy } from "../../failover/assistant-request-failure-copy.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
@@ -15,10 +13,7 @@ import { resolveRequesterDeliveryOutcome } from "./subagent-delivery-state.js";
 import type { SubagentLifecycleWakeContext } from "./subagent-registry-lifecycle-context.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  buildRequesterSettleWakeIdentity,
-  sameRequesterSettleRunIdentity,
-} from "./subagent-requester-settle-identity.js";
+import { sameRequesterSettleRunIdentity } from "./subagent-requester-settle-identity.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 export type RequesterWakeMutationReceipt = { committed?: RequesterWakeCommittedWrite };
@@ -232,28 +227,6 @@ export function createRequesterWakeSettlement(params: {
                 ts: Date.now(),
                 data: { phase: "error", error, errorNotice: notice },
               },
-            });
-          } else {
-            // Stable batches lost their original run id. Report the batch failure,
-            // never assign whichever writer now occupies this session to that batch.
-            const { batchKey } = buildRequesterSettleWakeIdentity({
-              requesterSessionKey: requester.requesterSessionKey,
-              requesterAgentId: requester.requesterAgentId,
-              batchRunIds: admittedWake.batchRunIds ?? batch.map((entry) => entry.runId),
-              rearmGeneration,
-            });
-            await recordGatewaySessionRunFailure({
-              target: {
-                sessionKey: requester.requesterSessionKey,
-                agentId: requester.requesterAgentId,
-                storePath: requester.requesterStorePath,
-                sessionId: requester.completionRequesterSessionId,
-                expectedLifecycleRevision: requester.completionRequesterLifecycleRevision,
-              },
-              runId: buildAnnounceIdempotencyKey(`${batchKey}:delivery-failure`),
-              error,
-              notice,
-              assertCommitAllowed: () => assertSubagentRegistryWriteSourceCurrent(stateContext),
             });
           }
         }

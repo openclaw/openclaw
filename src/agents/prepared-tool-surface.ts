@@ -1,7 +1,6 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { isAgentToolRepeatGuardEnabled } from "./agent-scope.js";
 import type { OpenClawCodingToolsOptions } from "./agent-tools.options.js";
-import type { AnyAgentTool } from "./agent-tools.types.js";
 import type { ApplyPatchContainmentSource } from "./apply-patch-containment-hint.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
@@ -88,19 +87,4 @@ function isApplyPatchAllowedForModel(
       normalized && (normalized === normalizedModelId || normalized === normalizedFull),
     );
   });
-}
-
-export function projectAgentToolDefinition(tool: AnyAgentTool) {
-  const name = tool.name || "tool";
-  return {
-    name,
-    label: tool.label ?? name,
-    ...(tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true as const } : {}),
-    ...(tool.resultContentSource ? { resultContentSource: tool.resultContentSource } : {}),
-    description: tool.description ?? "",
-    parameters: tool.parameters,
-    executionMode: tool.executionMode,
-    ...(tool.async === false ? { async: false as const } : {}),
-    ...(tool.repeatable ? { repeatable: tool.repeatable } : {}),
-  };
 }

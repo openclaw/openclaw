@@ -22,7 +22,7 @@ import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.j
 import { matchCommandPrefix, rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 import { createCompactionNoticePayload } from "./compaction-notice.js";
-import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { stripMentions } from "./mentions.js";
 
 function formatCompactionReason(reason?: string): string | undefined {
   const text = normalizeOptionalString(reason);
@@ -109,7 +109,7 @@ export async function handleCompactCommand(
     sessionAgentId === currentAgentId && params.agentDir
       ? params.agentDir
       : resolveAgentDir(params.cfg, sessionAgentId);
-  const raw = stripStructuralPrefixes(params.ctx.commandText ?? "");
+  const raw = params.ctx.commandText ?? "";
   const stripped = params.isGroup
     ? stripMentions(raw, params.ctx, params.cfg, sessionAgentId)
     : raw;

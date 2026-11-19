@@ -18,6 +18,7 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import { resolveReplyCompletion, resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { isChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { GatewayOperatorRecoveryAuthorizationError } from "../../infra/restart-recovery-errors.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
 import { hasReplyOperationExecutionStarted } from "../../sessions/session-controller.state.js";
@@ -183,6 +184,9 @@ export async function handleAgentExecutionError(params: {
     }
     delete runState?.replyCompletion;
     return settleFailure({ text: `${err.message} This turn will not be continued automatically.` });
+  }
+  if (err instanceof GatewayOperatorRecoveryAuthorizationError) {
+    return settleFailure({ text: err.message });
   }
   if (isChannelRunAuthorizationError(err)) {
     if (isChannelRunAuthorizationError(err, "unavailable")) {

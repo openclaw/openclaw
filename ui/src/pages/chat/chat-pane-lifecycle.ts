@@ -48,7 +48,7 @@ import { resolveSidebarPanelShortcut } from "./chat-pane-panel-shortcuts.ts";
 import { openPreferredSidebarPanel, releaseAttachmentWorkspaceOwner } from "./chat-pane-rails.ts";
 import { ChatPaneSessionObservation } from "./chat-pane-session-observation.ts";
 import { createChatPaneSessionPanelToggles } from "./chat-pane-session-panel-toggle.ts";
-import { focusChatComposerFromKeydown } from "./chat-pane-shared.ts";
+import { focusChatComposerFromKeydown, stopChatRunFromEscape } from "./chat-pane-shared.ts";
 import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import * as startupSubscriptions from "./chat-pane-startup-subscriptions.ts";
 import type { ChatPaneInputChanges } from "./chat-pane-state-owner.ts";
@@ -272,6 +272,13 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     );
   };
 
+  protected readonly handleUnclaimedEscape = (event: KeyboardEvent) => {
+    if (this.state && this.active && this.presented) {
+      const { stopRunFromEscape } = getChatComposerState(this.presentationId);
+      stopChatRunFromEscape(this.element, event, stopRunFromEscape);
+    }
+  };
+
   override start(
     inlineCommandPresentation?: InlineCommandPresentation,
     inlineCommandPreparationError?: string,
@@ -296,6 +303,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     chatState.addCleanup(listen(this.element, "focusin", this.handlePaneFocus));
     chatState.addCleanup(listen(this.element, "input", this.handlePaneInput));
     chatState.addCleanup(listen(document, "keydown", this.handleDocumentKeydown, true));
+    chatState.addCleanup(listen(window, "keydown", this.handleUnclaimedEscape));
     const pageState = createPageState(
       this.context,
       chatState.createRenderLifecycle(),

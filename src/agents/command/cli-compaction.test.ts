@@ -252,6 +252,8 @@ describe("runCliTurnCompactionLifecycle", () => {
     const scenario = await prepareScenario("no-compactable-entries", {
       provider: "test-provider",
       model: "test-model",
+      // Over the 1,000-token window: a failed compaction must fail the command.
+      sessionEntry: { totalTokens: 1_200 },
       compact: async () => result,
       deps: {
         openSessionManager: async () =>
@@ -271,6 +273,21 @@ describe("runCliTurnCompactionLifecycle", () => {
     await expect(run(false, "contradictory result", true)).rejects.toThrow(
       "CLI transcript compaction failed for test-provider/test-model: contradictory result",
     );
+    // Under the window, the same failure only skips maintenance.
+    const soft = await prepareScenario("no-compactable-entries-soft", {
+      provider: "test-provider",
+      model: "test-model",
+      compact: async () => ({
+        ok: false,
+        compacted: false,
+        reason: "no real conversation messages",
+      }),
+      deps: {
+        openSessionManager: async () =>
+          ({ getBranch: () => [], buildSessionContext: () => ({ messages: [] }) }) as never,
+      },
+    });
+    await expect(soft.run()).resolves.toBe(soft.sessionEntry);
   });
 
   it.each(["admitted", "current"] as const)(
@@ -678,7 +695,9 @@ describe("runCliTurnCompactionLifecycle", () => {
   });
 
   it("does not fall back when native harness compaction returns no result", async () => {
-    const scenario = await prepareHarness("codex-native-empty", async () => undefined);
+    const scenario = await prepareHarness("codex-native-empty", async () => undefined, {
+      sessionEntry: { totalTokens: 1_200 },
+    });
 
     await expect(scenario.run()).rejects.toThrow(
       "CLI native harness compaction failed for codex/gpt-5.5: native harness compaction did not reduce context",
@@ -761,7 +780,10 @@ describe("runCliTurnCompactionLifecycle", () => {
     const disposed = createDeferred();
     const scenario = await prepareScenario("cli-timeout", {
       cfg: { agents: { defaults: { compaction: { timeoutSeconds: 1 } } } } as OpenClawConfig,
-      sessionEntry: resumeState({ "claude-cli": "claude-session" }, "claude-session"),
+      sessionEntry: {
+        ...resumeState({ "claude-cli": "claude-session" }, "claude-session"),
+        totalTokens: 1_200,
+      },
       contextEngine: (calls) => ({
         ...buildContextEngine({ compactCalls: calls }),
         async compact(compactParams) {

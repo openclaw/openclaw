@@ -145,7 +145,7 @@ describe("installSessionToolResultGuard", () => {
     },
   );
 
-  it("keeps the exec retention-loss disclosure through the session result cap", () => {
+  it("keeps execution and completion receipts through the session result cap", () => {
     const { sm } = setup({ maxToolResultChars: 4_000 });
     const output = buildExecForegroundResult({
       outcome: {
@@ -170,6 +170,22 @@ describe("installSessionToolResultGuard", () => {
       /^\[earlier output was discarded at the retention cap and cannot be recovered\]/,
     );
     expect(resultText(sm)).toMatch(/\[\.\.\. \d+ more characters truncated/);
+    // Completion facts are recorded before the capped result drops the child output.
+    const collector = setup({ maxToolResultChars: 4_000 }).sm;
+    const facts = { runId: "done-run", sessionKey: "agent:main:subagent:w", label: "W" };
+    const completion = { ...facts, status: "done", result: "x".repeat(40_000) };
+    collector.appendMessage(call("call_1", "agents_wait"));
+    // A per-ID error has no completion row; its compact count survives the cap too.
+    const mixed = { completed: [completion], errors: [{ runId: "gone", error: "not_found" }] };
+    collector.appendMessage({
+      ...result(JSON.stringify(mixed), "agents_wait"),
+      details: mixed,
+    });
+    expect(messages(collector).find((message) => message.role === "toolResult")).toMatchObject({
+      subagentCompletions: [facts],
+      subagentCollectionErrors: 1,
+    });
+    expect(resultText(collector)).not.toContain(completion.result);
   });
 
   it("marks an exec output file cut at its limit as partial", () => {

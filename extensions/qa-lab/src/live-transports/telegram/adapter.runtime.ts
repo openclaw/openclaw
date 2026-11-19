@@ -310,6 +310,7 @@ export async function createTelegramQaTransportAdapter(
       apiProxy = await skillRuntime!.startApiProxy(leaseHealth);
       await apiProxy.drainUpdates(credential.sutToken);
       userbot = await TelegramUserbotDriver.start({
+        role: "primary",
         chatId: directMessageOnly ? `@${credential.sutUsername}` : restored.groupId,
         ...(credential.forumGroupId ? { observeChatIds: [credential.forumGroupId] } : {}),
         expectedUserId: credential.testerUserId,
@@ -332,6 +333,7 @@ export async function createTelegramQaTransportAdapter(
         );
         drivers.push(
           await TelegramUserbotDriver.start({
+            role: "participant",
             chatId: directMessageOnly ? `@${credential.sutUsername}` : restored.groupId,
             expectedUserId: participant.testerUserId,
             driverEnv: restoredParticipant.driverEnv,

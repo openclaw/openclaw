@@ -164,6 +164,32 @@ async function expectUnchangedHeartbeatAdmission(
   return verdict;
 }
 
+it("keeps a disabled heartbeat in included config and asks to consolidate instead of delete", async () => {
+  const f = fixture({ scratch: source });
+  const workspace = path.join(path.dirname(path.dirname(f.configPath)), "workspace");
+  writeFixtureJsonSync(path.join(path.dirname(f.configPath), "agents.json"), {
+    defaults: { heartbeat: { agentId: "main", every: "" } },
+    entries: { main: { workspace }, ops: { workspace } },
+  });
+  writeFixtureJsonSync(f.configPath, { agents: { $include: "agents.json" } });
+  const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  const before = f.snapshot();
+
+  await updateAdmitCommand(f.contextPath);
+
+  const verdict = parseUpdateAdmissionVerdict(output.mock.calls[0]?.[0]);
+  expect(verdict).toMatchObject({
+    verdict: "refuse",
+    reasons: [expect.objectContaining({ code: "invalid-config" })],
+  });
+  const message = verdict?.reasons[0]?.message ?? "";
+  expect(message).toContain("agents.defaults.heartbeat");
+  expect(message).toContain("consolidate the included files into one openclaw.json");
+  expect(message).toContain("do not remove");
+  expect(message).not.toContain("to repair retired or unrecognized configuration fields");
+  expect(f.snapshot()).toEqual(before);
+});
+
 it.each(["absent", "file", "unreadable"] as const)(
   "checks unresolved cron update admission (heartbeat source: %s)",
   async (sourceKind) => {

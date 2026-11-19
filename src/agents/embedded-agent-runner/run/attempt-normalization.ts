@@ -9,6 +9,7 @@ import {
   readSessionEntryReadOnlyInWorker,
 } from "../../../config/sessions/session-entry-read-runtime.js";
 import { isSqliteTranscriptMutationConflict } from "../../../config/sessions/session-mutation-conflict-error.js";
+import { isAbortError } from "../../../infra/abort-signal.js";
 import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { formatAssistantErrorText } from "../../embedded-agent-helpers/error-text.js";
@@ -18,8 +19,9 @@ import { resolveLegacyCompactionSessionKey } from "../legacy-compaction-session-
 import { log } from "../logger.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "../replay-state.js";
 import {
-  isTranscriptConflictReplaySafe,
+  isEmbeddedRunReplaySafe,
   ReplaySafeTranscriptConflictError,
+  ReplaySafeRunAbortError,
 } from "../transcript-conflict.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
 import {
@@ -89,6 +91,22 @@ export async function normalizeEmbeddedRunAttempt(input: {
   const params = runInput.runParams;
   const runtime = preparedRuntime.snapshot();
   const attempt = normalizeEmbeddedRunAttemptResult(dispatchedAttempt.rawAttempt);
+  const assertNotAborted = () => {
+    try {
+      runInput.laneController.throwIfAborted();
+    } catch (error) {
+      // Preserve positive execution evidence when cancellation discards the result.
+      if (
+        error instanceof Error &&
+        isAbortError(error) &&
+        !params.pluginRuntimeRefreshContinuation &&
+        isEmbeddedRunReplaySafe(input.replayState, attempt)
+      ) {
+        throw new ReplaySafeRunAbortError(error);
+      }
+      throw error;
+    }
+  };
   // Completed attempt facts must survive cancellation while user persistence settles.
   const attemptCompactionCount = Math.max(0, attempt.compactionCount ?? 0);
   const recordedCompactionCount = input.recordedCompactionCount ?? 0;
@@ -114,7 +132,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
   sessionPromptState.suppressNextUserMessagePersistence = sessionPromptState.activePrompt.persisted;
   // Parent Stop can revoke attempt callbacks before they run. The lane signal,
   // not a callback-derived latch, owns cancellation after persistence settles.
-  runInput.laneController.throwIfAborted();
+  assertNotAborted();
   const {
     terminal,
     preflightRecovery,
@@ -152,7 +170,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
       ? { ...sessionPromptState.sessionTarget }
       : undefined;
     const assertCurrent = () => {
-      runInput.laneController.throwIfAborted();
+      assertNotAborted();
       if (
         sessionPromptState.sessionId !== previousSessionId ||
         sessionPromptState.sessionFile !== previousSessionFile ||
@@ -267,7 +285,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
     }
     sessionPromptState.sessionTarget = nextSessionTarget;
   }
-  runInput.laneController.throwIfAborted();
+  assertNotAborted();
   const bootstrapPromptWarningSignaturesSeen =
     attempt.bootstrapPromptWarningSignaturesSeen ??
     (attempt.bootstrapPromptWarningSignature
@@ -298,10 +316,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
   if (isSqliteTranscriptMutationConflict(promptError)) {
     // Never rebase this answer onto a newer user turn. The completion owner may
     // readmit its original input only when the entire failed run had no effects.
-    if (
-      promptError instanceof Error &&
-      isTranscriptConflictReplaySafe(input.replayState, attempt)
-    ) {
+    if (promptError instanceof Error && isEmbeddedRunReplaySafe(input.replayState, attempt)) {
       throw new ReplaySafeTranscriptConflictError(promptError);
     }
     throw promptError;

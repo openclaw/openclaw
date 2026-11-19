@@ -61,10 +61,6 @@ const catalog = {
         adminBlocked: "You need admin access to manage MCP servers.",
         savingBlocked: "Saving… Try again in a moment.",
       },
-      overrides: {
-        count: "{count} overrides",
-        countOne: "{count} override",
-      },
       contextUsage: {
         title: "Context usage details",
         percentUsed: "Context: {pct}% used",
@@ -75,6 +71,8 @@ const catalog = {
         inputShort: "In",
         outputShort: "Out",
         costShort: "Cost",
+        cacheShort: "Cache",
+        cacheHitRate: "Prompt tokens read from cache",
         sessionTotal: "Session total",
         unpriced: "Unpriced",
         quotaAccountUnknown: "Quota account unknown",
@@ -137,7 +135,7 @@ const catalog = {
       dictationInterruptedRecovery:
         "Captured text was inserted. Check your connection and try again.",
       dictationStartRecovery: "Check microphone access and transcription settings, then try again.",
-      dictationFinalizing: "Finishing dictation…",
+      dictationFinalizing: "Transcribing…",
       dictationListening: "Listening…",
       dictationStarting: "Starting microphone…",
       dictationStopAndKeep: "Stop and keep text",

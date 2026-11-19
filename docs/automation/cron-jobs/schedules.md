@@ -335,9 +335,9 @@ time first, and start as soon as a running check finishes or its condition fires
 A queued check is not deferred or retried later, holds no run slot, spends none of
 its time budget, and keeps its occurrence across a Gateway restart.
 
-A scheduled check does not use one of the scheduler's eight run slots, so checks keep
-running while eight long runs are active. Only the payload of a fired condition needs a
-run slot. If a condition fires while all eight are busy, the run waits for a free slot and
+A scheduled check does not use one of the scheduler's run slots, so checks keep running
+while every run slot holds a long run. Only the payload of a fired condition needs a run
+slot. If a condition fires while every slot is busy, the run waits for a free slot and
 then runs its payload on the result of that one check; the wait does not count against
 the run's time budget. A cron config change keeps the wait; a Gateway stop or restart
 ends it without running the payload. Freed slots go to waiting payloads and queued runs in due-time

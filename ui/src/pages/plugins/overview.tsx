@@ -7,6 +7,7 @@ import {
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
+import { Tooltip } from "../../components/solid/tooltip.tsx";
 import { askBrandLabel } from "../../components/theme-brand-label.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatDateMs } from "../../lib/format.ts";
@@ -39,30 +40,46 @@ function securityTone(status: string): "pass" | "warning" | "danger" | "unknown"
 function renderPluginSecurityAudit(status: string, auditUrl: string | null | undefined) {
   const tone = securityTone(status);
   const bars = { pass: 3, warning: 2, danger: 1, unknown: 0 }[tone];
+  const verdict =
+    tone === "pass"
+      ? t("pluginsPage.auditClean")
+      : tone === "warning"
+        ? t("pluginsPage.auditReview")
+        : status;
   return (
-    <a
+    <section
       class={["plugin-catalog-detail__security", `plugin-catalog-detail__security--${tone}`]}
-      href={auditUrl ?? undefined}
-      target="_blank"
-      rel="noopener noreferrer"
     >
-      <h2 class="settings-section__heading oc-settings-section-title">
-        {t("pluginsPage.detailSecurity")}
-        <span title={t("pluginsPage.detailSecurityAudit")}>{<Icon name="info" />}</span>
-      </h2>
-      <div class="plugin-catalog-detail__security-score">
-        <strong>
-          {tone === "pass"
-            ? t("pluginsPage.auditClean")
-            : tone === "warning"
-              ? t("pluginsPage.auditReview")
-              : status}
-        </strong>
+      <div class="plugin-catalog-detail__security-heading">
+        <h2 class="settings-section__heading oc-settings-section-title">
+          {t("pluginsPage.detailSecurity")}
+        </h2>
+        {/* Outside the audit link, whose page preview replaces any hint nested in it,
+            and outside the heading, whose uppercase type the hint would inherit. */}
+        <Tooltip content={t("pluginsPage.detailSecurityInfo")} describe={false} openOnClick>
+          <button
+            type="button"
+            class="oc-icon-button oc-icon-button--28"
+            aria-label={t("pluginsPage.detailSecurityInfo")}
+          >
+            <Icon name="info" />
+          </button>
+        </Tooltip>
+      </div>
+      <a
+        class="plugin-catalog-detail__security-score"
+        href={auditUrl ?? undefined}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label={`${t("pluginsPage.detailSecurity")}: ${verdict}`}
+        title={t("pluginsPage.detailSecurityAudit")}
+      >
+        <strong>{verdict}</strong>
         <For each={[0, 1, 2]}>
           {(index) => <span class={{ "is-filled": index < bars }} aria-hidden="true" />}
         </For>
-      </div>
-    </a>
+      </a>
+    </section>
   );
 }
 

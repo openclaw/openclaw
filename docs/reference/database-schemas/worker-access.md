@@ -13,6 +13,12 @@ awaits operations, retains owner-published facts, and checks current authority
 before effects. Moving a query to a worker is not enough: reuse those facts and
 batch related work so ordinary requests do not repeat database calls.
 
+Plugin model catalog publication uses the agent database writer queue. Credential
+cleanup joins those same queues before inspecting candidate catalogs, so an earlier
+publication settles before a clean-catalog decision. Later publications revalidate
+credentials in their transaction. No catalog sidecar lock is needed under Gateway
+database custody; catalog refresh never creates or removes one on the event loop.
+
 Retained session-generation and prepared entry-source guards keep the SQLite
 admission owner's lifetime and check its recorded generation without filesystem
 polling. Database retirement or a replacement observed at admission invalidates
@@ -92,6 +98,13 @@ context while preserving the selected database engine. Each reclamation request
 keeps its own current-source and commit-authority checks.
 
 ## Choose the execution owner
+
+Transcript-facts backfill discovery and covered-window probes use the session-store
+read worker, independently of writer admission. Only bounded fact-publication
+batches reserve the writer, at background priority after queued foreground work.
+Read delays scale with their own elapsed request time; write delays include
+preparation, commit and reply delivery, with the existing bounded contention backoff.
+The in-memory position cursor and transactional coverage checks preserve resumability.
 
 Shared-state worker contexts carry installed-service migration restrictions only
 for the admitted database. An unrelated older global installation does not change
@@ -270,6 +283,12 @@ The writable lifecycle alone opens and publishes those handles and owns leases,
 migrations, timers, and closure. Borrowers prevent idle eviction; explicit disposal
 can still close the connection and invalidate its claims immediately. Maintenance
 closes cached handles before migrating or replacing their storage.
+
+Retained PostgreSQL connections use the same pre-query reconnect owner as pooled
+connections when the server's last completed status was idle. After one second
+of wall-clock inactivity, including VM suspension, transport validation runs
+before caller SQL. A lost active transaction or uncertain statement outcome still
+fails; reconnect never replays caller SQL or claims an uncertain commit rolled back.
 
 If PostgreSQL schema publication invalidates admission, connection opening,
 shared-state reads before their callback, and standalone feature-schema ensures
@@ -1858,6 +1877,7 @@ registry hints for durable children go through the entry worker. The Gateway tru
 the child owner's selection without repeating its parent checks. A reparenting
 after the read appears on the next lookup. There is no synchronous batch fallback.
 
+Filtered SQLite transcript search generates snippets as its visibility cursor consumes ordered candidates, and retains its connection in the worker's read scope.
 Transcript search returns its read snapshot and obtains indexing readiness from
 the projection owner. It does not reread a connection revision after awaiting
 readiness; an intervening append appears on the next search. Projection rebuilds
@@ -6242,6 +6262,10 @@ Persisted-turn replay admission validates the exact session writer row and the
 prepared transcript version in the anchor reader's single snapshot. Each scan
 retains its physical source through validation and cleanup; later preparation
 phases must select that same physical file and obtain fresh reader authority.
+Initial preparation and final consumption share one bounded refresh when a
+concurrent append invalidates selection. The refreshed current user must retain
+the original entry ID and generation; a newer user or completed turn still fails.
+Once consumption starts, its callback is never retried.
 Final consumption retains writer FIFO custody and the native mutation witness
 through synchronous prompt publication and core entry. Current run ownership,
 permission generation, cancellation, and one-time replay consumption remain live

@@ -87,10 +87,10 @@ function contrastRatio(first: number, second: number): number {
 const originalAttributes = ["data-theme-mode", "data-theme"].map(
   (name) => [name, document.documentElement.getAttribute(name)] as const,
 );
-function sidebarFixture(pinned: boolean) {
+function sidebarFixture() {
   const sidebar = document.createElement("aside");
   sidebar.className = "sidebar";
-  sidebar.innerHTML = `<div class="sidebar-shell"><section class="sidebar-sessions sidebar-recent-sessions${pinned ? " sidebar-zone-entry" : ""}">
+  sidebar.innerHTML = `<div class="sidebar-shell"><section class="sidebar-sessions sidebar-recent-sessions">
     <div class="sidebar-recent-session"><a class="sidebar-recent-session__link">
       <span class="sidebar-session-indicator"></span><span class="sidebar-recent-session__title">Shared session</span>
     </a></div></section></div>`;
@@ -191,19 +191,15 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
           (theme === "claw" && (ownerCount === 2 || ownerCount === 13)
             ? ["present", "running", "away", "unread"]
             : ["present", "away"]
-          ).flatMap((presence) =>
-            (presence === "present" && ownerCount === 12 ? [false, true] : [false]).map(
-              (pinned) => ({ theme, mode, ownerCount, presence, pinned }),
-            ),
-          ),
+          ).map((presence) => ({ theme, mode, ownerCount, presence })),
         ),
       ),
     ),
   )(
-    "lays out $ownerCount owners: $theme/$mode, $presence, pinned=$pinned",
-    async ({ theme, mode, ownerCount, presence, pinned }) => {
+    "lays out $ownerCount owners: $theme/$mode, $presence",
+    async ({ theme, mode, ownerCount, presence }) => {
       await applyTheme(theme, mode);
-      const { sidebar, row: rowTemplate } = sidebarFixture(pinned);
+      const { sidebar, row: rowTemplate } = sidebarFixture();
       const rows = ["idle", "hover", "active", "selected"].map((state) => {
         const row = rowTemplate.cloneNode(true) as HTMLElement;
         rowTemplate.before(row);
@@ -397,7 +393,7 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
       chip.style.zoom = "4";
       await expectCenteredInk(owner);
       if (size === "row") {
-        const { row } = sidebarFixture(false);
+        const { row } = sidebarFixture();
         row.append(chip);
         expect(getComputedStyle(owner)).toMatchObject({ borderTopWidth: "0px", boxShadow: "none" });
       }

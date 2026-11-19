@@ -536,10 +536,8 @@ export function createOpenClawIdService(params: {
     ) {
       return;
     }
-    const [{ startMailboxReader }, { createDiscoveryClient }] = await Promise.all([
-      import("./mailbox-reader.js"),
-      import("./discovery-client.js"),
-    ]);
+    const [{ startMailboxReader, createMailboxSink }, { createDiscoveryClient }] =
+      await Promise.all([import("./mailbox-reader.js"), import("./discovery-client.js")]);
     const owner = await getAuthority();
     const { signer } = await gatewayKey.load();
     // A reader started for a stopped lifetime would also block the next lifetime's reader.
@@ -551,12 +549,7 @@ export function createOpenClawIdService(params: {
       clawId: record.claw_id,
       client,
       cursor: record.discovery.mailbox_cursor,
-      sink: {
-        submit: (statement) => owner.submit(statement, "mailbox"),
-        redeem: (redemption, sender) => owner.redeem(redemption, sender),
-        redeemNode: (redemption) => owner.redeemNode(redemption),
-        saveCursor: (cursor) => owner.recordDiscovery({ mailbox_cursor: cursor }),
-      },
+      sink: createMailboxSink(owner),
       onEffects: async (events) => {
         await applyEvents(events);
       },
