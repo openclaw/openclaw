@@ -229,6 +229,51 @@ describe.skipIf(process.platform === "win32")("native package stage", () => {
     });
   });
 
+  it("publishes a quoted pnpm launcher whose stage path itself contains an apostrophe", async () => {
+    await withTestDir({ prefix: "native-package-stage-quoted-" }, async (base) => {
+      // pnpm spells `'` inside its single-quoted words as `'\''`, including in the stage path.
+      const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+      const project = join(base, "team's base", "install", "global");
+      const globalRoot = join(project, "v11");
+      const packageRoot = join(globalRoot, "group", "node_modules", "openclaw");
+      const liveBinDir = join(base, "team's base", "bin");
+      await fs.mkdir(packageRoot, { recursive: true });
+      await fs.mkdir(liveBinDir, { recursive: true });
+      const stage = await prepareStage(
+        { manager: "pnpm", command: "pnpm", globalRoot, packageRoot },
+        liveBinDir,
+      );
+      const candidateRoot = join(stage.projectRoot, "v11", "group", "node_modules", "openclaw");
+      await fs.writeFile(join(candidateRoot, "openclaw.mjs"), "");
+      const launcher = join(stage.binDir, "openclaw");
+      await writeLauncher(
+        launcher,
+        [
+          "#!/bin/sh",
+          'basedir_abs=$(CDPATH= cd -P -- "$(dirname "$0")" && pwd -P)',
+          `export NODE_PATH=${quote(join(stage.projectRoot, "v11", "group", "node_modules"))}`,
+          `exec "$basedir_abs/node"  "$basedir_abs"/${quote(relative(stage.binDir, join(candidateRoot, "openclaw.mjs")))} "$@"`,
+          `# cmd-shim-target=${join(packageRoot, "openclaw.mjs")}`,
+          "",
+        ].join("\n"),
+      );
+
+      await finalizeNativePackageStage(stage, "openclaw");
+      // Activation: the stage becomes the live project and its launcher is published.
+      await fs.rename(project, `${project}.previous`);
+      await fs.rename(stage.projectRoot, project);
+      await fs.copyFile(launcher, join(liveBinDir, "openclaw"));
+      await writeLauncher(
+        join(liveBinDir, "node"),
+        `#!/bin/sh\nprintf '%s\\n%s\\n' "$1" "$NODE_PATH"\n`,
+      );
+
+      const [entry, nodePath] = (await output(join(liveBinDir, "openclaw"))).split("\n");
+      expect(resolve(entry ?? "")).toBe(join(await fs.realpath(packageRoot), "openclaw.mjs"));
+      expect(nodePath).toBe(join(await fs.realpath(project), "v11", "group", "node_modules"));
+    });
+  });
+
   it("refuses to publish a launcher that relocation left pointing into the stage", async () => {
     await withTestDir({ prefix: "native-package-stage-launcher-" }, async (base) => {
       const project = join(base, "install", "global");

@@ -69,18 +69,20 @@ export async function repairStagedRuntimeLauncher(
   // from planting a link where the repair writes.
   const staging = await fs.mkdtemp(path.join(path.dirname(file), ".openclaw-launcher-repair-"));
   const temporary = path.join(staging, path.basename(file));
-  await fs.writeFile(temporary, content, { flag: "wx", mode: 0o600 });
   try {
+    await fs.writeFile(temporary, content, { flag: "wx", mode: 0o600 });
     // pnpm 12 resolves the shim's directory physically; relocate from that same base.
     const physical = path.join(await fs.realpath(path.dirname(file)), path.basename(file));
     await relocateRuntimeLauncher(temporary, physical, physical, [
       { sourceRoot: stage, destinationRoot: projectRoot },
     ]);
-    const repaired = await resolveRuntimeLauncherTargets(
-      file,
-      entryName,
-      await fs.readFile(temporary, "utf8"),
-    );
+    const relocated = await fs.readFile(temporary, "utf8");
+    // A repair is complete only when nothing in the launcher (exec targets, NODE_PATH,
+    // comments) still names the stage, in any spelling.
+    if (relocated.includes(path.basename(stage))) {
+      throw new Error("The repaired launcher still names the removed update stage");
+    }
+    const repaired = await resolveRuntimeLauncherTargets(file, entryName, relocated);
     for (const target of repaired) {
       await fs.access(target);
     }
