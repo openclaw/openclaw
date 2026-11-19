@@ -22,6 +22,11 @@ session's owner or another participant cannot replace it. A revoked or unavailab
 source fails recovery rather than falling back to another person. Older markers
 without a captured source keep the session-principal recovery policy.
 
+Scheduled automation retains its cron owner, even when it runs in an ordinary
+conversation. Shutdown does not turn an interrupted occurrence into an operator
+resume request or an operator-authority failure notice. The cron scheduler owns
+its retry and next-tick behavior. Accepted user work still keeps its resume path.
+
 If the interrupted turn left a managed workspace pending, its recovery input waits
 for the workspace owner to finish preparation before starting the turn. Setup
 failures still produce the ordinary actionable error; pending setup alone does
