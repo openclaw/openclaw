@@ -76,9 +76,15 @@ export function scanDisplacedDatabases(
     ) {
       continue;
     }
-    const entries = [
-      ...(scan?.directory(directory) ?? fs.readdirSync(directory, { withFileTypes: true })),
-    ];
+    let entries: fs.Dirent[];
+    try {
+      entries = [
+        ...(scan?.directory(directory) ?? fs.readdirSync(directory, { withFileTypes: true })),
+      ];
+    } catch {
+      // An unreadable directory proves nothing; the rest of the inventory still runs.
+      continue;
+    }
     const unmatched: string[] = [];
     for (const entry of entries) {
       const parsed = parseDisplacedDatabaseName(entry.name);
@@ -198,6 +204,15 @@ export function classifyDisplacedDatabases(
         outcome: "blocked",
         reason: "displaced-database-changed",
         detail: `${changed[0]} is not the file the rollback recorded.`,
+      });
+      continue;
+    }
+    const live = fs.lstatSync(item.receipt.databasePath, { bigint: true, throwIfNoEntry: false });
+    if (!live?.isFile() || live.nlink !== 1n) {
+      Object.assign(artifact, {
+        outcome: "blocked",
+        reason: "live-database-missing",
+        detail: `${item.receipt.databasePath} is missing or aliased; its moved-aside copy is kept.`,
       });
       continue;
     }

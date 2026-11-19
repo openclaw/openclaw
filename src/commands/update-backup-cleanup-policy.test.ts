@@ -38,6 +38,10 @@ import {
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { recordDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
+import {
+  type DoctorMigrationBackupFormat,
+  doctorMigrationBackupPath,
+} from "./doctor-migration-backup-names.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
@@ -87,6 +91,7 @@ async function doctorBackups(
   state: OpenClawTestState,
   databases: readonly string[],
   updateRunId?: string,
+  format: DoctorMigrationBackupFormat = "full",
 ) {
   await closeOpenClawAgentDatabasesAsync(state.stateDir);
   await closeOpenClawStateDatabaseAsync();
@@ -94,7 +99,7 @@ async function doctorBackups(
   const inventory = databases.map((database) => ({
     path: database,
     identity: fs.statSync(database, { bigint: true }),
-    archivePath: `${database}.pre-startup-migration-${backupId}.bak`,
+    archivePath: doctorMigrationBackupPath(database, backupId, format),
   }));
   await withDoctorSqliteMaintenanceLock({
     env: state.env,
@@ -205,7 +210,8 @@ it("removes a rolled-back update's backups after a later verified update and kee
     for (const file of [userBackup, unmanifested, cron, unreceipted]) {
       fs.writeFileSync(file, "not provably the updater's");
     }
-    const foreignRun = await doctorBackup(state, agentPath(state), "no-such-update-run");
+    // An update run id the ledger does not hold as running tags nothing.
+    const foreignRun = await doctorBackup(state, agentPath(state), randomUUID());
     // A manifest from before `updateRunId` keeps its inode-based completion rule.
     const legacy = await doctorBackup(state, agentPath(state));
     // A receipt may name only its own family, never another file beside it.
@@ -240,7 +246,8 @@ it("removes a rolled-back update's backups after a later verified update and kee
     expect(cleanup?.advisory).toBeUndefined();
     const [summary, ...lines] = cleanup?.diagnostics ?? [];
     expect(summary).toContain(`(${freed} logical bytes, ${formatDiskSpaceBytes(freed)}).`);
-    for (const file of [unmanifested, cron, unreceipted, foreignRun]) {
+    expect(cleanup?.diagnostics).toContainEqual(expect.stringContaining(`Kept ${foreignRun} (`));
+    for (const file of [unmanifested, cron, unreceipted]) {
       expect(lines).toContainEqual(expect.stringContaining(`Kept: not provably ours: ${file} (`));
     }
     expect(lines.join("\n")).not.toContain(userBackup + " ");
@@ -585,5 +592,56 @@ it("leaves content-dependent eligibility unverified in the bounded status scan",
     expect(usage.incomplete).toBe(false);
     expect(usage.byKind.migrationOriginals.retirable.count).toBe(0);
     expect(usage.byKind.migrationOriginals.protected.count).toBe(2);
+  });
+});
+
+it("keeps an older full backup when the newer one is table-scoped", async () => {
+  await withState(async (state) => {
+    const now = Date.now();
+    const olderRun = startRun(state, now);
+    const older = await doctorBackup(state, agentPath(state), olderRun);
+    finishUpdateRun(olderRun, { status: "failed" }, { env: state.env });
+    const newerRun = startRun(state, now + 60_000);
+    // A scoped image holds only the tables one migration touched.
+    const scoped = (await doctorBackups(state, [agentPath(state)], newerRun, "scoped"))[0]!;
+    finishUpdateRun(newerRun, { status: "failed" }, { env: state.env });
+    await cleanUpWith(state);
+    expect([older, scoped].filter((file) => fs.existsSync(file))).toEqual([older, scoped]);
+  });
+});
+
+it("leaves a Doctor backup untagged when its update run already finished", async () => {
+  await withState(async (state) => {
+    const now = Date.now();
+    const finished = verifiedRun(state, now);
+    // A standalone repair inherited the finished run's id from its environment.
+    const repair = await doctorBackup(state, agentPath(state), finished);
+    const manifestDir = path.join(state.stateDir, "session-sqlite-migration-runs");
+    const [manifest] = fs
+      .readdirSync(manifestDir)
+      .map((name) => readSessionSqliteMigrationManifest(path.join(manifestDir, name))!);
+    expect(manifest?.updateRunId).toBeUndefined();
+    await cleanUpWith(state);
+    expect(fs.existsSync(repair)).toBe(true);
+  });
+});
+
+it("does not offer a moved-aside family for removal while its live database is missing", async () => {
+  await withState(async (state) => {
+    const now = Date.now();
+    const runId = startRun(state, now);
+    const family = await displacedFamily(agentPath(state), runId);
+    finishUpdateRun(runId, { status: "failed" }, { env: state.env });
+    verifiedRun(state, now + 60_000);
+    await closeOpenClawAgentDatabasesAsync(state.stateDir);
+    for (const suffix of ["", "-wal", "-shm"]) {
+      fs.rmSync(`${agentPath(state)}${suffix}`, { force: true });
+    }
+    const preview = await inspectSessionSqliteRecovery({ cfg: {}, env: state.env });
+    const outcomes = preview.artifacts
+      .filter((item) => item.path.startsWith(family))
+      .map((item) => item.outcome);
+    expect(outcomes.length).toBeGreaterThan(0);
+    expect(outcomes).not.toContain("candidate");
   });
 });

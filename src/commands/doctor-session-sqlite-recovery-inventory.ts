@@ -34,6 +34,7 @@ import {
   getActiveOpenClawStateDatabaseReadSnapshotAsync,
   withCurrentOpenClawStateReadScope,
 } from "../state/openclaw-state-db-readonly.js";
+import { classifyDoctorMigrationBackupPath } from "./doctor-migration-backup-names.js";
 import type { RecoveryInventoryScan } from "./recovery-inventory-scan.js";
 import {
   collectUpdateCaptureInventory,
@@ -202,7 +203,13 @@ export function collectRecoveryInventory(params: {
       [...references.entries()].flatMap(([archivePath, refs]) => {
         const current = statMigrationPath(archivePath, { bigint: true });
         const identity = refs[0]?.move.artifact?.identity;
+        // A table-scoped backup covers only the tables one migration touched, so only a
+        // full image of the same database can stand in for an older one.
         const intact =
+          refs.every(
+            (ref) =>
+              classifyDoctorMigrationBackupPath(ref.target.sqlitePath, archivePath) === "full",
+          ) &&
           current?.isFile() === true &&
           current.nlink === 1n &&
           identity !== undefined &&
