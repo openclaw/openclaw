@@ -69,7 +69,14 @@ describe("check-changelog-attributions", () => {
     expect(findForbiddenChangelogThanks(text)).toStrictEqual([]);
     expect(
       findForbiddenChangelogThanks("- Fix. Thanks @external-contributor and @steipete."),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
+  });
+
+  it("rejects automation handles while allowing human maintainers", () => {
+    for (const handle of ["claude", "hugin-bot", "roboclaw-bot", "steipete-oai", "tideclaw-bot"]) {
+      expect(isForbiddenChangelogThanksHandle(handle)).toBe(true);
+    }
+    expect(isForbiddenChangelogThanksHandle("steipete")).toBe(false);
   });
 
   it("allows external contributor thanks attributions", () => {
