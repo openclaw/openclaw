@@ -130,6 +130,42 @@ async function readPersistedJobs(): Promise<StoredJob[]> {
   return (await loadCronStore(storePath)).jobs as unknown as StoredJob[];
 }
 
+it("writes the recorded automation owner through the backed-up Doctor repair", async () => {
+  const createdActor = { type: "human", source: "profile", id: "profile-creator" };
+  const payload = { kind: "agentTurn", message: "Morning brief", toolsAllow: ["message"] };
+  await writeCronStore([
+    createCurrentCronJob({ id: "legacy-owner", createdActor, payload }),
+    createCurrentCronJob({ id: "transferred", createdActor, ownerProfileId: "profile-recipient" }),
+    createCurrentCronJob({
+      id: "incomplete-attribution",
+      createdActor: { ...createdActor, id: "" },
+      payload,
+    }),
+  ]);
+
+  await repairCronStore();
+
+  const { configJobs } = await loadCronJobsStoreWithConfigJobs(storePath);
+  expect(configJobs).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ id: "legacy-owner", ownerProfileId: "profile-creator", payload }),
+      expect.objectContaining({ id: "transferred", ownerProfileId: "profile-recipient" }),
+      expect.objectContaining({ id: "incomplete-attribution", enabled: false, payload }),
+    ]),
+  );
+  expect(noteMock).toHaveBeenCalledWith(
+    expect.stringContaining("Saved pre-repair cron backup"),
+    "Doctor changes",
+  );
+  expect(noteMock).toHaveBeenCalledWith(
+    expect.stringContaining("Paused automation incomplete-attribution"),
+    "Doctor warnings",
+  );
+  const repeat = makePrompter();
+  await repairCronStore(repeat);
+  expect(repeat.confirm).not.toHaveBeenCalled();
+});
+
 function requirePersistedJob(jobs: StoredJob[], index: number) {
   const job = jobs[index];
   if (!job) {
