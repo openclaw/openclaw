@@ -210,8 +210,11 @@ struct ChatSessionsCodingTests {
         liveEnvelope["__openclaw"] = ["id": "nested-row", "runId": "earlier-run"]
         liveEnvelope["content"] = try Array(#require(liveEnvelope["content"] as? [[String: Any]]).prefix(1))
         let live = try GatewayPayloadDecoding.decode(Self.nestedRaw(liveEnvelope), as: OpenClawChatMessage.self)
-        model.handleTransportEvent(.sessionMessage(.init(
-            sessionKey: "main", message: live, messageId: "nested-row", messageSeq: 1)))
+        for _ in 0..<2 {
+            model.handleTransportEvent(.sessionMessage(.init(
+                sessionKey: "main", message: live, messageId: "nested-row", messageSeq: 1)))
+        }
+        #expect(model.messages.count == 1)
         let before = try #require(model.messages.first)
         #expect(before.workRunID == "earlier-run")
         let payload = try JSONDecoder().decode(

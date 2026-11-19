@@ -283,14 +283,6 @@ extension IOSGatewayChatTransport {
         ifCurrentRoute expectedRoute: GatewayNodeSessionRoute?,
         distinguishPreDispatchRouteChange: Bool = false) async throws -> OpenClawChatSendResponse
     {
-        let ownershipScope = OpenClawChatSendOwnership.Scope(
-            sessionKey: sessionKey,
-            agentID: agentID ?? self.globalAgentId,
-            routingContract: expectedSessionRoutingContract ?? self.conversationRoutingContract)
-        guard self.conversationOwnership?.beginNative(ownershipScope) != false else {
-            throw OpenClawChatSendOwnershipError.webOwned
-        }
-        defer { self.conversationOwnership?.endNative(ownershipScope) }
         let supportsSettingsCAS = if let expectedRoute {
             await self.gateway.supportsServerCapability(
                 .sessionSettingsCAS,

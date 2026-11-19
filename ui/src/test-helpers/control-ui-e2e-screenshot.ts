@@ -91,23 +91,6 @@ export async function takeControlUiScreenshotFrame(
   content: readonly Locator[],
   options: ScreenshotFrameOptions = {},
 ) {
-  return withControlUiSettledTargets(
-    page,
-    surface,
-    content,
-    () => captureControlUiFrame(page, options.elements ?? [], options),
-    options,
-  );
-}
-
-/** Read presented targets with screenshot preparation/custody but without taking or writing pixels. */
-export async function withControlUiSettledTargets<T>(
-  page: Page,
-  surface: Locator,
-  content: readonly Locator[],
-  read: () => Promise<T>,
-  options: ScreenshotFrameOptions = {},
-): Promise<T> {
   if (options.viewport) {
     await page.setViewportSize(options.viewport);
   }
@@ -190,7 +173,7 @@ export async function withControlUiSettledTargets<T>(
           }),
       );
     }
-    const frame = await read();
+    const frame = await captureControlUiFrame(page, options.elements ?? [], options);
     expect(await inspect(), "Proof content moved or disappeared during frame capture").toEqual(
       settled,
     );

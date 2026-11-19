@@ -94,34 +94,12 @@ function appearanceKey(settings: UiPreferences): string {
   ]);
 }
 
-function nativeConversationPreferences(settings: UiPreferences): UiPreferences {
-  return {
-    ...settings,
-    theme: "custom",
-    // WKWebView's interface style already follows the native app appearance.
-    themeMode: "system",
-    accent: "theme",
-    fontUi: undefined,
-    fontChat: undefined,
-    customTheme: undefined,
-    background: {
-      ...settings.background,
-      source: { kind: "none" },
-      showOnNewSession: false,
-      showInSessions: false,
-      visibility: 0,
-    },
-  };
-}
-
 export function createApplicationTheme(
   initialSettings: UiSettings,
   gateway: ApplicationGateway,
-  nativeTheme?: CatalogTheme,
 ): ApplicationTheme & { dispose: () => void } {
   const { token: _token, ...initialPreferences } = initialSettings;
   let settings: UiPreferences = initialPreferences;
-  let presentationSettings = nativeTheme ? nativeConversationPreferences(settings) : settings;
   let appliedPalette: ApplicationThemePalette | null = null;
   let systemThemeCleanup: (() => void) | undefined;
   const listeners = createChangeListeners();
@@ -132,29 +110,23 @@ export function createApplicationTheme(
   let catalogRequested = false;
   let catalogLoadError: ThemeCatalogSnapshot | undefined;
   let disposed = false;
-  const presentationTheme = () => nativeTheme ?? catalog?.theme(settings.theme);
   const publish = () => {
     const generation = ++presentationGeneration;
     let preferencesPublished = false;
     const previousBranding = currentThemeBranding();
-    const branding = themeBranding(presentationSettings, presentationTheme());
+    const branding = themeBranding(settings, catalog?.theme(settings.theme));
     setCurrentThemeBranding(branding);
-    syncThemePaletteStylesheet(presentationSettings.theme, () => {
+    syncThemePaletteStylesheet(settings.theme, () => {
       // A slower palette cannot overwrite a newer selection or a disposed app.
       if (generation !== presentationGeneration) {
         return;
       }
-      applyThemePresentation(presentationSettings, presentationTheme());
-      if (nativeTheme) {
-        document.documentElement.style.setProperty("--app-background-image", "none");
-      }
-      const mode = presentationTheme()?.mode ?? presentationSettings.themeMode;
+      applyThemePresentation(settings, catalog?.theme(settings.theme));
+      const mode = catalog?.theme(settings.theme)?.mode ?? settings.themeMode;
       appliedPalette = {
         revision: generation,
-        theme: presentationSettings.theme,
-        resolvedMode: resolveTheme(presentationSettings.theme, mode).endsWith("light")
-          ? "light"
-          : "dark",
+        theme: settings.theme,
+        resolvedMode: resolveTheme(settings.theme, mode).endsWith("light") ? "light" : "dark",
       };
       // Computed-style consumers need the applied palette, not just the new
       // preference. Synchronous application shares the publication below.
@@ -231,11 +203,11 @@ export function createApplicationTheme(
 
   const syncSystemThemeListener = () => {
     detachSystemThemeListener();
-    if (presentationSettings.themeMode !== "system") {
+    if (settings.themeMode !== "system") {
       return;
     }
     systemThemeCleanup = subscribeMediaQuery("(prefers-color-scheme: light)", () => {
-      if (presentationSettings.themeMode === "system") {
+      if (settings.themeMode === "system") {
         publish();
       }
     });
@@ -251,7 +223,6 @@ export function createApplicationTheme(
     const changed = livePreferencesKey(next) !== livePreferencesKey(settings);
     const appearanceChanged = appearanceKey(next) !== appearanceKey(settings);
     settings = next;
-    presentationSettings = nativeTheme ? nativeConversationPreferences(settings) : settings;
     if (changed) {
       void loadCatalog();
     }
@@ -293,7 +264,7 @@ export function createApplicationTheme(
 
   return {
     get branding() {
-      return themeBranding(presentationSettings, presentationTheme());
+      return themeBranding(settings, catalog?.theme(settings.theme));
     },
     get catalog() {
       if (!catalogRequested) {
@@ -303,14 +274,14 @@ export function createApplicationTheme(
       return catalog?.snapshot(settings.theme) ?? catalogLoadError;
     },
     get settings() {
-      return presentationSettings;
+      return settings;
     },
     get mode() {
-      return presentationSettings.themeMode;
+      return settings.themeMode;
     },
     get resolvedMode() {
-      const mode = presentationTheme()?.mode ?? presentationSettings.themeMode;
-      return resolveTheme(presentationSettings.theme, mode).endsWith("light") ? "light" : "dark";
+      const mode = catalog?.theme(settings.theme)?.mode ?? settings.themeMode;
+      return resolveTheme(settings.theme, mode).endsWith("light") ? "light" : "dark";
     },
     get appliedPalette() {
       return appliedPalette;
@@ -332,9 +303,6 @@ export function createApplicationTheme(
       stopGateway();
       presentationGeneration += 1;
       detachSystemThemeListener();
-      if (nativeTheme) {
-        document.documentElement.style.removeProperty("--app-background-image");
-      }
       chromeBreakpointCleanup();
       listeners.clear();
     },

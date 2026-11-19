@@ -739,7 +739,6 @@ extension GatewayConnectionController {
 
         Self.clearDeviceAuthTokens(gatewayID: stableID)
         _ = appModel.commitChatOfflineDataRemoval(gatewayID: stableID)
-        await IOSConversationController.removeStorage(gatewayID: stableID)
         return true
     }
 

@@ -92,7 +92,6 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/model-provider-remove-in-use.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-setup-provider-errors.real-gateway.e2e.test.ts",
   "ui/src/e2e/mount-recovery.e2e.test.ts",
-  "ui/src/e2e/native-conversation-theme.e2e.test.ts",
   "ui/src/e2e/native-notifications-loading.e2e.test.ts",
   "ui/src/e2e/pinned-snooze.e2e.test.ts",
   "ui/src/e2e/plugin-inline-view.real-gateway.e2e.test.ts",

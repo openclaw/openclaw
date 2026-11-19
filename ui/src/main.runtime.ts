@@ -3,7 +3,6 @@ import type { prepareApplicationStartup } from "./app/bootstrap-connection.ts";
 import { bootstrapApplication } from "./app/bootstrap.ts";
 import type { EarlyApplicationGateway } from "./app/early-gateway.ts";
 import { reportPendingForegroundActivity } from "./app/foreground-activity.ts";
-import { nativeEmbedHost } from "./app/native-web-chrome.ts";
 import { inferControlUiPublicAssetPath } from "./app/public-assets.ts";
 import { hasEmbedderTransport, isRemoteControlUiIngress } from "./app/remote-ingress.ts";
 import {
@@ -47,12 +46,7 @@ export async function startControlUi(
   installKeyboardHints();
   const root = document.getElementsByTagName("openclaw-app").item(0);
   if (root instanceof HTMLElement) {
-    const host = nativeEmbedHost();
-    const nativeTheme =
-      host?.platform === "ios" && host.formFactor === "pad" && host.surface === "conversation"
-        ? (await import("./app/native-conversation-theme.ts")).readNativeConversationTheme()
-        : undefined;
-    mountOpenClawApp(root, bootstrapApplication(initial, earlyGateway, nativeTheme));
+    mountOpenClawApp(root, bootstrapApplication(initial, earlyGateway));
   }
   const isProd = import.meta.env.PROD;
   const currentControlUiBuildId = CONTROL_UI_BUILD_INFO.buildId;

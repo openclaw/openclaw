@@ -9,6 +9,43 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct WebChatManagerTests {
+    @Test func `route identity includes the session and normalized agent`() {
+        let work = WebChatRoute(sessionKey: "global", agentID: " Work ")
+        let sameWork = WebChatRoute(sessionKey: "global", agentID: "work")
+        let main = WebChatRoute(sessionKey: "global", agentID: "main")
+
+        #expect(work == sameWork)
+        #expect(work != main)
+        #expect(work != WebChatRoute(sessionKey: "main", agentID: "work"))
+    }
+
+    @Test func `blank agent route normalizes to nil`() {
+        #expect(WebChatRoute(sessionKey: "global", agentID: "  ") ==
+            WebChatRoute(sessionKey: "global", agentID: nil))
+    }
+
+    @Test(arguments: [
+        ("main", "research", "/chat/research"),
+        ("Main", "research", "/chat/research"),
+        ("global", "research", "/chat/research"),
+        ("Global", "research", "/chat/research"),
+        ("agent:research:main", "main", "/chat/research"),
+        ("agent:research:Main", "main", "/chat/research"),
+        ("agent:research:global", "main", "/chat/research/~key/global"),
+        ("agent:research:Global", "main", "/chat/research/~key/Global"),
+        ("AGENT:RESEARCH:GlObAl", "main", "/chat/research/~key/GlObAl"),
+        ("agent:research:global:notes", "main", "/chat/research/global/notes"),
+    ])
+    func `Dashboard URLs distinguish home aliases from qualified literal sessions`(
+        sessionKey: String,
+        agentID: String,
+        expectedPath: String)
+    {
+        #expect(WebChatRoute.dashboardPath(sessionKey: sessionKey, agentID: agentID) == expectedPath)
+    }
+}
+
+extension WebChatManagerTests {
     @Test(arguments: [false, true])
     func `copied links preserve Gateway mounts and exact session keys without credentials`(preview: Bool) throws {
         let base = try #require(URL(string: "wss://user:password@example.test/control/?token=private#fragment"))
@@ -24,35 +61,6 @@ struct WebChatManagerTests {
 }
 
 extension WebChatManagerTests {
-    private func checkSessionSubmenus(_ menu: NSMenu, local: Bool) throws {
-        for title in ["Snooze", "Assign to…", "Copy", "Open in"] {
-            let item = try #require(menu.items.first { $0.title == title })
-            let submenu = try #require(item.submenu)
-            submenu.update()
-            let items = submenu.items.filter { !$0.isSeparatorItem }
-            if title == "Snooze" {
-                // Times vary; require fixed presets without imposing a clock-dependent item count.
-                let titles = items.map { $0.title.components(separatedBy: " · ")[0] }
-                #expect((3...5).contains(items.count))
-                #expect(Array(titles.prefix(2)) == ["In 1 hour", "In 3 hours"])
-                #expect(titles.contains("Tomorrow"))
-            } else if title == "Copy" {
-                #expect(items.map(\.title) == ["Session link", "Session preview link", "Markdown", "Session ID"])
-            }
-            if title == "Assign to…" {
-                #expect(items.map(\.isEnabled) == [true, false])
-            } else {
-                let enabled = items.allSatisfy(\.isEnabled)
-                #expect(enabled)
-            }
-            if title == "Open in" {
-                #expect(items
-                    .map(\.title) ==
-                    (local ? ["New window", "Cursor", "VS Code", "Windsurf", "Zed"] : ["New window"]))
-            }
-        }
-    }
-
     @Test(arguments: [true, false])
     func `window Gateway wiring enables menus before native menu presentation`(local: Bool) async throws {
         let methods = LockIsolated<[String]>([])
@@ -73,8 +81,7 @@ extension WebChatManagerTests {
                     "path":"/work/copy","branch":"launch","baseRef":"main","ownerKind":"session",\#
                     "createdAt":1,"lastActiveAt":2}]}
                     """#
-                case "sessions.groups.defaults":
-                    #"{"defaults":[{"name":"Research","cwd":"/work/repo","worktree":true}]}"#
+                case "sessions.groups.defaults": #"{"defaults":[{"name":"Research","cwd":"/work/repo","worktree":true}]}"#
                 case "worktrees.branches": #"{"branches":[],"repositoryStatus":"git"}"#
                 case "fs.listDir": #"{"path":"/work","home":"/work","entries":[]}"#
                 case "chat.history":
@@ -155,7 +162,23 @@ extension WebChatManagerTests {
             // Admission starts the owner's prefetch; native menu contents need no appearance task.
             await commands.sessionMenuActions.refreshTask?.value
             let menu = makeMenu()
-            try self.checkSessionSubmenus(menu, local: local)
+            for title in ["Snooze", "Assign to…", "Copy", "Open in"] {
+                let item = try #require(menu.items.first { $0.title == title })
+                let submenu = try #require(item.submenu)
+                submenu.update()
+                let items = submenu.items.filter { !$0.isSeparatorItem }
+                if title == "Assign to…" {
+                    #expect(items.map(\.isEnabled) == [true, false])
+                } else {
+                    let enabled = items.allSatisfy(\.isEnabled)
+                    #expect(enabled)
+                }
+                if title == "Open in" {
+                    #expect(items
+                        .map(\.title) ==
+                        (local ? ["New window", "Cursor", "VS Code", "Windsurf", "Zed"] : ["New window"]))
+                }
+            }
             let group = NSHostingMenu(rootView: sidebar.groupMenu("Research"))
             group.update()
             let groupItems = group.items.filter { !$0.isSeparatorItem }

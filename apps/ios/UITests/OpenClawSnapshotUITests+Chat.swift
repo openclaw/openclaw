@@ -704,8 +704,8 @@ extension OpenClawSnapshotUITests {
         try await self.checkProductionNativeNestedResults(historyActive: true)
     }
 
-    /// Cold held entry may validly choose native before WebKit reserves the session.
-    /// This preserves app-entry coverage, not held WebKit handoff or header geometry proof.
+    /// Exercise cold native app entry separately from the paired-process relaunch.
+    /// Deferred WebKit handoff and palette/layout qualification are not exercised here.
     func testProductionSelectedProviderHeldEntryPreservesSession() async throws {
         try await self.checkProductionNativeNestedResults(historyActive: true, coldHeldEntry: true)
     }
@@ -713,7 +713,7 @@ extension OpenClawSnapshotUITests {
     private func checkProductionNativeNestedResults(historyActive: Bool, coldHeldEntry: Bool = false) async throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["OPENCLAW_IOS_LIVE_GATEWAY"] == "1")
         self.executionTimeAllowance = 180
-        // Separate from every adapter history and from the screenshot transport.
+        // Dedicated real Gateway history, separate from the screenshot transport.
         let state = historyActive ? "active" : "initial"
         let sessionKey = "agent:main:ipad-xcui-" + state
         let label = "iPad XCUI " + state
@@ -757,69 +757,26 @@ extension OpenClawSnapshotUITests {
             _ = try await self.productionNestedControl("/start-active?sessionKey=" + sessionKey, post: true)
             return try await self.heldProductionNestedRequest(sessionKey: sessionKey, after: baseline)
         }
-        if coldHeldEntry {
+        if historyActive {
             heldID = try await startHold()
         }
-        let quietOrigin = historyActive && !coldHeldEntry
-        let app = self.launchProductionNestedSession(quietOrigin ? "agent:main:ipad-xcui-initial" : sessionKey)
-        if quietOrigin {
-            // Admit WebKit on a quiet dedicated origin before starting the target's hold.
-            if !app.webViews.firstMatch.waitForExistence(timeout: 15) {
-                let actions = app.buttons["Chat actions"]
-                XCTAssertTrue(actions.waitForExistence(timeout: 5))
-                actions.tap()
-                let web = app.buttons["Use Mac-style chat"]
-                XCTAssertTrue(web.waitForExistence(timeout: 5))
-                XCTAssertTrue(web.isHittable)
-                web.tap()
-            }
-            let quiet = app.webViews.firstMatch.staticTexts["Dedicated XCUI history: iPad XCUI initial"]
-            _ = try XCTUnwrap(quiet.waitForExistence(timeout: 15) ? quiet : nil, "Quiet WebKit admission required")
-            XCTAssertEqual(
-                app.webViews.firstMatch.staticTexts
-                    .matching(identifier: "Dedicated XCUI history: iPad XCUI initial").count,
-                1)
-            heldID = try await startHold()
-            let session = app.buttons.matching(NSPredicate(
-                format: "label == %@ OR label BEGINSWITH %@", label, label + ","))
-            if !session.firstMatch.isHittable { self.tapSidebarReveal(in: app) }
-            XCTAssertTrue(session.firstMatch.waitForExistence(timeout: 5))
-            XCTAssertEqual(session.count, 1)
-            self.waitForHittable(true, of: session.firstMatch)
-            session.firstMatch.tap()
-            let target = app.webViews.firstMatch.staticTexts["Dedicated XCUI history: " + label]
-            _ = try XCTUnwrap(
-                target.waitForExistence(timeout: 15) ? target : nil,
-                "Held target must remain in WebKit")
-            XCTAssertEqual(
-                app.webViews.firstMatch.staticTexts.matching(identifier: "Dedicated XCUI history: " + label).count,
-                1)
-        }
-        if !coldHeldEntry { XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 15)) }
+        let app = self.launchProductionNestedSession(sessionKey)
+        XCTAssertFalse(app.webViews.firstMatch.exists, "This slice retains the native composer by default")
         let marker = app.staticTexts["Dedicated XCUI history: " + label]
-        XCTAssertTrue(marker.waitForExistence(timeout: 15), "The requested real web-backed session must load")
+        XCTAssertTrue(marker.waitForExistence(timeout: 15), "The requested real native session must load")
         XCTAssertEqual(app.staticTexts.matching(identifier: "Dedicated XCUI history: " + label).count, 1)
         if let heldID { try await self.assertProductionNestedRequestOpen(heldID) }
-        // Strict handoff placements always require WebKit. Only cold app entry is renderer-neutral.
-        if !coldHeldEntry || app.webViews.firstMatch.exists {
-            let native = app.buttons["Voice & attachments"]
-            XCTAssertTrue(native.waitForExistence(timeout: 5))
-            XCTAssertTrue(native.isHittable)
-            self.attachScreenshot(named: "production-nested-" + state + "-web-entry")
-            native.tap()
-            XCTAssertTrue(app.webViews.firstMatch.waitForNonExistence(timeout: 8))
-        }
         let transcript = try self.chatTranscript(in: app)
         XCTAssertTrue(transcript.waitForExistence(timeout: 8))
         XCTAssertTrue(self.chatMessageInput(in: app).waitForExistence(timeout: 8))
-        XCTAssertTrue(marker.waitForExistence(timeout: 8), "Native fallback must keep the selected session")
+        XCTAssertTrue(marker.waitForExistence(timeout: 8), "Native entry must keep the selected session")
         if historyActive {
             XCTAssertTrue(app.buttons["Stop response"].waitForExistence(timeout: 5))
         } else {
             XCTAssertFalse(app.buttons["Stop response"].exists, "Initial entry must not inherit another run")
         }
         if let heldID { try await self.assertProductionNestedRequestOpen(heldID) }
-        if !coldHeldEntry { try self.assertProductionNestedResults(in: app, transcript: transcript, state: state) }
+        try self.assertProductionNestedResults(in: app, transcript: transcript, state: state)
         if let heldID {
             try await self.assertProductionNestedRequestOpen(heldID)
             _ = try await self.productionNestedControl("/release?id=\(heldID)", post: true)
