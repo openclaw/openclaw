@@ -322,6 +322,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/agent-command.compaction-rotation.test.ts",
   "src/agents/agent-command.compaction-custody.test.ts",
   "src/agents/agent-command.ingress-diagnostics.test.ts",
+  "src/agents/agent-command.followthrough-ingress.test.ts",
   "src/agents/agent-command.live-model-switch.test.ts",
   "src/agents/agent-command.embedded-maintenance.test.ts",
   "src/agents/agent-command.operator-direct-root.test.ts",
