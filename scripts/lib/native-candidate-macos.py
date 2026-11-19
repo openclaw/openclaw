@@ -134,12 +134,12 @@ class DependencyProxy:
     def __enter__(self):
         self.host_addresses = host_interface_addresses()
         self.stopping = threading.Event()
-        self.slots = threading.BoundedSemaphore(16)
+        self.slots = threading.BoundedSemaphore(64)
         self.lock = threading.Lock()
         self.workers = {}
         self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.listener.bind(("127.0.0.1", 0))
-        self.listener.listen(16)
+        self.listener.listen(64)
         self.listener.settimeout(0.2)
         self.port = self.listener.getsockname()[1]
         self.thread = threading.Thread(target=self.serve)
@@ -162,15 +162,17 @@ class DependencyProxy:
 
     def serve(self):
         while not self.stopping.is_set():
+            # Backpressure concurrent package fetches rather than resetting them.
+            if not self.slots.acquire(timeout=0.2):
+                continue
             try:
                 client, _peer = self.listener.accept()
             except socket.timeout:
+                self.slots.release()
                 continue
             except OSError:
+                self.slots.release()
                 return
-            if not self.slots.acquire(blocking=False):
-                client.close()
-                continue
             thread = threading.Thread(target=self.handle, args=(client,))
             with self.lock:
                 self.workers[client] = thread
