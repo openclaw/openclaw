@@ -30,12 +30,14 @@ afterEach(() => {
   container.remove();
 });
 
-function mountPicker(optionsReady = true) {
+function mountPicker(optionsReady = true, customOptions?: ReturnType<typeof modelOption>[]) {
   document.body.append(container);
   dispose = installChatComposerPickerDismissal(document);
-  const modelOptions = ["Alpha", "Beta", "Gamma"].map((label) =>
-    modelOption(label === "Gamma" ? "other" : "example", label.toLowerCase(), { label }),
-  );
+  const modelOptions =
+    customOptions ??
+    ["Alpha", "Beta", "Gamma"].map((label) =>
+      modelOption(label === "Gamma" ? "other" : "example", label.toLowerCase(), { label }),
+    );
   const params = modelPickerProps({
     selectedModelValue: "example/alpha",
     triggerModelLabel: "Alpha",
@@ -959,4 +961,24 @@ it("switches an inherited Default model to an available runtime with one click",
   expect(runtime.getAttribute("aria-disabled")).toBe("false");
   await userEvent.click(runtime);
   expect(params.onModelSelect).toHaveBeenCalledExactlyOnceWith("openai/sample", "main", "codex");
+});
+
+it("shows a lone leftover model without an All models row", async () => {
+  mountPicker(true, [
+    modelOption("example", "lead", { label: "Lead", recommended: true }),
+    modelOption("example", "solo", { label: "Solo" }),
+  ]);
+  await new Promise(requestAnimationFrame);
+  const picker = container.querySelector("details")!;
+  (picker.querySelector("summary") as HTMLElement).click();
+  await waitForModelMenu(picker);
+
+  const providerToggle = picker.querySelector<HTMLElement>(modelControlSelector("provider-toggle"));
+  if (providerToggle?.getAttribute("aria-expanded") !== "true") {
+    providerToggle?.click();
+    flush();
+  }
+
+  expect(container.querySelector(modelControlSelector("option", "example/solo"))).toBeTruthy();
+  expect(container.querySelector(modelControlSelector("more-toggle"))).toBeNull();
 });
