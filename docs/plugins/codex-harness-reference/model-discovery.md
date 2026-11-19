@@ -139,7 +139,7 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.169.0`, which already meets
+The current bundled harness is `@openai/codex` `0.170.0`, which already meets
 the reported GPT-6.2 minimum version. The table below is a historical snapshot, not the
 current catalog: a `model/list` check against `0.162.1` in an isolated,
 unauthenticated Codex home returned these visible bundled catalog entries on
