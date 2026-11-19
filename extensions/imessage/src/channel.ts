@@ -92,6 +92,7 @@ async function sendIMessageOutbound(
     accountId: ctx.accountId ?? undefined,
     deps: ctx.deps,
     replyToId: ctx.replyToId ?? undefined,
+    replyToIdSource: ctx.replyToIdSource,
     assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
     onPlatformSendDispatch: ctx.onPlatformSendDispatch,
     ...options,
@@ -453,7 +454,11 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             : normalizeOptionalString(currentMessageId);
         return {
           replyToId: existingReplyToId ?? implicitReplyToId ?? null,
-          ...(!existingReplyToId && !explicitCurrentReply && implicitReplyToId
+          ...((
+            existingReplyToId
+              ? replyToIsExplicit === false
+              : !explicitCurrentReply && implicitReplyToId
+          )
             ? { replyToIdSource: "implicit" as const }
             : {}),
         };

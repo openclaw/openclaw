@@ -3,7 +3,7 @@ import { isIMessageEmailChatIdentifier, type IMessageChatContext } from "./chat-
 import { openIMessageChatDbReader, type IMessageChatDbOperations } from "./chat-db.js";
 import { resolveLocalIMessageChatDbPath } from "./cli-path.js";
 
-type IMessageResourceBinding = "match" | "mismatch" | "unavailable";
+type IMessageResourceBinding = "match" | "mismatch" | "missing" | "unavailable";
 
 export function normalizeIMessageMessageGuidForLookup(messageId: string): string {
   const trimmed = messageId.trim();
@@ -112,6 +112,10 @@ export async function checkIMessageResourceBinding(params: {
       return "unavailable";
     }
     const rows = await store.execute({ type: "messageChats", input: { messageGuid } });
+    // LEFT JOIN keeps existing messages without a chat binding distinct from absent GUIDs.
+    if (rows.length === 0) {
+      return "missing";
+    }
     const matched = rows.some(
       (row) =>
         (!hasChatId || row.chatId === chatId) &&

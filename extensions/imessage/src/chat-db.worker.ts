@@ -62,10 +62,10 @@ export function openExistingSqliteWorkerBackend(
           db,
           query
             .selectFrom("message as m")
-            .innerJoin("chat_message_join as cmj", "cmj.message_id", "m.ROWID")
-            .innerJoin("chat as c", "c.ROWID", "cmj.chat_id")
+            .leftJoin("chat_message_join as cmj", "cmj.message_id", "m.ROWID")
+            .leftJoin("chat as c", "c.ROWID", "cmj.chat_id")
             .select([
-              "cmj.chat_id as chatId",
+              "c.ROWID as chatId",
               "c.guid as chatGuid",
               "c.chat_identifier as chatIdentifier",
             ])

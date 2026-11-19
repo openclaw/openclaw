@@ -31,6 +31,7 @@ export async function sendIMessageOutbound(params: {
   accountId?: string;
   deps?: { [channelId: string]: unknown };
   replyToId?: string;
+  replyToIdSource?: "explicit" | "implicit";
   conversationReadOrigin?: "delegated" | "direct-operator";
   onDeliveryResult?: NonNullable<Parameters<IMessageSendFn>[2]["onDeliveryResult"]>;
   assertDirectAdapterHandoff?: () => void;
@@ -54,6 +55,7 @@ export async function sendIMessageOutbound(params: {
     maxBytes,
     accountId: params.accountId,
     replyToId: params.replyToId,
+    replyToIdSource: params.replyToIdSource,
     conversationReadOrigin: params.conversationReadOrigin,
     assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     onPlatformSendDispatch: params.onPlatformSendDispatch,

@@ -42,7 +42,7 @@ import { withIMessageReceiptGuidReader } from "./chat-db.js";
 import { resolveIMessageChatDbLookupPath } from "./cli-path.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_SEND_TIMEOUT_MS } from "./constants.js";
-import { normalizeIMessageMessageId } from "./message-guid.js";
+import { normalizeIMessageMessageId, resolveIMessageSendResultId } from "./message-guid.js";
 import { resolveAuthorizedIMessageReplyReference } from "./message-resource.js";
 import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
 import {
@@ -88,6 +88,7 @@ type IMessageSendOpts = IMessageSendHandoff & {
   accountId?: string;
   conversationReadOrigin?: "delegated" | "direct-operator";
   replyToId?: string;
+  replyToIdSource?: "explicit" | "implicit";
   mediaUrl?: string;
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
@@ -124,21 +125,6 @@ type IMessageDeliveryProgress = IMessageSendResult & {
   visibleReplySent: true;
   replyToId?: string;
 };
-
-function resolveMessageId(result: Record<string, unknown> | null | undefined): string | null {
-  if (!result) {
-    return null;
-  }
-  const raw =
-    (typeof result.messageGuid === "string" && result.messageGuid.trim()) ||
-    (typeof result.messageId === "string" && result.messageId.trim()) ||
-    (typeof result.message_id === "string" && result.message_id.trim()) ||
-    (typeof result.id === "string" && result.id.trim()) ||
-    (typeof result.guid === "string" && result.guid.trim()) ||
-    (typeof result.message_id === "number" ? String(result.message_id) : null) ||
-    (typeof result.id === "number" ? String(result.id) : null);
-  return raw ? raw.trim() : null;
-}
 
 function isNumericMessageRowId(value: string | null | undefined): value is string {
   return typeof value === "string" && /^\d+$/.test(value.trim());
@@ -311,6 +297,7 @@ async function sendMessageIMessageForAccount(
     }),
     service,
     replyToId: opts.replyToId,
+    replyToIdSource: opts.replyToIdSource,
     conversationReadOrigin: opts.conversationReadOrigin,
   });
   opts.assertDirectAdapterHandoff?.();
@@ -411,7 +398,7 @@ async function sendMessageIMessageForAccount(
       | { kind: "message"; startedAtMs: number },
   ): Promise<IMessageSendResult> {
     const isMessage = delivery.kind === "message";
-    const resolvedId = resolveMessageId(result);
+    const resolvedId = resolveIMessageSendResultId(result);
     const messageId =
       resolvedId ??
       (result.ok || result.success || (isMessage && result.status === "sent") ? "ok" : "unknown");
