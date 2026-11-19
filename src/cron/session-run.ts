@@ -204,7 +204,7 @@ export async function runCronSessionTurn(
       source: "cron",
       contextKey: `cron:${job.id}`,
       expectedTarget,
-      createIfMissing: !job.operatorSource,
+      createIfMissing: job.operatorSource ? undefined : true,
       deliveryContext: route,
       abortSignal: params.abortSignal,
       scheduledAutomation: {

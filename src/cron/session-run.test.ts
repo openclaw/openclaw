@@ -319,6 +319,25 @@ describe("scheduled session prompts", () => {
 });
 
 describe("scheduled session execution custody", () => {
+  it.each([true, false])(
+    "uses opt-in session creation for operator source=%s",
+    async (operatorSource) => {
+      const params = input();
+      if (!operatorSource) {
+        delete params.job.operatorSource;
+      }
+      fixture.restore.mockResolvedValue(restoredSource());
+      fixture.enqueue.mockReturnValue(
+        receipt(Promise.resolve({ status: "completed", executionStarted: true, delivered: false })),
+      );
+      await runCronSessionTurn(params);
+      // The admission contract permits true or absence, never a false creation capability.
+      expect(fixture.enqueue.mock.calls[0]?.[1].createIfMissing).toBe(
+        operatorSource ? undefined : true,
+      );
+    },
+  );
+
   it.each([
     { reason: "aborted", status: "cancelled", retryable: true },
     { reason: "cancelled", status: "cancelled", retryable: false },

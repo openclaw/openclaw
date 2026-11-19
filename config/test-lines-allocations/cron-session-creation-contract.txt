@@ -1,0 +1,2 @@
+# Regression for the scheduled-session opt-in creation contract (operator and ordinary jobs).
+19
