@@ -178,10 +178,11 @@ export function resolveSlot<E extends ManagedEvent>(
 /**
  * Consumed entries a consumer gives back, put at the head of the queue in their original order.
  * The consuming turn's claims end whether or not an entry is restored (a replaced store leaves the
- * row to replay); an entry already queued again (same id or durable row) is skipped. To bring the
- * queue back to `maxEvents`, the oldest entries without a durable row are evicted: dropping a
- * durable-backed entry from memory would lose the return until gateway restart, so the queue may
- * exceed the cap only by such entries.
+ * row to replay); an entry already queued again (same id or durable row) is skipped. Upstream bounds
+ * waking and passive occurrences in separate pools of `maxEvents`; to bring each pool back to its
+ * cap, its oldest entries without a durable row are evicted: dropping a durable-backed entry from
+ * memory would lose the return until gateway restart, so a pool may exceed the cap only by such
+ * entries.
  */
 export function restore<E extends ManagedEvent>(
   sessionKey: string,
@@ -189,6 +190,7 @@ export function restore<E extends ManagedEvent>(
   events: readonly E[],
   clone: (event: E) => E,
   maxEvents: number,
+  isWake: (event: E) => boolean,
 ): E[] {
   for (const event of events) {
     releaseSystemEventDeliveryAdoption(event, { settled: false });
@@ -208,17 +210,19 @@ export function restore<E extends ManagedEvent>(
       ),
   );
   entry.queue.unshift(...restored.map(clone));
-  let overflow = entry.queue.length - maxEvents;
   const evicted: E[] = [];
-  if (overflow > 0) {
-    entry.queue = entry.queue.filter((event) => {
-      if (overflow > 0 && !event.sessionDeliveryAckId) {
-        overflow -= 1;
-        evicted.push(event);
-        return false;
-      }
-      return true;
-    });
+  for (const wake of [false, true]) {
+    let overflow = entry.queue.filter((event) => isWake(event) === wake).length - maxEvents;
+    if (overflow > 0) {
+      entry.queue = entry.queue.filter((event) => {
+        if (overflow > 0 && isWake(event) === wake && !event.sessionDeliveryAckId) {
+          overflow -= 1;
+          evicted.push(event);
+          return false;
+        }
+        return true;
+      });
+    }
   }
   return evicted;
 }

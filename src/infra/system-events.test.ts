@@ -18,6 +18,7 @@ import {
   claimSystemEventTurn,
   consumeSelectedSystemEventEntries as consumeSelected,
   drainSystemEventEntries,
+  enqueueRequiredSystemEventEntry,
   enqueueSystemEvent,
   enqueueSystemEventEntry,
   enqueueSystemEventWithReceipt,
@@ -251,6 +252,35 @@ describe("system events (session routing)", () => {
     expect(restored.slice(0, 2)).toEqual(["return-1", "return-2"]);
     expect(restored).toHaveLength(20);
     expect(restored).not.toContain("ambient-0");
+  });
+
+  it("restores consumed wake and passive entries into their own pools", () => {
+    // Upstream bounds waking and passive occurrences separately, so a session can hold more than
+    // one pool's cap; a restore must not trim the whole queue to one cap or move a wake.
+    const queueKey = "agent:main:restore-pools";
+    for (let i = 0; i < 20; i += 1) {
+      enqueueSystemEvent(`ambient-${i}`, { sessionKey: queueKey, contextKey: `ambient:${i}` });
+    }
+    for (let i = 0; i < 3; i += 1) {
+      expect(
+        enqueueRequiredSystemEventEntry(`resume-${i}`, { sessionKey: queueKey }),
+      ).not.toBeNull();
+    }
+    const consumed = consumeSelected(queueKey, peekEntries(queueKey));
+    expect(consumed).toHaveLength(23);
+
+    restoreConsumedSystemEventEntries(queueKey, consumed);
+
+    expect(texts(peekEntries(queueKey))).toHaveLength(23);
+    expect(enqueueSystemEvent("late notice", { sessionKey: queueKey })).toBe(false);
+    for (let i = 3; i < 20; i += 1) {
+      expect(
+        enqueueRequiredSystemEventEntry(`resume-${i}`, { sessionKey: queueKey }),
+      ).not.toBeNull();
+    }
+    expect(() =>
+      enqueueRequiredSystemEventEntry("resume-overflow", { sessionKey: queueKey }),
+    ).toThrow("queue is full");
   });
 
   it("keeps a restored return queued when an ordinary event arrives at the cap", () => {
