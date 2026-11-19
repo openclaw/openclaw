@@ -92,6 +92,22 @@ const modelConfig = (modelPolicy: unknown, extraRoles = {}) => ({
   ...rolesConfig({ definitions: { guest: { ...validRole, modelPolicy }, ...extraRoles } }),
 });
 
+test.each(["none", "view", "invited"])("preserves explicit session access mode %s", (others) => {
+  const config = validated(
+    rolesConfig({
+      definitions: { guest: { ...validRole, sessions: { others } } },
+    }),
+  );
+  expect(config.gateway?.roles?.definitions.guest?.sessions.others).toBe(others);
+});
+
+test("does not enable invitation-only access in an unconfigured Gateway", () => {
+  expect(validated({}).gateway?.roles).toBeUndefined();
+  expect(validated(rolesConfig({})).gateway?.roles?.definitions.guest?.sessions.others).toBe(
+    "view",
+  );
+});
+
 test("accepts a conversation-scoped automation role without operator.write", () => {
   const scopes = ["operator.sessions.write", "operator.cron"];
   const config = validated(rolesConfig({ definitions: { guest: { ...validRole, scopes } } }));
@@ -177,7 +193,6 @@ test.each([
 
 test.each([
   [{ default: "missing", definitions: { guest: validRole } }, "default"],
-  [{ definitions: { guest: validRole } }, "default"],
   [{ definitions: {} }, "definitions"],
 ] as const)("requires a role %s", (roles, field) => {
   expectSchemaIssue({ gateway: { roles } }, ["gateway", "roles", field]);
@@ -295,4 +310,18 @@ test("validates the realtime input transcription model as an optional string", (
     { talk: { realtime: { providers: { openai: { inputTranscriptionModel: 123 } } } } },
     ["talk", "realtime", "providers", "openai", "inputTranscriptionModel"],
   );
+});
+
+test("accepts role definitions without enabling named-role enforcement", () => {
+  expect(accepts({ gateway: { roles: { definitions: { guest: validRole } } } })).toBe(true);
+});
+
+test("requires a default for GitHub role assignments, including an empty mapping", () => {
+  for (const byGithubLogin of [{ octocat: "guest" }, {}]) {
+    expectSchemaIssue(
+      { gateway: { roles: { definitions: { guest: validRole }, assignments: { byGithubLogin } } } },
+      ["gateway", "roles", "assignments", "byGithubLogin"],
+      "gateway.roles.default",
+    );
+  }
 });

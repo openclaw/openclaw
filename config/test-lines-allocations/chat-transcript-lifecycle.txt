@@ -1,0 +1,18 @@
+# Tool-activity lifecycle coverage after consolidation: one regression per defect.
+# Retained owners cover nested calls, execution outcomes, permission boundaries,
+# disclosure sharing versus pane-local state, live/history/steer identity,
+# lossless 60-call retention, and headline cadence.
+# Completion owners cover durable output caps, private history projection,
+# result-time placement, deduplication across older pages, and historical stop
+# names after child deletion with exact-run and ordering controls.
+# Duplicate same-branch cases, wording echoes and a reload e2e already proven by
+# the cached-steer unit regression were removed; no room is allocated for growth.
+# The subagent roster listing label, the swarm e2e for coalesced launches and
+# per-outcome completion rows, the retained failed-child fact, and lifecycle rows
+# reached through tool-search dispatch (envelope plus nested call), announced child
+# failure outcomes and error-bearing collection waits add the remaining lines.
+# Exact excess against integrated baseline 9bfad2b: 1425 net test lines minus the
+# normal 400-line allowance. Final review removes the obsolete empty-Stop fixture,
+# fixes lint-safe dispatch setup, and checks mixed completion/error details.
+# Settle-wake receipts keep the resumed turn, with tool calls shown and hidden.
+1063

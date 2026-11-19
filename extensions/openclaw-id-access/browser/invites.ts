@@ -1,6 +1,6 @@
 // Invite creation (spec section 6.3): a fresh link secret, its proof key, and an
-// InviteCap signed by this owner device. Only the cap and the proof key reach
-// the Gateway; the secret stays in the link fragment the owner shares.
+// InviteCap signed by this owner device. The selected local profile travels only
+// to the Gateway; the secret stays in the link fragment the owner shares.
 import {
   buildInviteLink,
   bytesToBase64url,
@@ -8,6 +8,7 @@ import {
   fingerprint,
   generateInviteSecret,
   inviteSecretHash,
+  isMemberRole,
   PENDING_REDEMPTION_TTL_SECONDS,
   type IrohEndpointKey,
   type MemberRole,
@@ -27,7 +28,10 @@ export async function createInvite(
   link: Link,
   email: string,
   role: MemberRole,
+  confirmedAdmin: boolean,
+  existingProfileId?: string,
 ): Promise<CreatedInvite> {
+  requireDefinedRole(link, role, confirmedAdmin);
   const now = Math.floor(Date.now() / 1000);
   const { invite_id, secret } = generateInviteSecret();
   const proofKey = await deriveInviteProofKey(secret);
@@ -46,6 +50,7 @@ export async function createInvite(
     action: "register_invite",
     cap,
     proofKey: bytesToBase64url(proofKey),
+    ...(existingProfileId ? { existingProfileId } : {}),
   });
   // SAFETY: the Gateway reports rootPub as a formatted ed25519 key; fingerprint rejects anything else.
   const rootFp = await fingerprint(link.rootPub as PublicKeyText);
@@ -98,4 +103,46 @@ export async function removeMember(
     statement,
   });
   return result?.removal ?? null;
+}
+
+export class RoleClassificationChangedError extends Error {
+  readonly code = "role_changed";
+  constructor() {
+    super("This role's administrator access changed. Review the current role before continuing.");
+  }
+}
+
+function requireDefinedRole(link: Link, role: MemberRole, confirmedAdmin: boolean): void {
+  if (!isMemberRole(role)) {
+    throw Object.assign(new Error("This configured role name cannot be used for a member."), {
+      code: "role_invalid",
+    });
+  }
+  const selected = link.roles?.find((entry) => entry.defined && entry.name === role);
+  if (!selected?.defined) {
+    throw Object.assign(
+      new Error(`The role ${role} is not defined on this claw. Choose another role.`),
+      { code: "role_undefined" },
+    );
+  }
+  if (selected.admin !== confirmedAdmin) {
+    throw new RoleClassificationChangedError();
+  }
+}
+
+/** Changes only the membership role, with the same owner signature and submit path as removal. */
+export async function changeMemberRole(
+  request: Request,
+  link: Link,
+  accountId: string,
+  role: MemberRole,
+  confirmedAdmin: boolean,
+): Promise<void> {
+  requireDefinedRole(link, role, confirmedAdmin);
+  const statement = await signMembershipChange(link, {
+    op: "set_role",
+    account_id: accountId,
+    role,
+  });
+  await request("openclawId.authority", { action: "submit", statement });
 }

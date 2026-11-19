@@ -23,7 +23,7 @@ import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-r
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
-import { historyLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { historyLane, sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { messageEvent } from "./transcript-message.test-support.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 
@@ -107,7 +107,7 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
     await replaceTranscriptEvents(scope, events);
     const { actor, database } = await acquireActor(fixture, env);
     const historyReads = vi.spyOn(historyLane.pool, "run");
-    const discoveryReads = vi.spyOn(targetDiscoveryLane.pool, "run");
+    const discoveryReads = vi.spyOn(sessionStoreLane.pool, "run");
     const clearReads = () => {
       historyReads.mockClear();
       discoveryReads.mockClear();

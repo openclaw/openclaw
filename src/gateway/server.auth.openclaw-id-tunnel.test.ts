@@ -27,7 +27,11 @@ import {
 import * as profileWrites from "../state/user-profile-writes.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
-import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
+import {
+  checkDeviceTokenPeer,
+  setDeviceTokenBindingOwner,
+} from "./openclaw-id/device-token-binding.js";
+import { MEMBER_ROLE_PRESETS as PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import { setOpenClawIdOwnerAccountResolver } from "./openclaw-id/owner-account.js";
 import {
   setOpenClawIdTunnelPrincipalResolver,
@@ -69,14 +73,21 @@ const CONTROL_UI_SCOPES = [
   "operator.pairing",
   "operator.questions",
 ];
+
 const PRINCIPALS: Record<string, OpenClawIdTunnelPrincipal> = {
   [OWNER_KEY]: { kind: "owner", peerKey: OWNER_KEY },
   [OPERATOR_KEY]: { kind: "member", peerKey: OPERATOR_KEY, accountId: "acct_op", role: "operator" },
   [VIEWER_KEY]: { kind: "member", peerKey: VIEWER_KEY, accountId: "acct_view", role: "viewer" },
-  [GUEST_KEY]: { kind: "member", peerKey: GUEST_KEY, accountId: "acct_guest", role: "guest" },
+  [GUEST_KEY]: {
+    kind: "member",
+    peerKey: GUEST_KEY,
+    accountId: "acct_guest",
+    role: "unconfigured-role",
+  },
 };
 
 let started: Awaited<ReturnType<typeof createGatewaySuiteHarness>> | undefined;
+let failNextBindingWrite = false;
 
 // Stands in for the ingress listener: marks the request relayed from the peer
 // named by the test header before the Gateway's listener sees it.
@@ -103,6 +114,7 @@ beforeAll(async () => {
     gateway: {
       auth: { mode: "token", token: TOKEN },
       controlUi: { allowedOrigins: [BROWSER_ORIGIN] },
+      roles: { definitions: PRESETS },
     },
   });
   started = await createGatewaySuiteHarness();
@@ -113,6 +125,10 @@ beforeAll(async () => {
   setDeviceTokenBindingOwner({
     lookup: (deviceId, role) => bindings.get(`${deviceId}:${role}`),
     record: async (deviceId, role, peerKey) => {
+      if (failNextBindingWrite) {
+        failNextBindingWrite = false;
+        throw new Error("Synthetic binding write failed");
+      }
       bindings.set(`${deviceId}:${role}`, peerKey);
     },
     forget: async (tokens) => {
@@ -133,6 +149,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  failNextBindingWrite = false;
   const pairing = await listDevicePairing();
   for (const pending of pairing.pending) {
     await rejectDevicePairing(pending.requestId);
@@ -149,6 +166,7 @@ async function connectTunnel(
     bootstrapToken?: string;
     identityPath?: string;
     scopes?: string[];
+    client?: NonNullable<Parameters<typeof connectReq>[1]>["client"];
   } = {},
 ) {
   const ws: WebSocket = await openWs(started!.port, {
@@ -156,7 +174,7 @@ async function connectTunnel(
     ...(peerKey ? { [TEST_PEER_HEADER]: peerKey } : {}),
   });
   const res = await connectReq(ws, {
-    client: CONTROL_UI_CLIENT,
+    client: options.client ?? CONTROL_UI_CLIENT,
     scopes: options.scopes ?? CONTROL_UI_SCOPES,
     deviceIdentityPath:
       options.identityPath ?? makeIdentityPath(`openclaw-tunnel-${randomUUID()}.sqlite`),
@@ -311,13 +329,22 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     }
   });
 
-  test.each(["removed", "reassigned"] as const)(
-    "a tokenless browser is Access-managed and loses RPC access when its peer is %s",
-    async (change) => {
+  test.each([
+    { client: CONTROL_UI_CLIENT, change: "removed", bindingFailure: false },
+    { client: CONTROL_UI_CLIENT, change: "reassigned", bindingFailure: false },
+    {
+      client: { id: "openclaw-ios", version: "1.0", platform: "ios", mode: "ui" },
+      change: "removed",
+      bindingFailure: true,
+    },
+  ] as const)(
+    "a tokenless $client.id has ID-bound operator approval and loses RPC access when its peer is $change",
+    async ({ client, change, bindingFailure }) => {
       const original = expectDefined(PRINCIPALS[OPERATOR_KEY], "operator principal");
       const gateway = {
         auth: { mode: "token" as const, token: TOKEN },
         controlUi: { allowedOrigins: [BROWSER_ORIGIN] },
+        roles: { definitions: PRESETS },
       };
       await writeConfigFile({
         gateway: {
@@ -326,6 +353,7 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
           roles: {
             default: "member",
             definitions: {
+              ...PRESETS,
               member: {
                 sessions: { others: "none" },
                 agents: "*",
@@ -337,8 +365,25 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
       });
       let browser: WebSocket | undefined;
       let admin: WebSocket | undefined;
+      const identityPath = makeIdentityPath(`tokenless-${randomUUID()}.sqlite`);
       try {
-        const connected = await connectTunnel(OPERATOR_KEY);
+        if (bindingFailure) {
+          failNextBindingWrite = true;
+          const failed = await connectTunnel(OPERATOR_KEY, { client, identityPath });
+          try {
+            expect(failed.res).toMatchObject({
+              ok: false,
+              error: {
+                code: "UNAVAILABLE",
+                message: expect.stringContaining("Synthetic binding write failed"),
+              },
+            });
+            expect((await listDevicePairing()).paired).toEqual([]);
+          } finally {
+            failed.ws.close();
+          }
+        }
+        const connected = await connectTunnel(OPERATOR_KEY, { client, identityPath });
         browser = connected.ws;
         expect(connected.res.ok, JSON.stringify(connected.res.error)).toBe(true);
         expect(helloAuth(connected.res)?.deviceToken).toBeUndefined();
@@ -361,9 +406,21 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
           "device.pair.list",
           {},
         );
-        expect(list.payload?.paired.find((entry) => entry.deviceId === deviceId)?.managedBy).toBe(
-          "openclaw-id",
-        );
+        if (client.id === CONTROL_UI_CLIENT.id) {
+          expect(list.payload?.paired.find((entry) => entry.deviceId === deviceId)?.managedBy).toBe(
+            "openclaw-id",
+          );
+        } else {
+          expect(
+            await checkDeviceTokenPeer({ deviceId, role: "operator", peerKey: OPERATOR_KEY }),
+          ).toEqual({ ok: true });
+          expect(
+            await checkDeviceTokenPeer({ deviceId, role: "operator", peerKey: undefined }),
+          ).toEqual({
+            ok: false,
+            reason: "device-token-peer-mismatch",
+          });
+        }
         expect((await rpcReq(browser, "health", {})).ok).toBe(true);
         expect((await rpcReq(browser, "exec.approvals.get", {})).ok).toBe(false);
         if (change === "removed") {
@@ -388,11 +445,17 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     },
   );
 
-  test("a viewer member reads but is refused chat.send", async () => {
+  test("a viewer reads conversations but cannot read logs or the user directory or send", async () => {
     const { ws, res } = await connectTunnel(VIEWER_KEY);
     try {
       expect(res.ok).toBe(true);
-      expect(grantedScopes(res)).toEqual(["operator.read"]);
+      expect(grantedScopes(res)).toEqual(["operator.sessions.read"]);
+      for (const method of ["users.self", "sessions.list"]) {
+        expect((await rpcReq(ws, method, {})).ok, method).toBe(true);
+      }
+      for (const method of ["logs.tail", "users.list"]) {
+        expect((await rpcReq(ws, method, {})).error?.message, method).toMatch(/missing scope/);
+      }
       const send = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
         message: "hi",
@@ -409,7 +472,7 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     const { ws, res } = await connectTunnel(VIEWER_KEY, { token: TOKEN });
     try {
       expect(res.ok).toBe(true);
-      expect(grantedScopes(res)).toEqual(["operator.read"]);
+      expect(grantedScopes(res)).toEqual(["operator.sessions.read"]);
     } finally {
       ws.close();
     }
@@ -421,7 +484,7 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     try {
       expect(res.ok).toBe(true);
       expect(helloAuth(res)?.method).toBe("trusted-proxy");
-      expect(grantedScopes(res)).toEqual(["operator.read"]);
+      expect(grantedScopes(res)).toEqual(["operator.sessions.read"]);
       expect((await rpcReq(ws, "config.patch", {})).ok).toBe(false);
     } finally {
       ws.close();
@@ -536,6 +599,7 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     const gateway = {
       auth: { mode: "token" as const, token: TOKEN },
       controlUi: { allowedOrigins: [BROWSER_ORIGIN] },
+      roles: { definitions: PRESETS },
     };
     const browserIdentity = makeIdentityPath(`openclaw-tunnel-managed-${randomUUID()}.sqlite`);
     const tunnel = await connectTunnel(OWNER_KEY, { identityPath: browserIdentity });
@@ -607,6 +671,7 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     const gateway = {
       auth: { mode: "token" as const, token: TOKEN },
       controlUi: { allowedOrigins: [BROWSER_ORIGIN] },
+      roles: { definitions: PRESETS },
     };
     await writeConfigFile({ gateway: { ...gateway, nodes: { pairing } } });
     sshProbe.mockClear();

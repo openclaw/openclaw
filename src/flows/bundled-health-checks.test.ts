@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { MissingPublicSurfaceError } from "../plugin-sdk/facade-loader.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -13,12 +12,7 @@ import {
   resolveBundledHealthCheckPluginStateMode,
   resolveCodexHealthApi,
 } from "./bundled-health-checks.js";
-import { runDoctorLintChecks, selectUpdateReadinessChecks } from "./doctor-lint-flow.js";
-import {
-  clearHealthChecksForTest,
-  getHealthCheck,
-  listHealthChecks,
-} from "./health-check-registry.js";
+import { clearHealthChecksForTest, getHealthCheck } from "./health-check-registry.js";
 
 const STATE_DEFERRED_CHECK_ID = "memory-core/managed-local-embedding-setup";
 
@@ -230,73 +224,10 @@ const implicitCodexConfig: OpenClawConfig = {
   plugins: { entries: { codex: { enabled: true }, policy: { enabled: true } } },
 };
 
-it("registers update readiness without loading unselected runtime health APIs", () => {
-  register(
-    {
-      ...codexConfig,
-      plugins: {
-        entries: { policy: { enabled: true }, "cua-computer": { enabled: true } },
-      },
-      cloudWorkers: { profiles: { aws: { provider: "crabbox" } } },
-    },
-    { updateReadiness: "post-plugin" },
-  );
-
-  expect(mocks.registerMemoryCoreDoctorChecks).toHaveBeenCalledOnce();
-  expect(mocks.loadPluginManifestRegistryForPluginRegistry).not.toHaveBeenCalled();
-  expect(mocks.registerPolicyDoctorChecks).not.toHaveBeenCalled();
-  expect(mocks.registerOpenAIDoctorChecks).not.toHaveBeenCalled();
-  expect(mocks.registerCuaDriverDoctorChecks).not.toHaveBeenCalled();
-  expect(mocks.loadBundledPluginManifestRegistry).not.toHaveBeenCalled();
-});
-
-it("retains owner identities and blocking findings across readiness registration", async () => {
-  const finding = {
-    checkId: STATE_DEFERRED_CHECK_ID,
-    severity: "error" as const,
-    message: "not ready",
-  };
-  const check = {
-    id: STATE_DEFERRED_CHECK_ID,
-    kind: "plugin" as const,
-    description: "Readiness owner",
-    defaultEnabled: false,
-    detect: vi.fn(async () => [finding]),
-  };
-  for (const updateReadiness of [undefined, "post-plugin", "post-plugin"] as const) {
-    mocks.registerMemoryCoreDoctorChecks.mockImplementationOnce((host) => {
-      if (host.getHealthCheck(check.id) !== check) {
-        host.registerHealthCheck(check);
-      }
-    });
-    register({}, { updateReadiness });
-    expect(getHealthCheck(check.id)).toBe(check);
-  }
-  const callbacks = mocks.registerMemoryCoreDoctorChecks.mock.calls.map(
-    ([host]) => host.registerHealthCheck,
-  );
-  expect(new Set(callbacks).size).toBe(1);
-  const ctx = {
-    cfg: {},
-    mode: "lint" as const,
-    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-  };
-  await expect(runDoctorLintChecks(ctx)).resolves.toMatchObject({ checksRun: 0, findings: [] });
-  await expect(
-    runDoctorLintChecks(ctx, {
-      checks: selectUpdateReadinessChecks(listHealthChecks(), "post-plugin"),
-      includeAllChecks: true,
-    }),
-  ).resolves.toMatchObject({ checksRun: 1, findings: [finding] });
-});
-
-it("fails when the selected readiness owner cannot load its artifact", () => {
-  mocks.loadBundledPluginPublicArtifactModuleSync.mockImplementationOnce(() => {
-    throw new MissingPublicSurfaceError("selected readiness artifact unavailable");
-  });
-  expect(() => register(codexConfig, { updateReadiness: "post-plugin" })).toThrow(
-    "selected readiness artifact unavailable",
-  );
+it("never registers plugin-owned checks as update readiness gates", () => {
+  expect(register(codexConfig, { updateReadiness: "post-plugin" })).toEqual([]);
+  expect(mocks.registerMemoryCoreDoctorChecks).not.toHaveBeenCalled();
+  expect(mocks.loadBundledPluginPublicArtifactModuleSync).not.toHaveBeenCalled();
 });
 
 function codexRecord(

@@ -1,3 +1,4 @@
+import { isOperatorAuthorityUnavailable } from "../../infra/operator-authority-error.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
@@ -208,6 +209,9 @@ export function createMessageInjectionAuthority(canInject: () => boolean): () =>
           return;
         }
       } catch (cause) {
+        if (isOperatorAuthorityUnavailable(cause)) {
+          throw cause;
+        }
         revoked = new MessageInjectionAuthorityError({ cause });
       }
       revoked ??= new MessageInjectionAuthorityError();

@@ -383,7 +383,12 @@ describe("configured file transcription through Talk RPCs", () => {
         };
         const { call } = fileRpc(config, talkHandlers);
         expect(expectRespondOk(await call("talk.catalog"))).toMatchObject({
-          transcription: { ready: true, activeProvider: "streaming-stt" },
+          transcription: {
+            source: "voice-model",
+            ready: true,
+            activeProvider: "streaming-stt",
+            mediaProviders: [expect.objectContaining({ id: "local-stt", configured: true })],
+          },
         });
         expectRespondOk(await call("talk.session.create", { mode: "transcription" }), {
           provider: "streaming-stt",
@@ -398,6 +403,39 @@ describe("configured file transcription through Talk RPCs", () => {
         id: "streaming-stt",
         label: "Streaming STT",
         models: ["saved-model"],
+        isConfigured: () => true,
+        createSession,
+      },
+    );
+  });
+
+  it("keeps an automatic streaming provider when the voice-note model has no credentials", async () => {
+    const createSession = vi.fn(() => ({
+      connect: async () => {},
+      sendAudio: vi.fn(),
+      close: vi.fn(),
+      isConnected: () => true,
+    }));
+    await withFileProvider(
+      async (requests) => {
+        const config: OpenClawConfig = {
+          ...cfg,
+          models: { providers: { "local-stt": localProvider } },
+        };
+        const { call } = fileRpc(config, talkHandlers);
+        expect(expectRespondOk(await call("talk.catalog"))).toMatchObject({
+          transcription: { ready: true, activeProvider: "streaming-stt" },
+        });
+        expectRespondOk(await call("talk.session.create", { mode: "transcription" }), {
+          provider: "streaming-stt",
+        });
+        expect(createSession).toHaveBeenCalledTimes(1);
+        expect(requests).toHaveLength(0);
+      },
+      undefined,
+      {
+        id: "streaming-stt",
+        label: "Streaming STT",
         isConfigured: () => true,
         createSession,
       },
@@ -461,7 +499,9 @@ describe("configured file transcription through Talk RPCs", () => {
           release.resolve();
           await catalog.completed;
           const result = expectRespondOk(catalog.respond);
-          expect(result).toMatchObject({ transcription: { ready: false } });
+          expect(result).toMatchObject({
+            transcription: { source: "media-understanding", ready: false },
+          });
           expect(result).not.toHaveProperty("transcription.activeProvider");
           if (reason === "unknown provider" || reason === "missing credentials") {
             expect(result).toMatchObject({
@@ -551,6 +591,31 @@ describe("configured file transcription through Talk RPCs", () => {
       });
     },
   );
+
+  it("refuses a third recording with a typed capacity code while two still transcribe", async () => {
+    const release = createDeferred();
+    onTestFinished(() => release.resolve());
+    await withFileProvider(
+      async () => {
+        const { open, append, start, call } = fileRpc();
+        const closing = [];
+        for (let index = 0; index < 2; index += 1) {
+          const sessionId = await open();
+          await append(sessionId);
+          closing.push(start("talk.session.close", { sessionId }).completed);
+        }
+        expectRespondError(await call("talk.session.create", { mode: "transcription" }), {
+          code: "UNAVAILABLE",
+          retryable: true,
+          details: { code: "TALK_SESSION_CAPACITY" },
+        });
+        release.resolve();
+        await Promise.all(closing);
+        await open();
+      },
+      () => release.promise,
+    );
+  });
 
   it("discards buffered audio when its connection closes before transcription starts", async () => {
     await withFileProvider(async (requests) => {

@@ -13,6 +13,7 @@ import {
   type SidebarAttentionItem,
   type SidebarInboxEntry,
 } from "./sidebar-attention-entries.ts";
+import { readOpenClawIdAttention } from "./sidebar-attention-openclaw-id.ts";
 import "../test-helpers/load-styles.ts";
 import "../styles/hub-tabs.css";
 import "../styles/sidebar-attention-floating.css";
@@ -147,6 +148,25 @@ afterEach(() => {
 });
 
 describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
+  it("shows seven desktop mentions and keeps the remaining rows scrollable", () => {
+    const shell = shellFor();
+    const mentions = Array.from({ length: 16 }, (_, index) => inboxMention(String(index)));
+    mountPanel(panelParams(inboxEntries([], mentions)), shell);
+    const list = part(shell, "list");
+    const rows = [...shell.querySelectorAll<HTMLElement>(".sidebar-mention-row")];
+    const viewport = bounds(list);
+    const visibleRows = rows.filter((row) => {
+      const content = bounds(part(row, "content"));
+      return content.top >= viewport.top && content.bottom <= viewport.bottom;
+    });
+    expect(visibleRows).toHaveLength(7);
+    expect(list.scrollHeight).toBeGreaterThan(list.clientHeight);
+    const headerTop = bounds(part(shell, "header")).top;
+    list.scrollTop = list.scrollHeight;
+    expect(bounds(rows.at(-1)!).bottom).toBeLessThanOrEqual(viewport.bottom);
+    expect(bounds(part(shell, "header")).top).toBe(headerTop);
+  });
+
   it("keeps the header and tabs fixed when the selected category is empty", async () => {
     const params = panelParams([authWarning]);
 
@@ -450,3 +470,64 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
     expect(style(list).backgroundColor).toBe(style(sheet).backgroundColor);
   });
 });
+
+it.each([
+  ["light", 390],
+  ["dark", 390],
+  ["light", 1440],
+  ["dark", 1440],
+] as const)(
+  "shows a claimed member browser request in the owner Inbox (%s %s)",
+  async (theme, width) => {
+    const { page } = await import("vitest/browser");
+    await page.viewport(width, 900);
+    document.documentElement.dataset.theme = theme;
+    const now = Math.floor(Date.now() / 1000);
+    const request = {
+      requestId: "member-browser-request",
+      accountId: "private-account-id",
+      displayName: "Alice Example",
+      email: "alice@example.test",
+      label: "Safari on iOS",
+      location: "Example City",
+      requestedAt: now - 60,
+      expiresAt: now + 1740,
+    };
+    const gateway = client(
+      vi.fn(async (method: string) =>
+        method === "openclawId.status"
+          ? {
+              channel: "tunnel",
+              owner: true,
+              status: { state: "online" },
+              link: { linked: true, clawId: "test-claw" },
+            }
+          : { link: { browserRequests: [request] } },
+      ),
+    );
+    const attention = await readOpenClawIdAttention(gateway, () => true);
+    const params = panelParams(attention!.items(Date.now()));
+    const opened = vi.fn();
+    params.onOpen = opened;
+    const shell = mountPanel(params, shellFor(width === 390));
+    await waitForSolid(() =>
+      expect(shell.textContent).toContain("Browser request from Alice Example"),
+    );
+    expect(shell.textContent).toContain("Safari on iOS");
+    expect(shell.textContent).toContain("Unverified request");
+    const title = shell.querySelector<HTMLElement>(
+      '[data-attention-kind="openClawIdBrowserRequest"] .sidebar-issues-panel__entity',
+    )!;
+    expect(title.scrollWidth).toBeLessThanOrEqual(title.clientWidth);
+    expect(shell.textContent).toContain("Location reported by OpenClaw ID: Example City");
+    expect(shell.textContent).not.toContain("private-account-id");
+    await page.getByText("Browser request from Alice Example", { exact: true }).click();
+    await page.screenshot({ path: `./.vitest/ocf551/member-browser-inbox-${theme}-${width}.png` });
+    await page.getByRole("button", { name: "Approve a new device", exact: true }).click();
+    expect(opened).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: expect.objectContaining({ kind: "openClawIdBrowserApproval", remote: true }),
+      }),
+    );
+  },
+);

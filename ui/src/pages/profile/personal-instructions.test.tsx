@@ -265,6 +265,14 @@ it("asks a signed-in person for access instead of another sign-in", async () => 
   expect(request).not.toHaveBeenCalled();
 });
 
+it("keeps recovery advice for an unsaved deletion after a failed save", async () => {
+  const { element } = await loaded(replies({}, new Error("Personal USER.md changed since read")));
+  await save(element, "");
+  expect(value(element)).toBe("");
+  expect(alert(element)?.textContent).toContain("Your draft is unchanged");
+  expect(element.textContent).toContain("Unsaved changes");
+});
+
 it("preserves a conflicting draft, confirms reload, and keeps it when reload fails", async () => {
   const request = replies(
     {},

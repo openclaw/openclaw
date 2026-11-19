@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
+import { MAX_CRON_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -432,15 +433,25 @@ function drainCronQueueInDatabase(
   // At most three runs check a condition at once; the rest stay queued in due order with no
   // running marker, so they spend no run budget and keep their occurrence across a restart.
   let checkingCount = [...jobs.values()].filter(isCheckingCondition).length;
+  // Once every base slot is busy, one more run may start per drain while memory is free, so each
+  // later drain reads memory again with that run counted.
+  let extraRunOpen = input.memoryAllowsExtraRun === true;
+  const baseSlots = Math.max(1, input.maxConcurrentRuns);
+  const hasRunSlot = () =>
+    activeCount < baseSlots || (extraRunOpen && activeCount < MAX_CRON_CONCURRENT_RUNS);
+  const takeRunSlot = () => {
+    extraRunOpen &&= activeCount < baseSlots;
+    activeCount += 1;
+  };
   for (const receipt of queued) {
     const handle = receiptHandle(receipt);
     const job = jobs.get(receipt.jobId)!;
     if (awaitsRunSlot(job, receipt.receiptId)) {
       // Its check already ran; the host waiting on it starts the payload once the mark is gone.
-      if (!input.schedulingPaused && activeCount < Math.max(1, input.maxConcurrentRuns)) {
+      if (!input.schedulingPaused && hasRunSlot()) {
         delete job.state.runSlotWaitReceiptId;
         updateCronRuntimeRow(db, input.storeKey, job);
-        activeCount += 1;
+        takeRunSlot();
       }
       continue;
     }
@@ -508,7 +519,7 @@ function drainCronQueueInDatabase(
     if (
       (input.schedulingPaused && context.mode === "scheduled") ||
       (checksCondition && checkingCount >= MAX_CONCURRENT_CONDITION_CHECKS) ||
-      (!withoutRunSlot && activeCount >= Math.max(1, input.maxConcurrentRuns))
+      (!withoutRunSlot && !hasRunSlot())
     ) {
       continue;
     }
@@ -580,7 +591,9 @@ function drainCronQueueInDatabase(
     delete job.state.runningScheduleChangeId;
     updateCronRuntimeRow(db, input.storeKey, job, previousEnabled);
     result.launches.push({ job, runReceipt, migrationPending });
-    activeCount += withoutRunSlot ? 0 : 1;
+    if (!withoutRunSlot) {
+      takeRunSlot();
+    }
   }
   return result;
 }
@@ -593,6 +606,7 @@ export function requestAndDrainCronRunsInWorker(
     CronRunQueueOperations["cron.drainQueue"]["input"],
     | "requests"
     | "maxConcurrentRuns"
+    | "memoryAllowsExtraRun"
     | "schedulingPaused"
     | "preparingAgentIds"
     | "busyConversationJobIds"

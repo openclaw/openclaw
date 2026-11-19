@@ -60,6 +60,18 @@ screenshots for node-routed browsers, Chrome MCP existing-session profiles,
 missing Playwright, or stream connection failures. Navigation rules apply to
 the stream: navigating to a blocked address stops it and clears the view.
 
+The panel and the agent can use the same browser at the same time. Click **Take
+control** in the panel toolbar to work in the browser without the agent acting
+at the same time. While you hold control of that profile, browser
+actions from anyone else (the agent's browser tool, the `openclaw browser` CLI,
+other Control UI windows) are not run. The agent's browser tool answers that you
+have taken over the browser, and its turn continues; it can still take snapshots
+and screenshots. An action that had already started may finish. Click **Release
+control** to hand the browser back. Control is also released when the Control UI
+window closes or loses its connection, and after 5 minutes without input from
+you. Take control is available for browsers on the Gateway host, not for
+node-routed browsers.
+
 ### Chrome settings and passwords
 
 You can open `chrome://settings` (for example `chrome://settings/payments`) and

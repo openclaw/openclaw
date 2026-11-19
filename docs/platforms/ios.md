@@ -30,7 +30,7 @@ The app requires iOS 26.2 or iPadOS 26.2 or later.
 - **Stop response** stays available while you draft a follow-up, alongside Send. Stopping the response preserves your draft.
 - Chat is the single text-and-voice surface. Chat actions can open the full Sessions screen without leaving Chat and can show or hide assistant reasoning and tool activity. Tap the microphone for draft dictation, open its menu to record a voice note, or use the inline Talk control for realtime voice; the Talk control animates from live microphone or playback level while listening or speaking.
 - Assistant reasoning is visible only with `/reasoning on` and the local **Show reasoning & tool activity** setting enabled. `/reasoning off` hides it after history reload and relaunch. Tool activity follows the local setting independently.
-- Sessions has **Active**, **Snoozed**, **Automations**, and **Archived** scopes. Snoozed sessions stay out of the active sidebar and Overview until they wake.
+- Sessions has **Active**, **Snoozed**, **Automations**, and **Archived** scopes. **All Sessions** includes the current agent’s existing main conversation alongside other chats; **Home** remains its permanent sidebar shortcut. Snoozed sessions stay out of the active sidebar and Overview until they wake.
 - Agent narration appears inline as each segment finishes, including after reconnect. Narration, tool activity, and the reply stay grouped in one response. Compact-width layouts hide the assistant avatar to leave more room for text; regular-width layouts keep a single top-aligned avatar. Completed standalone bubbles use sender-side tails where the avatar is hidden, and accessible reply containers retain the assistant’s name. Completed chat turns keep all assistant text and media visible in place on iPhone and iPad. Contiguous tool activity and reasoning fold into separate **Worked** disclosures between the visible parts. Collapsed headings list operation kinds and failed, blocked, skipped, or unknown outcomes; expanding a section also shows its total tool-call count. Tap one to inspect that stretch of work; loading older history keeps expanded sections open. Active or unanswered work stays expanded.
 - Chat accepts images from the photo picker, camera, Files, paste, and the iOS share sheet. Assistant-generated images render inline from short-lived Gateway artifact URLs, open in a full-screen preview, and remain available after reconnect or history reload without storing image bytes in the transcript cache.
 - Choose **+ → File** to attach audio, video, PDFs, text/code, CSV, JSON, Markdown, ZIP archives, and Office documents from Files. Removable chips show filenames and sizes. Files use the Gateway’s advertised attachment size limits and preserve their original bytes through the durable outbox. The file limit also caps the total attachment bytes per message, counting images after resizing; attachments already in an oversized draft stay in the composer when Send rejects their combined size. For older Gateways that do not advertise limits, native chat caps non-image files and the combined attachment budget at 19,464,192 bytes (the decoded budget for a 25 MiB frame), and processed images at 5 MB after resizing. Image source reads have a separate 64 MiB cap to bound resize-input memory; a larger source photo within that cap can be sent when its resized JPEG fits the image and batch budgets. Empty or unreadable files show **Could not attach**; oversized files show **Too large to send**. Sent uploads remain visible after history refresh; downloading inbound uploads from native history is not supported yet. Recorded voice notes keep their separate recording flow.
@@ -622,6 +622,13 @@ reviewer-safe prompt through the existing iPhone relay and offers the compact
 allow-once/deny decision subset. Direct Watch Gateway mode does not carry
 approval prompts.
 
+Approval push alerts require current `operator.approvals` and `operator.read`
+access, plus visibility of the request. Devices paired through OpenClaw ID use
+current ID membership and role permissions, even when their linked local profile
+has a broader role. Removing that membership or narrowing its permissions stops
+new approval alerts. Cleanup notifications may still clear an earlier prompt.
+Separately paired local devices retain their local permissions.
+
 Approval state is shared with the Control UI and supported chat surfaces. The
 first committed answer wins. iPhone and Watch fetch the Gateway's saved
 terminal record after another surface resolves the request, after a remote
@@ -802,6 +809,12 @@ If mDNS is blocked, use a unicast DNS-SD zone (choose a domain; example: `opencl
 ### Manual host/port
 
 Open **Settings → Gateway**, enable **Use Manual Gateway**, and enter the Gateway host + port (default `18789`).
+
+A Tailscale Serve name (ending in `.ts.net`) with no port uses `443` with TLS. A
+loopback-only Gateway behind Serve refuses connections on its own port, even
+over Tailscale. When a connection is refused or times out, the error names the
+address the app tried; for a refused tailnet address, connect to the `.ts.net`
+name without a port or scan a new code from `openclaw qr`.
 
 IPv6 host fields accept raw addresses such as `fd00::1` and bracketed addresses
 such as `[fd00::1]`. Full Gateway URLs require brackets around the address,

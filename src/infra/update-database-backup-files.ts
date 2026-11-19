@@ -3,6 +3,41 @@ import fs from "node:fs/promises";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { ignoreMissingPath } from "./errno.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
+import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import { SqliteWalCheckpointBusyError, truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
+
+export async function prepareRestorableDatabaseFiles(
+  databases: readonly string[],
+  stopped = false,
+) {
+  const identities = await inspectRestorableDatabaseFiles(databases);
+  const checkpointed = new Set<string>();
+  if (!stopped) {
+    return { identities, checkpointed };
+  }
+  const walSources = databases.filter(
+    (file) => identities.has(`${file}-wal`) && !identities.has(`${file}-journal`),
+  );
+  for (const file of walSources) {
+    // The native updater holds its maintenance lease until this child joins.
+    // Fold committed WAL frames once before capturing the recovery image.
+    using database = openNodeSqliteDatabase(resolveExistingSqliteFileUri(file));
+    try {
+      truncateSqliteWal(database, file);
+      checkpointed.add(file);
+    } catch (error) {
+      // A read-only probe may pin WAL; retain the existing verified capture path.
+      if (!(error instanceof SqliteWalCheckpointBusyError)) {
+        throw error;
+      }
+    }
+  }
+  return {
+    // Even a busy checkpoint can have folded committed pages into the main file.
+    identities: walSources.length ? await inspectRestorableDatabaseFiles(databases) : identities,
+    checkpointed,
+  };
+}
 
 /** Fence every durable database file an update rollback restores. */
 export async function inspectRestorableDatabaseFiles(

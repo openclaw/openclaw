@@ -51,6 +51,19 @@ it("preserves dismissals outside a partial agent inventory", () => {
   ).toEqual(stored);
 });
 
+it("does not re-arm an immutable recovery use while the owner history is absent", () => {
+  const dismissal = chip("openClawIdRecoveryUse", '["synthetic-claw",9]');
+  dismissSidebarAttention(ATTENTION_KEY, dismissal);
+  reconcileSidebarAttentionDismissals({ key: ATTENTION_KEY, active: [] });
+  expect(isSidebarAttentionDismissed(loadDismissals(ATTENTION_KEY), dismissal)).toBe(true);
+  expect(
+    isSidebarAttentionDismissed(
+      loadDismissals(ATTENTION_KEY),
+      chip("openClawIdRecoveryUse", '["synthetic-claw",10]'),
+    ),
+  ).toBe(false);
+});
+
 it.each([
   [{ phase: "pending", requestId: "request-1" }, null],
   [{ phase: "guidance" }, '["guidance","operator.read","operator.write"]'],

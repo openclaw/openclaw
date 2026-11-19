@@ -3,7 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import { access, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
-import { IncomingMessage, type ClientRequest } from "node:http";
+import { createServer, IncomingMessage, type ClientRequest } from "node:http";
 import { request as httpsRequest, type RequestOptions } from "node:https";
 import { Socket } from "node:net";
 import path from "node:path";
@@ -13,6 +13,7 @@ import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanPackedOpenClawTarballs } from "../../scripts/lib/packed-openclaw-tarballs.mts";
+import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
 import {
   assertExpectedSha256ForTest,
   cleanupPackageSourceWorktreeForTest,
@@ -27,6 +28,7 @@ import {
   runCommandForTest,
   validateOpenClawPackageSpec,
 } from "../../scripts/resolve-openclaw-package-candidate.mts";
+import { reserveTestPortListener } from "../../src/test-utils/port-claims.js";
 import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import {
   fixtureReceiptClientSource,
@@ -345,6 +347,78 @@ describe("resolve-openclaw-package-candidate", () => {
     expect(parseArgs(["--output-name", "openclaw-current.tar.gz"]).outputName).toBe(
       "openclaw-current.tar.gz",
     );
+  });
+
+  it("downloads a fresh OpenClaw candidate without changing other package cooldowns", async () => {
+    const dir = autoTempDirs.make("openclaw-package-cooldown-");
+    const outputDir = path.join(dir, "output");
+    await mkdir(outputDir);
+    const tarball = await readFile(await createPackageTarball(path.join(dir, "source")));
+    const publishedAt = new Date().toISOString();
+    const registry = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        createServer((request, response) => {
+          if (request.url?.endsWith(".tgz")) {
+            response.end(tarball);
+            return;
+          }
+          const name = request.url === "/openclaw" ? "openclaw" : "unrelated-package";
+          response.setHeader("content-type", "application/json");
+          response.end(
+            JSON.stringify({
+              name,
+              "dist-tags": { latest: "2026.8.1" },
+              time: { "2026.8.1": publishedAt },
+              versions: {
+                "2026.8.1": {
+                  name,
+                  version: "2026.8.1",
+                  dist: { tarball: "http://" + request.headers.host + "/package.tgz" },
+                },
+              },
+            }),
+          );
+        }),
+    });
+    try {
+      const address = registry.listener.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Expected TCP registry");
+      }
+      const env = {
+        ...process.env,
+        npm_config_registry: "http://127.0.0.1:" + address.port,
+        npm_config_cache: path.join(dir, "cache"),
+        npm_config_min_release_age: "7",
+        npm_config_fetch_retries: "0",
+      };
+      const runner = resolveNpmPackageCandidatePackRunner("openclaw@2026.8.1", outputDir);
+      await runCommandForTest(runner.command, runner.args, { capture: true, env });
+      await expect(readFile(path.join(outputDir, "openclaw-2026.8.1.tgz"))).resolves.toEqual(
+        tarball,
+      );
+      // Same npm configuration still rejects a different fresh package. The
+      // candidate exception must not alter the repository or inherited settings.
+      const unrelated = resolveNpmRunner({
+        npmArgs: [
+          "pack",
+          "unrelated-package@2026.8.1",
+          "--ignore-scripts",
+          "--pack-destination",
+          outputDir,
+        ],
+      });
+      await expect(
+        runCommandForTest(unrelated.command, unrelated.args, { capture: true, env }),
+      ).rejects.toThrow("ETARGET");
+    } finally {
+      try {
+        await registry.releaseListener();
+      } finally {
+        await registry.claim.release();
+      }
+    }
   });
 
   it("keeps the first packed identity when a moving npm tag changes", async () => {

@@ -103,6 +103,8 @@ shell-completion metadata.
 - The local path never requires the gateway to be running.
 - `model run` without `--local` or `--gateway` runs locally only when no Gateway owns the state directory. When a local Gateway is running, the CLI runs it through that Gateway instead (`transport: "gateway"` in the JSON envelope), because the Gateway owns the shared credentials and their OAuth refresh. A local run beside it could refresh a token the Gateway would then keep reading in its stale form.
 - `model run --local` refuses while a Gateway owns the state directory, and makes no provider call. Omit `--local` to run it through the Gateway, or stop the Gateway first.
+- While a Gateway owns the state directory, a local command never refreshes or stores a shared sign-in. This covers `image *`, `audio *`, `video *`, `web *`, `embedding *`, and local `tts convert`. A sign-in that is still valid is used as is, and the Gateway refreshes it on its next turn. An expired sign-in is refused before any change: the error names the Gateway and says to run the work through the Gateway, retry after the Gateway's next turn refreshes the sign-in, or stop the Gateway. With no Gateway running, these commands refresh and run locally as before.
+- `model auth login` follows `openclaw models auth login`: with a Gateway running, the sign-in runs through that Gateway. `model auth logout` follows `openclaw models auth logout`: it refuses while a Gateway owns the state directory; stop the Gateway first.
 - A local `model run` holds the state directory for its duration, so concurrent local runs on one state directory fail instead of running side by side. Run them one at a time, or start the Gateway and let the runs go through it.
 - Provider inventory commands whose `configured` state can come from saved agent auth accept
   `--agent <id>`. Without it, they use `agents.defaults.systemAgent.agentId` or the sole configured
@@ -238,9 +240,9 @@ late transcript output.
 The same cancellation behavior applies to `infer video describe`: interruption
 stops the pending provider request and suppresses late description output.
 
-For audio transcription and video description on POSIX systems, `--file` follows
-directory symlinks before resolving `..`, matching filesystem path resolution.
-Final-file symlinks remain subject to the existing media-directory checks.
+On POSIX systems, `--file` and `--output` paths follow directory symlinks
+before resolving `..`, matching filesystem path resolution. Final-file symlinks
+remain subject to the existing media-directory checks.
 
 For CLI-backed transcription, the result's `provider` identifies the tool family
 and `model` reports the executed command. Auto-detected tools report their resolved

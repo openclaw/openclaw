@@ -1,15 +1,21 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   formatIrohEndpointKey,
   randomBytes,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import { authorizeWsControlUiGatewayConnect, authorizeHttpGatewayConnect } from "../auth.js";
 import type { GatewayIngressAttribution } from "../ingress-attribution.js";
 import { createOpenClawIdAuthority } from "./authority.js";
+import { MEMBER_ROLE_PRESETS } from "./member-role-presets.test-support.js";
 import { linkedClaw } from "./openclaw-id.test-support.js";
+import { openClawIdRecoveryPrincipalSchema } from "./tunnel-principal-schema.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
-  openClawIdRecoveryPrincipalSchema,
   prepareOpenClawIdTunnelPrincipal,
   resolveOpenClawIdTunnelPrincipal,
   setOpenClawIdTunnelPrincipalLookup,
@@ -18,7 +24,12 @@ import {
   setOpenClawIdTunnelPrincipalResolver,
 } from "./tunnel-principal.js";
 
+beforeEach(() =>
+  setRuntimeConfigSnapshot({ gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } } }),
+);
+
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   setOpenClawIdTunnelPrincipalResolver(undefined);
   setOpenClawIdTunnelPrincipalLookup(undefined);
 });
@@ -96,7 +107,7 @@ describe("OpenClaw ID tunnel principals", () => {
     );
     expect(openclawIdTunnelRolePolicy(operator)?.scopes).not.toContain("operator.admin");
     expect(openclawIdTunnelRolePolicy(operator)?.scopes).not.toContain("operator.pairing");
-    expect(openclawIdTunnelRolePolicy(viewer)?.scopes).toEqual(["operator.read"]);
+    expect(openclawIdTunnelRolePolicy(viewer)?.scopes).toEqual(["operator.sessions.read"]);
   });
 
   it("denies unknown member roles at connect, HTTP and retained/recovery admission", async () => {
@@ -104,7 +115,7 @@ describe("OpenClaw ID tunnel principals", () => {
       kind: "member" as const,
       peerKey: `iroh:${"ab".repeat(32)}`,
       accountId: "acct-guest",
-      role: "guest",
+      role: "unconfigured-role",
       authority: { clawId: "claw", rootPub: "root", listedSeq: 1 },
     };
     setOpenClawIdTunnelPrincipalResolver(async () => principal);
@@ -135,7 +146,7 @@ describe("OpenClaw ID tunnel principals", () => {
       kind: "member",
       peerKey: `iroh:${"ab".repeat(32)}`,
       accountId: "acct-guest",
-      role: "guest",
+      role: "unconfigured-role",
       authority: { clawId: "claw", rootPub: "root", listedSeq: 1 },
     };
     expect(openClawIdRecoveryPrincipalSchema.parse(principal)).toEqual(principal);
@@ -151,7 +162,7 @@ describe("OpenClaw ID tunnel principals", () => {
         await claw.sign({
           op: "add",
           account_id: "acct-guest",
-          role: "guest",
+          role: "unconfigured-role",
           peer_keys: [peer],
           invite_id: null,
         }),
@@ -162,7 +173,7 @@ describe("OpenClaw ID tunnel principals", () => {
     await reloaded.load();
     setOpenClawIdTunnelPrincipalResolver((key) => reloaded.resolvePeer(key));
     setOpenClawIdTunnelPrincipalLookup((key) => reloaded.currentPeer(key));
-    expect(reloaded.currentPeer(peer)).toMatchObject({ kind: "member", role: "guest" });
+    expect(reloaded.currentPeer(peer)).toMatchObject({ kind: "member", role: "unconfigured-role" });
     expect(await resolveOpenClawIdTunnelPrincipal(peer)).toBeUndefined();
     const stored = openClawIdRecoveryPrincipalSchema.parse(reloaded.currentPeer(peer));
     expect(isOpenClawIdTunnelPrincipalCurrent(stored)).toBe(false);
@@ -241,4 +252,30 @@ it("retains the original signed listing across authority reload, not a later app
   setOpenClawIdTunnelPrincipalLookup((key) => claw.authority.currentPeer(key));
   expect(isOpenClawIdTunnelPrincipalCurrent(admitted)).toBe(false);
   expect(isOpenClawIdTunnelPrincipalCurrent(owner)).toBe(true);
+});
+
+it("resolves edited presets and custom roles from the current definition without a default", async () => {
+  const principal = {
+    kind: "member" as const,
+    peerKey: "iroh:custom",
+    accountId: "custom",
+    role: "guest",
+  };
+  setOpenClawIdTunnelPrincipalResolver(async () => principal);
+  setOpenClawIdTunnelPrincipalLookup(() => principal);
+  const policy: GatewayOperatorRoleDefinition = {
+    sessions: { others: "none" as const },
+    agents: ["research"],
+    scopes: ["operator.admin"],
+  };
+  setRuntimeConfigSnapshot({
+    gateway: { roles: { definitions: { guest: policy, operator: policy } } },
+  });
+  expect(await resolveOpenClawIdTunnelPrincipal(principal.peerKey)).toEqual(principal);
+  expect(openclawIdTunnelRolePolicy(principal)).toEqual(policy);
+  expect(openclawIdTunnelRolePolicy({ ...principal, role: "operator" })).toEqual(policy);
+  expect(isOpenClawIdTunnelPrincipalCurrent(principal)).toBe(true);
+  setRuntimeConfigSnapshot({ gateway: { roles: { definitions: { operator: policy } } } });
+  expect(await resolveOpenClawIdTunnelPrincipal(principal.peerKey)).toBeUndefined();
+  expect(isOpenClawIdTunnelPrincipalCurrent(principal)).toBe(false);
 });

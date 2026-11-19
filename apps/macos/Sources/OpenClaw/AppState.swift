@@ -1405,6 +1405,9 @@ extension AppState {
                 }
             }
         }
+        if self.connectionMode != .unconfigured {
+            self.ifNotPreview { MacOpenClawIDDeviceStore.shared.clearRemoval() }
+        }
         self.onboardingSeen = self.connectionMode != .unconfigured
         if self.onboardingSeen {
             self.ifNotPreview {
@@ -1445,6 +1448,9 @@ extension AppState {
             return false
         }
         self.acknowledgeGatewayConfigPersistence(draft, root: synced.root)
+        if draft.connectionMode != .unconfigured {
+            self.ifNotPreview { MacOpenClawIDDeviceStore.shared.clearRemoval() }
+        }
         if draft.clearsPrimaryGateway {
             // The cleared selection is recorded in the app's defaults; the file is untouched.
             if !self.isPreview {

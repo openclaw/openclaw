@@ -18,11 +18,13 @@ struct DashboardNativeGatewayAuth: Sendable {
         case token(String)
         case password(String)
         case deviceToken(String)
+        /// OpenClaw ID ingress admits the tunnel key with a signed device proof and no credential.
+        case ingress
 
         var signatureToken: String? {
             switch self {
             case let .token(value), let .deviceToken(value): value
-            case .password: nil
+            case .password, .ingress: nil
             }
         }
 
@@ -31,6 +33,7 @@ struct DashboardNativeGatewayAuth: Sendable {
             case let .token(value): ["token": value]
             case let .password(value): ["password": value]
             case let .deviceToken(value): ["deviceToken": value]
+            case .ingress: [:]
             }
         }
     }

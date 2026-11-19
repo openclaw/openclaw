@@ -29,7 +29,7 @@ import {
 import {
   assembleScheduledAdmissionFacts,
   parentRowFactsFromEntry,
-  scheduledParentLinkOf,
+  scheduledParentKeyOf,
 } from "../../src/cron/execution-context-admission.js";
 import {
   compareScheduledDecisions,
@@ -54,6 +54,7 @@ import { resolveCarriedCronModelSelection } from "../../src/cron/isolated-agent/
 import { resolveCronSessionTargetSessionKey } from "../../src/cron/session-target.js";
 import { resolveCronRunToolsAllow } from "../../src/cron/tools-allow.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../../src/gateway/operator-role-enforcement.js";
 import { decodeGatewayOperatorRecoverySource } from "../../src/gateway/operator-run-recovery-source.codec.js";
 
 type Args = { stateDir: string; configPath?: string; json: boolean; emitFixtures?: string };
@@ -310,7 +311,10 @@ export function anonymizeParentRow(
   if (!row || row.missing) {
     return row;
   }
-  const link = scheduledParentLinkOf(job);
+  const source = job.operatorSource
+    ? decodeGatewayOperatorRecoverySource(job.operatorSource.source)
+    : undefined;
+  const link = source && source.kind !== "gateway" ? source : job.sourceConversation;
   const worktreePath = "/work/parent/worktree";
   return {
     sessionId: row.sessionId === link?.sessionId ? "parent-session" : "replaced-session",
@@ -540,7 +544,7 @@ async function main() {
         continue;
       }
       const runSessionKey = runSessionKeyFor(job, agentId);
-      const parentKey = scheduledParentLinkOf(job)?.sessionKey;
+      const parentKey = scheduledParentKeyOf(job);
       let parentRow;
       if (parentKey) {
         const node = agentDbs
@@ -567,7 +571,8 @@ async function main() {
           owner =
             profiles.has(requester.profileId) &&
             !profiles.get(requester.profileId) &&
-            (!cfg.gateway?.roles || requester.profileId === GATEWAY_OWNER_PROFILE_ID);
+            (!isNamedOperatorRoleEnforcementEnabled(cfg) ||
+              requester.profileId === GATEWAY_OWNER_PROFILE_ID);
           ownerCheck = "checked";
         } else if (requester.kind === "unknown") {
           owner = false;

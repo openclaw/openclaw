@@ -1,11 +1,22 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
+import type { UserProfileIdentity } from "../state/user-profiles.types.js";
 import {
   createExecApprovalIosPushDelivery,
   createPluginApprovalIosPushDelivery,
 } from "./exec-approval-ios-push.js";
+import type { ExecApprovalRecord } from "./exec-approval-manager.js";
+import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
+import type { OperatorScope } from "./operator-scopes.js";
+import type { PreparedSessionMutationFacts } from "./session-sharing-target.types.js";
 
 const mocks = vi.hoisted(() => ({
   pairing: vi.fn(),
@@ -16,6 +27,9 @@ const mocks = vi.hoisted(() => ({
   execWake: vi.fn(),
   pluginAlert: vi.fn(),
   pluginWake: vi.fn(),
+  linkedProfiles: vi.fn(),
+  profiles: vi.fn(),
+  sessionFacts: vi.fn(),
 }));
 
 const registrationDefaults = {
@@ -46,7 +60,7 @@ function successfulApnsPushResult() {
   return { ok: true, status: 200 };
 }
 
-function approvalRequest(id: string): ExecApprovalRequest {
+function approvalRequest(id: string): ExecApprovalRecord {
   return {
     id,
     request: { command: "echo ok", host: "gateway", allowedDecisions: ["allow-once"] },
@@ -68,7 +82,7 @@ function pluginApprovalRequest(id: string): PluginApprovalRequest {
   };
 }
 
-const approvalScopes = ["operator.approvals", "operator.read"];
+const approvalScopes: OperatorScope[] = ["operator.approvals", "operator.read"];
 
 function pairedIosOperator(
   scopes = approvalScopes,
@@ -95,12 +109,38 @@ function mockPairedIosOperator(scopes = approvalScopes) {
   mockPairedIosOperators(pairedIosOperator(scopes));
 }
 
-async function expectRejectedRequest(
-  id: string,
-  options?: Parameters<ReturnType<typeof createExecApprovalIosPushDelivery>["handleRequested"]>[1],
-) {
+function mockIdMemberIosDevice() {
+  const peerKey = `iroh:${"a".repeat(64)}`;
+  setDeviceTokenBindingOwner({
+    lookup: (deviceId) => (deviceId === "id-ios" ? peerKey : undefined),
+    record: async () => {},
+    forget: async () => {},
+    reportMismatch: () => {},
+  });
+  setOpenClawIdTunnelPrincipalLookup(() => ({
+    kind: "member",
+    peerKey,
+    accountId: "member-account",
+    role: "member",
+  }));
+  mocks.linkedProfiles.mockResolvedValue({
+    "member-account": { id: "member-profile", displayName: null, email: null },
+  });
+  const profile: UserProfileIdentity = {
+    profileId: "member-profile",
+    role: "admin",
+    aliases: new Set(["member-profile", "member-profile-alias"]),
+  };
+  mocks.profiles.mockResolvedValue({
+    readCurrentIdentity: (profileId: string) =>
+      profile.aliases.has(profileId) ? profile : undefined,
+    release: () => {},
+  });
+}
+
+async function expectRejectedRequest(id: string) {
   const delivery = createExecApprovalIosPushDelivery({ log: {} });
-  expect(await delivery.handleRequested(approvalRequest(id), options)).toBe(false);
+  expect(await delivery.handleRequested(approvalRequest(id))).toBe(false);
   expect(mocks.registrations).not.toHaveBeenCalled();
   expect(mocks.execAlert).not.toHaveBeenCalled();
 }
@@ -111,12 +151,37 @@ function expectPluginAlert(expected: Record<string, unknown>) {
 
 vi.mock("../config/io.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/io.js")>()),
-  getRuntimeConfig: () => ({ gateway: {} }),
+  getRuntimeConfig: () => getRuntimeConfigSnapshot() ?? { gateway: {} },
+}));
+
+vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
+  prepareUserProfileCatalog: mocks.profiles,
+}));
+
+vi.mock("../state/user-profile-openclaw-id.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-profile-openclaw-id.js")>()),
+  readOpenClawIdUserProfiles: mocks.linkedProfiles,
+}));
+
+// mock-isolation: Supply committed profile/session facts without opening stores; retain real policy.
+vi.mock("./session-sharing-preparation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-sharing-preparation.js")>()),
+  prepareSessionMutationFacts: mocks.sessionFacts,
 }));
 
 vi.mock("../infra/device-pairing.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/device-pairing.js")>()),
   listDevicePairing: mocks.pairing,
+}));
+
+vi.mock("../infra/device-pairing-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-pairing-worker.js")>()),
+  withCurrentDevicePairingSnapshot: (async (_stateDir, prepare, preparePublication) => {
+    const { paired } = await mocks.pairing();
+    await preparePublication?.();
+    return prepare(paired)?.start();
+  }) satisfies typeof import("../infra/device-pairing-worker.js").withCurrentDevicePairingSnapshot,
 }));
 
 vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
@@ -150,6 +215,9 @@ describe("createExecApprovalIosPushDelivery", () => {
     mocks.execWake.mockResolvedValue(successfulApnsPushResult());
     mocks.pluginAlert.mockResolvedValue(successfulApnsPushResult());
     mocks.pluginWake.mockResolvedValue(successfulApnsPushResult());
+    mocks.linkedProfiles.mockResolvedValue({});
+    mocks.profiles.mockReset();
+    mocks.sessionFacts.mockReset();
   });
 
   it("does not target iOS devices whose active operator token lacks operator.approvals", async () => {
@@ -164,15 +232,17 @@ describe("createExecApprovalIosPushDelivery", () => {
     await expectRejectedRequest("approval-no-read");
   });
 
-  it("does not target iOS devices rejected by the approval visibility filter", async () => {
+  it("does not target iOS devices outside the request's reviewer binding", async () => {
     mockPairedIosOperator();
-    const isTargetVisible = vi.fn(() => false);
-
-    await expectRejectedRequest("approval-filtered", { isTargetVisible });
-    expect(isTargetVisible).toHaveBeenCalledWith({
-      deviceId: "ios-device-1",
-      scopes: ["operator.approvals", "operator.read"],
-    });
+    const delivery = createExecApprovalIosPushDelivery({ log: {} });
+    expect(
+      await delivery.handleRequested({
+        ...approvalRequest("approval-filtered"),
+        requestedByDeviceId: "other-requester",
+        approvalReviewerDeviceIds: ["other-reviewer"],
+      }),
+    ).toBe(false);
+    expect(mocks.execAlert).not.toHaveBeenCalled();
   });
 
   it("does not treat iOS as a live approval route when every push fails", async () => {
@@ -215,7 +285,6 @@ describe("createExecApprovalIosPushDelivery", () => {
     await resolved;
 
     expect(mocks.execWake).toHaveBeenCalledTimes(1);
-    expect(mocks.pairing).toHaveBeenCalledTimes(1);
     expect(mocks.registrations).toHaveBeenLastCalledWith(["ios-device-1"]);
   });
 
@@ -232,6 +301,180 @@ describe("createExecApprovalIosPushDelivery", () => {
     expect(mocks.registrations).not.toHaveBeenCalled();
     expect(mocks.execWake).not.toHaveBeenCalled();
   });
+
+  afterEach(() => {
+    setDeviceTokenBindingOwner(undefined);
+    setOpenClawIdTunnelPrincipalLookup(undefined);
+    clearRuntimeConfigSnapshot();
+  });
+
+  it("caps an ID device's fresh approval pushes without reducing independent local grants", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        roles: {
+          definitions: {
+            member: { scopes: ["operator.admin"], sessions: { others: "write" }, agents: "*" },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    mockIdMemberIosDevice();
+    mockPairedIosOperators(
+      pairedIosOperator(["operator.admin"], "id-ios"),
+      pairedIosOperator(["operator.admin"], "local-ios"),
+    );
+    const delivery = createPluginApprovalIosPushDelivery({ log: {} });
+    expect(await delivery.handleRequested(pluginApprovalRequest("plugin:before"))).toBe(true);
+    expect(mocks.pluginAlert.mock.calls.map(([p]) => p.nodeId)).toEqual(["id-ios", "local-ios"]);
+    mocks.pluginAlert.mockClear();
+    mocks.profiles.mockResolvedValueOnce({
+      readCurrentIdentity: () => undefined,
+      release: () => {},
+    });
+    expect(await delivery.handleRequested(pluginApprovalRequest("plugin:missing-profile"))).toBe(
+      true,
+    );
+    expect(mocks.pluginAlert.mock.calls.map(([p]) => p.nodeId)).toEqual(["local-ios"]);
+    mocks.pluginAlert.mockClear();
+    cfg.gateway!.roles!.definitions!.member = {
+      scopes: ["operator.read"],
+      sessions: { others: "none" },
+      agents: "*",
+    };
+    setRuntimeConfigSnapshot(cfg);
+    expect(await delivery.handleRequested(pluginApprovalRequest("plugin:after"))).toBe(true);
+    expect(mocks.pluginAlert.mock.calls.map(([p]) => p.nodeId)).toEqual(["local-ios"]);
+  });
+
+  it("rechecks ID policy after APNs preparation while preserving local delivery and cleanup", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        roles: {
+          definitions: {
+            member: { scopes: approvalScopes, sessions: { others: "write" }, agents: "*" },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    mockIdMemberIosDevice();
+    mockPairedIosOperators(
+      pairedIosOperator(approvalScopes, "id-ios"),
+      pairedIosOperator(approvalScopes, "local-ios"),
+    );
+    const authStarted = createDeferred();
+    const authReady = createDeferred();
+    mocks.directAuth.mockImplementationOnce(async () => {
+      authStarted.resolve();
+      await authReady.promise;
+      return { ok: true, value: directAuthConfig };
+    });
+    const sent: string[] = [];
+    mocks.execAlert.mockImplementation(
+      async (
+        push: Parameters<typeof import("../infra/push-apns.js").sendApnsExecApprovalAlert>[0],
+      ) => {
+        if (push.isCurrent && !(await push.isCurrent())) {
+          return { ok: false, status: 0, reason: "stale-authority" };
+        }
+        sent.push(push.nodeId);
+        return successfulApnsPushResult();
+      },
+    );
+    const delivery = createExecApprovalIosPushDelivery({ log: {} });
+    const request = approvalRequest("approval-policy-during-auth");
+    const requested = delivery.handleRequested(request);
+    try {
+      await authStarted.promise;
+      expect(mocks.execAlert).not.toHaveBeenCalled();
+      cfg.gateway!.roles!.definitions!.member = {
+        scopes: ["operator.read"],
+        sessions: { others: "none" },
+        agents: "*",
+      };
+      setRuntimeConfigSnapshot(cfg);
+      authReady.resolve();
+      expect(await requested).toBe(true);
+      expect(sent).toEqual(["local-ios"]);
+
+      await delivery.handleResolved({ id: request.id });
+      expect(mocks.execWake.mock.calls.map(([push]) => push.nodeId)).toEqual([
+        "id-ios",
+        "local-ios",
+      ]);
+    } finally {
+      authReady.resolve();
+      await requested;
+    }
+  });
+
+  it.each([
+    {
+      audience: "creator alias",
+      creatorId: "member-profile-alias",
+      withSession: true,
+      visible: true,
+    },
+    { audience: "another profile", creatorId: "other-profile", withSession: true, visible: false },
+    { audience: "missing source", creatorId: "other-profile", withSession: false, visible: false },
+  ])(
+    "uses the ID session ceiling for a $audience approval despite a linked admin role",
+    async ({ creatorId, withSession, visible }) => {
+      setRuntimeConfigSnapshot({
+        gateway: {
+          roles: {
+            definitions: {
+              member: { scopes: approvalScopes, sessions: { others: "none" }, agents: "*" },
+            },
+          },
+        },
+      });
+      mockIdMemberIosDevice();
+      mockPairedIosOperators(pairedIosOperator(approvalScopes, "id-ios"));
+      const sessionKey = "agent:main:approval-source";
+      const facts: PreparedSessionMutationFacts = {
+        target: {
+          agentId: "main",
+          canonicalKey: sessionKey,
+          storeKey: sessionKey,
+          storeKeys: [sessionKey],
+          storePath: "/synthetic/sessions.sqlite",
+          entry: {
+            sessionId: "approval-source",
+            updatedAt: 1,
+            visibility: "shared",
+            createdActor: { type: "human", source: "profile", id: creatorId },
+          },
+        },
+        membership: new Set(),
+      };
+      mocks.sessionFacts.mockResolvedValue({
+        storageTarget: {
+          agentId: "main",
+          canonicalKey: sessionKey,
+          storePath: "/synthetic/sessions.sqlite",
+        },
+        bindCreation: () => {},
+        prepareRead: () => undefined,
+        readCurrent: () => facts,
+        release: () => {},
+      } satisfies import("./session-sharing-preparation.js").SessionFactsRead<PreparedSessionMutationFacts>);
+      const request = approvalRequest("approval-session-policy");
+      request.requestedByDeviceId = "other-requester";
+      request.approvalReviewerDeviceIds = ["id-ios"];
+      if (withSession) {
+        request.request.sessionKey = sessionKey;
+        request.request.agentId = "main";
+      }
+      expect(await createExecApprovalIosPushDelivery({ log: {} }).handleRequested(request)).toBe(
+        visible,
+      );
+      expect(mocks.execAlert.mock.calls.map(([push]) => push.nodeId)).toEqual(
+        visible ? ["id-ios"] : [],
+      );
+    },
+  );
 
   describe("createPluginApprovalIosPushDelivery", () => {
     it("targets only paired iOS operators with approval and read scopes", async () => {

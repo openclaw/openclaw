@@ -7,11 +7,11 @@ import {
   type ResearchState,
 } from "./job-state.js";
 
+// The job store is per transcript; edits and resets keep the transcript, so the job stays visible.
 function belongs(job: ResearchJob, context: ResearchExecution) {
   return (
     job.sessionKey === context.sessionKey &&
     job.sessionId === context.sessionId &&
-    job.lifecycleRevision === context.lifecycleRevision &&
     job.agentId === context.agentId
   );
 }

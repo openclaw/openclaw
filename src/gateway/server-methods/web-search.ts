@@ -183,7 +183,7 @@ async function prepareWebSearchStatus(
         const chatLogin = buildOAuthRefreshFailureLoginCommand(health.provider, {
           surface: "chat",
         });
-        selectedAuthIssue = `The ${health.provider} sign-in this provider uses is ${health.status}. If a test search fails, send \`${chatLogin}\` from a private chat or Control UI session, or run \`${buildOAuthRefreshFailureLoginCommand(health.provider)}\`.`;
+        selectedAuthIssue = `The ${health.provider} sign-in this provider uses is ${health.status}. If a test search fails, send \`${chatLogin}\` from a private chat or the OpenClaw app, or run \`${buildOAuthRefreshFailureLoginCommand(health.provider)}\`.`;
       }
     }
   }
@@ -258,6 +258,7 @@ async function prepareWebSearchStatus(
         entry,
         evaluation,
         pluginRegistry: catalog.pluginRegistry,
+        resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
       });
       status.model.runtime = runtime?.id ?? "openclaw";
       status.model.runtimeLabel =

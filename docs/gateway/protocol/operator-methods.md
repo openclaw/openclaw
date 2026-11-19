@@ -249,11 +249,22 @@ an in-flight metadata read.
 Session and identified-account results include `accountSelection` display facts
 with the models. Collaborators do not receive another person's private account
 locator. The `provider-config` view remains shared authored inventory and omits
-account selection. `refreshFailed: true` reports a failed acquisition while
+account selection. `refreshFailures` identifies failed discovery scopes with
+`acquisition: "provider" | "native"` and an optional `provider` identifier. The
+provider is omitted when the acquisition scope is unknown or outside the requested
+catalog view. These diagnostics never include raw errors, endpoints, credentials,
+or account/profile identifiers and do not replace authentication outcomes. Clients
+should retain usable model choices and distinguish a partially available catalog
+from an empty one; older responses may have `refreshFailed` without diagnostics.
+`refreshFailed: true` reports a failed acquisition while
 compatible rows remain usable; recovery clears it. A successful empty catalog
 remains empty.
 
 The Gateway advertises `session-scoped-model-catalog` for this contract.
+Before the first prepared metadata publication, `chat.metadata` and passive
+`models.list` reads return `UNAVAILABLE` with `retryable: true` and a starting
+message. Retry after startup progresses. Publication failures and retired metadata
+owners remain errors; conversation startup still omits unavailable optional metadata.
 `chat.metadata` remains available to legacy clients. Clients that read models
 directly can pass `includeModels: false` to skip the duplicate catalog, account
 selection, and runtime-selection projection. Commands and swarm availability

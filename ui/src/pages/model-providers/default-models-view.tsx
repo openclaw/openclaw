@@ -4,6 +4,7 @@ import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profi
 import { dedupeByKey } from "../../../../src/shared/dedupe-by-key.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode, ModelAuthStatusProvider, ModelAuthStatusResult } from "../../api/types.ts";
+import { pathForAgentPanel } from "../../app-route-paths.ts";
 import {
   DecisionModelPicker,
   type DecisionModelEntry,
@@ -16,7 +17,7 @@ import {
   SettingsSegmented,
 } from "../../components/solid/settings-ui.tsx";
 import { isChatFastModeProviderSupported } from "../../lib/chat/model-select-state.ts";
-import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
+import { thinkingLevelLabel } from "../../lib/chat/thinking-level-label.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   canonicalModelAuthProviderId,
@@ -25,10 +26,16 @@ import {
 import { describeModelProviderAuth } from "../../lib/model-provider-auth-label.ts";
 import { formatCompletionRoute, type CompletionRoute } from "../../lib/model-runtime-label.ts";
 import { modelSettingFallbacks, modelSettingPrimary } from "../../lib/model-setting.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ModelDefaultsSaveField, ModelProviderRowMessage } from "./config-mutation.ts";
 import type { ModelProviderCatalogReceipt } from "./core-load.ts";
-import { modelCatalogRef, type DefaultModelSelection, type ModelPickerEntry } from "./data.ts";
+import {
+  modelCatalogRef,
+  type AgentUtilityOverride,
+  type DefaultModelSelection,
+  type ModelPickerEntry,
+} from "./data.ts";
 import { renderMutationMessage } from "./view-status.tsx";
 
 export type DefaultModelsViewProps = {
@@ -37,6 +44,10 @@ export type DefaultModelsViewProps = {
   selection: DefaultModelSelection;
   authStatus?: ModelAuthStatusResult | null;
   automaticUtilityModel?: string | null;
+  /** Agents with their own utility model settings; the rest use this default. */
+  utilityOverrides?: AgentUtilityOverride[];
+  onOpenAgent: (agentId: string) => void;
+  basePath: string;
   /** Route the utility model in effect (automatic or explicit) runs on. */
   utilityRuntime?: CompletionRoute;
   thinkingLevel: string | undefined;
@@ -74,8 +85,6 @@ const UTILITY_MODEL_HELP_ID = "model-providers-utility-help";
 const DECISION_MODEL_HELP_ID = "model-providers-decision-help";
 const THINKING_HELP_ID = "model-providers-thinking-help";
 const FAST_MODE_HELP_ID = "model-providers-fast-mode-help";
-const TRANSLATED_THINKING_LEVELS = new Set(["off", "low", "medium", "high"]);
-
 function modelOption(
   model: ModelPickerEntry,
   authProviders: ReadonlyMap<string, ModelAuthStatusProvider>,
@@ -178,37 +187,13 @@ function BehaviorSetting<Value extends string>(props: {
   );
 }
 
-function thinkingLevelLabel(value: string, label?: string): string {
-  return TRANSLATED_THINKING_LEVELS.has(value)
-    ? t(`quickSettings.model.thinkingLevels.${value}`)
-    : formatThinkingOverrideLabel(value, label);
-}
-
 function fastModeOptionValue(value: ReturnType<typeof formatFastModeValue>): FastMode {
   return value === "auto" || value === "ultrafast" ? value : value === "on";
 }
 
-// Discovery progress does not change the saved selection or disable known models.
-function CatalogFeedback(props: {
-  discovering: boolean;
-  saved?: boolean;
-  error?: string;
-  onRetry: () => void;
-}): JSX.Element {
+function CatalogFeedback(props: { error?: string; onRetry: () => void }): JSX.Element {
   return (
     <>
-      {props.discovering ? (
-        <div class="model-providers__catalog-progress" role="status" aria-live="polite">
-          <span class="btn__spinner" aria-hidden="true" />
-          <span>
-            {t(
-              props.saved
-                ? "modelProviders.defaults.savedDiscoveringMore"
-                : "modelProviders.defaults.discoveringMore",
-            )}
-          </span>
-        </div>
-      ) : undefined}
       {props.error ? (
         <div class="model-providers__catalog-progress" role="alert" aria-live="polite">
           <span>{props.error}</span>
@@ -243,12 +228,8 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
             reset();
           };
           return (
-            <Loading
-              fallback={<CatalogFeedback discovering saved={props.defaultsSaved} onRetry={retry} />}
-            >
+            <Loading>
               <CatalogFeedback
-                saved={props.defaultsSaved}
-                discovering={isPending(read) || Boolean(props.catalogDiscovering)}
                 error={isPending(read) ? undefined : formatUiError(failure())}
                 onRetry={retry}
               />
@@ -256,22 +237,7 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
           );
         }}
       >
-        <Loading
-          fallback={
-            <CatalogFeedback
-              saved={props.defaultsSaved}
-              discovering={Boolean(receipt()) || Boolean(props.catalogDiscovering)}
-              onRetry={() => props.onCatalogRetry()}
-            />
-          }
-        >
-          {latest(read)}
-          <CatalogFeedback
-            saved={props.defaultsSaved}
-            discovering={isPending(read) || Boolean(props.catalogDiscovering)}
-            onRetry={() => props.onCatalogRetry()}
-          />
-        </Loading>
+        <Loading>{latest(read)}</Loading>
       </Errored>
     </div>
   );
@@ -348,14 +314,14 @@ export function DefaultModels(props: DefaultModelsViewProps) {
       (level) => level.id,
     ).map((level) => ({
       value: level.id,
-      label: thinkingLevelLabel(level.id, level.label),
+      label: thinkingLevelLabel(t, level.id, level.label),
     }));
     // Catalog refreshes and model switches must not rewrite a saved global preference.
     const selected = thinkingLevel();
     if (selected && !options.some((option) => option.value === selected)) {
       options.push({
         value: selected,
-        label: thinkingLevelLabel(selected),
+        label: thinkingLevelLabel(t, selected),
         disabled: true,
       });
     }
@@ -530,6 +496,15 @@ export function DefaultModels(props: DefaultModelsViewProps) {
               ]}
             />
           }
+          description={
+            props.utilityOverrides?.length ? (
+              <UtilityOverrides
+                overrides={props.utilityOverrides}
+                basePath={props.basePath}
+                onOpen={props.onOpenAgent}
+              />
+            ) : undefined
+          }
           control={
             <ModelPicker
               windowed
@@ -577,5 +552,47 @@ export function DefaultModels(props: DefaultModelsViewProps) {
         {props.canMutate ? renderMutationMessage(props.message) : undefined}
       </div>
     </SettingsSection>
+  );
+}
+
+function UtilityOverrides(props: {
+  overrides: AgentUtilityOverride[];
+  basePath: string;
+  onOpen: (agentId: string) => void;
+}) {
+  const selection = (entry: AgentUtilityOverride) =>
+    [
+      entry.model === undefined
+        ? t("modelProviders.defaults.utilityOverrideDefaultModel")
+        : entry.model || t("modelProviders.defaults.disabled"),
+      ...(entry.fallbacks.length
+        ? [
+            t("modelProviders.defaults.utilityOverrideFallbacks", {
+              models: entry.fallbacks.join(", "),
+            }),
+          ]
+        : []),
+    ].join(" · ");
+  return (
+    <span>
+      {t("modelProviders.defaults.utilityOverridesTitle")}
+      <For each={props.overrides}>
+        {(entry) => (
+          <span data-agent-id={entry.agentId}>
+            <br />
+            <a
+              class="model-providers__agent-link"
+              href={pathForAgentPanel(entry.agentId, null, props.basePath)}
+              onClick={(event) => handleNavigationClick(event, () => props.onOpen(entry.agentId))}
+            >
+              {entry.label}
+            </a>
+            {`: ${selection(entry)}`}
+          </span>
+        )}
+      </For>
+      <br />
+      {t("modelProviders.defaults.utilityOverridesOthers")}
+    </span>
   );
 }

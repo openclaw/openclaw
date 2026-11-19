@@ -130,7 +130,6 @@ export class CommandPaletteState {
   private sessionSearchRead: { promise: Promise<void> } | undefined;
   private sessionSearchFailed = false;
   private sessionSearchPartial = false;
-  private archivedTranscriptsExcluded = 0;
   private sessionSearchIndexing = false;
 
   private sessionSearchTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -412,7 +411,6 @@ export class CommandPaletteState {
     this.sessionSearchRead = undefined;
     this.sessionSearchFailed = false;
     this.sessionSearchPartial = false;
-    this.archivedTranscriptsExcluded = 0;
     this.sessionSearchIndexing = false;
   }
 
@@ -580,7 +578,6 @@ export class CommandPaletteState {
       }
       const transcriptResult = transcriptOutcome.result;
       this.sessionSearchPartial = transcriptOutcome.error;
-      this.archivedTranscriptsExcluded = transcriptResult?.archivedTranscriptsExcluded ?? 0;
       this.sessionSearchIndexing = transcriptResult?.indexing === true;
       this.sessionItems = buildCommandPaletteSessionItems({
         visibleRows,
@@ -707,13 +704,10 @@ export class CommandPaletteState {
       sessionSearchRead: this.sessionSearchRead,
       catalogSearchRead: this.catalogLoad,
       modelSearchRead: this.modelSearchRead,
-      catalogSearchPending:
-        Boolean(this.catalogLoad && this.catalogLoad.loadedAt === undefined) ||
-        this.modelReader.pending,
+      catalogSearchPending: Boolean(this.catalogLoad && this.catalogLoad.loadedAt === undefined),
       sessionSearchFailed: this.sessionSearchFailed,
       sessionSearchPartial: this.sessionSearchPartial,
       sessionSearchIndexing: this.sessionSearchIndexing,
-      archivedTranscriptsExcluded: this.archivedTranscriptsExcluded,
       onToggle: this.togglePalette,
       onQueryChange: (query: string, event: InputEvent) => {
         this.draft.setMessage(

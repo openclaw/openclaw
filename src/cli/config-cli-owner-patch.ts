@@ -5,8 +5,8 @@ import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
 import { collectBaseArrayPaths, formatConfigPatchPath } from "../config/patch-replace-paths.js";
 import { resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveIdentityPathViaExistingAncestorSync as identity } from "../infra/boundary-path.js";
 import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { resolveIdentityPathViaExistingAncestorSync as identity } from "../infra/path-existence.js";
 import { isPlainObject } from "../infra/plain-object.js";
 import { shortenHomePath } from "../utils.js";
 import type { OwnerRequest } from "./local-state-owner.js";
@@ -145,6 +145,7 @@ export async function bindConfigOwner(requestOwner: OwnerRequest, env: NodeJS.Pr
       restart?: unknown;
       restartPending?: unknown;
       billingRouteWarnings?: unknown;
+      warnings?: unknown;
     }>("config.patch", buildConfigOwnerPatch(change, current.hash));
     return {
       hint:
@@ -152,9 +153,9 @@ export async function bindConfigOwner(requestOwner: OwnerRequest, env: NodeJS.Pr
           ? "The Gateway is restarting to apply it."
           : undefined,
       // Older Gateways omit the field; the owner computed it against its own credentials.
-      warnings: Array.isArray(result.billingRouteWarnings)
-        ? result.billingRouteWarnings.filter((warning) => typeof warning === "string")
-        : [],
+      warnings: [result.billingRouteWarnings, result.warnings].flatMap((warnings) =>
+        Array.isArray(warnings) ? warnings.filter((warning) => typeof warning === "string") : [],
+      ),
     };
   };
 }

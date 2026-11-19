@@ -241,18 +241,18 @@ describe("RFB server-side pre-authentication", () => {
   });
 
   it("surfaces the ARD server SecurityResult reason", async () => {
+    const message = `RFB authentication failed: ${"account rejected".repeat(80)}`;
     await rejectArd(async (server) => {
       await writeArdOffer(server, 16);
       await server.readExactly(144);
-      const reason = Buffer.from("account rejected", "utf8");
+      const reason = Buffer.from("account rejected".repeat(80), "utf8");
       const status = Buffer.alloc(8);
       status.writeUInt32BE(1, 0);
       status.writeUInt32BE(reason.length, 4);
       await server.write(Buffer.concat([status, reason]));
-    }, "RFB authentication failed: account rejected");
+    }, message);
   });
-
-  it.each([3, 7])("matches the VncAuth DES vector with RFB 3.%i", async (minor) => {
+  it.each([3, 7, 8])("matches the VncAuth DES vector with RFB 3.%i", async (minor) => {
     const banner = Buffer.from(`RFB 003.00${minor}\n`);
     const legacy = minor === 3;
     const challenge = Buffer.from("0123456789abcdef", "ascii");

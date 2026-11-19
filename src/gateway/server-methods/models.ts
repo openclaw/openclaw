@@ -33,7 +33,8 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { assertValidParams } from "./validation.js";
 
-// Ordinary reads serve published rows while the catalog owner acquires native inventory.
+// Ordinary reads serve published rows while the catalog owner relists aged provider listings and
+// acquires native inventory in the background.
 export const modelsHandlers: GatewayRequestHandlers = {
   "models.list": createPreparedReadHandler(
     async (options) => {
@@ -117,6 +118,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
           });
           void owner?.recheckNativeLogin?.();
           if (!params.preparedOnly && params.view !== "provider-config") {
+            owner?.refreshExpiredModelCatalog?.();
             void owner
               ?.loadFullModelCatalog?.({
                 changedOnly: true,

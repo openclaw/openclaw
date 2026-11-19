@@ -259,7 +259,7 @@ async function adoptProgressDraft(
   // The retained draft now owns the card. Detach it from this turn so final
   // cleanup and late lane callbacks cannot edit or delete it.
   turn.answerLane.stream = undefined;
-  turn.progressContinuationAdopted = true;
+  turn.finalHandoff = "progress-continuation";
   resetLaneState(turn, turn.answerLane);
   resetReasoningStepState(turn);
   turn.deliveryState.markDelivered();

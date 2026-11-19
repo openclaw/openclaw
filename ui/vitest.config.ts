@@ -80,6 +80,7 @@ const mockRegistryUnitTests = uiIsolatedTestFiles.map((testFile) => testFile.sli
 const mockRegistryBrowserTests = [
   "src/lib/toast-host.loading.browser.test.ts",
   "src/pages/chat/chat-pane-frame-updates.browser.test.tsx",
+  "src/pages/chat/chat-pane-inline-output.browser.test.tsx",
   "src/pages/chat/components/chat-tool-cards.browser.test.tsx",
   "src/pages/chat/components/chat-transcript-geometry-updates.browser.test.tsx",
 ].map((file) => resolveUiTypeScriptPath(file, here));
@@ -94,9 +95,9 @@ let chromiumLaunchOptions: ReturnType<typeof resolveChromiumLaunchOptions> | nul
 
 // The accessibility-tree suite remains Chromium-only until its CDP probe is replaced.
 const webkitTestFiles = [
+  "src/pages/chat/components/chat-transcript-geometry-updates.browser.test.tsx",
   "src/pages/apps/apps-page.browser.test.tsx",
   "src/pages/config/view.config-read.browser.test.tsx",
-  "src/pages/usage/view-details.browser.test.tsx",
   "src/pages/sessions/view.invalidation.browser.test.tsx",
   "src/components/settings-ui.browser.test.tsx",
   "src/components/select-picker.behavior.browser.test.ts",
@@ -108,6 +109,7 @@ const webkitTestFiles = [
   "src/components/app-sidebar-agent-menu-scroll.browser.test.ts",
   "src/components/app-sidebar-rail-menus.browser.test.ts",
   "src/components/app-sidebar-session-visibility.browser.test.ts",
+  "src/components/sidebar-session-window.browser.test.ts",
   "src/components/app-sidebar-owner-avatar.browser.test.ts",
   "src/components/app-sidebar-session-filter.browser.test.ts",
   "src/components/agent-emoji-picker.browser.test.ts",
@@ -124,6 +126,7 @@ const webkitTestFiles = [
   "src/components/session-people-search.browser.test.ts",
   "src/components/control-theme.browser.test.tsx",
   "src/components/menu-surface.browser.test.tsx",
+  "src/components/solid/overlay-style.browser.test.tsx",
   "src/components/session-progress-hovercard.browser.test.ts",
   "src/components/modal-dialog.test.ts",
   "src/components/tooltip.test.ts",
@@ -139,10 +142,12 @@ const webkitTestFiles = [
   "src/pages/chat/chat-composer-overflow.browser.test.tsx",
   "src/pages/chat/chat-composer-queue.browser.test.tsx",
   "src/pages/chat/chat-queue-images.browser.test.ts",
+  "src/pages/chat/components/chat-activity-summary-width.browser.test.tsx",
   "src/pages/chat/components/chat-effort-picker.browser.test.tsx",
   "src/pages/chat/components/chat-details.browser.test.ts",
   "src/pages/chat/components/chat-message-reactions.browser.test.tsx",
   "src/pages/chat/components/chat-model-picker.browser.test.tsx",
+  "src/pages/chat/components/chat-model-picker-layout.browser.test.tsx",
   "src/pages/chat/components/chat-pane-header.browser.test.tsx",
   "src/components/overlay-anchor.browser.test.ts",
   "src/components/overlay-lifecycle.browser.test.ts",
@@ -166,8 +171,12 @@ export function createUiBrowserVitestConfig(
       : ["src/**/*.browser.test.{ts,tsx}", "../extensions/*/browser/**/*.browser.test.{ts,tsx}"],
     env,
   );
-  const mockRegistryInclude =
-    browser === "chromium" ? includeUiTests(mockRegistryBrowserTests, env) : [];
+  const mockRegistryInclude = includeUiTests(
+    browser === "chromium"
+      ? mockRegistryBrowserTests
+      : ["src/pages/chat/components/chat-transcript-geometry-updates.browser.test.tsx"],
+    env,
+  );
   const runtimeFiles = loadPatternListFromEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", env);
   const excludesBrowserFiles =
     runtimeFiles !== null &&
@@ -274,8 +283,10 @@ export function createUiBrowserVitestConfig(
             ? [
                 {
                   browser,
-                  name: "chromium-mock-registry",
+                  name: `${browser}-mock-registry`,
                   include: mockRegistryInclude,
+                  // This additional WebKit lane proves parked-row box/geometry restoration.
+                  ...(browser === "webkit" ? { testNamePattern: /parks retained rows/ } : {}),
                   isolate: true,
                 },
               ]

@@ -474,7 +474,7 @@ test("exports the producing agent identity on run, harness, message, tool-loop, 
     toolName: "read",
     level: "warning",
     action: "warn",
-    detector: "generic_repeat",
+    detector: "tool_repeat",
     count: 3,
     message: "repeated read calls",
   });

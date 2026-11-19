@@ -170,6 +170,10 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
           request.params.sessionKey === sessionKey
         ) {
           const caller = getGatewayToolCallerIdentity();
+          if (boundary === "revoked") {
+            // This port observes handoff, not target admission; another start must still refuse.
+            expect(caller?.operatorAuthority?.reauthorize).toThrow();
+          }
           effects.push({
             origin: caller?.requesterOrigin,
             profileId: caller?.operatorAuthority?.profileId,
@@ -314,7 +318,7 @@ it.each(["allowed", "revoked", "session changed", "selected Bob"] as const)(
         }
         releasePeer.resolve();
         await returned.promise;
-        if (boundary === "revoked" || boundary === "session changed") {
+        if (boundary === "session changed") {
           expect(effects).toEqual([]);
           return;
         }

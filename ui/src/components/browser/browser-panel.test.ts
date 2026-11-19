@@ -448,6 +448,10 @@ describe("Browser panel", () => {
         if (envelope.path === "/tabs/focus") {
           return { ok: true };
         }
+        // The panel's background takeover check; this node-routed tab carries no connection.
+        if (envelope.path === "/control") {
+          return { available: false, controlled: false, byYou: false };
+        }
         return request("browser.request", envelope);
       });
       const { panel } = mountPanel({
@@ -494,7 +498,8 @@ describe("Browser panel", () => {
         path: "/operator/input",
         target: "node",
         node: "browser-node",
-        query: { profile: "work" },
+        // Typed text is the person using the page, so the panel marks it as operator input.
+        query: { operatorInput: true, profile: "work" },
         body: { targetId: "form-tab", inputs: [{ kind: "insertText", text }] },
       });
       if (outcome === "failed") {

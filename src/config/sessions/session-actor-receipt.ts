@@ -94,7 +94,7 @@ export function restoreSessionActorCommittedOutcome<Value>(
     if (!reference || receipt.entryReference !== reference.writeToken) {
       throw new Error("Session actor receipt entry reference is unavailable");
     }
-    // The replica owns this deeply frozen entry; settlement and observers only read it.
+    // The command retains this frozen preimage; settlement and observers only read it.
     const delta = receipt.entryDelta;
     const entry = delta
       ? { ...reference.entry!, ...Object.fromEntries(delta.values) }

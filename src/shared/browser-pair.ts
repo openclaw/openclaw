@@ -25,8 +25,24 @@ export function normalizeBrowserPairCode(input: string): string | null {
   return BROWSER_PAIR_CODE_RE.test(code) ? code : null;
 }
 
-export function formatBrowserPairCode(code: string): string {
-  return `${code.slice(0, 4)}-${code.slice(4)}`;
+/**
+ * `work:ABCD-EFGH` names the issuing Gateway's profile so a bare `openclaw pair` reaches it.
+ * The prefix only routes the CLI; the eight random characters stay the whole secret-free code.
+ */
+export function formatBrowserPairCode(code: string, profile?: string | null): string {
+  const formatted = `${code.slice(0, 4)}-${code.slice(4)}`;
+  return profile ? `${profile}:${formatted}` : formatted;
+}
+
+/** Split typed input into its profile prefix (unvalidated) and the code text. */
+export function splitBrowserPairCodeProfile(input: string): {
+  profile: string | null;
+  code: string;
+} {
+  const separator = input.indexOf(":");
+  return separator < 0
+    ? { profile: null, code: input }
+    : { profile: input.slice(0, separator).trim(), code: input.slice(separator + 1) };
 }
 
 /** Short, display-only name for a browser's signing key. */

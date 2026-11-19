@@ -37,7 +37,9 @@ export async function runNodeJoin(linkText: string, opts: NodeJoinOptions): Prom
     throw new Error("Labs OpenClaw ID node transport currently requires Unix sockets");
   }
   const saved = await loadNodeHostConfig();
-  const discovery = opts.discoveryUrl ?? saved?.gateway?.openclawId?.discoveryUrl;
+  // An explicit flag wins over the origin the owner's link carries, then the saved deployment.
+  const discovery =
+    opts.discoveryUrl ?? link.discovery_url ?? saved?.gateway?.openclawId?.discoveryUrl;
   if (!discovery) {
     throw new Error(
       "Discovery API origin is not configured; pass --discovery-url <https-origin> from the claw owner.",
@@ -67,7 +69,7 @@ export async function runNodeJoin(linkText: string, opts: NodeJoinOptions): Prom
     installedAppsSharingEnabled: saved?.installedAppsSharing,
     commands,
   });
-  const key = loadNodeTunnelKey();
+  const key = await loadNodeTunnelKey();
   const signer = await ed25519SignerFromSeed(key).finally(() => key.fill(0));
   const previous = saved?.gateway?.openclawId;
   const target = await enrollNode({
