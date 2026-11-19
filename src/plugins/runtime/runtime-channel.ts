@@ -155,7 +155,8 @@ function bindChannelDelivery<
   if (consumer && custody) {
     adoption = source && bindChannelCallbacks(source, consumer);
     replyOptions = {
-      ...replyOptions,
+      // Restore same-owner data before copying a prewrapped options object.
+      ...(replyOptions ? bindChannelCallbacks(replyOptions, consumer) : {}),
       [replyCallbackCustody]: custody,
       ...(adoption ? { turnAdoptionLifecycle: adoption } : {}),
     };

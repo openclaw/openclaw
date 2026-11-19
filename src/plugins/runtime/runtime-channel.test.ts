@@ -169,22 +169,26 @@ describe("inbound dispatch", () => {
     }
   });
 
-  it("does not add adoption ownership to plain source options", async () => {
-    const { owner, dispatch } = createOwnedInboundFixture();
-    const source = new AbortController();
-    try {
-      await dispatch({ abortSignal: source.signal });
-      const turn = dispatchRoutedChannelTurn.mock.calls.at(-1)?.[0];
-      expect(turn?.replyOptions?.abortSignal).toBe(source.signal);
-      // Plain user turns detach this source signal when queued; a lifecycle would attach it.
-      expect(
-        turn?.turnAdoptionLifecycle ?? turn?.replyOptions?.turnAdoptionLifecycle,
-      ).toBeUndefined();
-      expect(owner.hasRetainedConsumers).toBe(false);
-    } finally {
-      await owner.dispose();
-    }
-  });
+  it.each([false, true])(
+    "preserves source options without adoption ownership (prewrapped=%s)",
+    async (prewrapped) => {
+      const { owner, dispatch } = createOwnedInboundFixture();
+      const source = new AbortController();
+      try {
+        const options = { abortSignal: source.signal };
+        await dispatch(prewrapped ? owner.wrap(options) : options);
+        const turn = dispatchRoutedChannelTurn.mock.calls.at(-1)?.[0];
+        expect(turn?.replyOptions?.abortSignal).toBe(source.signal);
+        // Plain user turns detach this source signal when queued; a lifecycle would attach it.
+        expect(
+          turn?.turnAdoptionLifecycle ?? turn?.replyOptions?.turnAdoptionLifecycle,
+        ).toBeUndefined();
+        expect(owner.hasRetainedConsumers).toBe(false);
+      } finally {
+        await owner.dispose();
+      }
+    },
+  );
 
   it("keeps a callback-only queued turn alive until settlement", async () => {
     const { owner, delivered, dispatch } = createOwnedInboundFixture();
