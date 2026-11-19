@@ -1,5 +1,8 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "./chat-flow.test-support.ts";
 import { modelPicker } from "./chat-runtime-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -17,6 +20,64 @@ const cases = ["provider", "search"].flatMap((target) =>
 );
 
 suite.define(() => {
+  it("retains provider brand colors in Favorites and Search", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, colorScheme: "light", reducedMotion: "reduce" },
+      async ({ page }) => {
+        const favorites = [
+          "openai/example-large",
+          "anthropic/example-opus",
+          "google/example-flash",
+        ];
+        await installMockGateway(page, {
+          agentModel: favorites[0],
+          models: [
+            { provider: "openai", id: "example-large", name: "Example Large" },
+            { provider: "anthropic", id: "example-opus", name: "Example Opus" },
+            { provider: "google", id: "example-flash", name: "Example Flash" },
+          ],
+          presenceUsers: [{ id: "synthetic-operator", self: true }],
+          featureMethods: [...defaultControlUiFeatureMethods, "users.prefs.get", "users.prefs.set"],
+          bootstrapPreferences: {
+            profileId: "synthetic-operator",
+            entries: { [prefsKey]: favorites },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        const { picker, trigger, search } = modelPicker(page);
+        await trigger.click();
+        await picker.getByRole("tab", { name: "Favorites", exact: true }).click();
+        for (const query of ["", "example"]) {
+          await search.fill(query);
+          const icons = picker.locator(
+            ".chat-controls__model-option-provider .provider-brand-icon:visible",
+          );
+          await expect.poll(() => icons.count()).toBe(3);
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            const frame = await takeControlUiScreenshotFrame(page, picker, [icons.first()], {
+              animations: "disabled",
+            });
+            await writeFile(
+              path.join(
+                suite.artifactDir,
+                (process.env.OPENCLAW_PROOF_STAGE ?? "after") +
+                  (query ? "-search.png" : "-favorites.png"),
+              ),
+              frame.png,
+            );
+          }
+          await expect
+            .poll(() =>
+              icons.evaluateAll((rows) =>
+                rows.map((icon) => getComputedStyle(icon).color).toSorted(),
+              ),
+            )
+            .toEqual(["rgb(16, 163, 127)", "rgb(217, 119, 87)", "rgb(66, 133, 244)"]);
+        }
+      },
+    );
+  });
+
   it.each(["chat", "new"])(
     "persists provider drag order after closing and reloading /%s",
     async (route) => {
