@@ -489,6 +489,13 @@ truncated. Metadata trimming preserves the completion's new notification and pro
 discarding older history as needed. If those records cannot fit, completion fails
 without saving the card.
 
+Agent write tools (`workboard_create`, `workboard_comment`, `workboard_move`,
+`workboard_claim`, `workboard_heartbeat`, `workboard_release`, `workboard_proof`,
+`workboard_complete` and the other card mutations) return the compact card summary
+that `workboard_list` uses under `card`, plus the id of what they added (`commentId`,
+`attachmentId`, `proofId`). They never echo the card's notes, comments, events or other
+history; use `workboard_read` for the full card.
+
 Claimed cards reject agent-tool mutations from other agents unless the caller
 holds the claim token returned by `workboard_claim`. Every card returned by an
 agent tool or Gateway RPC call redacts `metadata.claim.token` to `[redacted]`

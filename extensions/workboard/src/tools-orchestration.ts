@@ -9,6 +9,7 @@ import {
   createWorkboardCardMutations,
   claimTokenField,
   strictObject,
+  summarizeWorkboardCard,
   workspaceField,
 } from "./tools-card-mutations.js";
 
@@ -261,8 +262,8 @@ export function createWorkboardOrchestrationTools(params: {
         const { record, id, scope } = await readScopedCardToolParams(asNonArrayRecord(rawParams));
         const result = await store.decompose(id, record, scope);
         return jsonResult({
-          parent: redactClaimToken(result.parent),
-          children: result.children.map(redactClaimToken),
+          parent: summarizeWorkboardCard(result.parent),
+          children: result.children.map(summarizeWorkboardCard),
         });
       },
     },

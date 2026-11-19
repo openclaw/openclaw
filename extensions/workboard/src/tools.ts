@@ -13,8 +13,10 @@ import type { WorkboardStore } from "./store.js";
 import {
   cardIdField,
   claimTokenField,
+  compactCardResult,
   createWorkboardCardMutations,
   strictObject,
+  summarizeWorkboardCard,
   workspaceField,
 } from "./tools-card-mutations.js";
 import { createWorkboardOrchestrationTools } from "./tools-orchestration.js";
@@ -23,44 +25,12 @@ function contextOwner(ctx: OpenClawPluginToolContext | undefined): string {
   return ctx?.agentId || ctx?.sessionKey || ctx?.sessionId || "agent";
 }
 
-function summarizeCard(card: WorkboardCard) {
-  return {
-    id: card.id,
-    title: card.title,
-    status: card.status,
-    priority: card.priority,
-    agentId: card.agentId,
-    tenant: card.metadata?.automation?.tenant,
-    boardId: card.metadata?.automation?.boardId ?? "default",
-    parents: card.metadata?.links
-      ?.filter((link) => link.type === "parent" && link.targetCardId)
-      .map((link) => link.targetCardId),
-    children: card.metadata?.links
-      ?.filter((link) => link.type === "child" && link.targetCardId)
-      .map((link) => link.targetCardId),
-    claim: card.metadata?.claim
-      ? {
-          ownerId: card.metadata.claim.ownerId,
-          claimedAt: card.metadata.claim.claimedAt,
-          lastHeartbeatAt: card.metadata.claim.lastHeartbeatAt,
-          expiresAt: card.metadata.claim.expiresAt,
-        }
-      : undefined,
-    diagnostics: card.metadata?.diagnostics,
-    archivedAt: card.metadata?.archivedAt,
-    updatedAt: card.updatedAt,
-  };
-}
-
 function redactedProofResult(card: WorkboardCard) {
   const proofId = card.metadata?.proof?.at(-1)?.id;
   if (!proofId) {
     throw new Error("proof was not retained in card metadata.");
   }
-  return jsonResult({
-    card: redactClaimToken(card),
-    proofId,
-  });
+  return compactCardResult(card, { proofId });
 }
 
 const ScopedClaimTokenField = claimTokenField("Claim token for claimed cards.");
@@ -255,7 +225,7 @@ export function createWorkboardTools(params: {
           .filter((card) => !agentId || card.agentId === agentId)
           .filter((card) => !tenant || card.metadata?.automation?.tenant === tenant)
           .slice(0, limit)
-          .map(summarizeCard);
+          .map(summarizeWorkboardCard);
         return jsonResult({ cards });
       },
     },
@@ -268,11 +238,9 @@ export function createWorkboardTools(params: {
       execute: async (_toolCallId, rawParams) => {
         const record = rawParams as Record<string, unknown>;
         normalizeCappedStringList(record.parents, "parents");
-        return jsonResult({
-          card: redactClaimToken(
-            await store.create(record, { ownerId, token: record.token as string | undefined }),
-          ),
-        });
+        return compactCardResult(
+          await store.create(record, { ownerId, token: record.token as string | undefined }),
+        );
       },
     },
     {
@@ -286,9 +254,7 @@ export function createWorkboardTools(params: {
         const parentId = readStringParam(record, "parentId", { required: true });
         const childId = readStringParam(record, "childId", { required: true });
         const token = record.token as string | undefined;
-        return jsonResult({
-          card: redactClaimToken(await store.linkCards(parentId, childId, { ownerId, token })),
-        });
+        return compactCardResult(await store.linkCards(parentId, childId, { ownerId, token }));
       },
     },
     {
@@ -320,7 +286,7 @@ export function createWorkboardTools(params: {
           ownerId,
           ttlSeconds: record.ttlSeconds,
         });
-        return jsonResult({ ...claimed, card: redactClaimToken(claimed.card) });
+        return compactCardResult(claimed.card, { token: claimed.token });
       },
     },
     {
@@ -348,8 +314,9 @@ export function createWorkboardTools(params: {
       label: "Workboard Comment",
       description: "Append a compact comment to a Workboard card.",
       parameters: toolSchemas.comment,
-      execute: scopedCardMutation((id, record, scope) =>
-        store.addComment(id, { body: record.body }, scope),
+      execute: scopedCardMutation(
+        (id, record, scope) => store.addComment(id, { body: record.body }, scope),
+        (card) => ({ commentId: card.metadata?.comments?.at(-1)?.id }),
       ),
     },
     {
@@ -400,8 +367,10 @@ export function createWorkboardTools(params: {
       description:
         "Store a small Workboard attachment in plugin SQLite KV and link it to the card.",
       parameters: toolSchemas.attachment_add,
-      execute: scopedCardMutation((id, record, scope) =>
-        store.addAttachment(id, record, scope, params.context?.assertInputCommitAllowed),
+      execute: scopedCardMutation(
+        (id, record, scope) =>
+          store.addAttachment(id, record, scope, params.context?.assertInputCommitAllowed),
+        (card) => ({ attachmentId: card.metadata?.attachments?.at(-1)?.id }),
       ),
     },
     {
