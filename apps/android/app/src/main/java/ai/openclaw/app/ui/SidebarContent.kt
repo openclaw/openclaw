@@ -259,13 +259,12 @@ internal fun SidebarSessionPresentation.collapsedSectionChildActivity(roots: Lis
 }
 
 private fun hiddenChildActivity(descendants: List<ChatSessionEntry>): SidebarSessionActivity? {
-  val activeChildren = descendants.filter { isSessionRunActive(it.hasActiveRun, it.status?.trim()?.lowercase()) }
-  return when {
-    activeChildren.any { it.status?.trim()?.lowercase() != "queued" } -> SidebarSessionActivity.Running
-    activeChildren.isNotEmpty() -> SidebarSessionActivity.Queued
-    descendants.any { it.unread == true } -> SidebarSessionActivity.Unread
-    else -> null
-  }
+  // Classify each child as its own row would; a failed child keeps its failure on that row.
+  val activities =
+    descendants.mapNotNullTo(mutableSetOf()) {
+      sidebarSessionActivity(status = it.status, lastRunError = it.lastRunError, hasActiveRun = it.hasActiveRun, unread = it.unread == true)
+    }
+  return listOf(SidebarSessionActivity.Running, SidebarSessionActivity.Queued, SidebarSessionActivity.Unread).firstOrNull { it in activities }
 }
 
 /**
@@ -746,11 +745,6 @@ internal fun OpenClawSidebar(
   }
 
   @Composable
-  fun SectionChildActivity(roots: List<ChatSessionEntry>) {
-    recentPresentation.collapsedSectionChildActivity(roots)?.let { SidebarSessionActivityIndicator(activity = it, palette = palette) }
-  }
-
-  @Composable
   fun SessionRows(
     entries: List<ChatSessionEntry>,
     dragSource: SidebarSessionDragSource?,
@@ -999,7 +993,7 @@ internal fun OpenClawSidebar(
             attention = if (pinnedExpanded) null else attentionFor(recentPresentation.withDescendants(pinnedSessions).map { sidebarAttentionSessionKey(it.key, it.ownerAgentId ?: selectedAgentId ?: defaultAgentId) }),
             expanded = pinnedExpanded,
             palette = palette,
-            trailingContent = { if (!pinnedExpanded) SectionChildActivity(pinnedSessions) },
+            hiddenActivity = if (pinnedExpanded) null else recentPresentation.collapsedSectionChildActivity(pinnedSessions),
             onClick = { pinnedExpandedChoice = !pinnedExpanded },
             modifier = Modifier.padding(top = 10.dp),
           )
@@ -1093,7 +1087,7 @@ internal fun OpenClawSidebar(
                   expanded = expanded,
                   palette = palette,
                   iconContent = { Icon(Icons.Outlined.Folder, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                  trailingContent = { if (!expanded) SectionChildActivity(group.entries) },
+                  hiddenActivity = if (expanded) null else recentPresentation.collapsedSectionChildActivity(group.entries),
                   onClick = { collapsedGroups = toggleSidebarExpansion(collapsedGroups, group.name) },
                 )
                 if (expanded) sectionRows(token, group.entries)
@@ -1105,7 +1099,7 @@ internal fun OpenClawSidebar(
                   attention = if (chatGroupsExpanded) null else attentionFor(recentPresentation.withDescendants(recentPresentation.chatGroups).map { it.key }),
                   expanded = chatGroupsExpanded,
                   palette = palette,
-                  trailingContent = { if (!chatGroupsExpanded) SectionChildActivity(recentPresentation.chatGroups) },
+                  hiddenActivity = if (chatGroupsExpanded) null else recentPresentation.collapsedSectionChildActivity(recentPresentation.chatGroups),
                   onClick = { chatGroupsExpanded = !chatGroupsExpanded },
                 )
                 if (chatGroupsExpanded) sectionRows(token, recentPresentation.chatGroups)
@@ -1117,7 +1111,7 @@ internal fun OpenClawSidebar(
                   attention = if (recentExpanded) null else attentionFor(recentPresentation.withDescendants(recentRows).map { it.key }),
                   expanded = recentExpanded,
                   palette = palette,
-                  trailingContent = { if (!recentExpanded) SectionChildActivity(recentRows) },
+                  hiddenActivity = if (recentExpanded) null else recentPresentation.collapsedSectionChildActivity(recentRows),
                   onClick = { recentExpanded = !recentExpanded },
                 )
                 if (recentExpanded) {

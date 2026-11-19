@@ -501,6 +501,8 @@ class SidebarShellLogicTest {
 
     assertNull(activityFor(idle))
     assertNull(activityFor(idle.copy(status = "failed", lastRunError = "boom")))
+    // A failed child shows its failure on its own row, so its unread flag does not fold up either.
+    assertNull(activityFor(idle.copy(status = "failed", unread = true)))
     assertEquals(SidebarSessionActivity.Unread, activityFor(idle.copy(unread = true)))
     val queued = session("agent:main:subagent:queued", 30).copy(status = "queued", hasActiveRun = true)
     assertEquals(SidebarSessionActivity.Queued, activityFor(idle.copy(unread = true), queued))

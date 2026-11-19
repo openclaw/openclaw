@@ -285,7 +285,11 @@ class SidebarNavigationAccessibilityTest {
       )
     val other = ChatSessionEntry(key = "agent:main:dashboard:notes", displayName = "Product notes", updatedAtMs = 40, lastActivityAt = 40)
     showSidebar(sessions = listOf(parent, child, other), activeSessionKey = other.key)
-    composeRule.onNodeWithText("Recent").performClick()
+    // The collapsed section announces its hidden child's work with its expansion state.
+    composeRule
+      .onNodeWithText("Recent")
+      .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Collapsed, Working"))
+      .performClick()
 
     composeRule.onNodeWithText("Release planning").assertIsDisplayed()
     composeRule.onNodeWithText("Product notes").assertIsDisplayed()

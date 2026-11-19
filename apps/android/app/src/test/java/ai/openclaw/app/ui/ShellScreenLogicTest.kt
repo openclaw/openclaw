@@ -440,9 +440,20 @@ class ShellScreenLogicTest {
       )
 
     assertEquals(
-      listOf("agent:main:dashboard:home-child", "agent:main:subagent:orphan", "agent:main:dashboard:parent", "agent:main:main"),
+      listOf("agent:main:dashboard:home-child", "agent:main:dashboard:parent", "agent:main:subagent:orphan", "agent:main:main"),
       overviewRecentSessions(sessions).map { session -> session.key },
     )
+  }
+
+  @Test
+  fun overviewRecentSessionsRankAParentByItsNewestChild() {
+    val sessions =
+      listOf(
+        ChatSessionEntry(key = "agent:main:dashboard:old-parent", updatedAtMs = 1),
+        ChatSessionEntry(key = "agent:main:subagent:fresh-child", updatedAtMs = 100, parentSessionKey = "agent:main:dashboard:old-parent"),
+      ) + (1..3).map { ChatSessionEntry(key = "agent:main:dashboard:newer-$it", updatedAtMs = 50L + it) }
+
+    assertEquals("agent:main:dashboard:old-parent", overviewRecentSessions(sessions).first().key)
   }
 
   @Test

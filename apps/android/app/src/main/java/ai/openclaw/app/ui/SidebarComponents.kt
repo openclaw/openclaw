@@ -159,7 +159,11 @@ internal fun SidebarCollapsibleHeader(
   iconContent: (@Composable () -> Unit)? = null,
   trailingContent: (@Composable () -> Unit)? = null,
   attention: SidebarAttention? = null,
+  /** Work in children this collapsed section hides; announced with the expansion state. */
+  hiddenActivity: SidebarSessionActivity? = null,
 ) {
+  val expansionState = if (expanded) nativeString("Expanded") else nativeString("Collapsed")
+  val activityState = hiddenActivity?.let { sidebarSessionActivityLabel(it) }
   Row(
     modifier =
       modifier
@@ -167,7 +171,7 @@ internal fun SidebarCollapsibleHeader(
         .heightIn(min = 48.dp)
         .clip(RoundedCornerShape(10.dp))
         .clickable(role = Role.Button, onClick = onClick)
-        .semantics { stateDescription = if (expanded) nativeString("Expanded") else nativeString("Collapsed") }
+        .semantics { stateDescription = listOfNotNull(expansionState, activityState).joinToString(", ") }
         .padding(horizontal = 8.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -183,6 +187,7 @@ internal fun SidebarCollapsibleHeader(
       overflow = TextOverflow.Ellipsis,
     )
     attention?.let { SidebarAttentionIndicator(it, palette) }
+    hiddenActivity?.let { SidebarSessionActivityIndicator(activity = it, palette = palette) }
     trailingContent?.invoke()
   }
 }
@@ -315,6 +320,14 @@ internal fun sidebarSessionActivity(
   }
 }
 
+internal fun sidebarSessionActivityLabel(activity: SidebarSessionActivity): String =
+  when (activity) {
+    SidebarSessionActivity.Failed -> nativeString("Run failed")
+    SidebarSessionActivity.Queued -> nativeString("Queued")
+    SidebarSessionActivity.Running -> nativeString("Working")
+    SidebarSessionActivity.Unread -> nativeString("Needs attention")
+  }
+
 @Composable
 internal fun SidebarSessionActivityIndicator(
   activity: SidebarSessionActivity,
@@ -385,13 +398,7 @@ internal fun SidebarSessionRow(
       unread = session.unread == true,
     )
   val sessionStateDescription =
-    attention?.status ?: when (activity) {
-      SidebarSessionActivity.Failed -> nativeString("Run failed")
-      SidebarSessionActivity.Queued -> nativeString("Queued")
-      SidebarSessionActivity.Running -> nativeString("Working")
-      SidebarSessionActivity.Unread -> nativeString("Needs attention")
-      null -> nativeString("Selected").takeIf { selected }
-    }
+    attention?.status ?: activity?.let { sidebarSessionActivityLabel(it) } ?: nativeString("Selected").takeIf { selected }
   SidebarRowSurface(
     selected = selected,
     stateDescription = sessionStateDescription,
