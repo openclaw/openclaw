@@ -236,7 +236,7 @@ it.each([
   },
 );
 
-it("fails closed when optional SDK relative imports reach a parent install", async () => {
+it("bounds optional SDK relative imports to a checkout nested in a parent install", async () => {
   const ancestor = tempRoot("optional-imports");
   const root = path.join(ancestor, ".worktrees/validation");
   const fixture = createNativeFixture(root);
@@ -279,17 +279,20 @@ it("fails closed when optional SDK relative imports reach a parent install", asy
     "src/index.ts":
       'import type { Options } from "synthetic-sdk";\nexport type { Fallback } from "synthetic-sdk";\nexport function origin(options: Options) { return options.origin; }\n',
   });
-  // The compiler reads its real filesystem: an optional import that climbs past the
-  // checkout into a parent install fails with the escaped path instead of being hidden.
-  const ancestorTypes = path.join(ancestor, "node_modules/synthetic-fetch/index.d.ts");
-  await expect(fixture.compile()).rejects.toThrow(
-    `Declaration input escapes checkout: ${ancestorTypes}`,
-  );
-  fs.rmSync(path.dirname(ancestorTypes), { recursive: true });
-  const local = await fixture.compile();
-  expect(local.declarations.get(entry)?.code).toContain('origin(options: Options): "local"');
-  fixture.expectInputs(local.inputs, "src/index.ts", localTypes);
-  expect(local.inputs.every((file) => !path.relative(root, file).startsWith(".."))).toBe(true);
+  // The updater builds each candidate in a worktree inside the install it replaces.
+  // The parent install's packages must neither fail the build nor reach its output.
+  const first = await fixture.compile();
+  expect(first.declarations.get(entry)?.code).toContain('origin(options: Options): "local"');
+  fixture.expectInputs(first.inputs, "src/index.ts", localTypes);
+  expect(first.inputs.every((file) => !path.relative(root, file).startsWith(".."))).toBe(true);
+
+  fixture.write({
+    [path.join(ancestor, "node_modules/synthetic-fetch/index.d.ts")]:
+      requestTypes("changed-ancestor"),
+  });
+  const ancestorChanged = await fixture.compile();
+  expect(ancestorChanged.declarations.get(entry)).toEqual(first.declarations.get(entry));
+  expect(ancestorChanged.inputs).toEqual(first.inputs);
 });
 
 for (const kind of [
