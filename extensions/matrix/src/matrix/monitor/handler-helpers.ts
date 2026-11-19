@@ -13,35 +13,26 @@ const MATRIX_TOOL_PROGRESS_MAX_CHARS = 300;
 const MAX_TRACKED_SHARED_DM_CONTEXT_NOTICES = 512;
 type MatrixAllowBotsMode = "off" | "mentions" | "all";
 
+// Matrix rich replies: clients strip the legacy reply fallback (leading `> ` quote lines in body,
+// leading <mx-reply> in formatted_body); the quoted event is fetched separately as reply context.
 export function resolveMatrixCurrentContent(
   content: RoomMessageEventContent,
 ): RoomMessageEventContent {
   if (!content["m.relates_to"]?.["m.in_reply_to"]?.event_id) {
     return content;
   }
-
-  // Rich-reply fallbacks are untrusted copies; quote context is fetched separately.
-  const body = content.body;
-  let bodyStart = 0;
-  if (typeof body === "string" && /^> (?:\* )?<@[^>\n]+>/.test(body)) {
-    while (body.startsWith("> ", bodyStart)) {
-      const end = body.indexOf("\n", bodyStart);
-      bodyStart = end === -1 ? body.length : end + 1;
-    }
-    if (bodyStart > 0 && body[bodyStart] === "\n") {
-      bodyStart += 1;
-    }
-  }
-  const formattedBody = content.formatted_body;
-  const fallback =
+  const { body, formatted_body: html } = content;
+  const plain =
+    typeof body === "string" && /^> (?:\* )?<@[^>\n]+>/.test(body)
+      ? body.replace(/^(?:> .*(?:\n|$))+\n?/, "")
+      : body;
+  const formatted =
     content.format === "org.matrix.custom.html"
-      ? formattedBody?.match(/^<mx-reply>[\s\S]*?<\/mx-reply>/i)
-      : undefined;
-  return {
-    ...content,
-    ...(typeof body === "string" && bodyStart > 0 ? { body: body.slice(bodyStart) } : {}),
-    ...(fallback ? { formatted_body: formattedBody!.slice(fallback[0].length) } : {}),
-  };
+      ? html?.replace(/^<mx-reply>[\s\S]*?<\/mx-reply>/i, "")
+      : html;
+  return plain === body && formatted === html
+    ? content
+    : { ...content, body: plain, formatted_body: formatted };
 }
 
 export function resolveMatrixMentionPrecheckText(params: {
