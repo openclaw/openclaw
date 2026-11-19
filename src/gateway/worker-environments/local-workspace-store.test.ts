@@ -184,16 +184,80 @@ it("keeps admitted paths and checkpoint documents out of root-publication reques
       currentManifestRaw: rawManifest,
       currentManifestRef: manifestRef,
       buildCacheInputs,
+      fingerprints: {
+        target: "projection",
+        blob: Buffer.alloc(8192, 7).toString("base64"),
+        oppositeBlob: Buffer.alloc(8192, 9).toString("base64"),
+      },
     };
     const reserved = await store.update(baseline, { checkpoint_json: JSON.stringify(checkpoint) });
-    return store.update(reserved, { pending_target: null }, undefined, checkpoint);
+    return store.update(reserved, { pending_target: null }, undefined, {
+      ...checkpoint,
+      fingerprintsFromCheckpoint: true,
+    });
   });
   expect(await readLocalWorkspaceProjection(worktreeId, env)).toEqual(accepted);
   expect(accepted.source_paths_json).toBe(sourcePaths);
   expect(JSON.parse(accepted.checkpoint_json!)).toMatchObject({ buildCacheInputs });
+  expect(Buffer.from(accepted.projection_fingerprints!)).toEqual(Buffer.alloc(8192, 7));
+  expect(Buffer.from(accepted.canonical_fingerprints!)).toEqual(Buffer.alloc(8192, 9));
   expect(bytes).toHaveLength(4);
   expect.soft(bytes[0], "create request bytes").toBeLessThan(2048);
   expect.soft(bytes[3], "settlement request bytes").toBeLessThan(2048);
+  // SAFETY: The store just persisted this owner-written checkpoint.
+  const checkpoint = JSON.parse(accepted.checkpoint_json!) as LocalWorkspaceManifestCheckpoint;
+  await expect(
+    withLocalWorkspaceStore({ worktreeId, env }, (store) =>
+      store.update(store.get()!, {}, undefined, {
+        ...checkpoint,
+        resultingRoot: `sha256:${"f".repeat(64)}`,
+        fingerprintsFromCheckpoint: true,
+      }),
+    ),
+  ).rejects.toThrow("checkpoint changed before acceptance");
+  expect(await readLocalWorkspaceProjection(worktreeId, env)).toEqual(accepted);
+});
+
+it("bounds reconcile checkpoint requests while preserving the durable recovery document", async () => {
+  const worktreeId = randomUUID();
+  const entries = Array.from({ length: 25000 }, (_, index) => ({
+    path: `file-${index}.txt`,
+    type: "file",
+    mode: 0o644,
+    size: 32,
+    sha256: "b".repeat(64),
+  }));
+  const raw = JSON.stringify({
+    version: 1,
+    baseCommit: "a".repeat(40),
+    entries: entries.slice(0, 2),
+  });
+  const checkpoint = JSON.stringify({
+    baseManifestRaw: raw,
+    currentManifestRaw: raw,
+    records: [],
+    removed: [],
+    buildCacheInputs: entries.map((entry) => `.artifacts/build-cache-inputs/${entry.path}`),
+  });
+  const bytes: number[] = [];
+  probe.command(stateWorker, (command, options, scope) => {
+    if (command.type === "localWorkspace.mutate") {
+      bytes.push(serialize(command).byteLength);
+    }
+    return scope.execute(command, options);
+  });
+  await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+    const created = await store.create(localWorkspaceProjectionFixture(worktreeId, root));
+    await store.update(created, {
+      checkpoint_json: checkpoint,
+      pending_target: "canonical",
+    });
+  });
+  await closeOpenClawStateDatabaseAsync();
+  const recovered = await readLocalWorkspaceProjection(worktreeId, env);
+  expect(recovered?.checkpoint_json).toBe(checkpoint);
+  expect(bytes).toHaveLength(2);
+  expect(Math.max(...bytes)).toBeLessThan(1024 * 1024);
 });
 
 it("looks up workspace identity without returning pending recovery payloads", async () => {
@@ -827,6 +891,7 @@ it("recovers an oversized committed row after reply loss without replaying or tr
   );
   const baseline = JSON.stringify({ synthetic: "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES / 4) });
   const journalPack = Buffer.alloc(1024, 7);
+  const publicationPack = new Uint8Array(journalPack);
   let writes = 0;
   let retainedGuard: (() => void) | undefined;
   const lostReply = probe.command(stateWorker, async (command, executeOptions, scope) => {
@@ -848,12 +913,16 @@ it("recovers an oversized committed row after reply loss without replaying or tr
         journal_pack: journalPack,
         paused_runtimes_json: undefined,
       },
+      undefined,
+      undefined,
+      publicationPack,
     );
     expect(store.get()).toEqual(row);
     return row;
   });
   lostReply.mockRestore();
   expect(writes).toBe(1);
+  expect(publicationPack.byteLength).toBe(0);
   assert(retainedGuard);
   expect(retainedGuard).toThrow();
   const committed = await readLocalWorkspaceProjection(worktreeId, env);

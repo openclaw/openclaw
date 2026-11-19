@@ -147,7 +147,10 @@ describe("config form renderer", () => {
 
     renderRaw({ schema, activeSection: "lab", unsupportedPaths: ["lab.mode"] });
     await waitForSolid(() => expect(container.querySelector(".config-field__raw-link")).toBeNull());
-    expect(container.textContent).toContain("Unsupported schema node. Use Raw mode.");
+    expect(container.textContent).toContain(
+      "Edit this setting in the Raw tab of Advanced settings.",
+    );
+    expect(onPatch).not.toHaveBeenCalled();
   });
 
   it("localizes the security heading while preserving Gateway and schema descriptions", async () => {

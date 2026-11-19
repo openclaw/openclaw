@@ -952,6 +952,189 @@ case skipped on macOS. Independent preservation and local ClawSweeper review
 found no lost contract or actionable finding. This closes the earlier FIFO
 setup cleanup follow-up; no production change is claimed.
 
+### MCP CLI workspace cleanup custody
+
+At `a56ba88e924fad822fd8f447f1b67e82c13c6f42`, the MCP CLI harness empties
+its directory tracker before asynchronous removal succeeds. A failed removal
+leaves the directory untracked and unavailable to a later cleanup attempt.
+Delegate removal to the existing shared cleanup helper; preserve allocation,
+explicit caller-owned teardown, mock restoration and exit-code restoration.
+All five consumer suites remain: 46 declarations / 57 expanded cases. Test
+support changes by +2/-3 lines; production and shared helper code are unchanged.
+
+Direct execution of the baseline cleanup body with an injected removal failure
+leaves the failed directory present and untracked after both cleanup attempts.
+The other directory is removed and the exact error and exit code are preserved.
+The same fault in an existing Vitest consumer case confirms that the candidate
+retains the failed path and removes it on the second cleanup call. Both versions
+remove the healthy workspace and restore the temporary home, environment, cwd
+and exit code. Observations precede emergency cleanup; temporary instrumentation
+was restored byte for byte.
+
+All five consumer suites pass on both versions: 56 cases pass and the one
+Windows-only case is skipped on macOS. Baseline wall time was 106.39 seconds;
+the candidate took 138.65 seconds (121.87 seconds reported by Vitest). These are
+qualification observations, not speed-comparison data. The unchanged shared
+helper passes 11 cases with its Windows-only case skipped. Independent
+preservation and full local ClawSweeper review found no actionable issue.
+This closes the earlier MCP temporary-directory removal follow-up.
+
+### Channel and model fixture environment restoration
+
+At `ea8bbbb3b672b7df04d3747941d75cf7345a37fc`, the channel catalog-row
+and model-status cold-import fixtures remove their suite roots before restoring
+stubbed environment variables. A removal error skips that restoration. Keep each
+existing suite-lifetime root and put environment restoration in `finally`.
+All three declarations / four expanded cases remain, including both channel
+account shapes, missing-owner repair hints and all three model-status routes.
+Test code changes by +10/-4 lines; production and shared support are unchanged.
+
+Direct execution of both original teardown bodies with an injected removal
+failure preserves the exact error but skips environment restoration. The same
+fault in each actual Vitest afterAll hook confirms that the baseline leaves all
+three fixture environment variables stubbed, while the candidate restores all
+three. Both preserve the exact removal error and report the expected teardown
+failure. Observations precede emergency cleanup; temporary instrumentation was
+restored byte for byte.
+
+The clean baseline and candidate each pass all four cases. Baseline wall time
+was 73.44 seconds including cold worker compilation; the warm candidate took
+11.33 seconds (8.19 seconds reported by Vitest). These are qualification
+observations, not speed-comparison data. Independent preservation and full local
+ClawSweeper review found no actionable issue. This closes the earlier channel
+and model fixture environment-restoration follow-up.
+
+### Startup fixture cleanup custody
+
+At `5dc8071931853986c9a924c2e99996b8b5753a71`, the startup metadata and
+command-timing fixtures empty their directory trackers before removal succeeds.
+A failed removal leaves the root untracked and unavailable to a later cleanup
+attempt. Delegate both hooks to the existing shared cleanup owner. Keep the
+timing fixture's synchronous timeline flush immediately before removal.
+All four declarations / four expanded cases remain; production and shared
+helper code are unchanged.
+
+Direct execution and actual Vitest `afterEach` fault/retry probes reproduce
+both original hooks forgetting the failed root. Neither retries it; metadata
+also leaves the healthy sibling behind. The candidate hooks preserve the exact
+error, remove the healthy sibling, retain the failed root, and remove it when
+the same hook runs again without the fault. Timing flush precedes both removal
+attempts. Each fault run intentionally reports two failed / two passed cases;
+all original case assertions execute. Temporary instrumentation was restored
+byte-for-byte.
+
+Clean baseline and candidate runs pass all four cases (5.66 s and 3.28 s wall
+time; Vitest durations 2.40 s and 0.779 s). These are qualification observations,
+not a performance comparison. Scoped CLI-test typecheck, lint, formatting,
+line-cap and max-lines ratchets, and `git diff --check` pass. Independent review
+and local ClawSweeper report no actionable findings. The shared cleanup helper
+is unchanged and retains its prior 11-pass / one-Windows-skip proof.
+
+### Agent startup fixture cleanup custody
+
+At `33d26e441f91c3d2534071a8d36e8aa9d146d07f`, the agent startup timing fixture clears
+its directory tracker before asynchronous removal succeeds. A failed removal
+therefore leaves the root untracked. Delegate cleanup to the existing shared
+owner, preserving the order: flush timeline, restore stubbed environment, remove
+tracked roots. The single declaration / expanded case and all timeline-content
+assertions remain; production and shared-helper code are unchanged.
+
+Direct execution and an actual Vitest `afterEach` fault/retry probe reproduce
+the original hook forgetting its failed root. The candidate preserves the exact
+error, removes a healthy sibling, retains the failed root, and removes it when
+the same hook runs again without the fault. Both versions flush and restore the
+two diagnostics environment variables before removal. Each fault run reports
+one intentional teardown failure after the original assertions execute.
+Temporary instrumentation was restored byte-for-byte.
+
+The clean baseline and candidate each pass the single case (11.64 s and 6.21 s
+wall time; Vitest durations 3.67 s and 1.78 s). These are qualification
+observations, not a performance comparison. Scoped agent-test typecheck, lint,
+formatting, line-cap/max-lines ratchets, and `git diff --check` pass. Independent
+preservation and local ClawSweeper review found no actionable issue. The shared
+cleanup helper is unchanged; its prior 11-pass / one-Windows-skip proof is reused.
+
+### Source scan fixture cleanup custody
+
+At `10f6b53ce51827256689604e821c34a7f5e84323`, the source-file scan fixture empties
+its directory tracker before removal succeeds. Reuse the shared cleanup owner
+after the existing pending-scan settlement and reset. All five declarations /
+eight expanded cases remain, including refill concurrency, source ordering,
+pre/post-read limits, decoding, mapper error behavior and live file mutations
+through both collect and map. Keep the asynchronous hook and the `rm` import
+used by the deletion mutation. Production and shared-helper code are unchanged.
+
+Actual Vitest-hook fault injection preserves the original removal error on both
+heads. With a real held scan, every root remains intact until settlement and the
+pending scan is reset before removal. The original hook loses the failed root
+and makes no retry; the candidate retains it, removes a healthy sibling and
+succeeds on the next attempt. Each fault run has one intentional hook failure
+and seven passing cases. Temporary instrumentation was removed and the exact
+candidate bytes restored. All eight clean cases pass on both heads (1.71 s
+baseline; 1.88 s candidate command time); these are correctness runs, not a
+performance comparison. Scoped scripts-test typecheck, lint, formatting and
+both line-cap ratchets pass. Production and shared-helper code are unchanged.
+
+### Built status runtime fixture cleanup
+
+At `a58770f3a50053e89236c787a331c1cb48d4b388`, the built-status runtime test
+clears its directory tracker before removal and stops on the first failure.
+Reuse the shared cleanup owner while preserving the synchronous hook, fixture
+factory and both declarations / four expanded cases. Retain the empty-PATH
+fallback with scoped environment restoration, hashed `.mjs` preference and
+three external-find rows with the no-readdir assertion. Production and shared
+helpers are unchanged.
+
+Actual Vitest-hook fault injection preserves the original error on both
+versions. The baseline loses both roots and performs no retry; the candidate
+removes the healthy root, retains the failed root and removes it on retry.
+Both injected runs intentionally report one hook failure and three passing
+cases. Both clean runs pass all four cases (6.99 s baseline command time;
+1.90 s candidate); these correctness runs are not a performance comparison.
+The temporary instrumentation was restored byte for byte, and scoped PATH
+restoration passed. Scoped scripts-test typecheck, lint, formatting and both
+line-cap ratchets pass. Independent preservation and local ClawSweeper reviews
+found no actionable defects.
+
+### Hotspot report fixture cleanup
+
+At `5cb4520c7e1d2d4ef519508c2c5dd091e446d789`, hotspot-report teardown
+clears its tracked roots before removal and stops on the first error. Reuse
+the shared cleanup owner without changing the fixture factory or the single
+declaration / expanded case. Preserve the real CLI's rejection of a valid
+report with no timed files: exit 1, empty stdout and the specific diagnostic.
+The shared report-parser tests protect a separate contract; they do not
+replace this CLI-boundary proof. Production and shared helpers are unchanged.
+
+Injection through the actual registered Vitest hook confirms that the original
+cleanup loses both failed and unattempted roots and performs no retry. The
+shared owner preserves the same error, removes the healthy root, retains the
+failed root and succeeds on retry. Both injected runs intentionally fail the
+single case at teardown; both clean runs pass it. Temporary instrumentation
+was restored byte for byte. Scoped scripts-test typecheck, lint, formatting
+and both line-cap ratchets pass. Independent preservation and local
+ClawSweeper reviews found no actionable defects.
+
+### Standalone SQLite fixture cleanup
+
+At `4f8b68e647afb8507f3e5bba54af1374cb608389`, standalone SQLite test
+teardown clears its directory tracker before removal and stops on the first
+error. Reuse the shared cleanup owner while preserving the synchronous hook,
+fixture registration, child-process mock and all three declarations / five
+expanded cases. Retain macOS staging and manifest identity, the three distinct
+rejection guards, and Linux's embedded-library behavior. Production and shared
+helpers are unchanged. Mocked compilation and probing do not establish real
+SQLite capability qualification.
+
+Injection through the actual registered Vitest hook confirms that the original
+cleanup loses both failed and unattempted roots and cannot retry. The shared
+owner preserves the same error, removes the healthy root, retains the failed
+root and removes it on retry. Both injected runs intentionally report one
+teardown failure and four passing cases. Both clean runs pass all five cases.
+Temporary instrumentation was restored byte for byte. Scoped scripts-test
+typecheck, lint, formatting and both line-cap ratchets pass. Independent
+preservation and local ClawSweeper reviews found no actionable defects.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.

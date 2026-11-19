@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getAcpSessionManager } from "./control-plane/manager.js";
+import { isRejectedConfigOptionValue } from "./control-plane/manager.runtime-controls.js";
 import {
   buildConfiguredAcpSessionKey,
   normalizeText,
@@ -85,14 +86,24 @@ export async function ensureConfiguredAcpBindingSession(params: {
         const value = runtimeOptions[key];
         if (value !== undefined && normalizeText(currentOptions?.[key]) !== value) {
           params.assertActive?.();
-          currentOptions = await acpManager.setSessionConfigOption({
-            ...(params.assertActive ? { assertActive: params.assertActive } : {}),
-            cfg: params.cfg,
-            agentId: params.spec.agentId,
-            sessionKey,
-            key,
-            value,
-          });
+          try {
+            currentOptions = await acpManager.setSessionConfigOption({
+              ...(params.assertActive ? { assertActive: params.assertActive } : {}),
+              cfg: params.cfg,
+              agentId: params.spec.agentId,
+              sessionKey,
+              key,
+              value,
+            });
+          } catch (error) {
+            // A configured thinking level the adapter will not accept keeps the accepted one.
+            if (key !== "thinking" || !isRejectedConfigOptionValue(error)) {
+              throw error;
+            }
+            logVerbose(
+              `acp-configured-binding: ${sessionKey} keeps its accepted thinking level: ${formatErrorMessage(error)}`,
+            );
+          }
         }
       }
       return {

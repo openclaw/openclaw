@@ -97,8 +97,8 @@ describe("agent-created Template drafts", () => {
 
     const choices = {
       name: "research-brief",
-      displayName: "Engineering Partner",
-      description: "A collaborative engineering partner.",
+      displayName: "  Engineering Partner  ",
+      description: " A collaborative engineering partner. ",
       excluded: [],
     };
     await using prepared = await prepareTemplateDraft({ ...target, choices });

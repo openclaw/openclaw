@@ -1,4 +1,3 @@
-import { dirname } from "node:path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import {
   buildAuthHealthSummary,
@@ -30,10 +29,7 @@ import {
 import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles/paths.js";
 import { withAuthProfileReaderCleanup } from "../agents/auth-profiles/reader-cleanup.js";
 import { prepareAgentAuthProfileRowsRead } from "../agents/auth-profiles/sqlite-read.js";
-import {
-  resolveAuthProfileDatabasePath,
-  resolveAuthProfileDatabaseOwnerId,
-} from "../agents/auth-profiles/sqlite.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -116,9 +112,8 @@ export async function collectSharedAuthStoreFindings(
     return [];
   }
   const databasePath = resolveSharedAuthStorePath(env);
-  const source = prepareAgentAuthProfileRowsRead({
+  const source = await prepareAgentAuthProfileRowsRead({
     databasePath,
-    agentId: resolveAuthProfileDatabaseOwnerId(dirname(databasePath)),
     env,
   });
   const readable = await withAuthProfileReaderCleanup(

@@ -214,8 +214,7 @@ export async function hydrateChatHistory(
         return undefined;
       }
     }
-    // Only a Stop-style cursor reset can cut a transcript this pane shows from
-    // its start; a window reset asks for a fresh window instead.
+    // Compaction and Stop cursor resets can cut a transcript this pane shows; a window reset asks for a fresh window instead.
     if (cursorReset && !isHistoryCursor(response) && !requests.windowReset?.isCurrent()) {
       const { fillHeldHistoryGap } = await import("./chat-history-held-gap.ts");
       const filled = await fillHeldHistoryGap(
@@ -417,11 +416,10 @@ export async function hydrateChatHistory(
       !continuousRead &&
       !requests.windowReset?.isCurrent() &&
       res.windowReset !== true &&
-      (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId) &&
-      (previousDisplayedLeafEntryId === undefined ||
-        previousDisplayedLeafEntryId === nextDisplayedLeafEntryId);
+      (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId);
     const reconciledHistory = retainsTranscriptIdentity
       ? (tailPreparation?.reconcileHistoryTail({
+          sameLeaf: previousDisplayedLeafEntryId === undefined || previousDisplayedLeafEntryId === nextDisplayedLeafEntryId,
           nextMessages: visibleMessages,
           nextPagination,
           nextSessionId,

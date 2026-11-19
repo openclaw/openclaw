@@ -46,7 +46,8 @@ export type ChatWelcomeProps = {
   hideSecondaryContent?: boolean;
   /** Visually retire secondary content while the new-session draft is active. */
   fadeSecondaryContent?: boolean;
-} & ChatWelcomeIdentityProps;
+} & ChatWelcomeIdentityProps &
+  Pick<AgentsListResult["agents"][number], "description" | "recommendedPrompts">;
 
 /** The new-session draft's welcome block. */
 export function ChatWelcome(
@@ -87,6 +88,9 @@ export function ChatWelcome(
             <Show when={props.assistantNameControl}>
               <div class="agent-chat__welcome-name">{props.assistantNameControl}</div>
             </Show>
+            <Show when={props.description}>
+              {(description) => <p class="agent-chat__description muted">{description()}</p>}
+            </Show>
             <Show when={props.hint}>
               <p class="agent-chat__hint">{props.hint}</p>
             </Show>
@@ -109,17 +113,23 @@ export function ChatWelcome(
                 when={props.preparedRecents?.length}
                 fallback={
                   <div class="agent-chat__suggestions">
-                    <For each={resolveWelcomeSuggestionKeys(props.operatorAuth)}>
-                      {(key) => (
+                    <For
+                      each={
+                        props.recommendedPrompts?.length
+                          ? props.recommendedPrompts
+                          : resolveWelcomeSuggestionKeys(props.operatorAuth).map((key) => t(key))
+                      }
+                    >
+                      {(prompt) => (
                         <button
                           type="button"
                           class="agent-chat__suggestion"
                           onClick={() => {
-                            props.onDraftChange(t(key));
+                            props.onDraftChange(prompt);
                             props.onSend();
                           }}
                         >
-                          {t(key)}
+                          {prompt}
                         </button>
                       )}
                     </For>

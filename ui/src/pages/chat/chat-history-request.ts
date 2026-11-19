@@ -1,5 +1,4 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import { createLazyImportLoader } from "../../../../src/shared/lazy-promise.ts";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
@@ -25,6 +24,7 @@ import {
   type ChatHistoryResetResult,
   type ChatHistoryResponse,
   isHistoryCursor,
+  attachHistoryActivity,
   resolveChatHistoryPagination,
   historySessionId,
 } from "./chat-history-snapshot.ts";
@@ -84,32 +84,6 @@ export function captureChatHistoryRun(
           state.currentSessionId === sessionId,
       }
     : undefined;
-}
-
-export function attachHistoryActivity<Result extends ChatHistoryResponse>(result: Result): Result {
-  if (isHistoryCursor(result) && result.kind === "reset") {
-    return result;
-  }
-  if (!result.activity || !result.messages) {
-    return result;
-  }
-  const byId = new Map(result.activity.map((entry) => [entry.messageId, entry.items]));
-  const withActivity = (message: unknown) => {
-    const record = asOptionalRecord(message);
-    const id = record?.messageId ?? asOptionalRecord(record?.["__openclaw"])?.id;
-    const activity = typeof id === "string" ? byId.get(id) : undefined;
-    return record && activity ? { ...record, activity } : message;
-  };
-  return {
-    ...result,
-    messages: result.messages.map((entry) => {
-      if (!isHistoryCursor(result)) {
-        return withActivity(entry);
-      }
-      const envelope = asOptionalRecord(entry);
-      return envelope ? { ...envelope, message: withActivity(envelope.message) } : entry;
-    }),
-  };
 }
 
 type SharedChatHistoryResponse = ChatHistoryResponse & {

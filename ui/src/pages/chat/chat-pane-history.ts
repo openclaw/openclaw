@@ -384,25 +384,33 @@ export abstract class ChatPaneHistory extends ChatPaneHistoryPackets {
   }
 
   protected handleTranscriptHistoryIntent(event: Event): void {
-    const direction = this.historyInput.readBoundaryDirection(
-      event,
-      CHAT_HISTORY_PREFETCH_EDGE_PX,
-      this.transcript.scrollElement,
-    );
+    const root = this.transcript.scrollElement;
+    const direction = this.historyInput.readDirection(event, root);
+    // Initial placement may not emit a scroll; native input establishes the jump's origin.
+    if (root && direction < 0) {
+      this.transcriptScrollTop = root.scrollTop;
+    }
     if (
       !this.presented ||
       !this.visuallyPresented ||
-      !this.transcript.isPositionSettled ||
-      this.transcript.isProgrammaticScroll ||
+      !root ||
       direction === 0 ||
-      (direction < 0 &&
-        (this.history.loadingOlder || !this.hasOlderMessages() || !this.consumeHistoryIntent()))
+      (direction < 0
+        ? root.scrollTop > CHAT_HISTORY_PREFETCH_EDGE_PX || this.history.loadingOlder || !this.hasOlderMessages()
+        : root.scrollHeight - root.clientHeight - root.scrollTop > CHAT_HISTORY_PREFETCH_EDGE_PX)
     ) {
+      return;
+    }
+    this.transcript.cancelScroll();
+    if (!this.transcript.isPositionSettled) {
       return;
     }
     if (direction > 0) {
       // Restored/short windows can be clamped without a native scroll event.
       void this.loadNewerMessages();
+      return;
+    }
+    if (!this.consumeHistoryIntent()) {
       return;
     }
     this.historyAutoLoadBlocked = false;

@@ -175,6 +175,8 @@ it.each(["skill", "plugin"] as const)("previews pinned and bundled %s", async (k
 
 it("keeps the original card through a single explicit publication and pending receipt", async () => {
   const { page, request } = await fixture();
+  expect(page.queryByText("Behavior and authority")).toBeNull();
+  expect(page.container.querySelector(".template-creator__scope")).toBeNull();
   const pending = createDeferred<unknown>();
   request.mockImplementation(async (method: string) =>
     method === "templates.drafts.publish" ? pending.promise : reviewed,

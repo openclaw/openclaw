@@ -213,7 +213,7 @@ suite.define(() => {
         }),
       )
       .toBe("reload-required");
-    await page.getByRole("button", { name: /Server updated/u }).waitFor();
+    await page.getByRole("button", { name: /OpenClaw was updated/u }).waitFor();
     expect(await page.locator("openclaw-login-gate").count()).toBe(0);
   });
 

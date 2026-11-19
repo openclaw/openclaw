@@ -19,6 +19,7 @@ import { notifyListeners } from "../shared/listeners.js";
 import { encodeOwnedBuffer } from "../shared/owned-buffer.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
+import type { PrivateTempFileStream } from "./sessions/tools/private-temp-file.js";
 
 const DEFAULT_JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const MIN_JOB_TTL_MS = 60 * 1000; // 1 minute
@@ -164,8 +165,8 @@ export interface ProcessSession {
     finalize: () => Promise<void>;
     drain: () => Promise<void>;
   };
-  /** Run whose exec call started this process; completion provenance only, never authority. */
-  originRunId?: string;
+  /** Run whose exec call started this process. A provenance fact for plugins; it routes nothing. */
+  startedByRunId?: string;
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
@@ -205,6 +206,8 @@ export interface ProcessSession {
   /** Output prepared for a poll but not yet attached to the agent transcript. */
   pendingPollDelivery?: PendingPollDelivery;
   output: ProcessOutput;
+  /** Every output chunk in order, beyond the in-memory caps; kept only when the agent needs it. */
+  outputFile?: PrivateTempFileStream;
   readonly aggregated: string;
   readonly tail: string;
   exitCode?: number | null;
@@ -453,6 +456,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.pendingStderrChars = pendingChars;
   }
   session.totalOutputChars += chunk.length;
+  session.outputFile?.write(chunk);
   const previousLength = session.output.length;
   session.output.append(ownedChunk, session.maxOutputChars, chunk.length);
   session.truncated ||= session.output.length < previousLength + chunk.length;

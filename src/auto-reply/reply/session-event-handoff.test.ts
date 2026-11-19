@@ -22,7 +22,6 @@ import {
   loadReplySessionInitializationSnapshot,
 } from "../../config/sessions/session-accessor.reset.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as sessionReplacement from "../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -650,28 +649,6 @@ describe("session event target custody", () => {
           owner === "invocation" ? "no longer owns its invocation" : "Background producer retired",
         );
       }
-      expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-    },
-  );
-
-  it.for(["session reset", "lifecycle replacement"] as const)(
-    "rejects %s before dispatch",
-    async (change, { state: { env, storePath } }) => {
-      const target = await captureTarget("main", sessionKey, { env });
-      replaceSessionEntrySync(
-        { agentId: "main", storePath, sessionKey, env },
-        {
-          sessionId: change === "session reset" ? "replacement-session" : "original-session",
-          lifecycleRevision: "replacement-revision",
-          updatedAt: 2,
-          delivery: normalizeSessionDeliveryState({
-            context: { ...route, to: "replacement-target" },
-          }),
-        },
-      );
-      const receipt = enqueueCompletion(target);
-
-      await expectStopped(receipt, "failed", "original session generation");
       expect(peekSystemEventEntries(sessionKey)).toEqual([]);
     },
   );

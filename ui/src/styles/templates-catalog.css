@@ -6,23 +6,6 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   gap: 12px;
 }
 
-.templates-add-consent__item {
-  display: grid;
-  gap: 6px;
-  padding: 12px 0;
-  border-top: 1px solid var(--border);
-}
-
-.templates-add-consent__item > span,
-.templates-add-consent__item li {
-  color: var(--muted);
-}
-
-.templates-add-consent__item ul {
-  margin: 0;
-  padding-left: 20px;
-}
-
 .templates-add-consent__actions {
   display: flex;
   justify-content: flex-end;
@@ -184,6 +167,12 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
     width: 32px;
     height: 32px;
   }
+  & img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    border-radius: inherit;
+  }
 }
 .template-package-row {
   display: flex;
@@ -238,6 +227,7 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
 }
 
 .template-creator__row {
+  border-radius: 0;
   border-bottom: 1px solid var(--border);
 }
 .template-creator__status-anchor {
@@ -279,15 +269,6 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   & svg {
     width: 22px;
     height: 22px;
-  }
-}
-.template-creator__scope {
-  margin-top: 12px;
-  color: var(--muted);
-  font-size: 12px;
-  & dd {
-    margin: 4px 0 12px;
-    color: var(--text);
   }
 }
 .template-creator__category,
@@ -485,6 +466,12 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   border: 1px solid var(--border);
   border-radius: 14px;
 
+  .template-import-dialog > & {
+    max-height: var(--openclaw-modal-height-limit);
+    border: 0;
+    border-radius: inherit;
+  }
+
   & > header {
     & h2 {
       overflow-wrap: anywhere;
@@ -511,7 +498,6 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
     & .template-creator__body {
       padding: 24px;
     }
-    background: var(--bg-elevated);
     border-radius: 20px;
 
     & > :where(header) {
@@ -538,22 +524,13 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   }
 }
 
-.agents-home__template-card,
-.agents-home__template-skeleton {
+.agents-home__template-card {
+  position: relative;
   min-width: 0;
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
-}
-
-.agents-home__template-skeleton {
-  min-height: 168px;
-  background: var(--bg-accent);
-}
-
-.agents-home__template-card {
-  position: relative;
   /* Card width, not viewport width, decides the title row: multi-column grids
      make cards narrow on laptop-sized screens. */
   container-type: inline-size;
@@ -634,6 +611,10 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
 .agents-home__template-identity {
   grid-area: identity;
   min-width: 0;
+  /* Reserve two title lines plus the handle, and both summary lines below:
+     every card is the same height, so loading placeholders match the loaded
+     grid exactly and content arrives in place. */
+  min-height: calc(2 * 1.3 * 15px + 1.5 * 12px);
 }
 
 .agents-home__template-identity h3 {
@@ -652,6 +633,7 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   overflow: hidden;
   color: var(--muted);
   font-size: 12px;
+  line-height: 1.5;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -664,6 +646,7 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   position: relative;
   z-index: 2;
   display: -webkit-box;
+  min-height: 2.8em;
   margin: 0;
   overflow: hidden;
   color: var(--muted);
@@ -671,6 +654,23 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   line-height: 1.4;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  pointer-events: none;
+}
+
+/* Featured, search results and loading placeholders have no "View all" action;
+   keep their header as tall as the shelves that do. */
+.agents-home__explore .plugin-catalog-section__header {
+  min-height: 28px;
+}
+
+.agents-home__template-error {
+  position: relative;
+  z-index: 2;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.4;
   pointer-events: none;
 }
 

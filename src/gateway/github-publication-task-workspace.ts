@@ -232,6 +232,7 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
     operatorRoleActor: actor,
     creation: {
       via: "spawn",
+      surface: "github-publication",
       actor: {
         type: "agent",
         id: parent.agentId,

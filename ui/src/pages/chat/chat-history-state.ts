@@ -266,6 +266,14 @@ export function getChatHistoryLoadState(state: ChatState): ChatHistoryLoadState 
   return requests.historyLoad;
 }
 
+/** A global key routes to the selected agent, so another agent's read proves nothing about it. */
+function isAcceptedForSelectedAgent(state: ChatState, requestAgentId: string | undefined) {
+  return (
+    !isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
+    resolveUiSelectedSessionAgentId(state) === requestAgentId
+  );
+}
+
 /** Absence-sensitive placement requires the accepted read to remain the current load. */
 export function readChatHistoryStartCapability(
   state: ChatState,
@@ -277,7 +285,8 @@ export function readChatHistoryStartCapability(
     load.client === state.client &&
     load.sessions === state.sessions &&
     load.connectionEpoch === state.connectionEpoch &&
-    load.sessionKey === state.sessionKey
+    load.sessionKey === state.sessionKey &&
+    isAcceptedForSelectedAgent(state, load.requestAgentId)
     ? load.emptySource
     : undefined;
 }
@@ -291,8 +300,7 @@ export function getAcceptedChatHistorySession(state: ChatState) {
     state.sessions === accepted.sessions &&
     state.connectionEpoch === accepted.connectionEpoch &&
     state.sessionKey === accepted.sessionKey &&
-    (!isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
-      resolveUiSelectedSessionAgentId(state) === accepted.requestAgentId) &&
+    isAcceptedForSelectedAgent(state, accepted.requestAgentId) &&
     accepted.sessionInfo?.sessionId &&
     state.currentSessionId === accepted.sessionInfo.sessionId
     ? accepted.sessionInfo
@@ -312,7 +320,8 @@ export function isChatSessionProvenAbsent(
     state.sessions === accepted.sessions &&
     state.connectionEpoch === accepted.connectionEpoch &&
     state.sessionKey === sessionKey &&
-    accepted.sessionKey === sessionKey
+    accepted.sessionKey === sessionKey &&
+    isAcceptedForSelectedAgent(state, accepted.requestAgentId)
   );
 }
 
@@ -342,8 +351,7 @@ export function isInitialChatHistoryUnavailable(state: ChatState): boolean {
     state.sessions === accepted.sessions &&
     (!state.connected || state.connectionEpoch === accepted.connectionEpoch) &&
     accepted.sessionKey === state.sessionKey &&
-    (!isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
-      resolveUiSelectedSessionAgentId(state) === accepted.requestAgentId) &&
+    isAcceptedForSelectedAgent(state, accepted.requestAgentId) &&
     accepted.sessionInfo?.sessionId === state.currentSessionId
   ) {
     return false;

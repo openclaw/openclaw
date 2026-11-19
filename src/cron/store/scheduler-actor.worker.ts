@@ -578,6 +578,7 @@ export function runCronSchedulerInWorker(
           schedulingPaused: input.paused,
           preparingAgentIds: snapshot.config.preparingAgentIds,
           busyConversationJobIds: snapshot.config.busyConversationJobIds,
+          memoryAllowsExtraRun: snapshot.config.memoryAllowsExtraRun,
           hostProcessId: snapshot.config.hostProcessId,
           pluginCommandHosts: snapshot.config.pluginCommandHosts,
         },

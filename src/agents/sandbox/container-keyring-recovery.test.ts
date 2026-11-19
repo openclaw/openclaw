@@ -44,7 +44,18 @@ vi.mock("../../process/exec.js", async (original) => ({
       failed,
       isCanceled: false,
       exitCode: failed ? 125 : 0,
-      stdout: Buffer.from(args[0] === "inspect" ? `${id("a")}\ntrue\ntrue\nhash\n` : ""),
+      stdout: Buffer.from(
+        args[0] === "inspect"
+          ? JSON.stringify({
+              Id: id("a"),
+              State: { Running: true, Paused: false },
+              ReadonlyRootfs: true,
+              Labels: { "openclaw.configHash": "hash" },
+              Mounts: [],
+              Tmpfs: {},
+            })
+          : "",
+      ),
       stderr: Buffer.from(failed ? "crun: create keyring 'container': Disk quota exceeded" : ""),
     };
   },

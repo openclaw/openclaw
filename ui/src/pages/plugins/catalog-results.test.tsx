@@ -267,23 +267,11 @@ describe("renderPluginCatalogResults", () => {
     ui.node("input").toBe(search);
   });
 
-  it.each([
-    { phone: false, focused: true },
-    { phone: true, focused: false },
-  ])("focuses the search on arrival unless at phone width: %o", async ({ phone, focused }) => {
-    vi.stubGlobal("matchMedia", () => ({
-      matches: phone,
-      addEventListener: () => {},
-      removeEventListener: () => {},
-    }));
-    try {
-      const { container } = await mount(baseProps());
-      const search = container.querySelector<HTMLInputElement>("input")!;
-      expect(search.hasAttribute("autofocus")).toBe(focused);
-      expect(document.activeElement === search).toBe(focused);
-    } finally {
-      vi.unstubAllGlobals();
-    }
+  it("leaves focus where it was when the catalog opens", async () => {
+    const { container } = await mount(baseProps());
+    const search = container.querySelector<HTMLInputElement>("input")!;
+    expect(search.hasAttribute("autofocus")).toBe(false);
+    expect(document.activeElement === search).toBe(false);
   });
 
   it("does not rescan the large catalog for unrelated feedback updates", async () => {

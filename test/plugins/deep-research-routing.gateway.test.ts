@@ -59,6 +59,8 @@ import { drainGlobalSingletonLifecycleState } from "../../src/shared/global-sing
 import { setCanonicalUserProfileRole } from "../../src/state/user-profile-writes.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 
+const compareJobIds = (left: string, right: string) => left.localeCompare(right);
+
 // Drain global owners only after withOpenClawTestState closes scoped writers/leases.
 afterEach(() => drainGlobalSingletonLifecycleState());
 
@@ -827,7 +829,7 @@ it("admits browser research through the real Gateway session gate, recovers acce
       expect((await invoke("read", { jobId: pausedJobId }))[1].job.state).toBe("paused");
       expect(provider).toHaveBeenCalledTimes(4);
       const replaced = await patchSessionEntryCore(scope, () => ({
-        // Replacing only the lifecycle must fence views even when sessionId is retained.
+        // An edit or rewind replaces only the lifecycle; the transcript and its jobs stay.
         lifecycleRevision: "replacement-incarnation",
         updatedAt: Date.now(),
       }));
@@ -836,39 +838,37 @@ it("admits browser research through the real Gateway session gate, recovers acce
         lifecycleRevision: "replacement-incarnation",
       });
       await projection.ensureMaterialized();
-      expect((await invoke("read", { jobId }))[0]).toBe(false);
-      const replacedList = await invoke("list");
-      expect(replacedList[1].jobs).toEqual([]);
-      expect(replacedList[1].incarnation).not.toBe(starts[0][1].incarnation);
-      const staleStart = await invoke("start", input);
-      expect(staleStart[0]).toBe(false);
-      expect(staleStart[2].details.code).toBe("RESEARCH_START_REJECTED");
-      expect((await invoke("list"))[1].jobs).toEqual([]);
-      // The same real model-tool boundary must fence every sibling action, not only views.
-      for (const retiredJobId of [jobId, pausedJobId, modelJobId]) {
-        for (const action of ["result", "status", "resume", "cancel"]) {
-          const retired = await invokeTool(action, { jobId: retiredJobId });
-          expect(retired, action).toMatchObject({ ok: false });
-          expect(JSON.stringify(retired)).not.toContain("Retained browser-started report");
-        }
-        for (const action of ["resume", "cancel"]) {
-          expect(
-            (
-              await invoke(action, {
-                jobId: retiredJobId,
-                incarnation: replacedList[1].incarnation,
-              })
-            )[0],
-          ).toBe(false);
-        }
+      const retainedRead = await invoke("read", { jobId });
+      expect(retainedRead[0], JSON.stringify(retainedRead)).toBe(true);
+      expect(retainedRead[1].job.report).toBe("Retained browser-started report");
+      const retainedList = await invoke("list");
+      expect(retainedList[1].incarnation).toBe(input.incarnation);
+      expect(
+        retainedList[1].jobs.map((job: { jobId: string }) => job.jobId).toSorted(compareJobIds),
+      ).toEqual([jobId, pausedJobId, modelJobId].toSorted(compareJobIds));
+      const replayedStart = await invoke("start", input);
+      expect(replayedStart[0], JSON.stringify(replayedStart)).toBe(true);
+      expect(replayedStart[1].job.jobId).toBe(jobId);
+      // The real model-tool boundary keeps the same transcript's jobs, not only views.
+      expect(await invokeTool("result", { jobId })).toMatchObject({
+        ok: true,
+        output: { details: { result: { report: "Retained browser-started report" } } },
+      });
+      for (const retainedJobId of [pausedJobId, modelJobId]) {
+        expect(await invokeTool("status", { jobId: retainedJobId })).toMatchObject({
+          ok: true,
+          output: { details: { state: "paused" } },
+        });
       }
-      expect(await invokeTool("start", modelInput)).toMatchObject({ ok: false });
+      expect(await invokeTool("start", modelInput)).toMatchObject({
+        ok: true,
+        output: { details: { jobId: modelJobId } },
+      });
       expect(provider).toHaveBeenCalledTimes(4);
-      // A new live incarnation can start and cancel its own job, with no provider cancellation.
+      // The retained incarnation can still start and cancel new work, with no provider cancellation.
       pauseDiscovery = true;
       const currentStart = await invoke("start", {
         ...input,
-        incarnation: replacedList[1].incarnation,
         idempotencyKey: "current-lifecycle-work",
       });
       expect(currentStart[0], JSON.stringify(currentStart)).toBe(true);
@@ -888,11 +888,12 @@ it("admits browser research through the real Gateway session gate, recovers acce
       scheduler = createTestPluginServiceScheduler(gatewayScheduler);
       await startService();
       await clock.advanceBy(10_000);
-      // Retained old wakes cannot restore their retired source, even with the UUID unchanged.
       expect(provider).toHaveBeenCalledTimes(5);
-      expect((await invoke("list"))[1].jobs.map((job: { jobId: string }) => job.jobId)).toEqual([
-        currentJobId,
-      ]);
+      expect(
+        (await invoke("list"))[1].jobs
+          .map((job: { jobId: string }) => job.jobId)
+          .toSorted(compareJobIds),
+      ).toEqual([jobId, pausedJobId, modelJobId, currentJobId].toSorted(compareJobIds));
       const replacement = await patchSessionEntryCore(scope, () => ({
         sessionId: "ui-reset-incarnation",
         lifecycleRevision: "reset",
@@ -903,9 +904,34 @@ it("admits browser research through the real Gateway session gate, recovers acce
         lifecycleRevision: "reset",
       });
       await projection.ensureMaterialized();
+      // A reset to a new session id is a new job store: the old jobs are gone from every boundary.
       const reset = await invoke("read", { jobId });
       expect(reset[0]).toBe(false);
       expect(JSON.stringify(reset)).not.toContain("Retained browser-started report");
+      const resetList = await invoke("list");
+      expect(resetList[1].jobs).toEqual([]);
+      expect(resetList[1].incarnation).not.toBe(input.incarnation);
+      const staleStart = await invoke("start", input);
+      expect(staleStart[0]).toBe(false);
+      expect(staleStart[2].details.code).toBe("RESEARCH_START_REJECTED");
+      for (const retiredJobId of [jobId, pausedJobId, modelJobId, currentJobId]) {
+        for (const action of ["result", "status", "resume", "cancel"]) {
+          const retired = await invokeTool(action, { jobId: retiredJobId });
+          expect(retired, action).toMatchObject({ ok: false });
+          expect(JSON.stringify(retired)).not.toContain("Retained browser-started report");
+        }
+        for (const action of ["resume", "cancel"]) {
+          expect(
+            (
+              await invoke(action, {
+                jobId: retiredJobId,
+                incarnation: resetList[1].incarnation,
+              })
+            )[0],
+          ).toBe(false);
+        }
+      }
+      expect(provider).toHaveBeenCalledTimes(5);
       expect(network).not.toHaveBeenCalled();
     } finally {
       await stopService?.();

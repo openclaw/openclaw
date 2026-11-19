@@ -32,6 +32,7 @@ export interface ControlUiMockGatewayScenario
   /** Auto-wait for sidebar rosters unless startup is held or connect fails; true overrides those skips, false disables the wait. */
   awaitInitialRoster?: boolean;
   pluginAssetsRequireAuth?: boolean;
+  openclawIdEnabled?: boolean;
   pluginSurfaceUrls?: Record<string, string>;
   attachmentMaxBytes?: number;
   agentModel?: string | null;
@@ -241,6 +242,7 @@ export function normalizeScenario(
   return {
     bootstrapPreferences: scenario.bootstrapPreferences,
     pluginAssetsRequireAuth: scenario.pluginAssetsRequireAuth ?? true,
+    openclawIdEnabled: scenario.openclawIdEnabled ?? false,
     attachmentMaxBytes: scenario.attachmentMaxBytes ?? DEFAULT_MOCK_ATTACHMENT_MAX_BYTES,
     automaticallyFetchFavicons: scenario.automaticallyFetchFavicons ?? false,
     communityInvite: scenario.communityInvite ?? false,

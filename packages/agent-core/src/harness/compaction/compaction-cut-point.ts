@@ -6,11 +6,11 @@ import type { AgentMessage } from "../../types.js";
 import { isRuntimeContextCarrier } from "../messages.js";
 import { projectSessionEntryMessage } from "../session/session.js";
 import {
-  classifyToolUseResultPairing,
-  extractToolCallsFromAssistant,
-} from "../session/tool-result-pairing.js";
+  classifyToolPairingFacts,
+  type ToolPairingMessageFact,
+} from "../session/tool-pairing-facts.js";
+import { collectToolPairingMessageFact } from "../session/tool-result-pairing.js";
 import type { SessionTreeEntry } from "../types.js";
-import type { CompactionEntrySource } from "./compaction-entry-source.js";
 import {
   formatCompactionUserLabel,
   getCompactionContent,
@@ -29,20 +29,28 @@ export function getMessageFromEntryForCompaction(
 export const IMAGE_BLOCK_TOKENS = 2_000;
 const IMAGE_BLOCK_CHARS = IMAGE_BLOCK_TOKENS * CHARS_PER_TOKEN_ESTIMATE;
 
-function countContentChars(
+function countCompactionContentChars(
   content: string | Array<{ type: string; content?: unknown; text?: string }>,
 ): number {
   const { text, omissionText } = getCompactionContent(content);
   const images =
     typeof content === "string" ? 0 : content.filter((block) => block.type === "image").length;
+  return countCompactionContentCharsFromParts(estimateStringChars(text), images, omissionText);
+}
+
+export function countCompactionContentCharsFromParts(
+  textChars: number,
+  images: number,
+  omissionText?: string,
+): number {
   // Charge the largest role/separator even for mixed text. Any suppressed message's
   // minimum 56-character charge also covers the serializer's single 55-character overflow.
   const omissionChars = omissionText ? omissionText.length + "\n\n[Tool result]: ".length : 0;
-  return estimateStringChars(text) + images * IMAGE_BLOCK_CHARS + omissionChars;
+  return textChars + images * IMAGE_BLOCK_CHARS + omissionChars;
 }
 
-/** Estimate token count for one message using a conservative character heuristic. */
-export function estimateTokens(message: AgentMessage): number {
+/** Unrounded contribution; callers merging turns must round only after merging. */
+export function estimateCompactionChars(message: AgentMessage): number {
   if ("excludeFromContext" in message && message.excludeFromContext === true) {
     return 0;
   }
@@ -64,14 +72,14 @@ export function estimateTokens(message: AgentMessage): number {
       break;
     }
     case "user": {
-      chars = countContentChars(message.content);
+      chars = countCompactionContentChars(message.content);
       // User text is the baseline; charge the exact added source and sender label.
       chars += estimateStringChars(formatCompactionUserLabel(message)) - "User".length;
       break;
     }
     case "custom":
     case "toolResult": {
-      chars = countContentChars(message.content);
+      chars = countCompactionContentChars(message.content);
       break;
     }
     case "bashExecution": {
@@ -85,7 +93,12 @@ export function estimateTokens(message: AgentMessage): number {
     }
   }
 
-  return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
+  return chars;
+}
+
+/** Estimate token count for one message using a conservative character heuristic. */
+export function estimateTokens(message: AgentMessage): number {
+  return Math.ceil(estimateCompactionChars(message) / CHARS_PER_TOKEN_ESTIMATE);
 }
 function isCutPointMessage(message: AgentMessage): boolean {
   return message.role === "assistant" || isTurnStartMessage(message);
@@ -106,35 +119,25 @@ function isTurnStartEntry(entry: SessionTreeEntry): boolean {
   return message ? isTurnStartMessage(message) : false;
 }
 
-function readCutNavigation(entries: CompactionEntrySource, index: number) {
-  const navigation = entries.metadata(index);
-  return navigation?.type === "message" && navigation.message.role !== "custom"
-    ? navigation
-    : entries.get(index);
-}
-
 /** Find the user-visible message that starts the turn containing an entry. */
 export function findTurnStartIndex(
   entries: SessionTreeEntry[],
   entryIndex: number,
   startIndex: number,
 ): number {
-  return findTurnStartIndexFromSource(
-    { length: entries.length, metadata: (index) => entries[index], get: (index) => entries[index] },
-    entryIndex,
-    startIndex,
-  );
+  return findPreviousTurnStart(entryIndex, startIndex, (index) => {
+    const entry = entries[index];
+    return entry ? isTurnStartEntry(entry) : false;
+  });
 }
 
-/** Indexed variant for planners that hydrate only the entry being visited. */
-function findTurnStartIndexFromSource(
-  entries: CompactionEntrySource,
+function findPreviousTurnStart(
   entryIndex: number,
   startIndex: number,
+  isTurnStart: (index: number) => boolean,
 ): number {
   for (let i = entryIndex; i >= startIndex; i--) {
-    const entry = readCutNavigation(entries, i);
-    if (entry && isTurnStartEntry(entry)) {
+    if (isTurnStart(i)) {
       return i;
     }
   }
@@ -155,7 +158,31 @@ export interface CompactionRetentionConstraints {
   };
 }
 
-function createToolPairCutResolver(messages: AgentMessage[], entryIndexes: number[]) {
+/** Cut policy never needs the content/data of a persisted entry. */
+export type CompactionCutEntryFact = {
+  id: string;
+  type: SessionTreeEntry["type"];
+  hasMessage: boolean;
+  isCutPoint: boolean;
+  isTurnStart: boolean;
+  pairing?: ToolPairingMessageFact;
+};
+
+export function collectCompactionCutEntryFact(
+  entry: SessionTreeEntry,
+  message = getMessageFromEntryForCompaction(entry),
+): CompactionCutEntryFact {
+  return {
+    id: entry.id,
+    type: entry.type,
+    hasMessage: message !== undefined,
+    isCutPoint: message ? isCutPointMessage(message) : false,
+    isTurnStart: message ? isTurnStartMessage(message) : false,
+    pairing: message ? collectToolPairingMessageFact(message) : undefined,
+  };
+}
+
+function createToolPairCutResolver(messages: ToolPairingMessageFact[], entryIndexes: number[]) {
   const ranges: Array<{ start: number; end: number }> = [];
   const entryIndexAt = (messageIndex: number): number => {
     const entryIndex = entryIndexes[messageIndex];
@@ -164,12 +191,12 @@ function createToolPairCutResolver(messages: AgentMessage[], entryIndexes: numbe
     }
     return entryIndex;
   };
-  for (const frame of classifyToolUseResultPairing(messages)) {
+  for (const frame of classifyToolPairingFacts(messages)) {
     const start = entryIndexAt(frame.startIndex);
     let end = start;
     for (const occurrence of frame.occurrences) {
-      if (occurrence.sourceResultIndex !== undefined) {
-        end = Math.max(end, entryIndexAt(occurrence.sourceResultIndex));
+      if (occurrence.result) {
+        end = Math.max(end, entryIndexAt(occurrence.result.index));
       }
     }
     if (end === start) {
@@ -207,24 +234,7 @@ function createToolPairCutResolver(messages: AgentMessage[], entryIndexes: numbe
 
 /** Find the compaction cut point that keeps approximately the requested recent-token budget. */
 export function findCutPoint(
-  entries: SessionTreeEntry[],
-  startIndex: number,
-  endIndex: number,
-  keepRecentTokens: number,
-  constraints?: CompactionRetentionConstraints,
-) {
-  return findCutPointFromSource(
-    { length: entries.length, metadata: (index) => entries[index], get: (index) => entries[index] },
-    startIndex,
-    endIndex,
-    keepRecentTokens,
-    constraints,
-  );
-}
-
-/** Plan a cut without retaining hydrated entries from the indexed source. */
-export function findCutPointFromSource(
-  entries: CompactionEntrySource,
+  entries: readonly SessionTreeEntry[],
   startIndex: number,
   endIndex: number,
   keepRecentTokens: number,
@@ -237,17 +247,54 @@ export function findCutPointFromSource(
   /** Whether the selected cut point splits an in-progress turn. */
   isSplitTurn: boolean;
 } {
+  const facts: Array<CompactionCutEntryFact | undefined> = [];
+  // Eager projection preserves validation, but opaque estimators keep their original call order.
+  for (let index = startIndex; index < endIndex; index++) {
+    const entry = entries[index];
+    if (entry) {
+      facts[index] = collectCompactionCutEntryFact(entry);
+    }
+  }
+  return findCutPointFromFacts(
+    facts,
+    startIndex,
+    endIndex,
+    keepRecentTokens,
+    constraints,
+    (index) => {
+      const entry = entries[index];
+      const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
+      return message
+        ? (constraints?.budget?.estimateTokens(message) ?? estimateTokens(message))
+        : 0;
+    },
+  );
+}
+
+/** Array and reader views share the same cut, pairing, pending-input and retention policy. */
+export function findCutPointFromFacts(
+  entries: readonly (CompactionCutEntryFact | undefined)[],
+  startIndex: number,
+  endIndex: number,
+  keepRecentTokens: number,
+  constraints:
+    | {
+        requestBoundary?: CompactionRetentionConstraints["requestBoundary"];
+        budget?: Pick<
+          NonNullable<CompactionRetentionConstraints["budget"]>,
+          "maxTokens" | "reserveTokens"
+        >;
+      }
+    | undefined,
+  estimateEntryTokens: (index: number) => number,
+): { firstKeptEntryIndex: number; turnStartIndex: number; isSplitTurn: boolean } {
   const retention = constraints?.budget;
-  // Projection validates persisted custom/branch timestamps even outside the
-  // retained tail. Keep that eager validation without storing every cut point.
   let cutIndex: number | undefined;
   let lastAllowedCut = endIndex - 1;
-  const toolPairingFacts: AgentMessage[] = [];
+  const toolMessages: ToolPairingMessageFact[] = [];
   const toolEntryIndexes: number[] = [];
-  const turnStarts: number[] = [];
   for (let i = startIndex; i < endIndex; i++) {
-    const entry = readCutNavigation(entries, i);
-    const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
+    const entry = entries[i];
     if (
       entry &&
       constraints?.requestBoundary?.preserve &&
@@ -255,27 +302,22 @@ export function findCutPointFromSource(
     ) {
       lastAllowedCut = i;
     }
-    if (message && isCutPointMessage(message)) {
+    if (entry?.isCutPoint) {
       cutIndex = i;
     }
-    if (message && isTurnStartMessage(message)) {
-      turnStarts.push(i);
-    }
-    // Indexed callers already supply payload-free navigation; array callers own their
-    // existing messages. The pairing classifier can use either without another shell.
+    const pairing = entry?.pairing;
     if (
-      message &&
-      (message.role === "toolResult" ||
-        (message.role === "assistant" && extractToolCallsFromAssistant(message).length > 0))
+      pairing?.role === "toolResult" ||
+      (pairing?.role === "assistant" && pairing.calls.length > 0)
     ) {
-      toolPairingFacts.push(message);
+      toolMessages.push(pairing);
       toolEntryIndexes.push(i);
     }
   }
   if (cutIndex === undefined) {
     return { firstKeptEntryIndex: startIndex, turnStartIndex: -1, isSplitTurn: false };
   }
-  const resolveCutPoint = createToolPairCutResolver(toolPairingFacts, toolEntryIndexes);
+  const resolveCutPoint = createToolPairCutResolver(toolMessages, toolEntryIndexes);
   cutIndex = resolveCutPoint(cutIndex);
   lastAllowedCut = resolveCutPoint(lastAllowedCut);
   let accumulatedTokens = 0;
@@ -283,19 +325,14 @@ export function findCutPointFromSource(
   // The latest valid cut also handles an oversized trailing tool result that
   // exhausts the budget before the reverse walk reaches its preceding boundary.
   for (let i = endIndex - 1; i >= startIndex; i--) {
-    const entry = entries.tokens ? readCutNavigation(entries, i) : entries.get(i);
-    if (!entry) {
+    const entry = entries[i];
+    if (!entry?.hasMessage) {
       continue;
     }
-    const message = getMessageFromEntryForCompaction(entry);
-    if (!message) {
-      continue;
-    }
-    if (isCutPointMessage(message)) {
+    if (entry.isCutPoint) {
       cutIndex = resolveCutPoint(i);
     }
-    accumulatedTokens +=
-      entries.tokens?.(i) ?? retention?.estimateTokens(message) ?? estimateTokens(message);
+    accumulatedTokens += estimateEntryTokens(i);
     if (accumulatedTokens >= keepRecentTokens) {
       break;
     }
@@ -306,18 +343,12 @@ export function findCutPointFromSource(
     let fittingCut = endIndex;
     let tailLimit = retention.maxTokens;
     for (let i = endIndex - 1; i >= cutIndex; i--) {
-      const entry = entries.tokens ? readCutNavigation(entries, i) : entries.get(i);
-      const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
-      retainedTokens += message ? (entries.tokens?.(i) ?? retention.estimateTokens(message)) : 0;
+      const entry = entries[i];
+      retainedTokens += entry?.hasMessage ? estimateEntryTokens(i) : 0;
       if (retainedTokens > tailLimit) {
         break;
       }
-      if (
-        i <= lastAllowedCut &&
-        message &&
-        isCutPointMessage(message) &&
-        resolveCutPoint(i) === i
-      ) {
+      if (i <= lastAllowedCut && entry?.isCutPoint && resolveCutPoint(i) === i) {
         if (fittingCut === endIndex) {
           // The summary maximum is a reservation, not a minimum: small windows
           // retain one complete atom and give the summary the remaining room.
@@ -333,13 +364,13 @@ export function findCutPointFromSource(
   }
   // Decide the split from the selected message, before retaining the metadata in front of it:
   // a bootstrap marker before a user message must not make the previous turn a split-turn prefix.
-  const cutEntry = readCutNavigation(entries, cutIndex);
+  const cutEntry = entries[cutIndex];
   if (!cutEntry) {
     throw new Error("compaction cut point does not reference a session entry");
   }
-  const startsTurn = isTurnStartEntry(cutEntry);
+  const startsTurn = cutEntry.isTurnStart;
   while (cutIndex > startIndex) {
-    const prevEntry = readCutNavigation(entries, cutIndex - 1);
+    const prevEntry = entries[cutIndex - 1];
     if (!prevEntry) {
       break;
     }
@@ -347,14 +378,14 @@ export function findCutPointFromSource(
       break;
     }
     // Metadata can follow the cut, but private persisted messages cannot become its boundary.
-    if (prevEntry.type === "message" || getMessageFromEntryForCompaction(prevEntry)) {
+    if (prevEntry.type === "message" || prevEntry.hasMessage) {
       break;
     }
     cutIndex--;
   }
   const turnStartIndex = startsTurn
     ? -1
-    : (turnStarts.findLast((index) => index <= cutIndex) ?? -1);
+    : findPreviousTurnStart(cutIndex, startIndex, (index) => entries[index]?.isTurnStart === true);
 
   return {
     firstKeptEntryIndex: cutIndex,

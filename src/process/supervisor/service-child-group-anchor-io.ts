@@ -1,7 +1,7 @@
-import type { ChildProcess } from "node:child_process";
-import { once } from "node:events";
 import { closeSync } from "node:fs";
 import type { Socket } from "node:net";
+import { PassThrough, pipeline, type Readable, type Writable } from "node:stream";
+import { finished } from "node:stream/promises";
 import { releaseProcessStdin } from "../release-stdin.js";
 import type { SpawnStdioEntry } from "../spawn-secret-input.js";
 import type { ServiceChildStart } from "./service-child-protocol.js";
@@ -36,28 +36,33 @@ export function delay(ms: number, retainOwner = false): Promise<void> {
   });
 }
 
-/**
- * Stop relaying a handed-off command's output, but keep draining it until every
- * holder closes it: a handed-off service must never fail on a broken stdout or stderr.
- */
-export function releaseCommandOutput(
-  command: ChildProcess,
-  streams: Iterable<"stdout" | "stderr">,
-): Promise<void> {
-  return Promise.all(
-    [...streams].map(async (stream) => {
-      const source = command[stream];
-      if (!source) {
-        return;
-      }
-      source.unpipe(process[stream]);
-      // The host reads what was already relayed up to this EOF; nothing more follows.
-      process[stream].end();
-      const closed = once(source, "close").catch(() => undefined);
-      source.resume();
-      await closed;
-    }),
-  ).then(() => undefined);
+/** Relay owned output, returning a handoff that drains without breaking its writer. */
+export function relayCommandOutput(
+  source: Readable,
+  destination: Writable,
+  settled: () => void,
+): () => Promise<void> {
+  // The source cannot be in pipeline: ending the host output during handoff
+  // would destroy the child's pipe, even after unpipe(), and break later writes.
+  const relay = new PassThrough();
+  let released = false;
+  source.once("error", (error) => relay.destroy(error));
+  relay.once("close", () => {
+    if (!released) {
+      source.destroy();
+    }
+  });
+  pipeline(relay, destination, settled);
+  source.pipe(relay);
+  return async () => {
+    released = true;
+    source.unpipe(relay);
+    // Flush the relayed tail to host EOF, then discard future service output.
+    relay.end();
+    const drained = finished(source, { cleanup: true }).catch(() => undefined);
+    source.resume();
+    await drained;
+  };
 }
 
 /** Flush the anchor's last receipt, then release every host channel. */

@@ -30,7 +30,10 @@ import {
 } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.tsx";
-import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
+import {
+  prefetchChatModelAccounts,
+  renderChatModelAccountControl,
+} from "./components/chat-model-account-control.ts";
 import type { ChatPermissionPickerProps } from "./components/chat-permission-picker.tsx";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import { readChatSessionSnapshot } from "./session-message-cache.ts";
@@ -282,6 +285,7 @@ export function renderChatPaneComposerControls(params: {
           renderChatModelAccountControl({
             owner: state,
             client,
+            ownsScope: ownsRoute,
             selection: accountSelection,
             modelAuthStatusResult: state.modelAuthStatusResult,
             model: accountModel,
@@ -380,7 +384,12 @@ export function renderChatPaneComposerControls(params: {
           contextWindowAccess.allowed && canPatch({ contextWindow: next }, targetSessionKey)
             ? switchChatSetting(state, { kind: "contextWindow", value: next }, targetSessionKey)
             : Promise.resolve(false),
-        onModelPickerOpen: () => refreshChatModelCatalogOnDemand(state),
+        onModelPickerOpen: () => {
+          if (modelAccess.allowed && selectedSession?.modelSelectionLocked !== true) {
+            prefetchChatModelAccounts({ owner: state, client, ownsScope: ownsRoute });
+          }
+          return refreshChatModelCatalogOnDemand(state);
+        },
         onModelPickerOpenChange: (open) => {
           state.chatModelPickerOpenSessionKey = open ? state.sessionKey : null;
           // The native picker already presents this transition.

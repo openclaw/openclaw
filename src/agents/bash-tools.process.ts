@@ -1,4 +1,4 @@
-import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Static } from "typebox";
 import { attachInternalToolResultAcknowledgement } from "../../packages/agent-core/src/internal-hooks.js";
 import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
@@ -29,14 +29,18 @@ import { createProcessToolScope } from "./bash-process-scope.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
 import {
   EXEC_MANUAL_COLLECTION_FOLLOW_UP,
-  EXEC_RETENTION_CAP_NOTE,
+  renderExecDroppedOutputNote,
   appendExecTimeoutRetryGuidance,
   describeExitWake,
   hasExitWake,
   renderExecExitLabel,
 } from "./bash-tools.exec-output.js";
 import { ProcessToolOutputSchema } from "./bash-tools.process-schema.js";
-import { processSchema } from "./bash-tools.schemas.js";
+import {
+  isProcessObservationAction,
+  PROCESS_OBSERVATION_REPEATABLE,
+  processSchema,
+} from "./bash-tools.schemas.js";
 import {
   clampWithDefault,
   deriveSessionName,
@@ -103,10 +107,6 @@ function defaultTailNote(totalLines: number, usingDefaultTail: boolean) {
     return "";
   }
   return `\n\n[showing last ${DEFAULT_LOG_TAIL_LINES} of ${totalLines} lines; pass offset/limit to page]`;
-}
-
-function retentionCapNote(session: Pick<ProcessSession, "totalOutputChars" | "aggregated">) {
-  return session.totalOutputChars > session.aggregated.length ? EXEC_RETENTION_CAP_NOTE : "";
 }
 
 const MAX_POLL_WAIT_MS = 30_000;
@@ -220,7 +220,7 @@ function finishedPollResult(
       : "[earlier output is omitted from this poll; omitted output is no longer available through action=log]\n\n"
     : "";
   const text = appendExecTimeoutRetryGuidance(
-    retentionCapNote(finished) +
+    renderExecDroppedOutputNote(finished) +
       retainedOutputNote +
       (output || "(no new output)") +
       `\n\n${finishedSessionText(finished)}`,
@@ -289,10 +289,8 @@ export function createProcessTool(
     displaySummary: PROCESS_TOOL_DISPLAY_SUMMARY,
     description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
-    interruptible: (args) => {
-      const action = asNonArrayRecord(args).action;
-      return action === "list" || action === "poll" || action === "log";
-    },
+    interruptible: isProcessObservationAction,
+    repeatable: PROCESS_OBSERVATION_REPEATABLE,
     outputSchema: ProcessToolOutputSchema,
     execute: async (_toolCallId, args, signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
       const assertCallerCurrent = () => {
@@ -476,7 +474,7 @@ export function createProcessTool(
             const delivery = prepareSessionPoll(scopedSession, pollScope);
             const { output: unreadOutput, outputDropped } = delivery;
             const output = unreadOutput.trim();
-            const aggregateOutputNote = retentionCapNote(scopedSession);
+            const aggregateOutputNote = renderExecDroppedOutputNote(scopedSession);
             const retainedOutputNote = outputDropped
               ? "[earlier output is omitted from this poll; use action=log with offset and limit to inspect retained output]\n\n"
               : "";
@@ -525,7 +523,7 @@ export function createProcessTool(
             const runtime = scopedSession ? describeRunningSession(scopedSession) : undefined;
             const ended = record.exited && record.endedAt !== undefined;
             const text =
-              retentionCapNote(record) +
+              renderExecDroppedOutputNote(record) +
               (slice || (scopedSession ? "(no output yet)" : "(no output recorded)")) +
               defaultTailNote(totalLines, window.usingDefaultTail) +
               (ended ? `\n\n${finishedSessionText(record)}` : "");

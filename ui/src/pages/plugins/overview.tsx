@@ -7,6 +7,7 @@ import {
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
+import { Tooltip } from "../../components/solid/tooltip.tsx";
 import { askBrandLabel } from "../../components/theme-brand-label.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatDateMs } from "../../lib/format.ts";
@@ -39,30 +40,46 @@ function securityTone(status: string): "pass" | "warning" | "danger" | "unknown"
 function renderPluginSecurityAudit(status: string, auditUrl: string | null | undefined) {
   const tone = securityTone(status);
   const bars = { pass: 3, warning: 2, danger: 1, unknown: 0 }[tone];
+  const verdict =
+    tone === "pass"
+      ? t("pluginsPage.auditClean")
+      : tone === "warning"
+        ? t("pluginsPage.auditReview")
+        : status;
   return (
-    <a
+    <section
       class={["plugin-catalog-detail__security", `plugin-catalog-detail__security--${tone}`]}
-      href={auditUrl ?? undefined}
-      target="_blank"
-      rel="noopener noreferrer"
     >
-      <h2 class="settings-section__heading oc-settings-section-title">
-        {t("pluginsPage.detailSecurity")}
-        <span title={t("pluginsPage.detailSecurityAudit")}>{<Icon name="info" />}</span>
-      </h2>
-      <div class="plugin-catalog-detail__security-score">
-        <strong>
-          {tone === "pass"
-            ? t("pluginsPage.auditClean")
-            : tone === "warning"
-              ? t("pluginsPage.auditReview")
-              : status}
-        </strong>
+      <div class="plugin-catalog-detail__security-heading">
+        <h2 class="settings-section__heading oc-settings-section-title">
+          {t("pluginsPage.detailSecurity")}
+        </h2>
+        {/* Outside the audit link, whose page preview replaces any hint nested in it,
+            and outside the heading, whose uppercase type the hint would inherit. */}
+        <Tooltip content={t("pluginsPage.detailSecurityInfo")} describe={false} openOnClick>
+          <button
+            type="button"
+            class="oc-icon-button oc-icon-button--28"
+            aria-label={t("pluginsPage.detailSecurityInfo")}
+          >
+            <Icon name="info" />
+          </button>
+        </Tooltip>
+      </div>
+      <a
+        class="plugin-catalog-detail__security-score"
+        href={auditUrl ?? undefined}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label={`${t("pluginsPage.detailSecurity")}: ${verdict}`}
+        title={t("pluginsPage.detailSecurityAudit")}
+      >
+        <strong>{verdict}</strong>
         <For each={[0, 1, 2]}>
           {(index) => <span class={{ "is-filled": index < bars }} aria-hidden="true" />}
         </For>
-      </div>
-    </a>
+      </a>
+    </section>
   );
 }
 
@@ -175,47 +192,38 @@ export function renderPluginPublisher(
   });
 }
 
-export function renderPluginMetadata(
-  result: PluginDiscoveryDetailResult | undefined,
-  installedVersion?: string,
-  local?: PluginsInspectResult["overview"],
-  loading = false,
-): JSX.Element {
-  const detail = result?.detail;
-  const catalog = result?.plugin.catalog;
-  const repository = pluginRepository(
-    local?.repositoryUrl ?? detail?.repositoryUrl ?? detail?.verification?.sourceRepo,
-  );
-  const documentation = pluginWebUrl(local?.documentationUrl ?? detail?.documentationUrl);
+/** The detail rail shared by plugin and Template pages: audit, release facts, then categories. */
+export function renderPackageMetadata(options: {
+  loading?: boolean;
+  security?: { verdict?: string; auditUrl?: string };
+  version?: string;
+  installed?: boolean;
+  updatedAt?: number;
+  createdAt?: number;
+  downloads?: number;
+  categories?: readonly string[];
+}): JSX.Element {
+  const date = (value: number | undefined) =>
+    value === undefined ? undefined : formatDateMs(value, { dateStyle: "medium" });
   const values: Array<[string, string | undefined]> = [
     [
-      t(installedVersion ? "pluginsPage.detailInstalledVersion" : "pluginsPage.version"),
-      installedVersion ?? catalog?.latestVersion,
+      t(options.installed ? "pluginsPage.detailInstalledVersion" : "pluginsPage.version"),
+      options.version,
     ],
-    [
-      t("pluginsPage.detailUpdated"),
-      detail?.updatedAt === undefined
-        ? undefined
-        : formatDateMs(detail.updatedAt, { dateStyle: "medium" }),
-    ],
-    [
-      t("pluginsPage.detailPublished"),
-      detail?.createdAt === undefined
-        ? undefined
-        : formatDateMs(detail.createdAt, { dateStyle: "medium" }),
-    ],
+    [t("pluginsPage.detailUpdated"), date(options.updatedAt)],
+    [t("pluginsPage.detailPublished"), date(options.createdAt)],
     [
       t("pluginsPage.catalogDownloadsColumn"),
-      catalog?.downloads === undefined ? undefined : formatCompactCount(catalog.downloads),
+      options.downloads === undefined ? undefined : formatCompactCount(options.downloads),
     ],
   ];
-  const categories = catalog?.categories ?? [];
+  const categories = options.categories ?? [];
   const placeholder = () => (
     <span class="plugin-metadata__placeholder skeleton" aria-hidden="true" />
   );
   return (
     <>
-      {loading ? (
+      {options.loading ? (
         <section
           class="plugin-metadata__loading"
           role="status"
@@ -225,12 +233,15 @@ export function renderPluginMetadata(
           {placeholder()}
         </section>
       ) : undefined}
-      {detail?.security
-        ? renderPluginSecurityAudit(detail.security.verdict ?? "unknown", detail.security.auditUrl)
+      {options.security
+        ? renderPluginSecurityAudit(
+            options.security.verdict ?? "unknown",
+            options.security.auditUrl,
+          )
         : undefined}
-      {loading || values.some(([, value]) => value !== undefined) ? (
+      {options.loading || values.some(([, value]) => value !== undefined) ? (
         <dl class="plugin-metadata__facts">
-          <For each={values.filter(([, value]) => loading || value !== undefined)}>
+          <For each={values.filter(([, value]) => options.loading || value !== undefined)}>
             {([label, value]) => (
               <div>
                 <dt>{label}</dt>
@@ -250,6 +261,34 @@ export function renderPluginMetadata(
           </div>
         </section>
       ) : undefined}
+    </>
+  );
+}
+
+export function renderPluginMetadata(
+  result: PluginDiscoveryDetailResult | undefined,
+  installedVersion?: string,
+  local?: PluginsInspectResult["overview"],
+  loading = false,
+): JSX.Element {
+  const detail = result?.detail;
+  const catalog = result?.plugin.catalog;
+  const repository = pluginRepository(
+    local?.repositoryUrl ?? detail?.repositoryUrl ?? detail?.verification?.sourceRepo,
+  );
+  const documentation = pluginWebUrl(local?.documentationUrl ?? detail?.documentationUrl);
+  return (
+    <>
+      {renderPackageMetadata({
+        loading,
+        security: detail?.security,
+        version: installedVersion ?? catalog?.latestVersion,
+        installed: Boolean(installedVersion),
+        updatedAt: detail?.updatedAt,
+        createdAt: detail?.createdAt,
+        downloads: catalog?.downloads,
+        categories: catalog?.categories,
+      })}
       {repository || documentation ? (
         <ul class="plugin-metadata__links">
           {repository ? (

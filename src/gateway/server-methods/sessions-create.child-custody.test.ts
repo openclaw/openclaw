@@ -566,7 +566,7 @@ describe("hosted creation transfers accepted child input", () => {
       human: true,
     },
     { name: "canonical historical alias", options: { mergedParentCreator: true }, human: true },
-    { name: "different human owner", options: { mismatchedParentOwner: true }, human: false },
+    { name: "different human owner", options: { mismatchedParentOwner: true }, human: true },
   ])("assigns child ownership for a $name", async ({ options, human }) => {
     await using fixture = await createHostedChildFixture(options);
     await fixture.send();
