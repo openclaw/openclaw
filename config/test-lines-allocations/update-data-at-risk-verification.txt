@@ -8,5 +8,5 @@
 # plain update, including already-current and its refusal on unchecked leftovers; the
 # interrupted managed handoff past an earlier verified mark) with exact rendered text per
 # outcome, the Git release-launcher refusal message, and Doctor's skipped and unconfirmed
-# stale-Gateway stops. Exact net growth.
-473
+# stale-Gateway stops, an inaccessible leftover path and an unreadable database beside a deferrable one. Exact net growth.
+523

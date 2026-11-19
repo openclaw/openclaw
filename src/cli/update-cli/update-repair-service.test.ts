@@ -484,6 +484,12 @@ it("fails repair and leaves recovery open when the mark is still refused after D
   expect(service.start).not.toHaveBeenCalled();
   expect(listUpdateRuns()[0]?.status).toBe("failed");
   expect(defaultRuntime.error).toHaveBeenCalledWith(
+    // Doctor's maintenance may have parked and restored it, so no "left as it was" claim.
+    expect.stringContaining(
+      "Repair did not start or restart the Gateway after this check. Run `openclaw triage`",
+    ),
+  );
+  expect(defaultRuntime.error).toHaveBeenCalledWith(
     expect.stringContaining("Found: the state database is still at schema 39."),
   );
   // Recovery stays open: once the state is consistent, the next repair starts the Gateway.

@@ -8,6 +8,7 @@ import type {
 } from "../state/openclaw-database-preflight.types.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { VERSION } from "../version.js";
+import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import type { RecordedDataAtRisk } from "./update-run-data-at-risk.js";
 import {
@@ -53,18 +54,28 @@ function listFindings(findings: readonly string[]): string {
 /**
  * A database rollback moves each migrated database aside as `<db>.migrated-<run>` beside
  * its own file before it restores the backup. Check beside the shared database and every
- * registered agent database, wherever it lives; `null` when the registry cannot be read.
+ * registered agent database, wherever it lives. A path the system cannot inspect is
+ * reported as unchecked, never as absent.
  */
-function findRollbackLeftover(databasePaths: readonly string[], runId: string): string | undefined {
+function findRollbackLeftover(
+  databasePaths: readonly string[],
+  runId: string,
+): { file: string; unchecked?: true } | undefined {
+  let unchecked: string | undefined;
   for (const databasePath of databasePaths) {
     for (const suffix of ["", "-wal", "-shm", "-journal"]) {
       const leftover = `${databasePath}.migrated-${runId}${suffix}`;
-      if (fs.existsSync(leftover)) {
-        return leftover;
+      try {
+        fs.lstatSync(leftover);
+        return { file: leftover };
+      } catch (error) {
+        if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR")) {
+          unchecked ??= leftover;
+        }
       }
     }
   }
-  return undefined;
+  return unchecked ? { file: unchecked, unchecked: true } : undefined;
 }
 
 function readAgentDatabasePaths(env: NodeJS.ProcessEnv): string[] | undefined {
@@ -110,6 +121,21 @@ function classify(
   formatCommand: (command: string) => string,
 ): UpdateStateVerification {
   const pending = schemas.pendingMigrations ?? [];
+  const unreadable = schemas.indeterminate.map(
+    (database) =>
+      `${database.kind} database ${database.path} could not be read: ${database.reason}`,
+  );
+  if (unreadable.length > 0 && (pending.length > 0 || schemas.incompatible.length > 0)) {
+    // Nothing is deferred or continued past while part of the state could not be read.
+    return {
+      status: "unverifiable",
+      detail: `${listFindings(unreadable)}; and ${listFindings([
+        ...schemas.incompatible.map(describeAhead),
+        ...pending.map(describeBehind),
+      ])}`,
+      nextAction: retryRepair(formatCommand),
+    };
+  }
   if (schemas.incompatible.length > 0 && pending.length > 0) {
     // Neither an update nor Doctor can finish while one store is ahead and another behind.
     return {
@@ -135,15 +161,10 @@ function classify(
       nextAction: `run \`${formatCommand("openclaw doctor --fix")}\` to finish the migration.`,
     };
   }
-  if (schemas.indeterminate.length > 0) {
+  if (unreadable.length > 0) {
     return {
       status: "unverifiable",
-      detail: listFindings(
-        schemas.indeterminate.map(
-          (database) =>
-            `${database.kind} database ${database.path} could not be read: ${database.reason}`,
-        ),
-      ),
+      detail: listFindings(unreadable),
       nextAction: retryRepair(formatCommand),
     };
   }
@@ -173,24 +194,27 @@ export async function verifyUpdateStateConsistency(params: {
   const databasePath = path.resolve(resolveOpenClawStateSqlitePath(params.env));
   // A completed rollback keeps its displaced files on purpose; only other runs' count.
   const rollbackRuns = (params.marks ?? []).filter(({ databaseRestored }) => !databaseRestored);
-  const findLeftover = (paths: readonly string[]) =>
-    rollbackRuns
-      .map(({ runId }) => ({ runId, file: findRollbackLeftover(paths, runId) }))
-      .find((entry): entry is { runId: string; file: string } => entry.file !== undefined);
+  const probes = (paths: readonly string[]) =>
+    rollbackRuns.flatMap(({ runId }) => {
+      const probe = findRollbackLeftover(paths, runId);
+      return probe ? [{ runId, ...probe }] : [];
+    });
   // Leftovers are checked before anything else, so no other verdict can skip past one.
   const agentPaths = rollbackRuns.length > 0 ? readAgentDatabasePaths(params.env) : [];
-  const leftover = findLeftover([databasePath, ...(agentPaths ?? [])]);
+  const found = probes([databasePath, ...(agentPaths ?? [])]);
+  const leftover = found.find(({ unchecked }) => !unchecked);
   if (leftover) {
     return leftoverFinding(leftover);
   }
   const verdict = await checkStateEvidence(params, databasePath);
-  if (agentPaths) {
+  if (agentPaths && found.length === 0) {
     return verdict;
   }
   // Unchecked leftovers are never deferred or continued past: anything that can start or
   // restart the Gateway refuses on them. Another finding is kept beside that fact.
-  const unchecked =
-    "the agent database registry could not be read, so database rollback leftovers beside agent databases are unchecked";
+  const unchecked = agentPaths
+    ? `${found[0]?.file} could not be inspected, so that database rollback leftover is unchecked`
+    : "the agent database registry could not be read, so database rollback leftovers beside agent databases are unchecked";
   return {
     status: "unverifiable",
     leftoversUnchecked: true,

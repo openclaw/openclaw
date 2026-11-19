@@ -232,6 +232,50 @@ it("reports an agent rollback leftover even when that agent database cannot be r
   });
 });
 
+it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "treats a rollback leftover path it cannot inspect as unchecked, not absent",
+  async () => {
+    openOpenClawStateDatabase();
+    const agentPath = openOpenClawAgentDatabase({
+      agentId: "external",
+      path: state.path("external-store", "openclaw-agent.sqlite"),
+    }).path;
+    closeOpenClawAgentDatabasesForTest();
+    // An inaccessible mount: the leftover may be there, but nothing can look.
+    await fs.chmod(path.dirname(agentPath), 0o000);
+    try {
+      const verdict = await verifyUpdateStateConsistency({
+        env: process.env,
+        formatCommand: (command) => command,
+        marks: [{ runId: "run-1", mark: "rollback-state-unverified" }],
+      });
+
+      expect(verdict).toMatchObject({ status: "unverifiable", leftoversUnchecked: true });
+      expect(verdict.detail).toContain(`${agentPath}.migrated-run-1 could not be inspected`);
+    } finally {
+      await fs.chmod(path.dirname(agentPath), 0o700);
+    }
+  },
+);
+
+it("does not defer an unfinished migration while another database cannot be read", async () => {
+  const agentPath = openOpenClawAgentDatabase({
+    agentId: "external",
+    path: state.path("external-store", "openclaw-agent.sqlite"),
+  }).path;
+  closeOpenClawAgentDatabasesForTest();
+  openOpenClawStateDatabase();
+  setStateUserVersion(OPENCLAW_STATE_SCHEMA_VERSION - 1);
+  await fs.writeFile(agentPath, "not a sqlite database".repeat(256));
+
+  const verdict = await verify();
+
+  expect(verdict).toMatchObject({ status: "unverifiable" });
+  expect(verdict).not.toHaveProperty("finishable");
+  expect(verdict.detail).toContain("could not be read");
+  expect(verdict.detail).toContain("migration did not finish");
+});
+
 it("keeps a completed rollback's retained files out of the check after compaction", async () => {
   openOpenClawStateDatabase();
   const run = createUpdateRun({ trigger: "cli" });

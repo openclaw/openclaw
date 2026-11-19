@@ -94,7 +94,8 @@ export async function verifyRecordedDataAtRisk(params: {
         config: params.config,
         timeoutMs: params.timeoutMs,
       }),
-      outcome: `Repair left the Gateway as it was. ${formatDataAtRiskNextSteps(verification, env)}`,
+      // After Doctor, its maintenance may already have parked and restored the Gateway.
+      outcome: `${params.beforeMaintenance ? "Repair left the Gateway as it was." : "Repair did not start or restart the Gateway after this check."} ${formatDataAtRiskNextSteps(verification, env)}`,
     });
   }
   const resolved = formatDataAtRiskResolved({ marks, verification });
