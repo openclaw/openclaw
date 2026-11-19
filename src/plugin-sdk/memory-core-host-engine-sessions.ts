@@ -5,7 +5,7 @@ import {
   listSessionTranscriptCorpusEntriesForAgent as listSessionTranscriptCorpusEntriesFromHost,
   readSessionResetRecallCutoff as readSessionResetRecallCutoffFromHost,
 } from "../../packages/memory-host-sdk/src/engine-sessions.js";
-import { assertBoundIncognitoMemorySyncAccess } from "../../packages/memory-host-sdk/src/host/openclaw-runtime-session.js";
+import { assertBoundIncognitoMemorySyncAccess } from "../../packages/memory-host-sdk/src/host/session-memory-authority.js";
 import {
   listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
