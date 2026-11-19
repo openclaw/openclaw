@@ -11,11 +11,16 @@ import {
   fetchClawHubPackageDetail,
   fetchClawHubPackageSecurity,
   fetchClawHubPackageVersion,
+  type ClawHubPackageSecurityResponse,
 } from "../infra/clawhub-packages.js";
 import { withExtractedArchiveRoot } from "../infra/install-flow.js";
 import { projectTemplateCatalogDependencies } from "./catalog-dependencies.js";
 import type { ClawHubTemplateCatalogDetail } from "./clawhub-catalog-types.js";
 import { projectCatalogEntry, requirePublicTemplatePackage } from "./clawhub-catalog.js";
+import {
+  countTemplateContents,
+  readTemplateDisplayInventory,
+} from "./clawhub-display-inventory.js";
 import { parseTemplateManifestSummary } from "./clawhub-manifest-summary.js";
 import {
   readClawHubCatalogPreview,
@@ -59,7 +64,6 @@ const verifiedDetailContents = new Map<
   string,
   {
     artifact: ReturnType<typeof readExactTemplateArtifact>;
-    latestHint?: { registry: string; name: string; version: string };
     contents: ClawHubTemplateCatalogDetail["contents"];
   }
 >();
@@ -75,72 +79,53 @@ export async function readClawHubTemplateDetail(
   if (params.version !== undefined) {
     requireExactVersion(params.version);
   }
-  const packagePromise = fetchClawHubPackageDetail({ ...params, name: params.packageName }).then(
-    (detail) => requirePublicTemplatePackage(detail, params.packageName),
-  );
-  const versionPromise = params.version
-    ? Promise.resolve(params.version)
-    : packagePromise.then((pkg) => {
-        if (!pkg.latestVersion) {
-          throw new ClawHubSourceError(
-            "clawhub_version_unavailable",
-            "ClawHub has no published version.",
-          );
-        }
-        requireExactVersion(pkg.latestVersion);
-        return pkg.latestVersion;
-      });
-  const releasePromise = versionPromise.then((version) =>
-    fetchClawHubPackageVersion({ ...params, name: params.packageName, version }),
+  // A missing expansion means an older registry. A refusal or malformed present
+  // expansion is authoritative: never bypass it by requesting archive bytes.
+  const detail = await fetchClawHubPackageDetail({
+    ...params,
+    name: params.packageName,
+    view: "template-inventory",
+  });
+  const pkg = requirePublicTemplatePackage(detail, params.packageName);
+  const version = params.version ?? pkg.latestVersion;
+  if (!version) {
+    throw new ClawHubSourceError(
+      "clawhub_version_unavailable",
+      "ClawHub has no published version.",
+    );
+  }
+  requireExactVersion(version);
+  const coordinate = { packageName: pkg.name, version };
+  if (Object.hasOwn(detail, "templateInventory")) {
+    const inventory = readTemplateDisplayInventory(
+      detail.templateInventory,
+      coordinate,
+      version === pkg.latestVersion ? [pkg.artifact, pkg.clawpack] : [],
+    );
+    return projectDetail(pkg, version, inventory, params.baseUrl);
+  }
+  // Only a verified legacy read may populate or reuse the legacy contents cache.
+  const releasePromise = fetchClawHubPackageVersion({ ...params, name: pkg.name, version });
+  const securityPromise = fetchClawHubPackageSecurity({ ...params, name: pkg.name, version }).catch(
+    () => undefined,
   );
   const registry = resolveClawHubBaseUrl(params.baseUrl);
-  const lastLatest = params.version
-    ? undefined
-    : [...verifiedDetailContents.values()].findLast(
-        ({ latestHint }) =>
-          latestHint?.registry === registry && latestHint.name === params.packageName,
-      )?.latestHint?.version;
-  const readSecurity = (version: string) =>
-    fetchClawHubPackageSecurity({ ...params, name: params.packageName, version }).catch(
-      () => undefined,
-    );
-  // A prior release only predicts which live audit to start; the live package
-  // response always chooses the version, even when this speculation is wrong.
-  const predictedSecurity = lastLatest ? readSecurity(lastLatest) : undefined;
-  const securityPromise = versionPromise.then(
-    (version) =>
-      version === lastLatest && predictedSecurity ? predictedSecurity : readSecurity(version),
-    () => undefined, // The main read reports package/version resolution failures.
-  );
   const abort = new AbortController();
-  const fetchArchive = (version: string) =>
+  const fetchArchive = () =>
     downloadClawHubPackageArchive({
       ...params,
-      name: params.packageName,
+      name: pkg.name,
       version,
       artifact: "clawpack",
       timeoutMs: params.timeoutMs ?? CLAWHUB_TIMEOUT_MS,
       signal: params.signal ? AbortSignal.any([params.signal, abort.signal]) : abort.signal,
     });
-  const keyForVersion = (version: string) =>
-    JSON.stringify([registry, params.packageName, version]);
-  // Start a known-cold archive transfer alongside independent exact-release reads.
-  // A hit can avoid this transfer, but never the live package and download-authorization reads.
-  let download: Promise<ClawHubDownloadResult> | undefined;
-  const coldDownload = versionPromise.then((version) => {
-    if (!verifiedDetailContents.has(keyForVersion(version))) {
-      download = fetchArchive(version);
-      return download;
-    }
-    return undefined;
-  });
+  const key = JSON.stringify([registry, pkg.name, version]);
+  let download: Promise<ClawHubDownloadResult> | undefined = verifiedDetailContents.has(key)
+    ? undefined
+    : fetchArchive();
   try {
-    const [pkg, release, version, cold] = await Promise.all([
-      packagePromise,
-      releasePromise,
-      versionPromise,
-      coldDownload,
-    ]);
+    const [release, cold] = await Promise.all([releasePromise, download]);
     if (release.package?.name !== pkg.name || release.package.family !== "template") {
       throw new ClawHubSourceError(
         "clawhub_identity_mismatch",
@@ -154,13 +139,8 @@ export async function readClawHubTemplateDetail(
       );
     }
     const artifact = { package: release.package, version, artifact: release.version.artifact };
-    const coordinate = { packageName: pkg.name, version };
     const expected = readExactTemplateArtifact(artifact, coordinate);
     const summary = parseTemplateManifestSummary(release.version.templateManifestSummary);
-    const categories = Array.isArray(pkg.categories)
-      ? pkg.categories.filter((category) => typeof category === "string" && category.length > 0)
-      : [];
-    const key = keyForVersion(version);
     const readContents = async () => {
       const cached = !cold && verifiedDetailContents.get(key);
       if (
@@ -184,7 +164,7 @@ export async function readClawHubTemplateDetail(
           return cached.contents;
         }
       }
-      download ??= fetchArchive(version);
+      download ??= fetchArchive();
       const { contents } = await readClawHubTemplateContents(
         { ...params, ...coordinate },
         undefined,
@@ -194,9 +174,6 @@ export async function readClawHubTemplateDetail(
       verifiedDetailContents.set(key, {
         artifact: expected,
         contents,
-        ...(version === pkg.latestVersion
-          ? { latestHint: { registry, name: params.packageName, version } }
-          : {}),
       });
       if (verifiedDetailContents.size > 32) {
         verifiedDetailContents.delete(verifiedDetailContents.keys().next().value!);
@@ -204,40 +181,57 @@ export async function readClawHubTemplateDetail(
       return contents;
     };
     const [contents, security] = await Promise.all([readContents(), securityPromise]);
-    return {
-      ...projectCatalogEntry({ ...pkg, icon: release.version.icon }, params.baseUrl),
+    return projectDetail(
+      pkg,
       version,
-      agentId: summary.id,
-      ...(summary.name ? { agentName: summary.name } : {}),
-      ...(summary.description ? { agentDescription: summary.description } : {}),
-      workspaceFiles: contents.instructions.length,
-      skills: contents.skills.length,
-      plugins: contents.integrations.filter((item) => item.kind === "plugin").length,
-      mcpServers: contents.integrations.filter((item) => item.kind === "mcpServer").length,
-      scheduledJobs: contents.automations.length,
-      contents,
-      ...(Number.isFinite(pkg.createdAt) ? { createdAtMs: Math.max(0, pkg.createdAt) } : {}),
-      ...(categories.length ? { categories } : {}),
-      // A report for another package or release is not evidence about this one.
-      ...(security?.package?.name === pkg.name && security.release?.version === version
-        ? {
-            security: {
-              ...(security.verdict ? { verdict: security.verdict } : {}),
-              auditUrl: security.securityAuditUrl,
-            },
-          }
-        : {}),
-    };
+      { contents, security, summary, icon: release.version.icon },
+      params.baseUrl,
+    );
   } catch (error) {
     abort.abort(error);
     throw error;
   } finally {
-    await coldDownload.catch(() => undefined);
     await download?.then(
       (result) => result.cleanup(),
       () => undefined,
     );
   }
+}
+
+function projectDetail(
+  pkg: ReturnType<typeof requirePublicTemplatePackage>,
+  version: string,
+  data: {
+    contents: ClawHubTemplateCatalogDetail["contents"];
+    summary: ReturnType<typeof parseTemplateManifestSummary>;
+    security?: ClawHubPackageSecurityResponse;
+    icon?: string | null;
+  },
+  baseUrl?: string,
+): ClawHubTemplateCatalogDetail {
+  const { contents, summary, security, icon } = data;
+  const categories = Array.isArray(pkg.categories)
+    ? pkg.categories.filter((category) => typeof category === "string" && category.length > 0)
+    : [];
+  return {
+    ...projectCatalogEntry({ ...pkg, icon }, baseUrl),
+    version,
+    agentId: summary.id,
+    ...(summary.name ? { agentName: summary.name } : {}),
+    ...(summary.description ? { agentDescription: summary.description } : {}),
+    ...countTemplateContents(contents),
+    contents,
+    ...(Number.isFinite(pkg.createdAt) ? { createdAtMs: Math.max(0, pkg.createdAt) } : {}),
+    ...(categories.length ? { categories } : {}),
+    ...(security?.package?.name === pkg.name && security.release?.version === version
+      ? {
+          security: {
+            ...(security.verdict ? { verdict: security.verdict } : {}),
+            auditUrl: security.securityAuditUrl,
+          },
+        }
+      : {}),
+  };
 }
 
 export async function readClawHubTemplatePreview(

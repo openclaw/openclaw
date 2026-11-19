@@ -197,6 +197,8 @@ export type ClawHubPackageListResponse = {
   nextCursor: string | null;
 };
 export type ClawHubPackageDetail = {
+  /** Display-only, absent on registries without the projection. Narrow in the consumer. */
+  templateInventory?: unknown;
   package:
     | (ClawHubPackageListItem & {
         tags?: Record<string, string>;
@@ -370,11 +372,16 @@ export function parseClawHubPackageSecurityResponse(
 export async function fetchClawHubPackageDetail(
   params: ClawHubFetchOptions & {
     name: string;
+    view?: "template-inventory";
+    version?: string;
   },
 ): Promise<ClawHubPackageDetail> {
   return await fetchClawHubJson<ClawHubPackageDetail>({
     baseUrl: params.baseUrl,
     path: `/api/v1/packages/${encodeURIComponent(params.name)}`,
+    ...(params.view
+      ? { search: { view: params.view, version: params.version }, maxResponseBytes: 512 * 1024 }
+      : {}),
     token: params.token,
     timeoutMs: params.timeoutMs,
     signal: params.signal,

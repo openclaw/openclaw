@@ -29,6 +29,11 @@ vi.mock("../infra/clawhub-packages.js", async (importOriginal) => ({
   fetchClawHubPackageArtifact: mocks.artifact,
   fetchClawHubPackageSecurity: mocks.security,
 }));
+// mock-isolation: These older-registry fixtures omit ranked paging; its wire contract is tested separately.
+vi.mock("./clawhub-ranked-page.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./clawhub-ranked-page.js")>()),
+  fetchRankedTemplatePage: async () => undefined,
+}));
 // mock-isolation: Archive bytes come from the fixture so source identity remains deterministic.
 vi.mock("../infra/clawhub-artifacts.js", () => ({
   downloadClawHubPackageArchive: mocks.download,
@@ -38,7 +43,8 @@ vi.mock("../infra/clawhub-skills.js", async (importOriginal) => ({
   fetchClawHubSkillCard: mocks.skillCard,
 }));
 // mock-isolation: Trust verdicts are explicit fixtures, never ambient policy state.
-vi.mock("../infra/clawhub-install-trust.js", () => ({
+vi.mock("../infra/clawhub-install-trust.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/clawhub-install-trust.js")>()),
   checkClawHubPackageTrust: mocks.trust,
 }));
 // mock-isolation: Extraction is controlled by each test without touching package installers.
@@ -463,13 +469,13 @@ describe("public ClawHub Template catalog", () => {
     expect(mocks.download).toHaveBeenCalledTimes(2);
   });
 
-  it("uses a previously seen latest version only to predict the parallel audit, never to select the release", async () => {
+  it("waits for the live authorized package before reading the selected legacy release", async () => {
     mocks.security.mockResolvedValue(matchingSecurity);
     await readClawHubTemplateDetail({ packageName });
     const gate = Promise.withResolvers<Awaited<ReturnType<typeof mocks.detail>>>();
     mocks.detail.mockReturnValueOnce(gate.promise);
     const pending = readClawHubTemplateDetail({ packageName });
-    expect(mocks.security).toHaveBeenCalledTimes(2);
+    expect(mocks.security).toHaveBeenCalledTimes(1);
     const next = "2.0.0";
     await writePackage(packageName, next);
     mocks.version.mockResolvedValue(release(next));
@@ -626,13 +632,13 @@ describe("public ClawHub Template catalog", () => {
     const gate = Promise.withResolvers<Awaited<ReturnType<typeof mocks.detail>>>();
     mocks.detail.mockReturnValueOnce(gate.promise);
     const pending = readClawHubTemplateDetail({ packageName, version });
-    await vi.waitFor(() => {
-      expect(mocks.version).toHaveBeenCalledOnce();
-      expect(mocks.download).toHaveBeenCalledOnce();
-    });
-    expect(mocks.extract).not.toHaveBeenCalled();
+    for (const downstream of [mocks.version, mocks.security, mocks.download, mocks.extract]) {
+      expect(downstream).not.toHaveBeenCalled();
+    }
     gate.resolve({ package: officialPackage(), owner: { handle: "openclaw", official: true } });
     await pending;
+    expect(mocks.version).toHaveBeenCalledOnce();
+    expect(mocks.download).toHaveBeenCalledOnce();
     expect(mocks.artifact).not.toHaveBeenCalled();
     const download = await mocks.download.mock.results[0]!.value;
     expect(download.cleanup).toHaveBeenCalledOnce();
@@ -641,7 +647,7 @@ describe("public ClawHub Template catalog", () => {
   it("aborts an unfinished archive when parallel metadata fails", async () => {
     const metadata = Promise.withResolvers<Awaited<ReturnType<typeof mocks.detail>>>();
     const aborted = vi.fn();
-    mocks.detail.mockReturnValueOnce(metadata.promise);
+    mocks.version.mockReturnValueOnce(metadata.promise);
     mocks.download.mockImplementationOnce(
       ({ signal }) =>
         new Promise((_, reject) => {
@@ -668,7 +674,7 @@ describe("public ClawHub Template catalog", () => {
     "cleans the parallel download when %s verification fails",
     async (failure) => {
       if (failure === "metadata") {
-        mocks.detail.mockRejectedValueOnce(new Error("metadata unavailable"));
+        mocks.version.mockRejectedValueOnce(new Error("metadata unavailable"));
       } else {
         const selected = release();
         mocks.version.mockResolvedValueOnce({
