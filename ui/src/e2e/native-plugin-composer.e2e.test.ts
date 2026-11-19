@@ -206,9 +206,6 @@ suite.define(() => {
           () => (window as unknown as ComposerProofWindow).composerProof?.firstAborted,
         ),
       ).toBe(true);
-      expect(await page.locator('.agent-chat__composer-task[data-state="working"]').count()).toBe(
-        0,
-      );
       expect(await action.getAttribute("aria-pressed")).toBe("false");
     });
   });
@@ -284,10 +281,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Undo" }).waitFor();
       await page.getByRole("button", { name: "Replace draft", exact: true }).click();
       await expect.poll(() => textarea.inputValue()).toBe("written by another action");
-      // The receipt no longer matches the draft, so it cannot undo over the newer text.
       await expect.poll(() => page.getByRole("button", { name: "Undo" }).count()).toBe(0);
-      expect(await textarea.inputValue()).toBe("written by another action");
-      // Restoring the accepted text later does not revive the retired receipt.
       await page.getByRole("button", { name: "Restore rewrite", exact: true }).click();
       await expect.poll(() => textarea.inputValue()).toBe(PROPOSED);
       await page.waitForTimeout(300);

@@ -154,7 +154,8 @@ export function createComposerTasks(presented: () => boolean) {
   }
 
   function undo(target: HTMLTextAreaElement | null) {
-    if (!target || !state.accepted) {
+    // Like accept, a locked editor keeps the receipt until it is writable again.
+    if (!target || target.readOnly || target.disabled || !state.accepted) {
       return;
     }
     clearAccepted();

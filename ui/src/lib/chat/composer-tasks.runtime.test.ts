@@ -20,7 +20,7 @@ function setup(value: string) {
 }
 
 describe("composer tasks", () => {
-  it("keeps a proposal pending while the editor is locked", async () => {
+  it("keeps a proposal and its Undo receipt while the editor is locked", async () => {
     const { tasks, textarea, dispose } = setup("my draft");
     try {
       const outcome = tasks.offer("rewritten", "Rewrite", new AbortController().signal);
@@ -34,6 +34,11 @@ describe("composer tasks", () => {
       expect(tasks.accept(textarea)).toBe(true);
       await expect(outcome).resolves.toBe("accepted");
       expect(textarea.value).toBe("rewritten");
+      flush();
+      textarea.readOnly = true;
+      tasks.undo(textarea);
+      flush();
+      expect(tasks.accepted?.title).toBe("Rewrite");
     } finally {
       dispose();
     }

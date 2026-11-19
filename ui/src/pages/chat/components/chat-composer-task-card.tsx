@@ -64,6 +64,7 @@ export function ComposerTaskCardView(props: {
                 <button
                   type="button"
                   class="btn btn--sm btn--ghost"
+                  disabled={props.textarea()?.readOnly === true}
                   onClick={() => props.tasks.undo(props.textarea())}
                 >
                   <Icon name="rotateCcw" />
