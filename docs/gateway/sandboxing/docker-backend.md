@@ -12,6 +12,25 @@ The Docker backend runs tools locally through the `docker` CLI. Its selection an
 
 Defaults: `network: "none"` (no egress), `readOnlyRoot: true`, `capDrop: ["ALL"]`, image `openclaw-sandbox:trixie-slim`.
 
+Tmpfs mounts without an explicit `size=` option are capped at 1 GiB for `/tmp`,
+4 GiB for `/tmp/openclaw-deps`, and 256 MiB for other paths. Explicit sizes are
+preserved. These are capacity limits, not reserved memory. Keep durable output
+in the disk-backed workspace; writes beyond a tmpfs limit fail with no space left.
+Podman also caps its automatic writable `/tmp`, `/var/tmp`, and `/run` mounts.
+
+Docker and Podman tool containers stop after 15 minutes without a new admission,
+on the Gateway’s five-minute housekeeping sweep. Active turns, retained background
+commands, and persistent executions prevent stopping. Each sweep attempts at most
+32 idle stops and resumes after its last attempted container, so failed engines
+cannot starve later containers. Stopping frees tmpfs contents and ends untracked
+background processes; host workspace files and the container writable layer persist.
+The next turn can restart the same container without rerunning one-time setup.
+Age-based removal remains separate; disabling removal does not disable idle stops.
+
+Dependency installation that exhausts storage fails preparation instead of
+publishing a partial template. Free bytes and inodes in the workspace and builder
+temporary package store before retrying.
+
 This explicit configuration keeps the agent workspace read-only and preserves
 the default restricted runtime posture:
 

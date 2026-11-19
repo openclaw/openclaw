@@ -108,6 +108,19 @@ async function prepare(config = cfg, signal?: AbortSignal, rollbackGuard = vi.fn
   });
 }
 
+it.each(["ENOSPC", "No space left on device", "No space left\n      on device (os error 28)"])(
+  "fails preparation on %s instead of publishing source-only success",
+  async (failure) => {
+    mocks.exec.mockImplementation(async (_engine, args: string[]) => ({
+      code: args[0] === "exec" ? 1 : 0,
+      stdout: args[0] === "image" ? image : containerId,
+      stderr: args[0] === "exec" ? failure + "\n" + "progress\n".repeat(400) : "",
+    }));
+    await expect(prepare()).rejects.toThrow(/Sandbox dependency installation ran out of space/u);
+    expect(mocks.retire).toHaveBeenCalledOnce();
+  },
+);
+
 it("installs the pinned guest image without session credentials or writable Git metadata", async () => {
   expect(await prepare()).toEqual({ installed: true });
   const admitted = mocks.ensure.mock.calls[0]![0];

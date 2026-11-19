@@ -40,6 +40,8 @@ function dependencyDockerConfig(cfg: SandboxConfig, image: string): SandboxDocke
   };
 }
 
+class SandboxDependencyStorageError extends Error {}
+
 export type SandboxDependencyTemplateIdentity = {
   key: string;
   image: string;
@@ -274,10 +276,22 @@ export async function prepareSandboxDependencyTemplate(params: {
         ),
       );
       assertCurrent();
+      if (
+        installed.code !== 0 &&
+        /ENOSPC|no\s+space\s+left\s+on\s+device/iu.test(installed.stdout + installed.stderr)
+      ) {
+        throw new SandboxDependencyStorageError(
+          "Sandbox dependency installation ran out of space. Free bytes and inodes in the workspace and the builder temporary package store, then retry.",
+        );
+      }
       return installed.code === 0
         ? { installed: true }
         : { installed: false, reason: `pnpm install failed (exit ${installed.code})` };
-    } catch {
+    } catch (error) {
+      if (error instanceof SandboxDependencyStorageError) {
+        assertCurrent();
+        throw error;
+      }
       // Installer output can contain registry credentials; retain only the failure category.
       assertCurrent();
       return {
