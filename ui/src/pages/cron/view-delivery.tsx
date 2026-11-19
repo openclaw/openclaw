@@ -2,7 +2,6 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { createMemo, createSignal } from "solid-js";
 import type { ChannelPickerOption } from "../../components/solid/channel-picker.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import type { CronFormState } from "../../lib/cron/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -15,7 +14,7 @@ import {
   inputIdForField,
 } from "./view-fields.tsx";
 import { DurationRow } from "./view-schedule.tsx";
-import type { CronProps, CronPanelMode } from "./view-types.ts";
+import type { CronProps } from "./view-types.ts";
 function buildChannelOptions(data: CronProps): ChannelPickerOption[] {
   return [
     { value: "last", label: "last", kind: "neutral" },
@@ -140,13 +139,6 @@ function DeliveryRows(
           help={t("cron.form.bestEffortHelp")}
         />
       ) : undefined}
-      <CronInput
-        {...props}
-        field="sessionKey"
-        label={t("cron.form.sessionKey")}
-        help={t("cron.form.sessionKeyHelp")}
-        placeholder={t("cron.form.sessionKeyPlaceholder")}
-      />
     </>
   );
 }
@@ -171,7 +163,6 @@ const ADVANCED_FIELDS = [
  */
 export function Advanced(
   props: CronProps & {
-    mode: CronPanelMode;
     isAgentTurn: boolean;
     supportsAnnounce: boolean;
     selectedDeliveryMode: CronFormState["deliveryMode"];
@@ -223,22 +214,6 @@ export function Advanced(
               ]
             }
           />
-          {props.mode === "create" ? (
-            <ToggleRow
-              {...props}
-              field="enabled"
-              label={t("cron.form.startEnabled")}
-              help={t("cron.form.startEnabledHelp")}
-            />
-          ) : undefined}
-          {props.form.scheduleKind === "at" || props.form.scheduleKind === "on-exit" ? (
-            <ToggleRow
-              {...props}
-              field="deleteAfterRun"
-              label={t("cron.form.deleteAfterRun")}
-              help={t("cron.form.deleteAfterRunHelp")}
-            />
-          ) : undefined}
         </SettingsSection>
         <SettingsSection title={t("cron.form.advancedTask")}>
           {props.form.payloadLocked ? (
@@ -269,24 +244,6 @@ export function Advanced(
               ]}
             />
           )}
-          {props.isAgentTurn && props.form.payloadText.trim() ? (
-            <FieldRow
-              label={t("cron.form.promptPreview")}
-              controlId=""
-              stacked
-              wide
-              control={
-                <div
-                  class="cron-prompt-preview"
-                  role="region"
-                  aria-label={t("cron.form.promptPreview")}
-                  tabindex="0"
-                >
-                  <MarkdownHtml class="chat-text" markdown={props.form.payloadText} />
-                </div>
-              }
-            />
-          ) : undefined}
           {props.isAgentTurn ? (
             <>
               <CronInput
