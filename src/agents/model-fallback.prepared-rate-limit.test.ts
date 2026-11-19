@@ -218,7 +218,11 @@ it("matches uncaptured and prepared transport health decisions across saturation
 
 it("replaces routes on config republication and registry replacement", () => {
   const fixture = createFallbackRateLimitFixture("https://reload-route.invalid/v1", true);
-  const replacement = createFallbackRateLimitFixture("https://reload-route.invalid/v1", true);
+  const replacement = createFallbackRateLimitFixture(
+    "https://reload-route.invalid/v1",
+    true,
+    "replacement",
+  );
   const config = structuredClone(fixture.config);
   setRuntimeConfigSnapshot(config);
   const read = (owner = fixture) =>
@@ -242,7 +246,34 @@ it("replaces routes on config republication and registry replacement", () => {
   expect(changed?.baseUrl).toBe("https://changed-route.invalid/v1/transport");
   expect(changed).not.toBe(original);
   const replaced = read(replacement);
-  expect(replaced).toEqual(changed);
+  expect(replaced?.baseUrl).toBe("https://changed-route.invalid/v1/replacement");
   expect(replaced).not.toBe(changed);
+  expect(read()).toBe(changed);
+  const uncaptured = withPluginRuntimeRegistryScope(fixture.generation.pluginRegistry!, () =>
+    withPluginMetadataSnapshotScope(
+      replacement.metadata,
+      () =>
+        resolveFallbackRateLimitModel({
+          cfg: structuredClone(config),
+          provider: "synthetic-first",
+          modelId: "primary",
+        }),
+      { config, trustConfigIdentity: true },
+    ),
+  );
+  expect(uncaptured?.baseUrl).toBe("https://changed-route.invalid/v1/replacement");
+  const scoped = withPluginRuntimeRegistryScope(fixture.generation.pluginRegistry!, () =>
+    withPluginMetadataSnapshotScope(
+      replacement.metadata,
+      () =>
+        resolveFallbackRateLimitModel({
+          cfg: config,
+          provider: "synthetic-first",
+          modelId: "primary",
+        }),
+      { config, trustConfigIdentity: true },
+    ),
+  );
+  expect(scoped?.baseUrl).toBe("https://changed-route.invalid/v1/replacement");
   expect(read()).toBe(changed);
 });

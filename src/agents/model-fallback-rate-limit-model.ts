@@ -1,7 +1,9 @@
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { getPluginExecutionFrame } from "../plugins/plugin-instance-invocation.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
-import { getPluginRuntimeLoadContextState } from "../plugins/runtime/load-context-state.js";
+import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { resolveConfiguredProviderConfig } from "./embedded-agent-runner/model.configured-overrides.js";
 import { normalizeConfiguredProviderModel } from "./embedded-agent-runner/model.registry-resolution.js";
@@ -23,11 +25,18 @@ export function resolveFallbackRateLimitModel(lookup: {
       : lookup.cfg && isDeeplyFrozenPlainData(lookup.cfg)
         ? lookup.cfg
         : undefined;
-  const context = getPluginRuntimeLoadContextState(getPluginRegistryForContext() ?? undefined);
-  let models = config && context?.fallbackRateLimitModels?.get(config);
-  if (config && context?.fallbackRateLimitModels && !models) {
+  const context = getPluginRuntimeLoadContext(getPluginRegistryForContext() ?? undefined);
+  const scope = getPluginExecutionFrame()?.metadataScope;
+  const metadata = scope ? scope.snapshot : getGatewayPluginMetadataSnapshot();
+  // A scoped inspection can select another inventory without replacing the active registry.
+  const routes =
+    metadata && metadata === context?.metadataSnapshot
+      ? context.fallbackRateLimitModels
+      : undefined;
+  let models = config && routes?.get(config);
+  if (config && routes && !models) {
     models = new Map();
-    context.fallbackRateLimitModels.set(config, models);
+    routes.set(config, models);
   }
   const key = modelKey(lookup.provider, lookup.modelId);
   if (models?.has(key)) {

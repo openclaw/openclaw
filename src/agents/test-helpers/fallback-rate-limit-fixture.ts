@@ -13,6 +13,7 @@ import { ModelRegistry } from "../sessions/model-registry.js";
 export function createFallbackRateLimitFixture(
   baseUrl = "https://synthetic.invalid/v1",
   loadPlugins = false,
+  transportSuffix = "transport",
 ) {
   const providers = ["synthetic-first", "synthetic-second", "synthetic-third"];
   const models = ["primary", "backup", "last"];
@@ -70,7 +71,7 @@ export function createFallbackRateLimitFixture(
           id,
           configSchema: { type: "object", properties: { fixture: { type: "string" } } },
           registration: `api.registerProvider({ id: ${JSON.stringify(id)}, label: "Synthetic", auth: [],
-      normalizeTransport: ({ api, baseUrl }) => ({ api, baseUrl: baseUrl.endsWith("/transport") ? baseUrl : baseUrl + "/transport" }),
+      normalizeTransport: ({ api, baseUrl }) => ({ api, baseUrl: baseUrl.endsWith(${JSON.stringify("/" + transportSuffix)}) ? baseUrl : baseUrl + ${JSON.stringify("/" + transportSuffix)} }),
       normalizeResolvedModel: ({ model }) => ({ ...model, id: model.id + "-wire" }) });`,
         }),
       )
