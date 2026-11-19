@@ -10,13 +10,12 @@ import {
   readMemoryFile,
   type MemoryWorkspaceFiles,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { readAgentMemoryFile } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getMemoryWorkspaceMaintenance,
-  listWorkspaceMemoryFiles,
-  readWorkspaceText,
-} from "../memory-workspace-files.js";
+  readAgentMemoryFile,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { listWorkspaceMemoryFiles, readWorkspaceText } from "../memory-workspace-files.js";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import type { MemoryIndexDatabase } from "./manager-database-context.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";

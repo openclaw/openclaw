@@ -14,6 +14,7 @@ import {
   supportedBundledFacadeSdkEntrypoints,
 } from "../../../scripts/lib/plugin-sdk-entries.mts";
 import * as memoryCoreRuntime from "../../plugin-sdk/memory-core-host-runtime-core.js";
+import * as memoryFilesRuntime from "../../plugin-sdk/memory-core-host-runtime-files.js";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import {
   listGitTrackedFiles,
@@ -583,8 +584,12 @@ describe("plugin-sdk package contract guardrails", () => {
     expect(ssrfRuntime).not.toHaveProperty("fetchConfiguredLocalOriginWithSsrFGuard");
   });
 
-  it("keeps memory provenance mutation out of the packaged Memory Core facade", () => {
-    expect(memoryCoreRuntime).not.toHaveProperty("recordMemoryArtifactWriteProvenance");
+  it("keeps raw provenance mutation behind the core-owned Memory publisher", () => {
+    for (const facade of [memoryCoreRuntime, memoryFilesRuntime]) {
+      expect(facade).not.toHaveProperty("recordMemoryArtifactWriteProvenance");
+      expect(facade).not.toHaveProperty("clearMemoryArtifactProvenance");
+    }
+    expect(memoryFilesRuntime.commitMemoryContent).toBeTypeOf("function");
   });
 
   it("keeps bundled plugin SDK compatibility subpaths explicitly classified", () => {

@@ -20,7 +20,7 @@ import {
   assertMemoryShadowIdentity,
   readMemoryShadowIdentity,
 } from "./memory/manager-shadow-task.js";
-import { extractPromotionKeys } from "./short-term-promotion-memory-write.js";
+import { extractPromotionKeys } from "./short-term-promotion-markers.js";
 
 export type { MemoryEntryOrigin };
 

@@ -6,6 +6,7 @@ import {
   createWorkspaceMemoryFileClient,
   registerAgentWorkspaceAccess,
 } from "openclaw/plugin-sdk/agent-workspace-runtime";
+import { commitMemoryContent } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveBootstrapContextForRun } from "../../../src/agents/bootstrap-files.js";
 import {
@@ -23,7 +24,6 @@ import { withStateDirEnv } from "../../../src/test-helpers/state-dir-env.js";
 import { serveMemoryFiles } from "./remote/memory-files-worker.js";
 import { createMemoryRuntime } from "./runtime-provider.js";
 import { applyShortTermPromotions } from "./short-term-promotion-apply.js";
-import { commitMemoryContent } from "./short-term-promotion-memory-write.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   createPromotionCandidateForTest,

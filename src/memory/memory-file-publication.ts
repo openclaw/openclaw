@@ -1,31 +1,45 @@
 import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
+import { sha256Hex as hashMemoryContent } from "@openclaw/normalization-core/node-crypto";
+import type { MemoryWorkspaceFiles } from "../../packages/memory-host-sdk/src/host/workspace-files.js";
 import {
-  resolvePathPrefixSync,
-  writeFileWindowFully,
-} from "openclaw/plugin-sdk/file-access-runtime";
-import type { MemoryWorkspaceFiles } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { recordMemoryArtifactWriteProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { sha256Hex as hashMemoryContent } from "openclaw/plugin-sdk/node-crypto-runtime";
-import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
-import { getMemoryWorkspaceMaintenance, readWorkspaceFile } from "./memory-workspace-files.js";
-import { resolveWorkspaceCreationMode } from "./workspace-file-mode.js";
+  getAgentWorkspaceAccess,
+  WorkspaceAccessUnavailableError,
+} from "../agents/workspace-access.js";
+import { extractErrorCode } from "../infra/errors.js";
+import { writeFileWindowFully } from "../infra/file-descriptor.js";
+import { recordMemoryArtifactWriteProvenance } from "./memory-artifact-provenance.js";
 
 type MemoryFileCommit = Parameters<
   NonNullable<MemoryWorkspaceFiles["maintenance"]>["commitContent"]
 >[0];
 
-export function buildPromotionMarker(candidateKey: string): string {
-  return `<!-- openclaw-memory-promotion:${candidateKey} -->`;
+export function resolveWorkspaceCreationMode(
+  configured: MemoryFileCommit["workspaceFileMode"],
+): number {
+  // fs-safe enforces an exact mode. Snapshot this host's umask before any awaited I/O.
+  return configured === undefined
+    ? 0o600
+    : Number.parseInt(configured, 8) & ~process.umask() & 0o666;
 }
 
-export function extractPromotionKeys(content: string): string[] {
-  // Source paths can contain spaces; the comment boundary terminates a key.
-  return [...content.matchAll(/<!--\s*openclaw-memory-promotion:([^\n]*?)\s*-->/giu)]
-    .map((match) => match[1]?.trim())
-    .filter((key): key is string => Boolean(key));
+type MemoryWorkspaceMaintenance = NonNullable<MemoryWorkspaceFiles["maintenance"]>;
+
+export function getMemoryWorkspaceMaintenance(
+  workspaceDir: string,
+): MemoryWorkspaceMaintenance | undefined {
+  const access = getAgentWorkspaceAccess(workspaceDir, "memoryFiles");
+  if (!access?.memoryFiles) {
+    return undefined;
+  }
+  const files = access.memoryFiles.maintenance;
+  if (!files) {
+    throw new WorkspaceAccessUnavailableError("Remote Memory maintenance is unavailable");
+  }
+  return files;
 }
 
 export class MemoryWriteConflictError extends Error {
@@ -82,14 +96,15 @@ export async function resolveMemoryWritePath(
 }
 
 export async function readMemoryContent(filePath: string, workspaceDir?: string): Promise<string> {
-  const bytes = await (
-    workspaceDir ? readWorkspaceFile(workspaceDir, filePath) : fs.readFile(filePath)
-  ).catch((error: unknown) => {
-    if (extractErrorCode(error) === "ENOENT") {
-      return null;
-    }
-    throw error;
-  });
+  const files = workspaceDir ? getMemoryWorkspaceMaintenance(workspaceDir) : undefined;
+  const bytes = await (files ? files.readFile(filePath) : fs.readFile(filePath)).catch(
+    (error: unknown) => {
+      if (extractErrorCode(error) === "ENOENT") {
+        return null;
+      }
+      throw error;
+    },
+  );
   if (bytes === null) {
     return "";
   }
@@ -102,7 +117,7 @@ export async function readMemoryContent(filePath: string, workspaceDir?: string)
 }
 
 export function isAtomicReplacePermissionError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
+  const code = extractErrorCode(error);
   return code === "EACCES" || code === "EPERM" || code === "EEXIST" || code === "EROFS";
 }
 
@@ -143,8 +158,6 @@ async function writeExistingMemoryInPlace(params: {
     await handle.close();
   }
 }
-
-export { hashMemoryContent };
 
 export async function commitMemoryContent(
   params: MemoryFileCommit & { workspaceDir?: string },

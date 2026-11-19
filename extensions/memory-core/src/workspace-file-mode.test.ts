@@ -3,12 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import { createWorkspaceMemoryFileClient } from "openclaw/plugin-sdk/agent-workspace-runtime";
+import { commitMemoryContent } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { afterEach, expect, it, vi } from "vitest";
 import { updateDreamsFile } from "./dreaming-dreams-file.js";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import { serveMemoryFiles } from "./remote/memory-files-worker.js";
 import { appendSessionCorpusText } from "./session-ingestion.js";
-import { commitMemoryContent } from "./short-term-promotion-memory-write.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
