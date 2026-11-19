@@ -22,7 +22,7 @@ final class DashboardOpenClawIDSignIn: NSObject, WKScriptMessageHandlerWithReply
         didReceive message: WKScriptMessage,
         replyHandler: @escaping Reply)
     {
-        guard let owner, message.name == Self.name, message.world === .page,
+        guard let owner, message.name == Self.name, message.world === WKContentWorld.page,
               message.webView === owner.webView, message.frameInfo.isMainFrame,
               owner.isWindowOpen, owner.canDeliverNativeCommands,
               owner.documentHost.hasCurrentBrowserSession,
