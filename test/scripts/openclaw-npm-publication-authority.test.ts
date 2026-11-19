@@ -104,9 +104,7 @@ async function fixture() {
     api[path] = admissionResponse(path);
   }
   api[`contents/scripts/e2e/lib/upgrade-survivor?ref=${f.admission.receipt.request.candidateSha}`] =
-    f.client
-      .getCandidateFileNames()
-      .map((name) => ({ name, path: "scripts/e2e/lib/upgrade-survivor/" + name }));
+    f.client.getCandidateFileNames();
   for (const [path, source] of f.qualificationSources) {
     const bytes = Buffer.from(source);
     api[`contents/${path}?ref=${f.q}`] ??= {
