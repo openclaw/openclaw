@@ -80,7 +80,7 @@ function isOtelSdkDisabled(logger: { warn(message: string): void }): boolean {
 
 function readPositiveOtelNumber(name: string, fallback: number): number {
   const value = otelCore.getNumberFromEnv(name);
-  if (value !== undefined && value <= 0) {
+  if (value !== undefined && (!Number.isFinite(value) || value <= 0)) {
     diag.warn(`${name} (${value}) is invalid, expected number greater than 0, using default.`);
     return fallback;
   }
