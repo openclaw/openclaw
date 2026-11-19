@@ -1,5 +1,7 @@
 import "./schtasks.startup-fallback-mocks.test-support.js";
 import fs from "node:fs/promises";
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect } from "vitest";
 import {
   getWindowsCmdExePath,
@@ -25,6 +27,8 @@ import {
 } from "./schtasks.startup-fallback-fixture.test-support.js";
 import {
   schtasksCalls,
+  schtasksRegistration,
+  resolveStartupFixturePath,
   gatewayServiceProbeHostsMock,
   inspectPortUsageMock,
   writeGatewayScript,
@@ -363,6 +367,55 @@ describe("Scheduled Task activation provenance", () => {
       await expect(installGateway(env)).rejects.toThrow("refusing a direct fallback");
 
       expect(spawn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.for(["running", "stopped"] as const)(
+    "migrates a %s Startup fallback to the Scheduled Task",
+    async (fallback, { env }) => {
+      await writeGatewayScript(env);
+      const startupEntryPath = resolveStartupFixturePath(env);
+      await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
+      await fs.writeFile(startupEntryPath, "@echo off\r\n");
+      let fallbackAlive = fallback === "running";
+      mockProcesses(
+        () => [...(fallbackAlive ? [processEntry(4242)] : []), POWERSHELL_PROCESS],
+        () => {
+          fallbackAlive = false;
+          return makeSpawnSyncResult();
+        },
+      );
+      inspectPortUsageMock.mockImplementation(async (port) => ({
+        port,
+        status: fallbackAlive ? "busy" : "free",
+        listeners: fallbackAlive ? [{ pid: 4242, command: "node.exe" }] : [],
+        hints: [],
+      }));
+      schtasksRegistration.response = {
+        code: 1,
+        stdout: "",
+        stderr: "ERROR: The system cannot find the file specified.",
+      };
+      // While the fallback owns the port, a Scheduler-launched Gateway leaves it in control and exits.
+      const nativeProbe = expectDefined(taskProbe.getMockImplementation(), "native task probe");
+      taskProbe.mockImplementation((...args) => {
+        const probe = nativeProbe(...args);
+        if (probe.status !== 0 || !schtasksCalls.some(([action]) => action === "/Run")) {
+          return probe;
+        }
+        const run = fallbackAlive
+          ? { ...cleanExitTaskSnapshot(), lastRunResult: 78 }
+          : runningTaskSnapshot();
+        return { ...probe, stdout: JSON.stringify({ ...JSON.parse(probe.stdout), ...run }) };
+      });
+
+      await expect(installGateway(env)).resolves.toEqual({
+        scriptPath: resolveTaskScriptPath(env),
+      });
+
+      expect(fallbackAlive).toBe(false);
+      expect(spawn).not.toHaveBeenCalled();
+      await expect(fs.access(startupEntryPath)).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
 });

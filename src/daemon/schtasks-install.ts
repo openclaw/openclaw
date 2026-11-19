@@ -304,6 +304,9 @@ export async function installScheduledTask(
     const { stdout, definitionTransaction } = args;
     const { scriptPath, taskLaunchPath, taskDescription: description } = staged;
     const registration = restoreTask;
+    // The captured Startup Gateway still owns the port, so a Scheduler run now leaves it in
+    // control and exits. The takeover below runs the task after terminating that Gateway.
+    const takeoverOwnsActivation = startupRuntime?.status === "running";
     const activation = await (async (): Promise<ScheduledTaskActivation | "startup-fallback"> => {
       const taskDescription = description ?? "OpenClaw Gateway";
       const taskName = resolveTaskName(activationEnv);
@@ -318,13 +321,15 @@ export async function installScheduledTask(
       ) {
         assertGatewayServiceUpdateCurrent();
         activationAttempted = true;
-        const passwordTaskActivation = await runScheduledTaskOrThrow({
-          taskName,
-          env: activationEnv,
-          scriptPath,
-          allowFallback: false,
-          acceptProcessLaunchEvidence: startupRuntime !== null,
-        });
+        const passwordTaskActivation = takeoverOwnsActivation
+          ? "scheduled-task"
+          : await runScheduledTaskOrThrow({
+              taskName,
+              env: activationEnv,
+              scriptPath,
+              allowFallback: false,
+              acceptProcessLaunchEvidence: startupRuntime !== null,
+            });
         writeFormattedLines(stdout, [
           { label: "Updated task script", value: scriptPath },
           {
@@ -442,14 +447,16 @@ export async function installScheduledTask(
       await definitionTransaction?.beforeWrite();
       assertGatewayServiceUpdateCurrent();
       activationAttempted = true;
-      const taskActivation = await runScheduledTaskOrThrow({
-        taskName,
-        env: activationEnv,
-        scriptPath,
-        assertCurrent: definitionTransaction?.assertCurrent,
-        allowFallback: definitionTransaction ? false : undefined,
-        acceptProcessLaunchEvidence: startupRuntime !== null,
-      });
+      const taskActivation = takeoverOwnsActivation
+        ? "scheduled-task"
+        : await runScheduledTaskOrThrow({
+            taskName,
+            env: activationEnv,
+            scriptPath,
+            assertCurrent: definitionTransaction?.assertCurrent,
+            allowFallback: definitionTransaction ? false : undefined,
+            acceptProcessLaunchEvidence: startupRuntime !== null,
+          });
       // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
       writeFormattedLines(stdout, [
         {
