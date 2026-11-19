@@ -54,7 +54,7 @@ export const recoveryCleanupStep = () => ({
   // The summary comes first; one line per removed or kept item follows.
   diagnostics: expect.arrayContaining([
     expect.stringMatching(
-      /^Update backup cleanup removed [1-9]\d* items? and freed .+, [1-9]\d* bytes\./,
+      /^Update backup cleanup removed [1-9]\d* items? \([1-9]\d* logical bytes, .+\)\./,
     ),
   ]),
 });

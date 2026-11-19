@@ -90,8 +90,11 @@ export function applyUpdateRunStep(
       record.status === "failed" ||
       record.status === "rolled-back") &&
     step.status === "completed" &&
-    // The cleanup report: its completion, warning, summary and numbered item lines.
-    /^(?:(?:warning|diagnostic):)?recovery-artifact-cleanup(?::\d+)?$/u.test(step.step)
+    [
+      "recovery-artifact-cleanup",
+      "warning:recovery-artifact-cleanup",
+      "diagnostic:recovery-artifact-cleanup",
+    ].includes(step.step)
   ) {
     upsertStep(record, step);
     return;

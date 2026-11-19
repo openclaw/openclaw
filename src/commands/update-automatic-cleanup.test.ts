@@ -933,9 +933,15 @@ it("retires a failed run's capture after a later verified update, and reruns cle
     finishUpdateRun(failed, { status: "rolled-back" }, { env });
   }
   const { runId, directory } = capturedRun(now);
+  // An unreadable manifest makes the first cleanup warn; it is gone before the rerun.
+  const unreadable = path.join(resolveSessionSqliteMigrationRunsDir(env), "unreadable.json");
+  fs.mkdirSync(path.dirname(unreadable), { recursive: true });
+  fs.writeFileSync(unreadable, "{");
   // Cleanup runs before the Gateway's health verification is recorded.
-  await complete(runId, now + 1_000);
+  const first = (await complete(runId, now + 1_000)).steps.at(-1);
+  expect(first?.advisory?.message).toContain("unreadable-manifest");
   expect([failedCapture, directory].map(fs.existsSync)).toEqual([true, true]);
+  fs.unlinkSync(unreadable);
   {
     using clock = vi.spyOn(Date, "now");
     clock.mockReturnValue(now + 30_000);
@@ -944,4 +950,19 @@ it("retires a failed run's capture after a later verified update, and reruns cle
   const cleanup = await automaticallyCleanUpdateRecovery(runId, env);
   expect(cleanup?.advisory).toBeUndefined();
   expect([failedCapture, directory].map(fs.existsSync)).toEqual([false, false]);
+  // The run record now holds only the rerun's report: no earlier line or warning survives.
+  const report = getUpdateRun(runId, { env })!.steps.filter((step) =>
+    step.step.includes("recovery-artifact-cleanup"),
+  );
+  expect(report.map((step) => step.step).toSorted()).toEqual([
+    "diagnostic:recovery-artifact-cleanup",
+    "recovery-artifact-cleanup",
+    "warning:recovery-artifact-cleanup",
+  ]);
+  expect(report.find((step) => step.step.startsWith("diagnostic:"))?.detail).toBe(
+    cleanup?.diagnostics?.[0],
+  );
+  expect(report.find((step) => step.step.startsWith("warning:"))?.detail).toMatch(
+    /^An earlier cleanup warning was resolved by a later cleanup\. Update backup cleanup removed 2 items/,
+  );
 });

@@ -9,6 +9,10 @@ import { readSessionSqliteMigrationManifest } from "../infra/session-sqlite-migr
 import { discoverUpdateStateSchemaInspectionInProcess } from "../infra/update-candidate-state.js";
 import { createUpdateDatabaseBackupInProcess } from "../infra/update-database-backup.js";
 import { restoreUpdateDatabaseBackup } from "../infra/update-database-restore.js";
+import {
+  displacedDatabasePath,
+  writeDisplacedDatabaseReceipts,
+} from "../infra/update-displaced-database-receipt.js";
 import { createRetainedUpdateRecovery } from "../infra/update-retained-recovery.test-support.js";
 import {
   createUpdateRun,
@@ -30,6 +34,8 @@ import {
   withOpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { recordDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
+import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
+import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
 afterEach(() => {
@@ -71,31 +77,35 @@ function startRun(state: OpenClawTestState, at: number) {
   return createUpdateRun({ trigger: "cli" }, { env: state.env }).runId;
 }
 
-/** The Doctor of update `updateRunId` takes its pre-migration backup, as the producer does. */
-async function doctorBackup(state: OpenClawTestState, database: string, updateRunId?: string) {
+/** The Doctor of update `updateRunId` takes its pre-migration backups, one manifest per run. */
+async function doctorBackups(
+  state: OpenClawTestState,
+  databases: readonly string[],
+  updateRunId?: string,
+) {
   await closeOpenClawAgentDatabasesAsync(state.stateDir);
   await closeOpenClawStateDatabaseAsync();
   const backupId = randomUUID();
-  const backup = `${database}.pre-startup-migration-${backupId}.bak`;
+  const inventory = databases.map((database) => ({
+    path: database,
+    identity: fs.statSync(database, { bigint: true }),
+    archivePath: `${database}.pre-startup-migration-${backupId}.bak`,
+  }));
   await withDoctorSqliteMaintenanceLock({
     env: state.env,
     operation: "fixture migration",
     run: () => {
-      fs.copyFileSync(database, backup);
-      recordDoctorMigrationBackups(
-        updateRunId ? { ...state.env, OPENCLAW_UPDATE_RUN_ID: updateRunId } : state.env,
-        backupId,
-        [
-          {
-            path: database,
-            identity: fs.statSync(database, { bigint: true }),
-            archivePath: backup,
-          },
-        ],
-      );
+      for (const { path: database, archivePath } of inventory) {
+        fs.copyFileSync(database, archivePath);
+      }
+      const env = updateRunId ? { ...state.env, OPENCLAW_UPDATE_RUN_ID: updateRunId } : state.env;
+      recordDoctorMigrationBackups(env, backupId, inventory);
     },
   });
-  return backup;
+  return inventory.map(({ archivePath }) => archivePath);
+}
+async function doctorBackup(state: OpenClawTestState, database: string, updateRunId?: string) {
+  return (await doctorBackups(state, [database], updateRunId))[0]!;
 }
 
 /** End a run through the CLI terminal path; it runs the automatic cleanup. */
@@ -224,37 +234,12 @@ it("removes a rolled-back update's backups after a later verified update and kee
     expect(cleanup?.diagnostics).toContainEqual(expect.stringContaining(`Kept ${legacy} (`));
     expect(cleanup?.advisory).toBeUndefined();
     const [summary, ...lines] = cleanup?.diagnostics ?? [];
-    expect(summary).toContain(`freed ${formatDiskSpaceBytes(freed)}, ${freed} bytes.`);
+    expect(summary).toContain(`(${freed} logical bytes, ${formatDiskSpaceBytes(freed)}).`);
     for (const file of [unmanifested, cron, unreceipted, foreignRun]) {
       expect(lines).toContainEqual(expect.stringContaining(`Kept: not provably ours: ${file} (`));
     }
     expect(lines.join("\n")).not.toContain(userBackup + " ");
     expect(summary).toContain("openclaw triage");
-  });
-});
-
-it("keeps the newest intact backup set after a failure and releases older failed sets", async () => {
-  await withState(async (state) => {
-    const now = Date.now();
-    const failedRunWithBackup = async (at: number) => {
-      const runId = startRun(state, at);
-      const backup = await doctorBackup(state, agentPath(state), runId);
-      finishUpdateRun(runId, { status: "failed" }, { env: state.env });
-      return { runId, backup };
-    };
-    const oldest = await failedRunWithBackup(now);
-    const older = await failedRunWithBackup(now + 30_000);
-    // The newest set changed after it was recorded, so it cannot stand in for older sets.
-    const newest = startRun(state, now + 60_000);
-    const newestBackup = await doctorBackup(state, agentPath(state), newest);
-    fs.appendFileSync(newestBackup, Buffer.alloc(4096));
-    const cleanup = await finish(state, newest, now + 61_000, "failed");
-    expect([oldest.backup, older.backup, newestBackup].map((file) => fs.existsSync(file))).toEqual([
-      false,
-      true,
-      true,
-    ]);
-    expect(cleanup?.diagnostics).toContainEqual(expect.stringContaining(`Kept ${older.backup} (`));
   });
 });
 
@@ -288,12 +273,15 @@ it("keeps backups a pending recovery or an unfinished run references after a ver
       true,
       true,
     ]);
-    expect(cleanup?.diagnostics).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining(`Kept ${pendingBackup} (`),
-        expect.stringContaining(`Kept ${unfinishedBackup} (`),
-      ]),
-    );
+    // Each is kept for its own reason, named in the report.
+    const kept = (file: string) =>
+      cleanup?.diagnostics?.filter((line) => line.startsWith(`Kept ${file} (`));
+    expect(kept(pendingBackup)).toEqual([
+      expect.stringMatching(/\): a pending update recovery needs it\.$/u),
+    ]);
+    expect(kept(unfinishedBackup)).toEqual([
+      expect.stringMatching(/\): its update run has not finished\.$/u),
+    ]);
   });
 });
 
@@ -338,3 +326,127 @@ it("keeps a displaced database that changed after the rollback recorded it, with
     expect(cleanup?.advisory?.message).toContain(`${main} (displaced-database-changed`);
   });
 });
+
+type State = "intact" | "changed" | "missing";
+/** Per database: no backup, or a Doctor backup or a rollback's moved-aside family, and its fate. */
+type Copy = "none" | `${"doctor" | "displaced"}:${State}`;
+type RunSpec = { outcome: "verified" | "failed" | "unfinished"; pending: boolean; copies: Copy[] };
+
+/** Deterministic scenarios: several runs, each with a per-database backup state and outcome. */
+function scenario(seed: number): RunSpec[] {
+  let value = seed;
+  const next = (n: number) => {
+    value = (Math.imul(value ^ (value >>> 15), 2246822507) + 0x9e3779b9) >>> 0;
+    return value % n;
+  };
+  const copy = (): Copy =>
+    next(4) === 0
+      ? "none"
+      : `${next(2) ? "doctor" : "displaced"}:${(["intact", "changed", "missing"] as const)[next(3)]!}`;
+  return Array.from({ length: 2 + next(2) }, () => {
+    const outcome = (["verified", "failed", "failed", "failed", "unfinished"] as const)[next(5)]!;
+    return { outcome, pending: outcome === "failed" && next(4) === 0, copies: [copy(), copy()] };
+  });
+}
+
+/** A rollback moved this database family aside: main file plus WAL, with the real receipt. */
+async function displacedFamily(database: string, runId: string) {
+  const target = displacedDatabasePath(database, runId);
+  fs.copyFileSync(database, target);
+  fs.writeFileSync(`${target}-wal`, "committed frames");
+  await writeDisplacedDatabaseReceipts(
+    runId,
+    [target, `${target}-wal`].map((file) => ({
+      databasePath: database,
+      target: file,
+      identity: fs.statSync(file, { bigint: true }),
+    })),
+  );
+  return target;
+}
+
+it.each([
+  // Each newer run is intact only for the other database, or keeps only a WAL member.
+  ...(
+    [
+      ["none", "doctor:intact", "doctor:intact", "doctor:changed"],
+      ["none", "displaced:intact", "doctor:intact", "displaced:missing"],
+    ] as const
+  ).map(([a, b, c, d]) => ({
+    name: `newer run intact only for another database (${b}, ${d})`,
+    runs: [
+      { outcome: "failed", pending: false, copies: [a, b] },
+      { outcome: "failed", pending: false, copies: [c, d] },
+    ] as RunSpec[],
+  })),
+  ...Array.from({ length: 20 }, (_, index) => ({
+    name: `seed ${index + 1}`,
+    runs: scenario(index + 1),
+  })),
+])(
+  "keeps an intact backup of every database no verified update superseded ($name)",
+  async ({ runs }) => {
+    await withState(async (state) => {
+      const now = Date.now();
+      const databases = [resolveOpenClawStateSqlitePath(state.env), agentPath(state)];
+      const made: { run: number; database: number; file: string; copy: Copy }[] = [];
+      for (const [index, spec] of runs.entries()) {
+        const runId = startRun(state, now + index * 60_000);
+        const doctor = databases.filter((_, d) => spec.copies[d]!.startsWith("doctor"));
+        const files = doctor.length ? await doctorBackups(state, doctor, runId) : [];
+        for (const [d, database] of databases.entries()) {
+          const copy = spec.copies[d]!;
+          if (copy !== "none") {
+            const file = copy.startsWith("doctor")
+              ? files[doctor.indexOf(database)]!
+              : await displacedFamily(database, runId);
+            made.push({ run: index, database: d, file, copy });
+          }
+        }
+        using clock = vi.spyOn(Date, "now");
+        clock.mockReturnValue(now + index * 60_000 + 1_000);
+        if (spec.outcome === "verified") {
+          recordUpdateRunVerification(runId, VERIFIED, { env: state.env });
+          finishUpdateRun(runId, { status: "succeeded" }, { env: state.env });
+        } else if (spec.outcome === "failed") {
+          finishUpdateRun(runId, { status: "failed" }, { env: state.env });
+        }
+        if (spec.pending) {
+          const runtime = { root: state.stateDir, nodePath: process.execPath, version: "1.0.0" };
+          createRetainedUpdateRecovery(
+            { runId, from: { ...runtime, buildId: null }, to: { ...runtime, buildId: null } },
+            { env: state.env },
+          );
+        }
+      }
+      for (const { file, copy } of made) {
+        if (copy.endsWith(":changed")) {
+          fs.appendFileSync(file, Buffer.alloc(4096));
+        } else if (copy.endsWith(":missing")) {
+          fs.unlinkSync(file);
+        }
+      }
+      // Invariant: a database with an intact backup and no verified update from that run on
+      // keeps at least one intact backup.
+      const verifiedFrom = (run: number) =>
+        runs.some((spec, later) => later >= run && spec.outcome === "verified");
+      const intact = (database: number) =>
+        made.filter((b) => b.database === database && b.copy.endsWith(":intact"));
+      const owed = [0, 1].filter((d) => intact(d).some((b) => !verifiedFrom(b.run)));
+      await closeOpenClawAgentDatabasesAsync(state.stateDir);
+      await closeOpenClawStateDatabaseAsync();
+      await retireSessionSqliteRecovery({
+        env: state.env,
+        preview: await inspectSessionSqliteRecovery({ cfg: {}, env: state.env }),
+        readConfig: async () => ({}),
+        confirm: async () => true,
+      });
+      for (const database of owed) {
+        expect(
+          intact(database).some((b) => fs.existsSync(b.file)),
+          `database ${database} lost its last intact backup: ${JSON.stringify(runs)}`,
+        ).toBe(true);
+      }
+    });
+  },
+);

@@ -1201,9 +1201,13 @@ superseded them; otherwise they stay and are listed.
 A cleanup that ran before the update's health verification was recorded runs again
 at the next cleanup point once verification lands.
 
-When the newest update failed or was not verified, cleanup keeps that update's
-backups, because repair may need them, and deletes older sets only while no update
-recovery is pending and no update run is unfinished.
+Without a later verified update, cleanup decides per database, not per run: an older
+backup of a database is deleted only when a newer run left an intact backup of that
+same database (present and unchanged since it was recorded), and only while no update
+recovery is pending and no update run is unfinished. A newer run whose backup of a
+database is damaged, missing, or only partly present (for example a moved-aside WAL
+without its main file) stands in for nothing, so every database with an intact backup
+and no verified update after it keeps at least one intact backup.
 
 Cleanup never deletes:
 
@@ -1218,12 +1222,15 @@ Cleanup never deletes:
 - files outside the state directory, the install root, and the release prefix, or
   any name the updater does not write, such as your own `openclaw.sqlite.bak`.
 
-The update result's `recovery-artifact-cleanup` step lists what was removed with
-its size and the total freed, what was kept and why, and each file kept as
+The update result's `recovery-artifact-cleanup` step lists what was removed with its
+logical size and the total (file lengths; sparse or cloned files can release less disk
+space), what was kept and why, and each file kept as
 `Kept: not provably ours` with its size. To decide about those, ask your agent with
 `openclaw triage`; an unmanifested backup can also be removed with
 `openclaw update cleanup --include-unmanifested <path>`. A deletion that fails is a
 warning on the update and never changes its outcome; the next update retries it.
+The run record keeps the summary line and any warning; a cleanup that runs again after
+late verification replaces them.
 These rules apply when the installed updater or Gateway that finishes the update
 includes them; manifests and receipts written by older builds stay protected.
 

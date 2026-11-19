@@ -1,5 +1,6 @@
-/** What automatic update cleanup removed, freed and kept, in the update result's own words. */
+/** What automatic update cleanup removed and kept, in the update result's own words. */
 import { formatDiskSpaceBytes } from "../infra/disk-space.js";
+import { shellEscape } from "../shared/shell-quote.js";
 import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
 import { NOT_PROVABLY_UPDATER_OWNED_REASONS } from "./update-run-artifact-ownership.js";
 
@@ -25,8 +26,9 @@ const UNVERIFIED_REASONS: ReadonlySet<string> = new Set([
   "historical-recovery-dependencies-unverified",
 ]);
 
+/** File lengths, not allocated blocks: sparse or cloned backups can release less disk. */
 function sizeOf(bytes: number): string {
-  return `${formatDiskSpaceBytes(bytes)}, ${bytes} bytes`;
+  return `${bytes} logical bytes, ${formatDiskSpaceBytes(bytes)}`;
 }
 
 /** Each line is a run-record step, so long lists end with a pointer to the full preview. */
@@ -51,11 +53,11 @@ export function describeAutomaticCleanup(artifacts: readonly RecoveryCleanupArti
     (item) =>
       item.outcome === "protected" && !unproven.includes(item) && !unverified.includes(item),
   );
-  // A partly removed family still freed what it removed.
-  const freed = artifacts.reduce((bytes, item) => bytes + (item.removedBytes ?? 0), 0);
+  // A partly removed family still counts what it removed.
+  const removedBytes = artifacts.reduce((bytes, item) => bytes + (item.removedBytes ?? 0), 0);
   const unprovenBytes = unproven.reduce((bytes, item) => bytes + item.bytes, 0);
   const summary = [
-    `Update backup cleanup removed ${removed.length} ${removed.length === 1 ? "item" : "items"} and freed ${sizeOf(freed)}.`,
+    `Update backup cleanup removed ${removed.length} ${removed.length === 1 ? "item" : "items"} (${sizeOf(removedBytes)}).`,
     kept.length ? `Kept ${kept.length} the updater still needs.` : "",
     unproven.length
       ? `Kept ${unproven.length} not provably created by the updater (${sizeOf(unprovenBytes)}); to decide about them, ask your agent with openclaw triage.`
@@ -69,7 +71,7 @@ export function describeAutomaticCleanup(artifacts: readonly RecoveryCleanupArti
       (item) =>
         `Kept: not provably ours: ${item.path} (${sizeOf(item.bytes)}). Ask your agent with openclaw triage${
           item.reason === "unmanifested-recovery-original"
-            ? `, or remove it yourself with openclaw update cleanup --include-unmanifested ${item.path}`
+            ? `, or remove it yourself with openclaw update cleanup --include-unmanifested ${shellEscape(item.path)}`
             : ""
         }.`,
     ),

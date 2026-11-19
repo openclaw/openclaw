@@ -279,7 +279,7 @@ function printStep(step: Omit<UpdateStepResult, "cwd">): void {
   for (const finding of step.doctorLintFindings ?? []) {
     defaultRuntime.log(`    ${formatUpdateDoctorLintFinding(finding)}`);
   }
-  // Cleanup states what it removed, freed and kept even when nothing needs attention.
+  // Cleanup states what it removed and kept even when nothing needs attention.
   if (step.name === AUTOMATIC_RECOVERY_CLEANUP_STEP && step.diagnostics?.[0]) {
     defaultRuntime.log(`    ${theme.muted(step.diagnostics[0])}`);
   }

@@ -77,6 +77,10 @@ export function scanDisplacedDatabases(stateDir: string, scan?: RecoveryInventor
         continue;
       }
       const receiptPath = path.join(directory, entry.name);
+      // Status and read-only Doctor share one metadata budget; an unread receipt proves nothing.
+      if (scan && !scan.metadata(receiptPath)) {
+        continue;
+      }
       const receipt = readDisplacedDatabaseReceipt(receiptPath);
       const expectedPath = path.join(directory, parsed.databaseName);
       // The receipt must sit at the one name its own contents imply.
@@ -134,12 +138,20 @@ function matchesReceipt(
   );
 }
 
-/** A receipted family whose every present file is still the one the rollback recorded. */
+/**
+ * A complete receipted family: its main database and every file the rollback recorded are
+ * present and unchanged, and nothing unrecorded sits beside them. Only such a family can
+ * stand in for an older copy of the same database.
+ */
 export function isIntactDisplacedFamily(family: Family): boolean {
-  const listed = new Map(family.receipt?.files.map((file) => [file.path, file]) ?? []);
+  const receipt = family.receipt;
+  if (!receipt) {
+    return false;
+  }
+  const listed = new Map(receipt.files.map((file) => [file.path, file]));
   return (
-    family.receipt !== undefined &&
-    family.files.size > 0 &&
+    listed.has(displacedDatabasePath(receipt.databasePath, receipt.runId)) &&
+    family.files.size === listed.size &&
     [...family.files].every(([filePath, stat]) => matchesReceipt(stat, listed.get(filePath)))
   );
 }
@@ -182,7 +194,7 @@ export function classifyDisplacedDatabases(
     }
     Object.assign(
       artifact,
-      ownership?.classify(item.runId) ?? {
+      ownership?.classify(item.runId, item.receipt.databasePath) ?? {
         outcome: "protected",
         reason: "unreadable-update-history",
       },

@@ -47,8 +47,8 @@ const cleanup = {
   durationMs: 12,
   exitCode: 0,
   diagnostics: [
-    "Update backup cleanup removed 1 item and freed 0 MiB, 400 bytes.",
-    "Removed /fixture/state/state/openclaw.sqlite.pre-startup-migration-1.bak (0 MiB, 400 bytes).",
+    "Update backup cleanup removed 1 item (400 logical bytes, 0 MiB).",
+    "Removed /fixture/state/state/openclaw.sqlite.pre-startup-migration-1.bak (400 logical bytes, 0 MiB).",
   ],
 };
 // Releases before per-item reporting summarized cleanup in one sentence.

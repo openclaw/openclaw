@@ -1207,7 +1207,7 @@ for (const { durationMs, diagnostics, ...step } of cleanups) {
   // Earlier releases reported one fixed sentence.
   assert(Array.isArray(diagnostics) && diagnostics.length >= 1 &&
     diagnostics.every((line) => typeof line === "string") &&
-    (/^Update backup cleanup removed \d+ items? and freed [^,]+, \d+ bytes\./.test(diagnostics[0]) ||
+    (/^Update backup cleanup removed \d+ items? \(\d+ logical bytes, [^)]+\)\./.test(diagnostics[0]) ||
       (diagnostics.length === 1 &&
         /^Recovery cleanup removed \d+ files \(\d+ logical bytes\); protected recovery artifacts were retained\.$/.test(diagnostics[0]))),
     "second update omitted its verified recovery cleanup outcome");

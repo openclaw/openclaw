@@ -59,8 +59,16 @@ export async function recordAutomaticRecoveryCleanup(
     return undefined;
   }
   try {
+    // The run record keeps one fixed report: the summary and the warning. A rerun after late
+    // verification overwrites both, so no line from the earlier report survives it; the
+    // per-item lines stay in the update result and `openclaw update cleanup --dry-run`.
+    const [completed, ...steps] = updateRunStepsFromResultStep(result);
+    const warningStep = `warning:${AUTOMATIC_RECOVERY_CLEANUP_STEP}`;
+    const details = steps.filter(
+      (step) =>
+        step.step === warningStep || step.step === `diagnostic:${AUTOMATIC_RECOVERY_CLEANUP_STEP}`,
+    );
     // Record completion last: a crash before diagnostics settle leaves a safe retry.
-    const [completed, ...details] = updateRunStepsFromResultStep(result);
     for (const step of [...details, { ...completed!, endedAtMs: Date.now() }]) {
       const saved = await recordUpdateRunStepAsync(runId, step, { env, assertCurrent });
       if (!saved) {

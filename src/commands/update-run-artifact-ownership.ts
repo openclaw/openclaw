@@ -1,4 +1,5 @@
 /** Release rules for backups an update run recorded as its own; the run outcome decides. */
+import { canonicalMigrationFilePath } from "../infra/session-sqlite-migration-manifest.js";
 import { getUpdateRun } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { isUpdateRecoveryPending } from "../infra/update-run-recovery-schema.js";
@@ -20,17 +21,26 @@ export const NOT_PROVABLY_UPDATER_OWNED_REASONS: ReadonlySet<string> = new Set([
 ]);
 
 export type UpdateRunArtifactOwnership = {
-  classify(runId: string): Classification;
+  classify(runId: string, database: string): Classification;
 };
+
+/** One updater backup of one database that is still exactly what its record describes. */
+export type IntactUpdateBackup = { runId: string; database: string };
 
 /**
  * Owner-approved policy: a verified successful update releases its own backups and every
- * backup of an earlier finished run. Without one, the newest run's set is kept and older
- * sets go only while no recovery is pending and no run is unfinished.
+ * backup of a run that finished before it started. Without one, backups are released per
+ * database, never per run.
+ *
+ * Invariant: for every database that had an intact updater backup with no verified
+ * successful update after it, at least one intact backup of that database remains. An
+ * older backup of database X is released only by a verified update after it, or by an
+ * intact backup of the same X from a run that started after it finished. A run with a
+ * damaged or partial set supersedes nothing for the databases it does not intactly cover.
  */
 export function createUpdateRunArtifactOwnership(
   history: History | undefined,
-  ownerRunIds: Iterable<string>,
+  intactBackups: readonly IntactUpdateBackup[],
   env: NodeJS.ProcessEnv,
 ): UpdateRunArtifactOwnership {
   const runs = new Map<string, UpdateRunRecord | undefined>(
@@ -54,19 +64,17 @@ export function createUpdateRunArtifactOwnership(
     laterStartedAt > run.createdAtMs &&
     laterStartedAt >= run.finishedAtMs;
   const verifiedAfter = history?.latestVerifiedSuccessStartedAt ?? 0;
-  const unverified = [...new Set(ownerRunIds)]
-    .map(lookup)
-    .filter(
-      (run): run is UpdateRunRecord =>
-        run !== undefined &&
-        run.finishedAtMs !== null &&
-        !isVerifiedSuccessfulUpdate(run) &&
-        !supersededBy(run, verifiedAfter),
-    )
-    .toSorted((a, b) => b.createdAtMs - a.createdAtMs);
-  const newest = unverified[0];
+  // Start time of the newest run holding an intact backup of each database.
+  const newestIntact = new Map<string, number>();
+  for (const backup of intactBackups) {
+    const run = lookup(backup.runId);
+    if (run) {
+      const key = canonicalMigrationFilePath(backup.database);
+      newestIntact.set(key, Math.max(newestIntact.get(key) ?? 0, run.createdAtMs));
+    }
+  }
   return {
-    classify(runId) {
+    classify(runId, database) {
       if (!history) {
         return { outcome: "protected", reason: "unreadable-update-history" };
       }
@@ -86,7 +94,7 @@ export function createUpdateRunArtifactOwnership(
       if (supersededBy(run, verifiedAfter)) {
         return { outcome: "candidate", reason: "superseded-by-verified-update" };
       }
-      if (!newest || !supersededBy(run, newest.createdAtMs)) {
+      if (!supersededBy(run, newestIntact.get(canonicalMigrationFilePath(database)) ?? 0)) {
         return { outcome: "protected", reason: "newest-unverified-update-backup" };
       }
       if (history.hasPendingRecovery || history.hasUnfinishedRun) {

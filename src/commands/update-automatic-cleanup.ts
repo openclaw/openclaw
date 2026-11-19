@@ -15,6 +15,8 @@ import { retireOwnedSessionSqliteRecovery } from "./doctor-session-sqlite-retire
 import { describeAutomaticCleanup } from "./update-automatic-cleanup-report.js";
 import { isUnchangedUpdate, isVerifiedSuccessfulUpdate } from "./update-capture-cleanup.js";
 
+const RESOLVED_WARNING = "An earlier cleanup warning was resolved by a later cleanup.";
+
 /** Called only inside the selected state owner's lifetime, after durable completion. */
 export async function cleanupCompletedUpdateRecovery(
   runId: string,
@@ -49,7 +51,10 @@ export async function cleanupCompletedUpdateRecovery(
         cwd: "",
         durationMs: 0,
         exitCode: 0,
-        ...(message ? { advisory: { kind: "recoverable-maintenance", message } } : {}),
+        // A resolution note replaced an earlier warning; it is not a warning itself.
+        ...(message && !message.startsWith(RESOLVED_WARNING)
+          ? { advisory: { kind: "recoverable-maintenance", message } }
+          : {}),
         ...(detail ? { diagnostics: [detail] } : {}),
       };
     }
@@ -93,6 +98,12 @@ export async function cleanupCompletedUpdateRecovery(
       { assertCurrent },
     );
     const { diagnostics, warning } = describeAutomaticCleanup(report.artifacts);
+    // A rerun replaces the earlier report; an earlier warning it no longer has is resolved.
+    const resolved =
+      !warning &&
+      run.steps.some((step) => step.step === `warning:${AUTOMATIC_RECOVERY_CLEANUP_STEP}`)
+        ? [`${RESOLVED_WARNING} ${diagnostics[0]}`]
+        : undefined;
     // A failed update's own result already names what it keeps; add only real effects.
     if (
       !ownCaptureReleased &&
@@ -109,6 +120,7 @@ export async function cleanupCompletedUpdateRecovery(
       durationMs: Math.max(0, Date.now() - startedAt),
       exitCode: 0,
       diagnostics,
+      ...(resolved ? { warnings: resolved } : {}),
       // Failed deletions and unverifiable state are warnings; policy keeps are diagnostics.
       ...(warning
         ? { advisory: { kind: "recoverable-maintenance" as const, message: warning } }

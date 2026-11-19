@@ -46,6 +46,7 @@ import {
 } from "./update-displaced-database-cleanup.js";
 import {
   createUpdateRunArtifactOwnership,
+  type IntactUpdateBackup,
   type UpdateRunArtifactOwnership,
 } from "./update-run-artifact-ownership.js";
 
@@ -73,8 +74,8 @@ export function collectRecoveryInventory(params: {
   env: NodeJS.ProcessEnv;
   scan?: RecoveryInventoryScan;
   readHistory?: boolean;
-  /** Runs that own other update backups, so the newest unverified set is chosen across kinds. */
-  ownerRunIds?: readonly string[];
+  /** Intact update backups of other kinds, so successors are chosen per database across kinds. */
+  intactBackups?: readonly IntactUpdateBackup[];
 }) {
   const entries = (directory: string) =>
     params.scan?.directory(directory) ?? fs.readdirSync(directory, { withFileTypes: true });
@@ -187,7 +188,7 @@ export function collectRecoveryInventory(params: {
   if (
     params.readHistory !== false &&
     ([...references.values()].some((refs) => refs.some((ref) => ref.target.databaseIdentity)) ||
-      params.ownerRunIds?.length)
+      params.intactBackups?.length)
   ) {
     const history = readCompletedUpdateHistory(params.env);
     supersededBefore = Math.max(
@@ -197,23 +198,32 @@ export function collectRecoveryInventory(params: {
     ownership = createUpdateRunArtifactOwnership(
       history,
       [
-        // Only an intact set can stand in for older ones; a changed or missing backup
-        // never makes an older set "superseded".
-        ...[...references.entries()]
-          .filter(([archivePath, refs]) => {
-            const current = statMigrationPath(archivePath, { bigint: true });
-            const identity = refs[0]?.move.artifact?.identity;
-            return (
-              current?.isFile() === true &&
-              identity !== undefined &&
-              (["ino", "mtimeNs", "size"] as const).every(
-                (key) => String(current[key]) === String(identity[key]),
-              )
+        // Each intact backup stands in only for its own database; a changed or missing
+        // backup never makes an older backup of any database "superseded".
+        ...[...references.entries()].flatMap(([archivePath, refs]) => {
+          const current = statMigrationPath(archivePath, { bigint: true });
+          const identity = refs[0]?.move.artifact?.identity;
+          const intact =
+            current?.isFile() === true &&
+            current.nlink === 1n &&
+            identity !== undefined &&
+            refs.every(
+              (ref) =>
+                ref.move.artifact !== undefined &&
+                sameMigrationArtifact(ref.move.artifact.identity, identity),
+            ) &&
+            (["ino", "mtimeNs", "size"] as const).every(
+              (key) => String(current[key]) === String(identity[key]),
             );
-          })
-          .flatMap(([, refs]) => refs.map(updateRunIdOf)),
-        ...(params.ownerRunIds ?? []),
-      ].filter((runId): runId is string => runId !== undefined),
+          return intact
+            ? refs.flatMap((ref) => {
+                const runId = updateRunIdOf(ref);
+                return runId ? [{ runId, database: ref.target.sqlitePath }] : [];
+              })
+            : [];
+        }),
+        ...(params.intactBackups ?? []),
+      ],
       params.env,
     );
   }
@@ -254,7 +264,7 @@ export function collectRecoveryInventory(params: {
     // inode-based rules never apply to it, because retirement skips that live-file check.
     const runOutcome = ownerRunIds.some((runId) => runId !== undefined)
       ? ownerRunIds.length === 1
-        ? (ownership?.classify(ownerRunIds[0]!) ?? {
+        ? (ownership?.classify(ownerRunIds[0]!, refs[0]!.target.sqlitePath) ?? {
             outcome: "protected" as const,
             reason: "unreadable-update-history",
           })
@@ -576,8 +586,10 @@ function readUpdateCleanupInventory(params: {
   const families = scanDisplacedDatabases(stateDir, params.scan);
   const inventory = collectRecoveryInventory({
     ...params,
-    ownerRunIds: families.flatMap((family) =>
-      isIntactDisplacedFamily(family) ? [family.runId] : [],
+    intactBackups: families.flatMap((family) =>
+      isIntactDisplacedFamily(family) && family.receipt
+        ? [{ runId: family.receipt.runId, database: family.receipt.databasePath }]
+        : [],
     ),
   });
   const captures = collectUpdateCaptureInventory({
