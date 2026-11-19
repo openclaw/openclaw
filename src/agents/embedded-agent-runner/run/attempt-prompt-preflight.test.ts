@@ -57,8 +57,15 @@ function makeToolResultMessage(text: string): AgentMessage {
   } as AgentMessage;
 }
 
+const makeToolCall = () =>
+  makeAgentAssistantMessage({
+    content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+    stopReason: "toolUse",
+  });
+
 function createSessionManagerWithMessage(message: AgentMessage): SessionManager {
   const sessionManager = SessionManager.inMemory();
+  sessionManager.appendMessage(makeToolCall());
   sessionManager.appendMessage(message as Parameters<typeof sessionManager.appendMessage>[0]);
   return sessionManager;
 }
@@ -340,7 +347,7 @@ describe("attempt prompt preflight", () => {
 
   it("does not persist heuristic pre-prompt tool-result truncation", async () => {
     const toolResult = makeToolResultMessage("alpha beta gamma delta epsilon ".repeat(2_200));
-    const messages = [toolResult];
+    const messages = [makeToolCall(), toolResult];
     const reserveTokens = 2_000;
     const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
       messages,
@@ -375,6 +382,6 @@ describe("attempt prompt preflight", () => {
     expect(result.promptError).toBeNull();
     expect(result.promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
-    expect(sessionManager.buildSessionContext().messages).toEqual([toolResult]);
+    expect(sessionManager.buildSessionContext().messages).toMatchObject(messages);
   });
 });

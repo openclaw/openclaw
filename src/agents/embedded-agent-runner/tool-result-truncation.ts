@@ -1138,7 +1138,20 @@ function buildToolResultReplacementPlan(params: {
   maxChars: number;
   aggregateBudgetChars: number;
   protectTrailingToolResults?: boolean;
+  preserveSentToolResults?: boolean;
 }) {
+  // The last assistant response separates consumed output from the current tool batch.
+  // With no assistant boundary, do not assume orphan tool results are unsent.
+  const lastAssistant = params.preserveSentToolResults
+    ? params.branch.findLastIndex(
+        (entry) => entry.type === "message" && entry.message?.role === "assistant",
+      )
+    : -1;
+  const eligibleStart = params.preserveSentToolResults
+    ? lastAssistant < 0
+      ? params.branch.length
+      : lastAssistant + 1
+    : 0;
   const protectedEntryIds = params.protectTrailingToolResults
     ? getTrailingToolResultEntryIds(params.branch)
     : undefined;
@@ -1146,9 +1159,11 @@ function buildToolResultReplacementPlan(params: {
   let totalToolResultChars = 0;
   // Measurements belong to this synchronous plan, never to mutable messages or
   // session projection state. Replacement producers supply the next measurement.
-  const measuredBranch = params.branch.map((entry): MeasuredToolResultBranchEntry => {
+  const measuredBranch = params.branch.map((entry, index): MeasuredToolResultBranchEntry => {
     const textLength =
-      entry.type === "message" && entry.message ? getToolResultTextBudget(entry.message) : 0;
+      index >= eligibleStart && entry.type === "message" && entry.message
+        ? getToolResultTextBudget(entry.message)
+        : 0;
     if (textLength > 0) {
       toolResultCount += 1;
       totalToolResultChars += textLength;
@@ -1238,6 +1253,7 @@ function buildRecoveryToolResultReplacementPlan(params: {
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
   protectTrailingToolResults?: boolean;
+  preserveSentToolResults?: boolean;
   projectionState?: ToolResultPromptProjectionState;
 }) {
   const { maxChars, aggregateBudgetChars } = resolveToolResultBudgets(params);
@@ -1254,7 +1270,15 @@ function buildRecoveryToolResultReplacementPlan(params: {
     maxChars,
     aggregateBudgetChars,
   });
+  // A frozen prompt projection may differ from its original transcript bytes.
+  // Do not persist a projection replay as if the preflight planner changed it.
+  const changedIds = params.preserveSentToolResults
+    ? new Set(plan.replacements.map(({ entryId }) => entryId))
+    : undefined;
   const replacements = params.branch.flatMap((entry, index) => {
+    if (changedIds && !changedIds.has(entry.id)) {
+      return [];
+    }
     const finalEntry = plan.branch[index];
     if (
       entry.type !== "message" ||
@@ -1282,12 +1306,14 @@ export function estimateToolResultReductionPotential(params: {
   contextWindowTokens: number;
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
+  preserveSentToolResults?: boolean;
 }) {
   const { maxChars, aggregateBudgetChars } = resolveToolResultBudgets(params);
   const branch = buildToolResultPlanningBranch(params.messages);
 
   const plan = buildToolResultReplacementPlan({
     branch,
+    preserveSentToolResults: params.preserveSentToolResults,
     maxChars,
     aggregateBudgetChars,
   });
@@ -1311,6 +1337,7 @@ export async function truncateOversizedToolResultsInSessionManager(params: {
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
   protectTrailingToolResults?: boolean;
+  preserveSentToolResults?: boolean;
   projectionState?: ToolResultPromptProjectionState;
   sessionFile?: string;
   sessionId?: string;
@@ -1400,6 +1427,7 @@ export function sessionLikelyHasOversizedToolResults(params: {
   messages: AgentMessage[];
   contextWindowTokens: number;
   maxCharsOverride?: number;
+  preserveSentToolResults?: boolean;
 }): boolean {
   const estimate = estimateToolResultReductionPotential(params);
   return estimate.oversizedCount > 0 || estimate.aggregateReducibleChars > 0;

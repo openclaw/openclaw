@@ -1358,6 +1358,57 @@ describe("truncateOversizedToolResultsInSession", () => {
     expect(findAssistant("suppression owner")?.providerReplay).toEqual(suppressionReplay);
   });
 
+  it("trims the pending batch without rewriting canonical or projected sent output", async () => {
+    const dir = sessionDirs.make();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "runtime-sqlite-predicted-pressure";
+    const sessionKey = "agent:main:predicted-pressure";
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await replaceSessionEntry({ sessionKey, storePath }, {
+      sessionFile: formatSqliteSessionFileMarker(scope),
+      sessionId,
+      updatedAt: 10,
+    } as SessionStoreEntry);
+    const firstAssistant = makeAssistantMessage("read the first report");
+    const sent = makeToolResult("prior report 🔧 ".repeat(2_000), "sent_call");
+    const nextAssistant = makeAssistantMessage("read another report");
+    const pending = makeToolResult("fresh output ".repeat(2_000), "pending_call");
+    for (const message of [
+      makeUserMessage("run tools"),
+      firstAssistant,
+      sent,
+      nextAssistant,
+      pending,
+    ]) {
+      await appendTranscriptMessage(scope, { message });
+    }
+    const state = createToolResultPromptProjectionState();
+    const project = (messages: AgentMessage[]) =>
+      truncateOversizedToolResultsInMessages(messages, 128_000, 9_000, 60_000, state).messages;
+    const previous = project([firstAssistant, sent]);
+    expect(previous[1]).not.toEqual(sent);
+    const recover = (preserveSentToolResults: boolean) =>
+      truncateOversizedToolResultsInSessionManager({
+        sessionManager: SessionManager.open(scope),
+        contextWindowTokens: 128_000,
+        maxCharsOverride: 6_000,
+        aggregateMaxCharsOverride: 60_000,
+        projectionState: state,
+        preserveSentToolResults,
+      });
+    const history = () => SessionManager.open(scope).buildSessionContext().messages;
+    const before = history();
+
+    expect(await recover(true)).toMatchObject({ truncated: true, truncatedCount: 1 });
+    const after = history();
+    expect(after.slice(0, 4)).toEqual(before.slice(0, 4));
+    expect(project(after).slice(1, 3)).toEqual(previous);
+    expect(getFirstToolResultText(after.at(-1) as ToolResultMessage)).toContain("truncated");
+
+    expect(await recover(false)).toMatchObject({ truncated: true });
+    expect(history()[2]).not.toEqual(before[2]);
+  });
+
   it("reuses frozen provider projection bytes on the recovery branch", async () => {
     const dir = sessionDirs.make();
     const storePath = path.join(dir, "sessions.json");

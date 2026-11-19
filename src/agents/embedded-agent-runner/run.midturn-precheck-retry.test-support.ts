@@ -178,7 +178,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
-  it("recovers a successor transcript from its own frozen tool projection", async () => {
+  it("replays a successor's frozen tool projection without rewriting its transcript", async () => {
     const { SessionManager } = await import("../sessions/session-manager.js");
     const { retainEmbeddedSessionPromptState, clearEmbeddedSessionPromptStates } =
       await import("./session-prompt-state.js");
@@ -292,11 +292,27 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       if (!successor) {
         throw new Error("expected the successor attempt to populate its projection");
       }
-      // Recovery writes through a separate manager; read its committed branch.
+      // Predicted recovery replays the successor projection, but must not commit
+      // its already-bounded bytes over the original result.
       await successor.manager.reloadPersistedTranscriptAsync();
+      const messages = successor.manager.buildSessionContext().messages;
+      expect(messages.find((message) => message.role === "toolResult")).toMatchObject({
+        content: toolResult.content,
+      });
+      using restored = retainEmbeddedSessionPromptState(successorId);
+      actualTruncation.restoreCacheTtlToolResultProjections(
+        restored.state.toolResults,
+        successor.manager.getToolResultProjectionEntries(),
+      );
       expect(
-        successor.manager
-          .buildSessionContext()
+        actualTruncation
+          .truncateOversizedToolResultsInMessages(
+            messages,
+            200_000,
+            112_000,
+            undefined,
+            restored.state.toolResults,
+          )
           .messages.find((message) => message.role === "toolResult"),
       ).toMatchObject({ content: successor.content });
     } finally {

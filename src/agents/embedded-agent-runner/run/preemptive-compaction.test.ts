@@ -131,6 +131,24 @@ describe("preemptive-compaction", () => {
   const verbosePrompt =
     "user request with distinct content asking for a detailed answer and more context ".repeat(25);
 
+  it("compacts predicted overflow from tool output already included in provider usage", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [
+        makeAssistantHistory("read previous reports"),
+        ...Array.from({ length: 8 }, () => makeToolResultMessage("report contents ".repeat(1_000))),
+        makeProviderAssistant({ promptTokens: 41_000, totalTokens: 41_010 }),
+      ],
+      prompt: "continue",
+      contextTokenBudget: 40_000,
+      reserveTokens: 0,
+    });
+    expect(result).toMatchObject({
+      pressureSource: "provider_context_usage",
+      route: "compact_only",
+      toolResultReducibleChars: 0,
+    });
+  });
+
   it("counts the current system prompt after a provider usage boundary", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages: [

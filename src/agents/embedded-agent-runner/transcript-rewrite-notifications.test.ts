@@ -74,6 +74,15 @@ describe("committed transcript rewrite notifications", () => {
           baseUrlHash: "ozhevd1smnk8s",
         };
       }
+      if (kind === "mid-turn preflight") {
+        await appendTranscriptMessage(scope, {
+          message: {
+            ...assistant,
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "synthetic-call", name: "read", arguments: {} }],
+          },
+        });
+      }
       await appendTranscriptMessage(scope, {
         message:
           kind === "mid-turn preflight"
