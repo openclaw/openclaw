@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  installDatabaseProcessRole,
+  withEngineStoreAdmission,
+} from "../../infra/database-engine/admission-scope.js";
 import {
   mixedAgentConnection,
   useMixedAgentPair,
@@ -38,6 +41,10 @@ describe.skipIf(!mixedAgentConnection)(
   "PostgreSQL transcript exports above the slice budget",
   () => {
     useMixedAgentPair("postgres", "postgres");
+    beforeAll(() => {
+      // Deferred slices are read after the batch's first await, as in the transcript worker.
+      installDatabaseProcessRole("cli-oneshot");
+    });
 
     function seedLargeSession(rows?: { count: number; bytes: number }) {
       const database = withEngineStoreAdmission(() =>
@@ -79,7 +86,7 @@ describe.skipIf(!mixedAgentConnection)(
       return { events, scope };
     }
 
-    const begins = () => observed.filter((sql) => /^BEGIN/i.test(sql));
+    const begins = () => observed.filter((sql) => /^BEGIN\b/i.test(sql));
     // Head reads project the decoded row as "event_json"; slice reads also select its size.
     const payloadQueries = () => observed.filter((sql) => sql.includes(' as "event_json"'));
     const sliceQueries = () => observed.filter((sql) => sql.includes('as "payload_bytes"'));
@@ -90,7 +97,7 @@ describe.skipIf(!mixedAgentConnection)(
         absPath: path.join(path.dirname(scope.storePath), `${scope.sessionId}.jsonl`),
         options: scope,
       };
-      // The batch reads synchronously before the first await.
+      // The batch head is read synchronously before the first await.
       let prepared: ReturnType<typeof collectSessionMemoryEntries> | undefined;
       withEngineStoreAdmission(() => {
         prepared = collectSessionMemoryEntries([entry]);
@@ -113,8 +120,9 @@ describe.skipIf(!mixedAgentConnection)(
       );
       expect(snapshot?.events).toEqual(events);
       expect(payloadQueries()).toEqual([]);
-      // Each 2.5 MiB row fills a slice; the session row and the first message share one.
-      expect(sliceQueries()).toHaveLength(2);
+      // Each 2.5 MiB row ends a slice (the session row shares the first); a final empty
+      // slice confirms nothing follows the last row.
+      expect(sliceQueries()).toHaveLength(3);
     });
 
     // Many small rows never reach the byte budget, so only a row bound keeps PostgreSQL
@@ -128,7 +136,7 @@ describe.skipIf(!mixedAgentConnection)(
       expect(payloadQueries()).toEqual([]);
       expect(sliceQueries().length).toBeGreaterThanOrEqual(3);
       for (const query of sliceQueries()) {
-        expect(query).toMatch(/limit/iu);
+        expect(query).toMatch(/\blimit\b/iu);
       }
     });
   },
