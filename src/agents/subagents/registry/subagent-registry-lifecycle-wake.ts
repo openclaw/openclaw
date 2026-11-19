@@ -337,12 +337,17 @@ export function scheduleRequesterSettleWake(
   };
   const pauseNotice = entry.pauseReason === "sessions_yield" && admittedWake?.pauseNotice;
   // Failure settlement owns offered results, not a message wait's future completion.
-  const admittedBatch = (pauseNotice ? [runId] : (admittedWake?.batchRunIds ?? [runId])).flatMap(
+  const offeredBatch = (pauseNotice ? [runId] : (admittedWake?.batchRunIds ?? [runId])).flatMap(
     (id) => {
       const member = params.runs.get(id);
-      return member && (pauseNotice || !isEndedSubagentMessageWait(member)) ? [member] : [];
+      return member?.requesterSettleWake &&
+        member.requesterSettleWake.rearmGeneration === admittedWake?.rearmGeneration &&
+        (pauseNotice || !isEndedSubagentMessageWait(member))
+        ? [member]
+        : [];
     },
   );
+  const admittedBatch = subagentRuns.selectCompletionAuthorityBatch(offeredBatch, entry);
   let settleObserved = pendingSettlement?.scope === scope ? pendingSettlement.settle : undefined;
   let publishDispatch = pendingTransition?.scope === scope ? pendingTransition.commit : undefined;
   const completeBatch = async (
