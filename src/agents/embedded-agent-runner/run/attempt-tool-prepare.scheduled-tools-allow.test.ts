@@ -153,9 +153,10 @@ async function prepareTools(
     dispatched,
     emptyAllowlistError: catalog.emptyExplicitToolAllowlistError?.message,
     listed: tools.map((tool) => tool.name).toSorted(),
-    callable: refusals
-      .filter(([, refused]) => !refused.direct)
-      .map(([name]) => name)
+    callable: (
+      await Promise.all(tools.map(async (tool) => ((await executes(tool)) ? [tool.name] : [])))
+    )
+      .flat()
       .toSorted(),
     refusals,
     inherited: result.inheritedToolAllowlist
@@ -181,6 +182,77 @@ async function settle(run: () => Promise<unknown>): Promise<unknown> {
       setTimeout(resolve, 1500);
     }),
   ]);
+}
+
+/** Arguments that satisfy a tool's required schema fields with placeholder values. */
+function placeholderArgs(schema: unknown): unknown {
+  const node = (schema ?? {}) as {
+    type?: string | string[];
+    enum?: unknown[];
+    const?: unknown;
+    anyOf?: unknown[];
+    oneOf?: unknown[];
+    properties?: Record<string, unknown>;
+    required?: string[];
+  };
+  if (node.const !== undefined) {
+    return node.const;
+  }
+  if (node.enum?.length) {
+    return node.enum[0];
+  }
+  const variant = node.anyOf?.[0] ?? node.oneOf?.[0];
+  if (variant) {
+    return placeholderArgs(variant);
+  }
+  const type = Array.isArray(node.type) ? node.type[0] : node.type;
+  if (type === "object" || node.properties) {
+    return Object.fromEntries(
+      (node.required ?? []).map((key) => [key, placeholderArgs(node.properties?.[key])]),
+    );
+  }
+  return type === "number" || type === "integer"
+    ? 1
+    : type === "boolean"
+      ? false
+      : type === "array"
+        ? []
+        : "/nonexistent/openclaw-scheduled-tools-allow";
+}
+
+/**
+ * A tool executes when a call with schema-valid arguments passes every gate, starts the
+ * implementation (the agent loop's preparer path) and does not come back refused. Refusals,
+ * validation errors, and exceptions or timeouts before the implementation starts count as
+ * not executed. Placeholder paths and commands point nowhere, so started work fails inertly.
+ */
+async function executes(tool: AnyAgentTool): Promise<boolean> {
+  const preparer = getInternalToolExecutionPreparer(tool);
+  if (!preparer) {
+    return false;
+  }
+  const abort = new AbortController();
+  let started = false;
+  let refused = false;
+  await settle(async () => {
+    const step = await preparer({
+      toolCallId: "executes",
+      args: placeholderArgs(tool.parameters),
+      signal: abort.signal,
+    });
+    try {
+      if (step.kind === "ready") {
+        const result = step.execute(() => {
+          started = true;
+        });
+        refused = isGated(await result);
+      }
+    } finally {
+      step.dispose();
+    }
+  });
+  abort.abort();
+  return started && !refused;
 }
 
 async function refusedVia(tool: AnyAgentTool) {
