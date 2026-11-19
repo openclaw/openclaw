@@ -73,7 +73,10 @@ export function bindPostgresMemoryPublication(
   context: {
     database: EngineConnection;
     admit(stage: "transaction" | "commit"): void;
-    admitSearchExtensions?: (definitions: Readonly<Record<string, SearchSchema>>) => void;
+    admitSearchExtensions?: (
+      definitions: Readonly<Record<string, SearchSchema>>,
+      options?: { rebuild: true },
+    ) => void;
   },
   stageId?: string,
 ) {
@@ -343,9 +346,12 @@ export function bindPostgresMemoryPublication(
     }
     if (command.type === "schema.admit") {
       if (command.input.ftsEnabled) {
-        admitSearch({
-          "memory.text": memoryTextSearchSchema(command.input.ftsTokenizer ?? "unicode61"),
-        });
+        // Text rows remain canonical for this projection; changing tokenizer mode
+        // only replaces its optional trigram indexes, without re-embedding content.
+        admitSearch(
+          { "memory.text": memoryTextSearchSchema(command.input.ftsTokenizer ?? "unicode61") },
+          { rebuild: true },
+        );
       }
       const facts = rebuilding ?? readMemoryDatabaseFacts(db);
       return {
@@ -364,9 +370,12 @@ export function bindPostgresMemoryPublication(
       };
     }
     if (command.type === "vector.ensure") {
-      admitSearch({ "memory.vector": memoryVectorSearchSchema(command.input.dimensions) });
       if (rebuilding) {
+        // The stage contains the new embeddings. Keep the published projection
+        // until publication replaces its source rows and dimensions atomically.
         rebuilding.hasVectorTable = true;
+      } else {
+        admitSearch({ "memory.vector": memoryVectorSearchSchema(command.input.dimensions) });
       }
       return { ok: true, value: undefined, facts: rebuilding ?? readMemoryDatabaseFacts(db) };
     }
@@ -409,6 +418,12 @@ export function bindPostgresMemoryPublication(
             );
           }
           db.exec("DELETE FROM memory_index_chunks; DELETE FROM memory_index_sources");
+          if (rebuilding.hasVectorTable && metadata.vectorDims) {
+            admitSearch(
+              { "memory.vector": memoryVectorSearchSchema(metadata.vectorDims) },
+              { rebuild: true },
+            );
+          }
           function* sources() {
             const rows = records("reindex");
             let next = rows.next();
