@@ -187,7 +187,7 @@ it("keeps the series across runs when the bounded window drops an old compaction
   expect(third.prepared).toMatchObject({ restart: false, seriesStatus: "pinned" });
 });
 
-it("restarts a legacy series at most twice: unknown history, then the boundary id", async () => {
+it("restarts a legacy series once, then keeps it when the boundary returns", async () => {
   const session = await openCompactedSession("history-boundary-legacy");
   const first = await session.run("P1", 65_536);
   // Before the boundary count was recorded, a window without the compaction wrote historyId null.
@@ -210,91 +210,86 @@ it("restarts a legacy series at most twice: unknown history, then the boundary i
   }
   expect(runs).toMatchObject([
     { prepared: { seriesStatus: "restarted:history" }, compaction: false },
-    { prepared: { seriesStatus: "restarted:history" }, compaction: true },
+    { prepared: { seriesStatus: "pinned" }, compaction: true },
     { prepared: { seriesStatus: "pinned" }, compaction: false },
     { prepared: { seriesStatus: "pinned" }, compaction: true },
   ]);
 });
 
-it("does not keep a later history's series after a rewind to before its compaction", async () => {
-  const session = await openSession("history-boundary-rewind");
-  const writer = await session.open();
-  const kept = await writer.appendMessageAsync(makeUserMessage("First turn", 1));
-  await writer.appendCompactionAsync("First summary.", kept!, 1_000);
-  const first = await session.run("P1");
-  const rewindTo = expectDefined(
-    first.manager.getBranch().findLast(isCheckpoint)?.id,
-    "checkpoint",
-  );
-  const later = await session.open();
-  const keptLater = await later.appendMessageAsync(makeUserMessage("Second turn", 2));
-  await later.appendCompactionAsync("Second summary.", keptLater!, 1_000);
-  const second = await session.run("P2");
-  expect(second.manager.getBoundaryCount()).toBe(2);
-  expect(second.prepared).toMatchObject({ restart: true, systemPrompt: "P2" });
-  // Rewind to the checkpoint before the second compaction and continue from there.
-  const rewound = await session.open();
-  await rewound.branchAsync(rewindTo);
-  await rewound.appendMessageAsync(makeUserMessage("Rewound turn", 3));
-  const third = await session.run("P3");
-  expect(third.manager.getBoundaryCount()).toBe(1);
-  expect(third.prepared).toMatchObject({ restart: false, systemPrompt: "P1" });
+it("keeps an unknown history when its checkpoint and the boundary return to the window", async () => {
+  const session = await openCompactedSession("history-boundary-eviction");
+  await session.run("P1", 65_536);
+  // A stable prompt writes no new checkpoint, so the old one leaves the window with the compaction.
+  for (const turn of [2, 3]) {
+    await (await session.open()).appendMessageAsync(makeUserMessage("y".repeat(4_000), turn));
+  }
+  const runs = [];
+  for (const maxBytes of [8_192, 16_384, 8_192]) {
+    const { prepared, manager } = await session.run("P1", maxBytes);
+    runs.push({ prepared, compaction: hasCompaction(manager) });
+  }
+  expect(runs).toMatchObject([
+    // Nothing in the window names the history: the series restarts once as unknown:1.
+    { prepared: { restart: true }, compaction: false },
+    // The boundary fits again beside the unknown:1 checkpoint of the same count.
+    { prepared: { restart: false, seriesStatus: "pinned" }, compaction: true },
+    { prepared: { restart: false, seriesStatus: "pinned" }, compaction: false },
+  ]);
 });
 
-it("keeps the series when an earlier message is edited without a compaction", async () => {
-  const session = await openSession("history-boundary-edit");
-  await (await session.open()).appendMessageAsync(makeUserMessage("First turn", 1));
-  await session.run("P1");
-  const edited = expectDefined(
-    await (await session.open()).appendMessageAsync(makeUserMessage("Second turn", 2)),
+it("records the boundary count on a legacy checkpoint that names the visible boundary", async () => {
+  const session = await openCompactedSession("history-boundary-legacy-count");
+  const first = await session.run("P1", 65_536);
+  const checkpoint = first.manager.getBranch().findLast(isCheckpoint);
+  if (checkpoint?.type !== "custom") {
+    throw new Error("Missing prompt checkpoint");
+  }
+  // Written before the count existed, while the window held the compaction.
+  const { boundaryCount: _count, ...data } = checkpoint.data as Record<string, unknown>;
+  await (await session.open()).appendCustomEntryAsync(checkpoint.customType, data);
+  const statuses = [];
+  for (const maxBytes of [65_536, 8_192, 65_536]) {
+    if (maxBytes === 8_192) {
+      await session.pushOut();
+    }
+    statuses.push((await session.run("P1", maxBytes)).prepared);
+  }
+  expect(statuses).toMatchObject([
+    { seriesStatus: "pinned" },
+    { seriesStatus: "pinned" },
+    { seriesStatus: "pinned" },
+  ]);
+});
+
+it("counts boundaries on the active path when a rewind leaves a compaction behind", async () => {
+  // unknown:<count> names a history only if the count follows the active path, not the store.
+  const session = await openCompactedSession("history-boundary-rewind");
+  const rewindTo = expectDefined(
+    await (await session.open()).appendMessageAsync(makeUserMessage("Kept turn", 2)),
     "message",
   );
-  expect((await session.run("P2")).prepared).toMatchObject({ restart: false, systemPrompt: "P1" });
-  const editor = await session.open();
-  await editor.branchAsync(expectDefined(editor.getEntry(edited)?.parentId, "parent"));
-  await editor.appendMessageAsync(makeUserMessage("Second turn, edited", 3));
-  const third = await session.run("P3");
-  expect(third.manager.getBoundaryCount()).toBe(0);
-  expect(third.prepared).toMatchObject({
-    restart: false,
-    seriesStatus: "pinned",
-    systemPrompt: "P1",
-  });
+  const later = await session.open();
+  await later.appendCompactionAsync("Later summary. ".repeat(350), rewindTo, 10_000);
+  await session.pushOut();
+  const before = await session.run("P1");
+  expect(hasCompaction(before.manager)).toBe(false);
+  expect(before.manager.getBoundaryCount()).toBe(2);
+  const rewound = await session.open();
+  await rewound.branchAsync(rewindTo);
+  await rewound.appendMessageAsync(makeUserMessage("z".repeat(5_000), 3));
+  const after = await session.run("P2");
+  expect(hasCompaction(after.manager)).toBe(false);
+  expect(after.manager.getBoundaryCount()).toBe(1);
+  // The checkpoint written at count 2 is on the abandoned branch, so the series restarts.
+  expect(after.prepared).toMatchObject({ restart: true, systemPrompt: "P2" });
 });
 
-it("restarts the series at a reset", async () => {
-  const session = await openCompactedSession("history-boundary-reset");
-  expect((await session.run("P1")).manager.getBoundaryCount()).toBe(1);
-  await (await session.open()).appendResetBoundaryAsync("reset");
-  const next = await session.run("P2");
-  expect(next.manager.getBoundaryCount()).toBe(2);
-  expect(next.prepared).toMatchObject({
-    restart: true,
-    seriesStatus: "restarted:history",
-    systemPrompt: "P2",
+it("records an unknown history as unknown:<boundaryCount>", async () => {
+  const session = await openCompactedSession("history-boundary-unknown-id");
+  await session.pushOut();
+  const { manager } = await session.run();
+  expect(hasCompaction(manager)).toBe(false);
+  expect(manager.getBranch().findLast(isCheckpoint)).toMatchObject({
+    data: { historyId: "unknown:1", boundaryCount: 1 },
   });
-});
-
-it("keeps unknown histories with the same boundary count per session", async () => {
-  const sessions = [
-    await openCompactedSession("history-boundary-session-a"),
-    await openCompactedSession("history-boundary-session-b"),
-  ];
-  const firstRuns = [];
-  for (const [index, session] of sessions.entries()) {
-    await session.pushOut();
-    const { prepared, manager } = await session.run(`P-${index}`);
-    expect(hasCompaction(manager)).toBe(false);
-    expect(manager.getBranch().findLast(isCheckpoint)).toMatchObject({
-      data: { historyId: "unknown:1", boundaryCount: 1 },
-    });
-    firstRuns.push(prepared.systemPrompt);
-  }
-  expect(firstRuns).toEqual(["P-0", "P-1"]);
-  for (const [index, session] of sessions.entries()) {
-    expect((await session.run("P-next")).prepared).toMatchObject({
-      restart: false,
-      systemPrompt: `P-${index}`,
-    });
-  }
 });

@@ -423,7 +423,8 @@ export function prepareSessionSystemPrompt(params: {
         renderedPrefix: shareSystemPromptPrefix(data.renderedPrefix),
         routeKey: params.routeKey,
         historyId,
-        boundaryCount: params.historyBoundaryCount,
+        // The persisted count: a checkpoint written before the count existed is rewritten with it.
+        boundaryCount: typeof data.boundaryCount === "number" ? data.boundaryCount : undefined,
         permissionNotice:
           typeof data.permissionNotice === "string" ? data.permissionNotice : undefined,
         usageRanking: params.state.persistedUsageRanking,
@@ -539,6 +540,7 @@ export async function persistSessionSystemPrompt(
     snapshot.renderedPrefix !== previous.renderedPrefix ||
     snapshot.routeKey !== previous.routeKey ||
     snapshot.historyId !== previous.historyId ||
+    snapshot.boundaryCount !== previous.boundaryCount ||
     snapshot.permissionNotice !== previous.permissionNotice ||
     snapshot.usageRanking !== previous.usageRanking
   ) {

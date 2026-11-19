@@ -3,16 +3,14 @@ import type { SessionEntry } from "../sessions/session-manager-types.js";
 
 /**
  * The history a prompt series belongs to: the newest compaction or reset, null before any.
- * A bounded window can start after that entry. Then the newest prompt checkpoint names it, but
- * only when it records the same boundary count as the transcript: a checkpoint written before a
- * later compaction belongs to the earlier history. Without that evidence the history is unknown.
- * Checkpoints from before the count was recorded are unknown once the session has a boundary.
+ * The count changes only at a compaction or reset on the active path, so the newest prompt
+ * checkpoint that records the transcript's count was written in the current history and names
+ * it, even when the boundary is also in the window. A bounded window can start after the
+ * boundary; a checkpoint with another count belongs to an earlier history. Without that
+ * evidence the history is unknown. Checkpoints from before the count was recorded are unknown
+ * once the session has a boundary.
  */
 function readHistoryId(entries: SessionEntry[], boundaryCount: number | undefined) {
-  const boundary = entries.findLast((e) => e.type === "compaction" || e.type === "reset");
-  if (boundary) {
-    return boundary.id;
-  }
   const checkpoint = entries.findLast(
     (e) =>
       e.type === "custom" &&
@@ -21,13 +19,17 @@ function readHistoryId(entries: SessionEntry[], boundaryCount: number | undefine
       "historyId" in e.data,
   );
   const data = checkpoint?.type === "custom" && isRecord(checkpoint.data) ? checkpoint.data : {};
-  if (
-    boundaryCount === undefined ||
-    data.boundaryCount === boundaryCount ||
-    (boundaryCount === 0 && data.boundaryCount === undefined)
-  ) {
-    // SAFETY: session-prompt-state alone writes openclaw.system-prompt checkpoints; historyId is string | null.
-    return (data.historyId as string | null | undefined) ?? null;
+  // SAFETY: session-prompt-state alone writes openclaw.system-prompt checkpoints; historyId is string | null.
+  const checkpointId = (data.historyId as string | null | undefined) ?? null;
+  if (boundaryCount !== undefined && data.boundaryCount === boundaryCount) {
+    return checkpointId;
+  }
+  const boundary = entries.findLast((e) => e.type === "compaction" || e.type === "reset");
+  if (boundary) {
+    return boundary.id;
+  }
+  if (boundaryCount === undefined || (boundaryCount === 0 && data.boundaryCount === undefined)) {
+    return checkpointId;
   }
   return undefined;
 }
@@ -35,8 +37,8 @@ function readHistoryId(entries: SessionEntry[], boundaryCount: number | undefine
 /**
  * Omit the boundary count only for a view that holds the newest boundary. An unknown history is
  * named by its count: the count changes only at a compaction or reset on the active path, so a
- * checkpoint that recorded `unknown:N` at count N belongs to the same history. The series then
- * restarts at most twice: once to `unknown:N`, and once more when the boundary fits a window.
+ * checkpoint that recorded `unknown:N` at count N belongs to the same history, and the series
+ * restarts at most once when nothing in the window names it.
  */
 export function resolvePromptHistoryId(params: {
   state: { historyBoundary?: { count: number; id: string | null } };

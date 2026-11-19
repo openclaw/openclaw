@@ -42,7 +42,6 @@ import {
   readLiveSessionForkRequest,
   type SessionForkPin,
 } from "./embedded-agent-runner/session-fork-request.js";
-import { resolvePromptHistoryId } from "./embedded-agent-runner/session-prompt-history-id.js";
 import { parseSystemPromptRouteKey } from "./embedded-agent-runner/session-prompt-state.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { emitInternalRunUsageDiagnostic } from "./internal-run-usage.js";
@@ -241,8 +240,8 @@ async function readSessionForkPin(
   reader.assertCurrent();
   const data = isIndexedSessionEntry(event) && event.type === "custom" ? event.data : undefined;
   const route = isRecord(data) ? parseSystemPromptRouteKey(data.routeKey) : undefined;
-  // The model view starts at the newest boundary, so it needs no boundary count.
-  const historyId = resolvePromptHistoryId({ state: {}, entries });
+  const historyId =
+    entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ?? null;
   if (
     !isRecord(data) ||
     typeof data.prefix !== "string" ||
