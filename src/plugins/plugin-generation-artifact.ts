@@ -2,7 +2,10 @@ import fs from "node:fs";
 import { isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { bindCapturedWorkerSdk } from "../infra/captured-worker-sdk.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { useNodeModuleHooks } from "./native-module-require.js";
 import { createPluginCaptureResolver } from "./plugin-capture-resolution.js";
 import {
   createPluginGenerationFileCapture,
@@ -54,7 +57,7 @@ export type PluginGenerationArtifact = {
   boundaryRoot: string;
   sourceAliases: Record<string, string>;
   sourceDigest: string;
-  linkHost: (hostRoot: string) => void;
+  linkHost: (hostRoot: string, getAliases?: () => Readonly<Record<string, string>>) => void;
   hasSource: (source: string) => boolean;
   resolve: (source: string, rejectHardlinks?: boolean) => string;
   captureRecoverySource: () => PluginSourceCustodyFork["source"];
@@ -76,6 +79,36 @@ export type PluginGenerationArtifact = {
   dispose: () => void;
   disposeAsync: () => Promise<void>;
 };
+
+/** ClawCtl uses the stock in-process and worker SDK resolvers for its packaged host. */
+function usesManagedWindowsSdkResolver(hostRoot: string): boolean {
+  if (
+    process.platform !== "win32" ||
+    process.env.CLAWCTL_GATEWAY_ISOLATION !== "enabled" ||
+    !useNodeModuleHooks()
+  ) {
+    return false;
+  }
+  try {
+    const runningHost = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+    if (!runningHost) {
+      return false;
+    }
+    const running = fs.statSync(runningHost, { bigint: true });
+    const selected = fs.statSync(hostRoot, { bigint: true });
+    return (
+      running.isDirectory() &&
+      selected.isDirectory() &&
+      running.dev > 0n &&
+      running.ino > 0n &&
+      running.dev === selected.dev &&
+      running.ino === selected.ino
+    );
+  } catch {
+    // A missing or inaccessible host leaves SDK selection to the stock capture path.
+    return false;
+  }
+}
 
 /** Capture selective entries and whole dependencies without replacing earlier file bytes. */
 export const capturePluginGenerationArtifact = createPluginGenerationCapture(
@@ -661,6 +694,7 @@ function createPluginGenerationArtifact(
     nativeAdmission.finish(initialReceipt);
     additions.clear();
     const captures = [moduleCaptures, hardlinkedSources, metadataCapture, packages, resolution];
+    let releaseWorkerSdk: (() => void) | undefined;
     const clearCaptures = () => captures.forEach((capture) => capture.clear());
     const sourceLookup = createPluginGenerationSourceLookup({
       rootDir,
@@ -676,9 +710,17 @@ function createPluginGenerationArtifact(
       sourceRoot,
       rootDir: root,
       sourceAliases,
-      linkHost: (hostRoot: string) => {
-        sourceCapture.linkHost(hostRoot);
+      linkHost: (hostRoot, getAliases) => {
+        const managed = getAliases ? usesManagedWindowsSdkResolver(hostRoot) : false;
+        if (!managed) {
+          sourceCapture.linkHost(hostRoot);
+        }
         nativeAdmission.linkHost(hostRoot);
+        const release = managed && getAliases
+          ? bindCapturedWorkerSdk(directory, hostRoot, getAliases)
+          : undefined;
+        releaseWorkerSdk?.();
+        releaseWorkerSdk = release;
       },
       // The receipt attests the initial snapshot; lazy imports retain their own copied bytes.
       sourceDigest: initialReceipt.sourceDigest,
@@ -697,10 +739,14 @@ function createPluginGenerationArtifact(
         directory,
       }),
       dispose: () => {
+        releaseWorkerSdk?.();
         (retained?.source ?? sourceCapture).dispose();
         clearCaptures();
       },
-      disposeAsync: () => (retained?.source ?? sourceCapture).disposeAsync().then(clearCaptures),
+      disposeAsync: () => {
+        releaseWorkerSdk?.();
+        return (retained?.source ?? sourceCapture).disposeAsync().then(clearCaptures);
+      },
     };
   } catch (error) {
     (retained?.source ?? sourceCapture).dispose();

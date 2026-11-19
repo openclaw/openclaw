@@ -339,7 +339,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     devSourceRoot: params.devSourceRoot,
   });
   if (aliases.packageRoot && !reusedArtifact) {
-    artifact.linkHost(aliases.packageRoot);
+    artifact.linkHost(aliases.packageRoot, aliases.getAliasMap);
   }
   bindPluginStateOperationModuleSource({ ...params, artifact });
   installOpenClawPluginSdkNativeResolver({

@@ -4,6 +4,7 @@ import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { captureDeletedAgentDatabaseFences } from "./agent-database-readers.js";
+import { capturedWorkerSdkPreload } from "./captured-worker-sdk.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 import { trackSqliteDatabaseAdmissionWorker } from "./sqlite-database-admission.js";
 import {
@@ -92,6 +93,10 @@ export function createWorkerTaskHost(
           { host: port1, worker: port2 },
         );
         return { worker: native, native };
+      }
+      const preload = capturedWorkerSdkPreload(url);
+      if (preload) {
+        workerOptions.execArgv = [...(workerOptions.execArgv ?? process.execArgv), "--import", preload];
       }
       return { worker: createCpuTrackedWorker(url, workerOptions) };
     },
