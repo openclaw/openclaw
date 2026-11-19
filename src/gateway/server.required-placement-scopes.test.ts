@@ -246,7 +246,6 @@ test.for(["before acknowledgment", "after acknowledgment"] as const)(
       ) => {
         setupCalls.length = 0;
         dispatchErrors.length = 0;
-        dispatchSettled = undefined;
         terminalPlacement = undefined;
         const { ws } = await connectWriter(port, email);
         const committed = createDeferredCore();

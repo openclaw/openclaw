@@ -117,7 +117,7 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
     signal?.throwIfAborted();
     function onTimeout() {
       cleanup();
-      reject(signal?.reason ?? timeoutError);
+      reject(signal?.reason instanceof Error ? signal.reason : timeoutError);
     }
     function cleanup() {
       clearTimeout(timer);
