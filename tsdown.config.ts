@@ -10,6 +10,7 @@ import {
   collectSourceCheckoutPluginBuildEntries,
   createBundledPluginBuildInventory,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
+import { createEmptyCompanionChunksPlugin } from "./scripts/lib/empty-companion-chunks.mts";
 import { createFsSafeWindowsHelperAssetPlugin } from "./scripts/lib/fs-safe-windows-helper-asset.mts";
 import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
 import { createManagedHandoffBuildConfigs } from "./scripts/lib/managed-handoff-build-config.mts";
@@ -931,6 +932,7 @@ const configs: UserConfig[] = [
       // named entrypoints retain their public .js paths.
       outputOptions: { chunkFileNames: "[name]-[hash].mjs" },
       plugins: [
+        createEmptyCompanionChunksPlugin(),
         createStateSchemaInlinePlugin(),
         createGatewayRunChunkMetadataPlugin(),
         createRuntimeDependencyOwnershipBuildPlugin(),
