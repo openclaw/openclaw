@@ -288,6 +288,88 @@ it.each([
   },
 );
 
+it.each([false, true])(
+  "admits input after prior-run completion unless its lifecycle was explicit (explicit=%s)",
+  async (explicit) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const f = fixture();
+      const expectedState = { status: undefined, abortedLastRun: false };
+      await patchSessionEntryCore(f.scope, () => ({
+        ...expectedState,
+        lifecycleRevision: "same-session",
+        activeWriterRunId: "preceding-run",
+      }));
+      const input = expectDefined(
+        await acquireSessionInputActor(
+          { ...f.scope, target: f.target },
+          { assertCurrent() {}, assertReadable() {} },
+        ),
+        "durable input actor",
+      );
+      const authority = { assertCurrent() {}, authorize() {} };
+      let completion: ReturnType<typeof input.actor.completeTurn> | undefined;
+      const snapshot = input.actor.snapshot.bind(input.actor);
+      vi.spyOn(input.actor, "snapshot").mockImplementation((current) => {
+        const state = snapshot(current);
+        expect(state?.entry).toMatchObject({ status: "done", abortedLastRun: false });
+        return state;
+      });
+      const recorder = createUserTurnTranscriptRecorder({
+        message: {
+          role: "user",
+          content: "Follow up after completion.",
+          timestamp: 2,
+          idempotencyKey: "next-input",
+        },
+        target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: undefined },
+        ...(explicit ? { expectedSessionState: expectedState } : {}),
+        beforeMessageWrite: ({ message }) => {
+          // Queue settlement after preparation, ahead of the input actor command.
+          completion = input.actor.completeTurn(
+            {
+              commandId: "preceding-run-complete",
+              phaseId: "completion",
+              bookkeeping: {
+                sessionId: f.scope.sessionId,
+                lifecycleRevision: "same-session",
+                writerRunId: "preceding-run",
+                expectedState,
+                lifecycle: { status: "done", abortedLastRun: false },
+              },
+            },
+            authority,
+          );
+          return message;
+        },
+        updateMode: "none",
+      });
+      bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
+      try {
+        const persistence = recorder.persistApproved();
+        if (explicit) {
+          await expect(persistence).rejects.toThrow(
+            "Session actor turn was refused by its current owner",
+          );
+          expect(f.events().filter((event) => event.type === "message")).toEqual([]);
+        } else {
+          await expect(persistence).resolves.toMatchObject({ appended: true });
+          expect(f.events().filter((event) => event.type === "message")).toHaveLength(1);
+        }
+        await expect(completion).resolves.toMatchObject({ kind: "committed" });
+        expect(f.read()).toMatchObject({
+          sessionId: f.scope.sessionId,
+          lifecycleRevision: "same-session",
+          status: "done",
+          abortedLastRun: false,
+        });
+      } finally {
+        await input.actor.release();
+      }
+    });
+  },
+);
+
 it("retains actor-bound recorder custody through a durable worker publication failure", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
