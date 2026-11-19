@@ -428,7 +428,7 @@ describe("independent release child reuse", () => {
         );
         writeFileSync(
           join(directory, "gh"),
-          `#!${testNodeExecPath}
+          `#!${process.execPath}
 const fs = require("node:fs");
 const endpoint = process.argv[3].replace("repos/openclaw/openclaw/", "");
 if (endpoint === "actions/artifacts/301/zip") process.stdout.write(fs.readFileSync(__dirname + "/receipt.zip"));
@@ -644,90 +644,205 @@ else {
     expect(await discoverReusableReleaseChild(data.request, data.deps)).not.toBeNull();
   });
 
-  it("reuses policy-waived evidence through the default log reader without hiding failures", async () => {
-    const version = "2026.11.6";
-    const leaf = "Run QA Lab live Telegram lane";
-    const waiver = {
-      targetVersion: version,
-      childRole: "releaseChecksCandidate",
-      jobName: leaf,
-      reason: "synthetic test fixture",
-    };
-    RELEASE_VALIDATION_WAIVERS.push(waiver);
-    try {
-      const data = await fixture("releaseChecksCandidate");
-      const original = await discoverReusableReleaseChild(data.request, data.deps);
-      if (!original) {
-        throw new Error("expected original receipt");
-      }
-      data.run.conclusion = "failure";
-      data.jobs[0]!.name = leaf;
-      data.jobs[1]!.name = "Verify release checks";
-      for (const job of data.jobs.slice(0, 2)) {
-        job.conclusion = "failure";
-      }
-      data.jobs[1]!.steps = [
-        { name: "Verify release check results", status: "completed", conclusion: "failure" },
-      ];
-      data.receipt.workloadConclusion = "failure";
-      data.receipt.jobs = data.receipt.jobs.map((job, index) => ({
-        ...job,
-        name: data.jobs[index]!.name,
+  it("reuses a Q-policy-waived receipt through the default log reader", async () => {
+    const version = "2099.1.1";
+    const targetSha = TARGET;
+    const jobName = "a synthetic failing test";
+    const data = await fixture();
+    data.request.targetSha = data.receipt.targetSha = targetSha;
+    data.request.inputs.target_ref = data.receipt.inputs.target_ref = targetSha;
+    data.artifact.name = data.artifact.name.replace(TARGET, targetSha);
+    await data.seal();
+    const original = await discoverReusableReleaseChild(data.request, data.deps);
+    if (!original) {
+      throw new Error("expected original reusable receipt");
+    }
+    data.run.conclusion = "failure";
+    data.jobs[0]!.name = jobName;
+    data.jobs[1]!.name = "openclaw/ci-gate";
+    for (const job of data.jobs.slice(0, 2)) {
+      job.conclusion = "failure";
+    }
+    data.jobs[1]!.steps = [
+      {
+        name: "Verify selected CI lanes",
+        status: "completed",
         conclusion: "failure",
-      }));
-      data.receipt.compositeJobsSha256 = jsonDigest({
-        effectiveRunAttempt: data.receipt.effectiveRunAttempt,
-        plannedRunAttempt: data.receipt.plannedRunAttempt,
-        jobs: data.receipt.jobs,
-      });
-      await data.seal();
-      const selection = {
-        ...original,
-        receiptSha256: data.receipt.sha256,
-        artifact: {
-          ...original.artifact,
-          digest: data.artifact.digest,
-          sizeInBytes: data.artifact.size_in_bytes,
+      },
+    ];
+    data.receipt.workloadConclusion = "failure";
+    data.receipt.jobs = data.receipt.jobs.map((job, index) => ({
+      ...job,
+      name: data.jobs[index]!.name,
+      conclusion: "failure",
+    }));
+    data.receipt.compositeJobsSha256 = jsonDigest({
+      effectiveRunAttempt: data.receipt.effectiveRunAttempt,
+      plannedRunAttempt: data.receipt.plannedRunAttempt,
+      jobs: data.receipt.jobs,
+    });
+    await data.seal();
+    const selection = {
+      ...original,
+      receiptSha256: data.receipt.sha256,
+      artifact: {
+        ...original.artifact,
+        digest: data.artifact.digest,
+        sizeInBytes: data.artifact.size_in_bytes,
+      },
+    };
+    const root = tempDirs.make("frv-waiver-log-");
+    writeFileSync(join(root, "package.json"), '{"type":"commonjs"}\n');
+    const gh = join(root, "gh");
+    writeFileSync(
+      gh,
+      `#!${process.execPath}
+if (process.argv.slice(2).join(" ") !== "api repos/openclaw/openclaw/actions/jobs/2/logs --allow-escape-sequences") process.exit(2);
+process.stdout.write("##[error]checks-node-core-test-nondist-shard finished with failure (selected=true)");
+`,
+    );
+    chmodSync(gh, 0o755);
+    vi.stubEnv("PATH", `${root}${delimiter}${process.env.PATH ?? ""}`);
+    const github = data.deps.github;
+    const deps = {
+      ...data.deps,
+      github: async (endpoint: string) => {
+        if (!endpoint.startsWith("contents/scripts/lib/release-validation-waivers.json?ref=")) {
+          return github(endpoint);
+        }
+        const bytes = Buffer.from(
+          JSON.stringify({
+            schema: "openclaw.release-validation-waivers/v1",
+            waivers: [
+              {
+                targetVersion: version,
+                targetSha,
+                childRole: "normalCi",
+                jobName,
+                reason: "Synthetic operator approval",
+                aggregates: [
+                  {
+                    jobName: "openclaw/ci-gate",
+                    stepName: "Verify selected CI lanes",
+                    causes: [
+                      "checks-node-core-test-nondist-shard finished with failure (selected=true)",
+                    ],
+                    exactCauses: true,
+                  },
+                ],
+              },
+            ],
+          }),
+        );
+        return {
+          type: "file",
+          path: "scripts/lib/release-validation-waivers.json",
+          encoding: "base64",
+          size: bytes.length,
+          content: bytes.toString("base64"),
+          sha: createHash("sha1")
+            .update("blob " + bytes.length + "\0")
+            .update(bytes)
+            .digest("hex"),
+        };
+      },
+    };
+    await expect(validateReusableReleaseChild(selection, data.request, deps)).rejects.toThrow(
+      "current successful attempt",
+    );
+    const recovered = await validateReusableReleaseChild(
+      selection,
+      {
+        ...data.request,
+        policyTargetVersion: version,
+      },
+      deps,
+    );
+    expect(recovered.run.conclusion).toBe("failure");
+    expect(recovered.receipt.workloadConclusion).toBe("failure");
+    expect(await discoverReusableReleaseChild(data.request, deps)).toBeNull();
+    expect(
+      await discoverReusableReleaseChild({ ...data.request, policyTargetVersion: version }, deps),
+    ).toMatchObject({ runId: String(data.run.id), receiptSha256: data.receipt.sha256 });
+    await expect(
+      validateReusableReleaseChild(
+        selection,
+        {
+          ...data.request,
+          policyTargetVersion: version,
         },
-      };
-      const root = tempDirs.make("frv-waiver-log-");
-      writeFileSync(join(root, "package.json"), '{"type":"commonjs"}');
-      const gh = join(root, "gh");
-      writeFileSync(
-        gh,
-        "#!" +
-          process.execPath +
-          "\nif (process.argv.slice(2).join(' ') !== 'api repos/openclaw/openclaw/actions/jobs/2/logs --allow-escape-sequences') process.exit(2);\nprocess.stdout.write('##[error]qa_live_telegram_release_checks ended with failure');\n",
-      );
-      chmodSync(gh, 0o755);
-      vi.stubEnv("PATH", root + delimiter + (process.env.PATH ?? ""));
-      await expect(
-        validateReusableReleaseChild(selection, data.request, data.deps),
-      ).rejects.toThrow("current successful attempt");
-      const request = { ...data.request, policyTargetVersion: version };
-      const recovered = await validateReusableReleaseChild(selection, request, data.deps);
-      expect(recovered.run.conclusion).toBe("failure");
-      expect(recovered.receipt.workloadConclusion).toBe("failure");
-      expect(await discoverReusableReleaseChild(data.request, data.deps)).toBeNull();
-      expect(await discoverReusableReleaseChild(request, data.deps)).toMatchObject({
-        runId: "101",
-        receiptSha256: data.receipt.sha256,
-      });
-      await expect(
-        validateReusableReleaseChild(selection, request, {
-          ...data.deps,
-          getJobLog: async () => "##[error]artifact integrity failed",
-        }),
-      ).rejects.toThrow("unwaived failure");
-      await expect(
-        validateReusableReleaseChild(
-          selection,
-          { ...request, policyTargetVersion: "2026.11.7" },
-          data.deps,
-        ),
-      ).rejects.toThrow();
-    } finally {
-      RELEASE_VALIDATION_WAIVERS.splice(RELEASE_VALIDATION_WAIVERS.indexOf(waiver), 1);
+        { ...deps, getJobLog: async () => "##[error]artifact integrity failed" },
+      ),
+    ).rejects.toThrow("unwaived failure");
+    await expect(
+      validateReusableReleaseChild(
+        selection,
+        {
+          ...data.request,
+          policyTargetVersion: "2099.1.2",
+        },
+        deps,
+      ),
+    ).rejects.toThrow();
+  });
+  it("reads twelve complete inventories four at a time within the shared deadline", async () => {
+    const data = await fixture("normalCi", undefined, TOOLING, 261, 12);
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    vi.useFakeTimers();
+    const started = Date.now();
+    // Thirteen reads per attempt exceed 120s serially; skew also exercises out-of-order completion.
+    let active = 0;
+    let peak = 0;
+    const reads = new Map<number, string[]>();
+    const completed: number[] = [];
+    const github = async (endpoint: string) => {
+      const match = /attempts\/(\d+)\/jobs\?(.*)$/u.exec(endpoint);
+      if (!match) {
+        return data.deps.github(endpoint);
+      }
+      const attempt = Number(match[1]);
+      const pages = reads.get(attempt) ?? [];
+      reads.set(attempt, pages);
+      pages.push(match[2]!);
+      active += 1;
+      peak = Math.max(peak, active);
+      try {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 2_000 + (4 - (attempt % 4)) * 100);
+        });
+        if (/per_page=(100|50)&page=2$/u.test(endpoint)) {
+          throw new Error("gh: Server Error (HTTP 502)");
+        }
+        if (endpoint.endsWith("per_page=30&page=9")) {
+          completed.push(attempt);
+        }
+        return await data.deps.github(endpoint);
+      } finally {
+        active -= 1;
+      }
+    };
+    const verification = validateReusableReleaseChild(selection, data.request, {
+      ...data.deps,
+      github,
+      deadlineMs: started + 120_000,
+    });
+    const checked = expect(verification).resolves.toMatchObject({ receipt: data.receipt });
+    await vi.runAllTimersAsync();
+    await checked;
+    expect(peak).toBe(4);
+    expect(active).toBe(0);
+    expect(Date.now() - started).toBeLessThan(120_000);
+    expect(completed).toHaveLength(12);
+    expect(completed.slice(0, 4)).toEqual([3, 2, 1, 4]);
+    expect([...reads.keys()]).toEqual(Array.from({ length: 12 }, (_, index) => index + 1));
+    for (const pages of reads.values()) {
+      expect(pages).toEqual([
+        "per_page=100&page=1",
+        "per_page=100&page=2",
+        "per_page=50&page=1",
+        "per_page=50&page=2",
+        ...Array.from({ length: 9 }, (_, index) => `per_page=30&page=${index + 1}`),
+      ]);
     }
   });
 

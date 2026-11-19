@@ -12,7 +12,7 @@ import {
   composeReleaseAttemptJobs,
   validateReleaseExecutionPlanArtifact,
 } from "../../scripts/full-release-validation-policy.mjs";
-import { RELEASE_VALIDATION_WAIVERS } from "../../scripts/lib/release-validation-waivers.mjs";
+import { evaluateReleaseChildPolicy } from "../../scripts/lib/release-validation-waivers.mjs";
 import {
   downloadFullReleaseNpmPreflight,
   verifyNpmPreflightProducer,
@@ -27,11 +27,6 @@ import { fixture as admissionFixture } from "./release-qualification-admission.t
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sha256 = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
-const originalWaivers = [...RELEASE_VALIDATION_WAIVERS];
-afterEach(() =>
-  RELEASE_VALIDATION_WAIVERS.splice(0, RELEASE_VALIDATION_WAIVERS.length, ...originalWaivers),
-);
-
 function consumers(
   f: ReturnType<typeof candidatePublicationFixture>,
   evidenceClient: Parameters<typeof validateReleaseRunEvidence>[1] = f.client,
@@ -91,7 +86,7 @@ function npmProducer(f: ReturnType<typeof candidatePublicationFixture>) {
 }
 
 describe("candidate-owned publish consumer chain", () => {
-  it("verifies pre-ledger frozen Q evidence without requiring a new Q grant file", async () => {
+  it("rejects missing Q ledger evidence without using a fallback policy", async () => {
     const f = candidatePublicationFixture();
     const client = {
       ...f.client,
@@ -99,13 +94,10 @@ describe("candidate-owned publish consumer chain", () => {
         if (path === "scripts/lib/release-validation-waivers.json") {
           throw new Error("gh: Not Found (HTTP 404)");
         }
-        if (path === "scripts/lib/release-validation-waivers.mjs") {
-          return "const RELEASE_VALIDATION_WAIVERS = [];";
-        }
         return f.client.getWorkflowSource(sha, path);
       },
     };
-    await expect(validateReleaseRunEvidence(verifier(f), client)).resolves.toBeDefined();
+    await expect(validateReleaseRunEvidence(verifier(f), client)).rejects.toThrow("HTTP 404");
   });
   it("evaluates raw failed evidence against Q data rather than the verifier checkout", async () => {
     const f = candidatePublicationFixture({
@@ -205,114 +197,10 @@ describe("candidate-owned publish consumer chain", () => {
     await expect(consumers(f).docker()).resolves.toBeDefined();
   });
   it.each([
-    { scenario: "matching grant", parentConclusion: "success" },
-    { scenario: "failed parent", parentConclusion: "failure" },
-    { scenario: "cancelled parent", parentConclusion: "cancelled" },
-    { scenario: "missing grant", parentConclusion: "success" },
-    { scenario: "different version", parentConclusion: "success" },
-    { scenario: "different role", parentConclusion: "success" },
-    { scenario: "different job", parentConclusion: "success" },
-    { scenario: "tooling revoked after verification", parentConclusion: "success" },
-  ])(
-    "authenticates waived FRV at npm and Docker admission: $scenario",
-    async ({ scenario, parentConclusion }) => {
-      const f = candidatePublicationFixture();
-      const role = "releaseChecksIndependent";
-      const planned = f.plan.children.find((entry) => entry.key === role);
-      assert(planned);
-      const targetVersion = f.manifest.validationInputs.targetVersion;
-      assert(targetVersion);
-      const grant = {
-        targetVersion,
-        childRole: role,
-        jobName:
-          "Run repo/live E2E validation / Native live suites (Native live gateway profiles OpenAI)",
-        reason: "Synthetic checked-in provider outage grant.",
-      };
-      if (scenario !== "missing grant") {
-        RELEASE_VALIDATION_WAIVERS.push({
-          ...grant,
-          ...(scenario === "different version" ? { targetVersion: "2026.8.29-beta.1" } : {}),
-          ...(scenario === "different role" ? { childRole: "releaseChecksCandidate" } : {}),
-          ...(scenario === "different job" ? { jobName: `${grant.jobName} extra` } : {}),
-        });
-      }
-      const [aggregate] = await f.client.getRunAttemptJobs(planned.runId);
-      assert(aggregate);
-      const jobs = [
-        {
-          ...aggregate,
-          id: 90101,
-          conclusion: "failure",
-          steps: [{ name: "Verify release check results", conclusion: "failure" }],
-        },
-        { ...aggregate, id: 90102, name: grant.jobName, conclusion: "failure", steps: [] },
-      ];
-      const composite = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
-        plannedRunAttempt: 1,
-        effectiveRunAttempt: 1,
-      });
-      Object.assign(f.manifest.childEvidence[role]!, {
-        jobs: composite.jobs,
-        compositeJobsSha256: composite.sha256,
-      });
-      Object.assign(f.manifest, { waivers: [{ ...grant, runId: planned.runId, runAttempt: 1 }] });
-      f.parent.conclusion = parentConclusion;
-      const client = {
-        ...f.client,
-        getRunView: (id: string) => ({ ...f.client.getRunView(id), conclusion: parentConclusion }),
-        getRun: async (id: string) => {
-          const run = await f.client.getRun(id);
-          return id === planned.runId ? { ...run, conclusion: "failure" } : run;
-        },
-        getRunAttemptJobs: async (id: string) =>
-          id === planned.runId ? jobs : f.client.getRunAttemptJobs(id),
-        getJobLog: (id: number) =>
-          id === 90101
-            ? Promise.resolve(
-                "2026-10-18T00:00:00Z ##[error]live_repo_e2e_release_checks ended with failure\n",
-              )
-            : f.client.getJobLog(id),
-      };
-      if (parentConclusion !== "success") {
-        await expect(validateReleaseRunEvidence(verifier(f), client)).rejects.toThrow(
-          "parent run is not completed/success",
-        );
-        await expect(consumers(f, client).npm()).rejects.toThrow(
-          "parent run is not completed/success",
-        );
-        await expect(consumers(f, client).docker()).rejects.toThrow(
-          "Docker producer is neither active nor successfully completed",
-        );
-        return;
-      }
-      if (scenario === "missing grant" || scenario.startsWith("different ")) {
-        await expect(validateReleaseRunEvidence(verifier(f), client)).rejects.toThrow(
-          "does not pass release policy",
-        );
-        await expect(consumers(f, client).npm()).rejects.toThrow("does not pass release policy");
-        await expect(consumers(f, client).docker()).rejects.toThrow("does not pass release policy");
-        return;
-      }
-      const evidence = await validateReleaseRunEvidence(verifier(f), client);
-      expect(evidence.current.conclusion).toBe("success");
-      expect(evidence.children.find((entry) => entry.role === role)).toMatchObject({
-        conclusion: "failure",
-        waivers: [grant],
-      });
-      if (scenario === "tooling revoked after verification") {
-        f.admission.authority.permission = "read";
-        await expect(consumers(f, client).npm()).rejects.toThrow("qualification authority");
-        await expect(consumers(f, client).docker()).rejects.toThrow("qualification authority");
-        return;
-      }
-      await expect(consumers(f, client).npm()).resolves.toEqual(f.npmQualified);
-      await expect(consumers(f, client).docker()).resolves.toBeDefined();
-    },
-  );
-
-  it.each([
     "same qualification",
+    "candidate-bound same qualification",
+    "candidate-bound changelog descendant",
+    "candidate-bound execution-plan descendant",
     "changelog descendant",
     "execution-plan descendant",
     "independent Q change on changelog descendant",
@@ -321,7 +209,87 @@ describe("candidate-owned publish consumer chain", () => {
     "changed P",
     "revoked P",
   ])("selects a direct admitted root across transport refs only for %s", async (scenario) => {
-    const root = candidatePublicationFixture();
+    const candidateBound = scenario.startsWith("candidate-bound");
+    const version = "2099.1.1-beta.1";
+    const changedPaths = [
+      `CHANGELOG/${version.split("-")[0]}.md`,
+      `CHANGELOG/records/${version.split("-")[0]}.md`,
+    ];
+    const root = candidatePublicationFixture({
+      candidateVersion: version,
+      ...(candidateBound ? { candidateSha: "a".repeat(40) } : {}),
+    });
+    let evidenceClient: Parameters<typeof validateReleaseRunEvidence>[1] = root.client;
+    if (candidateBound) {
+      const child = root.plan.children.find((entry) => entry.key === "normalCi");
+      assert(child);
+      const originalJobs = await root.client.getRunAttemptJobs(child.runId);
+      const gate = originalJobs.find((job) => job.name === "openclaw/ci-gate");
+      assert(gate);
+      const jobs = [
+        ...originalJobs.filter((job) => job !== gate),
+        ...["synthetic leaf", gate.name].map((name, index) =>
+          Object.assign({}, gate, {
+            id: 1501 + index,
+            name,
+            conclusion: "failure",
+            steps: [{ name: "Verify selected CI lanes", conclusion: "failure" }],
+          }),
+        ),
+      ];
+      const grants = [
+        {
+          targetVersion: version,
+          targetSha: root.q,
+          childRole: "normalCi",
+          jobName: "synthetic leaf",
+          reason: "Synthetic candidate-bound approval",
+          aggregates: [
+            {
+              jobName: gate.name,
+              stepName: "Verify selected CI lanes",
+              causes: ["synthetic leaf failed"],
+              exactCauses: true,
+            },
+          ],
+        },
+      ];
+      const composite = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
+        effectiveRunAttempt: 1,
+        plannedRunAttempt: 1,
+      });
+      assert(root.manifest.childEvidence.normalCi);
+      Object.assign(root.manifest.childEvidence.normalCi, {
+        jobs: composite.jobs,
+        compositeJobsSha256: composite.sha256,
+      });
+      Object.assign(root.manifest, {
+        waivers: evaluateReleaseChildPolicy({
+          child: { key: "normalCi", jobs },
+          targetVersion: version,
+          targetSha: root.q,
+          waiverPolicy: grants,
+        }).waivers.map((waiver) =>
+          Object.assign({}, waiver, { runId: child.runId, runAttempt: 1 }),
+        ),
+      });
+      const original = { ...root.client };
+      evidenceClient = {
+        ...original,
+        getRunAttemptJobs: async (id: string) =>
+          id === child.runId ? jobs : original.getRunAttemptJobs(id),
+        getRun: async (id: string) => ({
+          ...(await original.getRun(id)),
+          ...(id === child.runId ? { conclusion: "failure" } : {}),
+        }),
+        getWorkflowSource: (sha: string, path?: string) =>
+          path === "scripts/lib/release-validation-waivers.json"
+            ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: grants })
+            : original.getWorkflowSource(sha, path),
+        getJobLog: async (id: number) =>
+          id === 1502 ? "##[error]synthetic leaf failed" : original.getJobLog(id),
+      };
+    }
     const descendant = scenario.endsWith("descendant");
     const candidateSha = scenario === "changed candidate" || descendant ? "d".repeat(40) : root.q;
     const targetSha = descendant ? "d".repeat(40) : root.q;
@@ -347,9 +315,10 @@ describe("candidate-owned publish consumer chain", () => {
       candidateSha,
       qualificationSha,
       transportRef: workflowRef,
-      candidateVersion: "2026.8.28-beta.1",
+      candidateVersion: version,
       policy: JSON.parse(readFileSync("scripts/lib/release-qualification-coverage.json", "utf8")),
       workflowSource: readFileSync(".github/workflows/full-release-validation.yml", "utf8"),
+      baselinePolicySource: readFileSync("scripts/lib/upgrade-survivor-scenarios.json", "utf8"),
     });
     envelope.qualificationAdmission = current.descriptor;
     inputs.trusted_workflow_json = JSON.stringify(envelope);
@@ -357,15 +326,12 @@ describe("candidate-owned publish consumer chain", () => {
       current.authority.permission = "read";
     }
     const client = {
-      ...root.client,
+      ...evidenceClient,
       compareCommits: descendant
         ? () => ({
             status: "ahead",
             merge_base_commit: { sha: root.q },
-            files: [
-              { filename: "CHANGELOG/2026.8.28.md", status: "modified" },
-              { filename: "CHANGELOG/records/2026.8.28.md", status: "modified" },
-            ],
+            files: changedPaths.map((filename) => ({ filename, status: "modified" })),
           })
         : root.client.compareCommits,
       verifyQualificationAdmission: (
@@ -383,9 +349,9 @@ describe("candidate-owned publish consumer chain", () => {
       {
         ...verifier(root),
         verifierSourceSha: scenario === "changed P" ? "e".repeat(40) : root.p,
-        ...(scenario === "execution-plan descendant"
+        ...(scenario.endsWith("execution-plan descendant")
           ? {
-              expectedChangedPaths: ["CHANGELOG/2026.8.28.md", "CHANGELOG/records/2026.8.28.md"],
+              expectedChangedPaths: changedPaths,
               expectedEvidencePolicy: "split-changelog-release-v1",
               expectedEvidenceSha: root.q,
               expectedRootRunId: root.runId,
@@ -410,8 +376,10 @@ describe("candidate-owned publish consumer chain", () => {
       },
       client,
     );
-    if (
-      scenario === "same qualification" ||
+    if (candidateBound && descendant) {
+      await expect(result).rejects.toThrow("candidate-bound release waiver");
+    } else if (
+      scenario.endsWith("same qualification") ||
       (descendant && scenario !== "independent Q change on changelog descendant")
     ) {
       const evidence = await result;
@@ -421,6 +389,12 @@ describe("candidate-owned publish consumer chain", () => {
         root: { runId: root.runId, workflowRefProof: "candidate-owned-admission-v1" },
         current: { conclusion: "success" },
       });
+      if (candidateBound) {
+        expect(evidence.waivers).toHaveLength(1);
+        expect(evidence.children.find((child) => child.role === "normalCi")).toMatchObject({
+          conclusion: "failure",
+        });
+      }
       expect(evidence.manifest.publicationArtifacts).toEqual(root.manifest.publicationArtifacts);
       expect(evidence.children.map((child) => child.runId)).toEqual(
         root.plan.children.map((child) => child.runId),

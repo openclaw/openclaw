@@ -112,15 +112,10 @@ request/admission. Do not open a grant PR against `main`, cherry-pick the grant
 into C, or change candidate bytes/version to carry it. Executable policy and
 workflow changes still use the normal tooling-change process. Keep authorization
 and detailed diagnostics in the release handoff, not the ledger or public docs;
-Q branches in a public repository are public, not private storage. A mechanical
-migration of historical grants preserves their scope and adds no new approval.
-
-Frozen pre-ledger Q revisions retain the historical P-owned grant semantics for
-recovery and admission. A missing ledger is accepted only after authenticating
-that exact Q’s pre-ledger evaluator source; it is never executed. Ledger-capable
-Q revisions require the ledger: missing or malformed data, failed authentication,
-and non-404 read failures remain blocking. New grants use the Q-ledger procedure
-above, not this historical compatibility path.
+Q branches in a public repository are public, not private storage. Main contains
+an empty ledger; actual grants belong only on the selected release Q branch.
+Missing or malformed Q ledgers, failed authentication, and transport errors remain
+blocking. There is no fallback to historical grants from main or another revision.
 
 For a newly approved job waiver, default to the exact release version, child
 role, and job across all future FRV runs, attempts, and candidates for that

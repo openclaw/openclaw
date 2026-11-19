@@ -15,12 +15,8 @@ import {
   fixture,
 } from "./release-qualification-admission.test-support.js";
 
-it("preserves production and verification of pre-ledger Q admissions", () => {
-  const f = fixture(false, { preLedgerSource: "const RELEASE_VALIDATION_WAIVERS = [];" });
-  expect(f.verify()).toEqual(f.receipt);
-  expect(() =>
-    fixture(false, { preLedgerSource: "import grants from './release-validation-waivers.json';" }),
-  ).toThrow("requires its release waiver ledger");
+it("rejects a Q revision without its ledger", () => {
+  expect(() => fixture(false, { missingLedger: true })).toThrow("HTTP 404");
 });
 
 const envelope = (inputs = request().inputs) =>
