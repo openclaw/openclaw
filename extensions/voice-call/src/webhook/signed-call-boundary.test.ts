@@ -373,7 +373,8 @@ it("binds signed Twilio calls before entering realtime lookup and bridge setup",
       );
     }
     expect(processEvent).toHaveBeenCalledTimes(2);
-    expect(lookupCall).toHaveBeenCalledOnce();
+    // Admission looks up the call, then rechecks it after awaited persistence.
+    expect(lookupCall).toHaveBeenCalledTimes(2);
     sendDocumentedTwilioMedia(matchingWs, MATCHING_STREAM_SID);
     await vi.waitFor(() => expect(sendAudio).toHaveBeenCalledTimes(3));
     sendDocumentedTwilioStop(matchingWs, MATCHING_CALL_SID, MATCHING_STREAM_SID);
