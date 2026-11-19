@@ -1,0 +1,10 @@
+# Stage 2 (openclaw/openclaw#129388): the pure candidate bc7e568a merged with upstream 41bdde2111. Net fork test-line growth, measured per file with scripts/check-test-lines-ratchet.mts semantics as (HEAD - 41bdde2111) minus (bc7e568a - 401a1de38b): +696.
+# O4a real-producer operator wake pins (3455d15ae9) +324: work-operator-continuation.producers.test.ts +232, server.continuation-finished-child-wake.product.test.ts +92.
+# O3 restart precedence and H1 custody pins (ba81542be1, 650413abb4) +137: subagent-registry.restart-terminal-custody.test.ts +87, subagent-registry.spawn-acceptance-custody.test.ts +50.
+# O2 delivery-ack replacement after relinquish (88a3fefc55) +54: user-turn-transcript.recorder.test.ts. System-event capacity pools (946600d06e) +30: system-events.test.ts. O1 dist-artifact compiler flags (8aeefacea8) +32: dist-artifact-fixture.test.ts +22, ui.test.ts +10.
+# Recipient authority at agent schema 44 +47: recipient-authority-migration +18, Doctor recipient-authority +13, pending-inputs-schema +6, retained-schema +3, authority PostgreSQL migration +3, agent-db-engine PostgreSQL +3, cold-navigation migration +1.
+# Fork fixtures following upstream contracts merged at 41bdde2111 +52: postcompaction-autocompaction +19, custody-conjecture +15, sessions-spawn-cloud +3, catalog-equivalence +3, and +2 each in chat-pending-inputs, sqlite-domain-command-classification, doctor-session-canonical-keys.completions, continuation-forest seams, status.continuation and update-cli-fixture.
+# Merge resolutions +62: the announce runtime mock kept after upstream #198194 removed it (+75), the cwd-split case rehomed to attempt.continuation-tools (+28, -20), the session-fork suite deleted with upstream #200545 (-16), reset-cleanup cause hunks (-5).
+# Fork deltas upstream absorbed -42: active-event-facts migration -24, #197153's CI guard lines now upstream's -14 (pg16-independent-smoke.txt retired with them, as upstream #197656 did), update-cli.fresh-doctor +4, and -10 across six files including the boundary lint-cap move.
+# Measured net, not a cap. Pending review; no approval claimed.
+696
