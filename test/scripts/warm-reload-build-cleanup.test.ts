@@ -78,12 +78,16 @@ it.each(["joined", "unjoined"] as const)(
     expect(existsSync(checkout)).toBe(cleanup === "unjoined");
     const worktrees = execFileSync(
       "git",
-      ["-C", state.repository, "worktree", "list", "--porcelain"],
+      ["-C", state.repository, "worktree", "list", "--porcelain", "-z"],
       {
         encoding: "utf8",
       },
     );
-    expect(worktrees.includes(checkout)).toBe(cleanup === "unjoined");
+    const registered = worktrees
+      .split("\0")
+      .filter((field) => field.startsWith("worktree "))
+      .map((field) => path.normalize(field.slice("worktree ".length)));
+    expect(registered.includes(checkout)).toBe(cleanup === "unjoined");
     expect(failManagedCleanup).toHaveBeenCalledTimes(cleanup === "unjoined" ? 1 : 0);
   },
 );
