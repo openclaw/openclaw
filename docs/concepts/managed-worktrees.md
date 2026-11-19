@@ -752,6 +752,8 @@ If an unarchived session's worktree was removed by cleanup or deletion, a new ch
 turn reports the removal before sandbox preparation. Use **Restore** on
 **Settings > Worktrees** (`worktrees.restore`), or start a new session. Sending
 another message does not automatically restore a removed checkout.
+Opening Review (`sessions.diff`) for a removed or missing worktree reports the
+same Restore guidance instead of an ownership-change error.
 
 `sessions.create` may include an absolute `cwd` to run directly in another Gateway folder or to choose the source checkout together with `worktree: true`. Connections with `operator.write` may use a Gateway `cwd` contained in any configured agent workspace; realpath containment prevents symlinks from escaping that boundary. Gateway paths outside those workspaces require `operator.admin`. Ordinary worktree chat creation remains `operator.write` and stays anchored to the configured workspace. For a Gateway source, New Session dispatches the completed worktree session to paired devices or cloud profiles instead of passing a paired-node working directory to creation. The separate `repository: { url, ref? }` create input starts a remote-owned repository session without a Gateway path or `worktree: true`.
 
