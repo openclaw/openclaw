@@ -77,7 +77,25 @@ export function tryInspectSqliteReadOnlyInProcess<T>(
     database.exec("ROLLBACK;");
     return { value };
   };
-  return withSqliteSourceReadDatabase(canonicalPath, "source", read, { readOnlyShm: preserve });
+  try {
+    return withSqliteSourceReadDatabase(canonicalPath, "source", read, { readOnlyShm: preserve });
+  } catch (error) {
+    // The read-only index cannot be opened once the last connection closed and removed the
+    // WAL family, and a new owner may already have recreated it, so the family is no
+    // evidence. The private snapshot owner rereads the source and reports any lasting
+    // open failure itself; a fallback never admits on its own.
+    if (preserve && isSqliteCantOpenError(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+const SQLITE_CANTOPEN_RESULT_CODE = 14;
+
+function isSqliteCantOpenError(error: unknown): boolean {
+  const errcode = (error as { errcode?: unknown } | null)?.errcode;
+  return typeof errcode === "number" && (errcode & 0xff) === SQLITE_CANTOPEN_RESULT_CODE;
 }
 
 /** The isolated reader lets SQLite distinguish a hot journal from harmless residue. */
