@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { writeFileSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
@@ -2838,37 +2838,66 @@ describe("FRV watch", () => {
     await expect(poll()).resolves.toMatchObject({ complete: true });
   });
 
-  it("labels every failed artifact qualification job as a blocker", async () => {
-    const statePath = path.join(tempDirs.make("frv-producer-blockers-"), "state.json");
-    const messages: string[] = [];
-    const client = {
-      ...unsealedWatcherReads,
-      repository: REPOSITORY,
-      getRun: async (runId: string) =>
-        runId === "77" ? rootRun(1, "failure") : runFor(child("normalCi", "808"), 1, "failure"),
-      getParentJobs: async () => [
-        { ...job("Prepare release npm artifacts"), id: 5, run_attempt: 1 },
-      ],
-      getJobLog: async () =>
-        `Dispatched full-release-artifacts.yml: https://github.com/${REPOSITORY}/actions/runs/808 (attempt 1)`,
-      getAttemptJobs: async () => [
-        job("Prepare npm artifacts / Check npm dependencies", "failure"),
-        job("Prepare npm artifacts / Check npm package contents", "timed_out"),
-      ],
-    };
+  it.each([
+    [1, 1, 1, true],
+    [2, 1, 2, false],
+    [2, 2, 2, true],
+  ])(
+    "labels every failed artifact qualification job as a blocker only for its parent attempt (%s/%s/%s)",
+    async (parentAttempt, dispatchAttempt, childAttempt, blocks) => {
+      const statePath = path.join(tempDirs.make("frv-producer-blockers-"), "state.json");
+      const messages: string[] = [];
+      const client = {
+        ...unsealedWatcherReads,
+        repository: REPOSITORY,
+        getRun: async (runId: string) =>
+          runId === "77"
+            ? rootRun(parentAttempt, "failure")
+            : runFor(child("normalCi", "808"), childAttempt, "failure"),
+        getParentJobs: async () => [
+          { ...job("Resolve target ref"), id: 4, run_attempt: parentAttempt },
+          { ...job("Prepare release npm artifacts"), id: 5, run_attempt: dispatchAttempt },
+        ],
+        getJobLog: async () =>
+          `Dispatched full-release-artifacts.yml: https://github.com/${REPOSITORY}/actions/runs/808 (attempt 1)`,
+        getAttemptJobs: async () => [
+          { ...job("Prepare npm artifacts / Check npm dependencies", "failure"), run_attempt: 1 },
+          {
+            ...job("Prepare npm artifacts / Check npm package contents", "timed_out"),
+            run_attempt: 1,
+          },
+        ],
+      };
 
-    await expect(
-      watchRelease("77", client, {
+      const result = await watchRelease("77", client, {
         statePath,
         once: true,
         emit: (event) => messages.push(event.message),
-      }),
-    ).resolves.toMatchObject({ complete: true });
-    expect(messages.filter((message) => message.includes("blocker"))).toEqual([
-      expect.stringContaining("Check npm dependencies"),
-      expect.stringContaining("Check npm package contents"),
-    ]);
-  });
+      });
+      expect(result).toMatchObject({ complete: true });
+      if (blocks) {
+        expect(result).toMatchObject({
+          complete: true,
+          blockers: [
+            expect.objectContaining({
+              blocker: true,
+              message: expect.stringContaining("Check npm dependencies"),
+            }),
+            expect.objectContaining({
+              blocker: true,
+              message: expect.stringContaining("Check npm package contents"),
+            }),
+          ],
+        });
+      } else {
+        expect(result).not.toHaveProperty("blockers");
+      }
+      expect(messages.filter((message) => message.includes("Check npm"))).toEqual([
+        expect.stringContaining("Check npm dependencies"),
+        expect.stringContaining("Check npm package contents"),
+      ]);
+    },
+  );
 
   it.each([
     "execution plan",

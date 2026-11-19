@@ -33,12 +33,13 @@ import {
 
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const time = "2026-08-28T12:00:00.000Z";
-const version = "2026.8.28-beta.1";
+
 const workflowPath = (name: string) => `.github/workflows/${name}.yml`;
 
 export function candidatePublicationFixture(
   options: {
     candidateSha?: string;
+    candidateVersion?: string;
     qualificationSha?: string;
     transportRef?: string;
     runId?: string;
@@ -46,6 +47,7 @@ export function candidatePublicationFixture(
     protectedTag?: boolean;
   } = {},
 ) {
+  const version = options.candidateVersion ?? "2026.8.28-beta.1";
   const fixture = trustedMainNpmFixture();
   const c = options.candidateSha ?? defaultQ;
   const q = options.qualificationSha ?? c;
@@ -107,6 +109,7 @@ export function candidatePublicationFixture(
   const mapped = <T>(value: T): T =>
     JSON.parse(
       JSON.stringify(value)
+        .replaceAll("2026.8.28-beta.1", version)
         .replaceAll(legacyRunId, runId)
         .replaceAll(fixture.targetSha, c)
         .replaceAll(fixture.workflowSha, q)
@@ -327,7 +330,10 @@ export function candidatePublicationFixture(
     revalidateQualificationAdmissionAuthority: (
       authority: Parameters<typeof revalidateQualificationAdmissionAuthority>[0],
     ) => revalidateQualificationAdmissionAuthority({ ...authority, runGh: admission.runGh }),
-    getWorkflowSource: () => workflowSource,
+    getWorkflowSource: (
+      _sha: string,
+      sourcePath = ".github/workflows/full-release-validation.yml",
+    ) => admission.sources.get(q + ":" + sourcePath) ?? readFileSync(sourcePath, "utf8"),
     getRef: (ref: string) => ({ ref, object: { sha: admission.authority.tagSha } }),
     getRunView: (_id: string) => mapped(fixture.client.getRunView(legacyRunId)),
     getRun: async (id: string) => (id === runId ? parent : mapped(fixture.client.getRun(id))),
@@ -344,6 +350,7 @@ export function candidatePublicationFixture(
         ? "2026-08-28T12:01:03.750Z FRV_EXECUTION_PLAN_SHA256=" + plan.sha256 + "\n"
         : fixture.client
             .getJobLog(id)
+            .replaceAll("2026.8.28-beta.1", version)
             .replaceAll(legacyRunId, runId)
             .replaceAll(fixture.targetSha, c),
     getRunAttemptJobs: async (id: string) =>

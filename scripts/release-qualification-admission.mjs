@@ -22,7 +22,6 @@ import {
 import { isRecord } from "./lib/record-shared.mjs";
 import {
   readReleaseValidationWaivers,
-  releaseQualificationExemptions,
   validateQualificationExemptions,
 } from "./lib/release-validation-waivers.mjs";
 import {
@@ -457,7 +456,7 @@ export function produceQualificationAdmission({
     readSource(request.repository, request.candidateSha, "package.json", runGh),
     readSource(request.repository, request.candidateSha, QUALIFICATION_BASELINE_POLICY_PATH, runGh),
   );
-  const waiverPolicy = readReleaseValidationWaivers((sourcePath) =>
+  readReleaseValidationWaivers((sourcePath) =>
     readSource(request.repository, request.qualificationSha, sourcePath, runGh).toString("utf8"),
   );
   const final = verifyProducer(producer, runGh, false);

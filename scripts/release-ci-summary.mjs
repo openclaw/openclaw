@@ -2098,13 +2098,13 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
       }
       const exactSha = normalizeSha(sha, "source admission workflow SHA");
       const payload = githubRestJson(
-        `contents/.github/workflows/full-release-validation.yml?ref=${exactSha}`,
+        `contents/${sourceWorkflowPath}?ref=${exactSha}`,
         normalizedRepository,
       );
       if (
         payload?.type !== "file" ||
         payload.encoding !== "base64" ||
-        payload.path !== ".github/workflows/full-release-validation.yml" ||
+        payload.path !== sourceWorkflowPath ||
         !Number.isSafeInteger(payload.size) ||
         payload.size < 1 ||
         payload.size > 1024 * 1024 ||
@@ -3123,6 +3123,13 @@ export async function validateReleaseRunEvidence(
     !isDeepStrictEqual(rootEvidence.manifestJson.waivers ?? [], sortReleaseJsonValueKeys(waivers))
   ) {
     throw new Error("release manifest waivers differ from checked-in release tooling policy");
+  }
+  // Authenticate root failures against their own candidate above, then enforce
+  // the grant's destination binding even when changelog-only reuse is valid.
+  const destinationTargetSha =
+    reuseRequest?.targetSha ?? expectedTargetSha ?? currentEvidence.manifest.targetSha;
+  if (waivers.some((waiver) => waiver.targetSha && waiver.targetSha !== destinationTargetSha)) {
+    throw new Error("candidate-bound release waiver cannot qualify a different target SHA");
   }
   if (remainingExpectedRunAttempts?.size) {
     throw new Error(

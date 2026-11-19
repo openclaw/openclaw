@@ -2662,7 +2662,7 @@ jobs:
     runs-on: *linux_runner_small
     timeout-minutes: 720
     env:
-      RELEASE_STATE_SCRIPT: *release_state_script
+      RELEASE_STATE_SCRIPT: &release_state_script ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/full-release-validation-state.mjs', github.workspace) || format('{0}/scripts/full-release-validation-state.mjs', github.workspace) }}
     outputs:
       state: ${{ steps.state.outputs.state }}
     steps:

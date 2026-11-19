@@ -565,10 +565,11 @@ describe("original publication admission reader", () => {
           : fixture.client.getJobLog(id),
       getRun: async (id: string) => fixture.client.getRun(id),
       getParentJobs: async (id: string) => fixture.client.getParentJobs(id),
-      getWorkflowSource: vi.fn(
-        () =>
-          'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n' +
-          (restoreContract ? '  FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT: "1"\n' : ""),
+      getWorkflowSource: vi.fn((_sha: string, sourcePath?: string) =>
+        sourcePath === "scripts/lib/release-validation-waivers.json"
+          ? readFileSync(sourcePath, "utf8")
+          : 'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n' +
+            (restoreContract ? '  FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT: "1"\n' : ""),
       ),
       getRunAttempt: vi.fn((runId: string, attempt: number) => {
         expect(attempt).toBe(1);
@@ -1530,6 +1531,20 @@ function trustedMainChildReuseFixture() {
     head_repository: repository,
   };
   const github = vi.fn(async (endpoint: string) => {
+    if (endpoint.startsWith("contents/scripts/lib/release-validation-waivers.json?ref=")) {
+      const content = readFileSync("scripts/lib/release-validation-waivers.json");
+      return {
+        type: "file",
+        path: "scripts/lib/release-validation-waivers.json",
+        encoding: "base64",
+        size: content.length,
+        content: content.toString("base64"),
+        sha: createHash("sha1")
+          .update("blob " + content.length + "\0")
+          .update(content)
+          .digest("hex"),
+      };
+    }
     if (endpoint === `actions/runs/${run.id}`) {
       return run;
     }
@@ -1902,8 +1917,10 @@ describe("release CI summary child correlation", () => {
         getJobLog,
         getReleaseEvidenceClient: () => ({
           ...createReleaseEvidenceClient(repository),
-          getWorkflowSource: () =>
-            'env:\n  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "1"\njobs:\n  npm_artifacts:\n    name: Prepare release npm artifacts\n    env:\n      CHILD_WORKFLOW_KIND: artifact-npm\n    steps: []\n',
+          getWorkflowSource: (_sha: string, sourcePath?: string) =>
+            sourcePath === "scripts/lib/release-validation-waivers.json"
+              ? readFileSync(sourcePath, "utf8")
+              : 'env:\n  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "1"\njobs:\n  npm_artifacts:\n    name: Prepare release npm artifacts\n    env:\n      CHILD_WORKFLOW_KIND: artifact-npm\n    steps: []\n',
         }),
         rerunJob,
         rerunParent,
@@ -1938,7 +1955,10 @@ describe("release CI summary child correlation", () => {
       getParentJobs: async (runId: string) => fixture.client.getParentJobs(runId),
       getRunAttemptJobs: async (runId: string) => fixture.client.getRunAttemptJobs(runId),
       loadManifest: () => ({ artifact: fixture.artifact, manifest: retainedManifest }),
-      getWorkflowSource: () => 'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n',
+      getWorkflowSource: (_sha: string, sourcePath?: string) =>
+        sourcePath === "scripts/lib/release-validation-waivers.json"
+          ? readFileSync(sourcePath, "utf8")
+          : 'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n',
     };
     const options = {
       run: fixture.parentRun,
@@ -2612,7 +2632,7 @@ describe("release CI summary child correlation", () => {
     const jobs = [windowsJob, { ...fixture.parentJob, name: "openclaw/ci-gate" }];
     setChildJobs(fixture, "normalCi", jobs).run.conclusion = "failure";
     await expect(verifyFixture(fixture)).rejects.toThrow(
-      "Release manifest contains failed selected job evidence",
+      "manifest child run does not pass release policy",
     );
   });
 

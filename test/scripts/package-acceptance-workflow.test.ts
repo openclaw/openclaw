@@ -14756,6 +14756,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     for (const source of [
       "scripts/release-ci-summary.mjs",
       "scripts/lib/release-validation-waivers.mjs",
+      "scripts/lib/release-validation-waivers.json",
+      "scripts/lib/ci-node-test-evidence.mjs",
       "scripts/lib/release-evidence-identity.mjs",
       "scripts/release-qualification-admission.mjs",
       "scripts/lib/qualification-admission-baselines.mjs",

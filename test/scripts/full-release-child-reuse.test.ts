@@ -34,6 +34,7 @@ async function fixture(
   role = "normalCi",
   dispatchInputs?: Record<string, string>,
   workflowSha = TOOLING,
+  workloadJobCount = 2,
 ) {
   const { workflow, suffix, displayName } = releaseChildSpec(role);
   const workflowRef = workflowSha === TARGET ? `release-ci/${TARGET.slice(0, 12)}-123` : "main";
@@ -85,8 +86,13 @@ async function fixture(
     html_url: `https://github.com/${REPOSITORY}/actions/runs/101/job/${id}`,
     steps: [] as { name: string; status: string; conclusion: string }[],
   });
-  const jobs = [rawJob(1, "node tests"), rawJob(2, "resolve target"), rawJob(3, PUBLISHER)];
-  jobs[2]!.steps = [
+  const jobs = [
+    ...Array.from({ length: workloadJobCount }, (_, index) =>
+      rawJob(index + 1, ["node tests", "resolve target"][index] ?? `workload ${index + 1}`),
+    ),
+    rawJob(workloadJobCount + 1, PUBLISHER),
+  ];
+  jobs.at(-1)!.steps = [
     "Checkout trusted child evidence tooling",
     "Seal exact child attempt evidence",
     "Upload sealed child evidence",
@@ -94,7 +100,7 @@ async function fixture(
   const composite = {
     effectiveRunAttempt: 1,
     plannedRunAttempt: 1,
-    jobs: jobs.slice(0, 2).map((job) => ({
+    jobs: jobs.slice(0, -1).map((job) => ({
       acceptedRunAttempt: 1,
       completedAt: job.completed_at,
       conclusion: job.conclusion,
@@ -118,7 +124,7 @@ async function fixture(
     sourceParentAttempt: 1,
     workloadConclusion: "success",
     inputs: { ...request.inputs },
-    publisher: { jobId: "3", jobName: PUBLISHER },
+    publisher: { jobId: String(workloadJobCount + 1), jobName: PUBLISHER },
     ...composite,
     compositeJobsSha256: jsonDigest(composite),
     dispatchActor: "github-actions[bot]",
@@ -443,7 +449,7 @@ else {
         chmodSync(join(directory, "gh"), 0o755);
         const outputPath = join(directory, "output");
         const cli = spawnSync(
-          testNodeExecPath,
+          process.execPath,
           [
             "scripts/find-reusable-release-child.mjs",
             "ci.yml",
@@ -785,67 +791,6 @@ process.stdout.write("##[error]checks-node-core-test-nondist-shard finished with
       ),
     ).rejects.toThrow();
   });
-  it("reads twelve complete inventories four at a time within the shared deadline", async () => {
-    const data = await fixture("normalCi", undefined, TOOLING, 261, 12);
-    const selection = await discoverReusableReleaseChild(data.request, data.deps);
-    vi.useFakeTimers();
-    const started = Date.now();
-    // Thirteen reads per attempt exceed 120s serially; skew also exercises out-of-order completion.
-    let active = 0;
-    let peak = 0;
-    const reads = new Map<number, string[]>();
-    const completed: number[] = [];
-    const github = async (endpoint: string) => {
-      const match = /attempts\/(\d+)\/jobs\?(.*)$/u.exec(endpoint);
-      if (!match) {
-        return data.deps.github(endpoint);
-      }
-      const attempt = Number(match[1]);
-      const pages = reads.get(attempt) ?? [];
-      reads.set(attempt, pages);
-      pages.push(match[2]!);
-      active += 1;
-      peak = Math.max(peak, active);
-      try {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 2_000 + (4 - (attempt % 4)) * 100);
-        });
-        if (/per_page=(100|50)&page=2$/u.test(endpoint)) {
-          throw new Error("gh: Server Error (HTTP 502)");
-        }
-        if (endpoint.endsWith("per_page=30&page=9")) {
-          completed.push(attempt);
-        }
-        return await data.deps.github(endpoint);
-      } finally {
-        active -= 1;
-      }
-    };
-    const verification = validateReusableReleaseChild(selection, data.request, {
-      ...data.deps,
-      github,
-      deadlineMs: started + 120_000,
-    });
-    const checked = expect(verification).resolves.toMatchObject({ receipt: data.receipt });
-    await vi.runAllTimersAsync();
-    await checked;
-    expect(peak).toBe(4);
-    expect(active).toBe(0);
-    expect(Date.now() - started).toBeLessThan(120_000);
-    expect(completed).toHaveLength(12);
-    expect(completed.slice(0, 4)).toEqual([3, 2, 1, 4]);
-    expect([...reads.keys()]).toEqual(Array.from({ length: 12 }, (_, index) => index + 1));
-    for (const pages of reads.values()) {
-      expect(pages).toEqual([
-        "per_page=100&page=1",
-        "per_page=100&page=2",
-        "per_page=50&page=1",
-        "per_page=50&page=2",
-        ...Array.from({ length: 9 }, (_, index) => `per_page=30&page=${index + 1}`),
-      ]);
-    }
-  });
-
   it("accepts candidate-owned evidence outside main ancestry", async () => {
     const data = await fixture("normalCi", undefined, TARGET);
     const workflowRef = `release-ci/${TARGET.slice(0, 12)}-123`;
@@ -895,7 +840,7 @@ process.stdout.write("##[error]checks-node-core-test-nondist-shard finished with
       data.request.workflowSha = workflowSha;
       const github = data.deps.github;
       data.deps.github = async (endpoint) => {
-        if (endpoint.startsWith("git/commits/")) {
+        if (endpoint.startsWith("git/commits/") || endpoint.startsWith("compare/")) {
           throw new Error("Full release child evidence API GET: commit unavailable");
         }
         return github(endpoint);

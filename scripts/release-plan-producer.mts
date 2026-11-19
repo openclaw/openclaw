@@ -34,6 +34,7 @@ const TOOLING_MODULE_PATHS = [
   "scripts/lib/actions-artifact-archive.mjs",
   "scripts/lib/bounded-response.mjs",
   "scripts/lib/canonical-json.mjs",
+  "scripts/lib/ci-node-test-evidence.mjs",
   "scripts/lib/full-release-child-request.mjs",
   "scripts/lib/npm-publish-plan.mjs",
   "scripts/lib/plain-gh.mjs",
@@ -372,7 +373,6 @@ function captureQualificationIdentity(
   api("actions/runs/" + runId + "/attempts/" + runAttempt + "/jobs?per_page=100");
   api("actions/artifacts/" + artifactId + "/zip", true);
   api("contents/scripts/lib/release-validation-waivers.json?ref=" + params.toolingSha);
-  const finalAuthorityStart = responses.length;
   api("actions/artifacts/" + artifactId);
   producer();
   return responses;
