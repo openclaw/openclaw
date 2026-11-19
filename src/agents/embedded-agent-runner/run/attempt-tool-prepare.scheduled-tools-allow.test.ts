@@ -12,6 +12,7 @@ import {
 } from "../../../test-utils/channel-plugins.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { rewrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
+import { runWithAgentRingZeroTools } from "../../agent-tools.ring-zero-context.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import type { AnyAgentTool } from "../../tools/common.js";
@@ -461,4 +462,14 @@ it("never delegates or captures a tool the guest sender is refused", async () =>
     expect(run.inherited ?? []).not.toContain(name);
     expect(run.cronCreator ?? []).not.toContain(name);
   }
+});
+
+it("keeps removing a host ring-zero tool the run allowlist does not name", async () => {
+  // Ring-zero tools join after agent policy. Their harness runs without Tool Search, so
+  // the allowlist still narrows the list there, as on main.
+  const run = await runWithAgentRingZeroTools([createStubTool("host_probe")], () =>
+    prepareTools({ ...scheduled, runId: "ring" }),
+  );
+  expect(run.listed).not.toContain("tool_search");
+  expect(run.listed).not.toContain("host_probe");
 });

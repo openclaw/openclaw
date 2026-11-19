@@ -18,7 +18,6 @@ import {
 } from "../../admitted-run-context.js";
 import { createOpenClawCodingToolsInternalAsync } from "../../agent-tools.async.js";
 import { assertMemoryFlushPersistenceToolAvailable } from "../../agent-tools.memory-flush.js";
-import { refuseRunAllowlistTool } from "../../agent-tools.turn-authority.js";
 import { getChannelAgentToolMeta } from "../../channel-tool-metadata.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
@@ -441,17 +440,12 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         );
       }
       params.markCoreToolStage("attempt:create-openclaw-coding-tools");
-      constructedToolsRaw = applyEmbeddedAttemptToolsAllow(boundTools, effectiveToolsAllow, {
-        toolMeta: (tool) => getPluginToolMeta(tool),
-      });
-      // The listing never depends on the allowlist; the catalog step still fails a run whose
-      // allowlist leaves nothing callable ("No callable tools remain").
-      if (toolsAllowGated) {
-        const allowed = new Set(constructedToolsRaw);
-        constructedToolsRaw = boundTools.map((tool) =>
-          allowed.has(tool) ? tool : refuseRunAllowlistTool(tool),
-        );
-      }
+      // On a fixed listing the assembly's turn policy already refuses what the allowlist omits.
+      constructedToolsRaw = toolsAllowGated
+        ? boundTools
+        : applyEmbeddedAttemptToolsAllow(boundTools, effectiveToolsAllow, {
+            toolMeta: (tool) => getPluginToolMeta(tool),
+          });
       params.markCoreToolStage("attempt:tools-allow");
     }
     const toolsRaw = constructedToolsRaw;
