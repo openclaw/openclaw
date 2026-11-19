@@ -396,7 +396,9 @@ OpenClaw ID members use their membership role's definition in
 When OpenClaw ID turns on, and at Gateway start when it is already on, the Gateway
 writes any missing presets without overwriting owner-edited definitions. Installing
 presets uses the standard config writer: it rewrites the config file as JSON and
-removes JSON5 comments.
+removes JSON5 comments. When plugin policy blocks the Access page, startup and
+watcher reconciliation leave the config file unchanged; repair the plugin policy
+with Doctor first.
 
 The presets are:
 
@@ -418,7 +420,9 @@ For those sessions' exec and file tools, an unavailable sandbox backend or faile
 provisioning is an error, not a fallback to a host or node target. The **Access**
 invite form warns when the selected role requires a sandbox and the configured
 Docker or Podman backend is unavailable. See [Sandboxing](/gateway/sandboxing)
-for setup.
+for setup. With OpenClaw ID enabled and a role catalog present, `openclaw doctor`
+also checks members and the named default for an unavailable container backend.
+This checks engine availability, not whether every agent image will provision.
 
 The sandbox requirement does not contain every execution path. Before inviting
 someone you do not trust with the machine, review the
@@ -445,7 +449,12 @@ whose role has no definition cannot connect or start retained/recovered work.
 Editing a definition reconnects affected members with current permissions;
 removing one denies that role. Missing presets are installed again on the next
 activation or Gateway start. Manage membership on **Access**, not `users.setRole`;
-clearing a stored profile role with `null` remains allowed.
+clearing a stored profile role with `null` remains allowed. With a role catalog
+present, Doctor reads membership locally while the Gateway is stopped, reports
+undefined member roles, and offers to restore missing presets. Accepting that
+repair rewrites JSON and removes comments, just like activation; it preserves
+existing definitions, `default`, and `assignments`. Unreadable membership is
+reported rather than treated as an empty member list.
 
 On **Access**, choose an invite's role from the claw's defined roles. **Operator**
 is selected when it is defined; otherwise the first role alphabetically is selected.
@@ -468,7 +477,10 @@ open it.
 
 Preset installation never sets or changes `gateway.roles.default` or
 `gateway.roles.assignments`. Without a default, other sign-in methods keep their
-existing behavior, including device-token-only reconnects. Existing team Gateways
+existing behavior, including device-token-only reconnects. The connection decides
+the policy: an OpenClaw ID member role and a profile role reached through another
+sign-in method are not combined. Stored profile assignments have no effect without
+a named default; Doctor warns about them. Existing team Gateways
 keep their default and enforcement. Owner devices and nodes are unchanged.
 A preset-write failure is logged and reported in OpenClaw ID service status;
 undefined member roles remain refused and owners retain access. Nothing is written
@@ -485,11 +497,26 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
   OpenClaw ID**, **Turn on remote access**, **Your devices**, **Copy claw link**
   and **Sign out of OpenClaw ID**, depending on your connection and setup state.
 - **Access**, under **Pages**: the **Remote access** page from the bundled
-  `openclaw-id-access` plugin (enabled by default). It shows who may reach this
+  `openclaw-id-access` plugin (enabled by default). Turning OpenClaw ID on through
+  Labs, the config CLI, or setup adds this plugin to an existing nonempty
+  `plugins.allow` in the same config write. Empty or absent allowlists are unchanged.
+  Explicit `plugins.deny`, `plugins.entries["openclaw-id-access"].enabled: false`,
+  and `plugins.enabled: false` still win: activation warns that the Access page
+  stays off and leaves those settings unchanged. Turning OpenClaw ID off does not
+  remove the allowlist entry.
+
+  Hand-edited or read-only configurations are not automatically repaired when
+  the allowlist blocks Access. The Gateway warns; run `openclaw doctor` and
+  accept the repair to add only `openclaw-id-access` to `plugins.allow`. Doctor
+  does not override explicit denies or disables, and declining preserves the file.
+  A read-only config must be made writable by its owner before repair.
+
+  The page shows who may reach this
   claw through OpenClaw ID; its **People** section lets you invite someone,
   approve or deny their request, change a member's role, and remove members. Use an approved owner
   browser to change access. Devices paired with this Gateway are in
   **Settings → Devices**.
+
 - **Member names**: an approved member is named from their OpenClaw ID account,
   or from the part of their email before the `@` when the account reports no
   name. Their first visit opens a new session, which asks for a name and photo

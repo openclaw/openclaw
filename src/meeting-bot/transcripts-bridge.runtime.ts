@@ -2,7 +2,7 @@ import path from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { resolveStateDir } from "../config/paths.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
-import { pluginInstanceInvocation } from "../plugins/plugin-instance-invocation.js";
+import { captureCurrentPluginBackgroundRunner } from "../plugins/plugin-instance-invocation.js";
 import {
   createTranscriptSummaryUpdates,
   persistTranscriptSummary,
@@ -90,9 +90,7 @@ export function createMeetingDurableTranscriptBridge<
       return isEnabled();
     },
     async start(session, capture) {
-      const runInBackground =
-        pluginInstanceInvocation.getStore()?.instance.lifecycle.runInBackgroundContext ??
-        (<T>(run: () => T) => run());
+      const runInBackground = captureCurrentPluginBackgroundRunner();
       await lifecycleTasks.enqueue(session.id, async () => {
         if (!isEnabled() || captures.has(session.id)) {
           return;

@@ -5,6 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
@@ -35,10 +36,7 @@ import {
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  recordSessionStateEventAsync,
-  registerSessionStateWatch,
-} from "../../sessions/session-state-events.js";
+import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import { readCursor } from "../../sessions/session-state-events.test-support.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -52,6 +50,7 @@ import {
 import {
   configureEventState,
   openEventToolHost,
+  recordWatchEvents,
   runEventFixture,
   startEmbeddedTurn,
 } from "./session-event.test-support.js";
@@ -85,23 +84,6 @@ function observeEnqueue(source: string | undefined, onReceipt: (receipt: EventRe
       }
       return receipt;
     });
-}
-
-async function recordWatchEvents(child: string, sessionId: string) {
-  const input = {
-    sessionKey: child,
-    sessionId,
-    agentId: "main",
-    kind: "human_direct_message" as const,
-    actorType: "human" as const,
-    summary: "Other actor changed the watched session",
-    watcherSessionKeys: [],
-  };
-  return {
-    child,
-    frozen: expectDefined(await recordSessionStateEventAsync(input), "frozen event"),
-    newer: expectDefined(await recordSessionStateEventAsync(input), "newer event"),
-  };
 }
 
 async function enqueueGuardedCliWatchdog(params: {
@@ -620,7 +602,13 @@ it.for([
               firstStarted.resolve();
               await releaseFirst.promise;
             }
-            return { payloads: [{ text: "Observed" }], meta: { durationMs: 1 } };
+            const prepared = prepareAgentRunTerminalReply({
+              rawText: starts.length === 2 && watchCount === 1 ? "NO_REPLY" : "Observed",
+            });
+            return {
+              payloads: prepared.text ? [{ text: prepared.text }] : [],
+              meta: { durationMs: 1, terminalReply: prepared.terminalReply },
+            };
           });
         const target = await captureSessionEventTargetForHost(scope.agentId, scope.sessionKey);
         const first = enqueueSessionEventForHost("First admitted work", {
@@ -648,7 +636,7 @@ it.for([
             }
             return result;
           });
-        const enqueueSpy = observeEnqueue("session", (receipt) => {
+        const enqueueSpy = observeEnqueue("session_state", (receipt) => {
           notices.push(receipt);
           enqueued.resolve();
         });
@@ -733,10 +721,14 @@ it.for([
             expect(outcome, outcome.error).toMatchObject({
               status: "completed",
               executionStarted: true,
+              ...(watchCount === 1 ? { deliverySuppressionReason: "silent" } : {}),
             });
           }
           expect(starts).toHaveLength(cancelledBatch ? 1 : 2);
           if (!cancelledBatch) {
+            expect(runEmbeddedAgentMock.mock.calls[1]?.[0].terminalReplyExpectation).toBe(
+              "optional",
+            );
             expect(runEmbeddedAgentMock.mock.calls[1]?.[0].permissionMode).toBe(
               watchCount === 2 ? "read-only" : "full",
             );

@@ -144,7 +144,7 @@
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"]
   .agent-chat__composer-input-row {
   grid-column: 2;
-  grid-row: 2;
+  grid-row: var(--chat-composer-action-row, 2);
   align-self: center;
   padding: 0;
 }
@@ -187,6 +187,14 @@
   justify-self: end;
 }
 
+/* Keep dictation status clear of the one-line draft and its buttons. */
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"]
+  .agent-chat__dictation-status {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  padding-block-end: 4px;
+}
+
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"]
   .agent-chat__composer-context,
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"]
@@ -219,9 +227,12 @@
   flex-shrink: 0;
 }
 
-/* Give the prediction its own full-width row above the compact controls. */
+/* Give the prediction or dictation status a row above the compact controls. */
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"]
-  .agent-chat__input:has(.agent-chat__composer-combobox[data-prediction]) {
+  .agent-chat__input:has(
+    .agent-chat__composer-combobox[data-prediction],
+    .agent-chat__dictation-status
+  ) {
   /* Keep :has() on the subject; a descendant selector invalidates unrelated subtrees. */
   --chat-composer-action-row: 3;
 
@@ -229,9 +240,10 @@
 }
 
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"]
-  .agent-chat__input
+  .agent-chat__input:not(:has(.agent-chat__dictation-status))
   .agent-chat__composer-input-row:has(.agent-chat__composer-combobox[data-prediction]) {
   grid-column: 1 / -1;
+  grid-row: 2;
   padding: 0 6px 6px;
   transform: none;
 }

@@ -87,12 +87,10 @@ function controlsHtml() {
       <div class="settings-row__control"><textarea class="settings-input">config textarea</textarea></div>
       <select class="settings-select"><option>settings select</option></select>
       <input class="usage-date-input" value="2026-05-31" />
-      <select class="usage-select"><option>usage select</option></select>
+      <label class="sessions-sort">
+        <span>Sort</span><select class="settings-select"><option>Recent</option></select>
+      </label>
       <input class="usage-query-input" value="usage query" />
-      <div class="usage-filters-inline">
-        <select><option>inline usage select</option></select>
-        <input type="text" value="inline usage input" />
-      </div>
       <div class="agent-chat__composer-combobox"><textarea>chat composer</textarea></div>
     </main>
   `;
@@ -519,10 +517,8 @@ describeBrowserLayout("form controls and app chrome styles", () => {
         ".settings-row__control > textarea.settings-input",
         ".settings-select",
         ".usage-date-input",
-        ".usage-select",
+        ".sessions-sort select",
         ".usage-query-input",
-        '.usage-filters-inline input[type="text"]',
-        ".usage-filters-inline select",
         ".agent-chat__composer-combobox > textarea",
       ];
       expect(
@@ -533,8 +529,8 @@ describeBrowserLayout("form controls and app chrome styles", () => {
         expect(Number.parseFloat(size), selectors[index]).toBeGreaterThanOrEqual(16),
       );
 
-      // Both the .field-wrapped and bare settings selects draw the themed
-      // chevron; bare ones once fell back to the misaligned native arrow.
+      // The field-wrapped, bare and Usage sort settings selects all draw the
+      // themed chevron; bare ones once fell back to the misaligned native arrow.
       const selects = await page.locator("select.settings-select").evaluateAll((nodes) =>
         nodes.map((node) => {
           const style = getComputedStyle(node as HTMLElement);
@@ -548,7 +544,7 @@ describeBrowserLayout("form controls and app chrome styles", () => {
         }),
       );
 
-      expect(selects).toHaveLength(2);
+      expect(selects).toHaveLength(3);
       for (const select of selects) {
         expect(select).toMatchObject({
           appearance: "base-select",

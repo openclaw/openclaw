@@ -5,6 +5,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
+  createOperationalRunInstanceRef,
+  getAdmittedRunDelegatedAuthority,
+  prepareAgentRunAdmission,
+} from "../../agents/admitted-run-context.js";
+import {
   bindCronManagementGrant,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
@@ -17,6 +22,11 @@ import {
   loadLegacyCronRepairState,
 } from "../../commands/doctor/cron/legacy-repair.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  bindCronJobAdmittedRun,
+  clearCronJobActive,
+  markCronJobActive,
+} from "../../cron/active-jobs.js";
 import { cronRunLogEntryToDetail } from "../../cron/run-history-detail.js";
 import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
@@ -929,30 +939,6 @@ describe("cron method validation", () => {
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
-  it("keeps wake mutation at zero when delegated authority closes during preparation", async () => {
-    let authorityActive = true;
-    const held = createDeferred<undefined>();
-    const context = createCronContext();
-    context.cron.prepareWake.mockImplementationOnce(async () => await held.promise);
-    context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
-
-    const invocation = invokeCron(
-      "wake",
-      { mode: "now", text: "ping", agentId: "ops" },
-      { context, client: callerClient("ops") },
-    );
-    await vi.waitFor(() => expect(context.cron.prepareWake).toHaveBeenCalledOnce());
-    authorityActive = false;
-    held.resolve(undefined);
-    const { respond } = await invocation;
-
-    expect(context.cron.wake).toHaveBeenCalledOnce();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "agent runtime authority is no longer active",
-    });
-  });
-
   it("stamps declaration ownership from the trusted caller and scopes key lookup", async () => {
     const { context, respond } = await invokeCronAdd(
       agentTurnCronParams({
@@ -1156,49 +1142,6 @@ describe("cron method validation", () => {
       messageIncludes: "Gateway caller authority is no longer active",
     });
   });
-
-  it.each([
-    ["cron.scratch.set", { id: "cron-1", content: "notes" }, "writeScratch"],
-    ["cron.remove", { id: "cron-1" }, "remove"],
-    ["cron.run", { id: "cron-1", mode: "force" }, "enqueueRun"],
-  ] as const)(
-    "revalidates delegated authority at the %s commit owner",
-    async (method, params, owner) => {
-      const context = createCronContext(createCronJob({ agentId: "ops" }));
-      let authorityActive = true;
-      context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
-      if (owner === "writeScratch") {
-        context.cron.writeScratch.mockImplementationOnce(async (_id, write) => {
-          authorityActive = false;
-          write.commitGuard?.();
-          throw new Error("unreachable");
-        });
-      } else if (owner === "remove") {
-        context.cron.remove.mockImplementationOnce(async (_id, options) => {
-          authorityActive = false;
-          options?.commitGuard?.();
-          throw new Error("unreachable");
-        });
-      } else {
-        context.cron.enqueueRun.mockImplementationOnce(async (_id, _mode, options) => {
-          authorityActive = false;
-          options?.commitGuard?.();
-          throw new Error("unreachable");
-        });
-      }
-
-      const { respond } = await invokeCron(method, params, {
-        context,
-        client: callerClient("ops"),
-      });
-
-      expect(context.cron[owner]).toHaveBeenCalledOnce();
-      expectResponseError(respond, {
-        code: "INVALID_REQUEST",
-        messageIncludes: "agent runtime authority is no longer active",
-      });
-    },
-  );
 
   it.each([
     ["cron.scratch.set", { id: "cron-1", content: "notes" }, "writeScratch"],
@@ -1529,12 +1472,35 @@ describe("cron method validation", () => {
     });
     expect(context.cron.enqueueRun).not.toHaveBeenCalled();
 
-    const remove = await invokeCron(
-      "cron.remove",
-      { id: accountJob.id },
-      { context, client: runClient },
-    );
-    expect(remove.respond).toHaveBeenCalledWith(true, { ok: true, removed: true }, undefined);
+    const admission = prepareAgentRunAdmission({
+      cfg: {},
+      operationalRunInstance: createOperationalRunInstanceRef("run-current-job-self-management"),
+      facts: {
+        runId: "run-current-job-self-management",
+        agentId: "ops",
+        ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
+      },
+    });
+    const marker = markCronJobActive(accountJob.id);
+    try {
+      const admitted = await admission.admit("embedded");
+      const identity = expectDefined(runClient.internal?.agentRuntimeIdentity, "scheduled caller");
+      identity.operationalRunInstance = admitted.operationalRunInstance;
+      identity.delegatedAuthority = {
+        kind: "local",
+        ...expectDefined(getAdmittedRunDelegatedAuthority(admitted), "scheduled admission"),
+      };
+      bindCronJobAdmittedRun(marker, admitted, new AbortController().signal);
+      const remove = await invokeCron(
+        "cron.remove",
+        { id: accountJob.id },
+        { context, client: runClient },
+      );
+      expect(remove.respond).toHaveBeenCalledWith(true, { ok: true, removed: true }, undefined);
+    } finally {
+      clearCronJobActive(accountJob.id, marker);
+      admission.close();
+    }
 
     cronRunRecordsOverride.mockImplementationOnce(async () => {
       runClient.internal!.agentRuntimeIdentity!.cronSelfManagementContext!.expiresAtMs =

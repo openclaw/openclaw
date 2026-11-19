@@ -393,6 +393,7 @@ export async function executePluginOwnedProcess(params: {
     beginCapture: (captureKey: string | undefined, assertCurrent: () => void) => void;
     registerTurnInterrupt?: (interrupt: CliBackendTurnInterrupt | undefined) => void;
     waitForTurnInterrupt?: () => Promise<void>;
+    onInputSubmitted?: () => void;
   };
   liveSession?: {
     requiredGeneration?: string;
@@ -472,7 +473,8 @@ export async function executePluginOwnedProcess(params: {
         getInjection: () => messageInjection,
         signal,
         assertCurrent,
-        cwd: run.cwd ?? run.workspaceDir,
+        context: params.context,
+        onInputSubmitted: params.mcpCapture?.onInputSubmitted,
       }),
     },
   );

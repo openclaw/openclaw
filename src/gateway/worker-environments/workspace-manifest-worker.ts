@@ -414,6 +414,7 @@ export async function prepareWorkspaceStageInput(
         buildCacheInputs: input.buildCacheInputs,
         gitHistory: input.gitHistory,
         parentCommit: input.parentCommit,
+        blobsOnly: input.blobsOnly,
         ...("publication" in input
           ? {
               publication: {

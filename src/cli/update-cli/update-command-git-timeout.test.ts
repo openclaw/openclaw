@@ -49,11 +49,14 @@ it.each(
     vi.spyOn(shared, "resolveGlobalManager").mockResolvedValue("npm");
     vi.spyOn(shared, "ensureGitCheckout").mockResolvedValue({ checkoutDir: gitRoot, step: null });
     vi.spyOn(snapshotCapacity, "assessInitialUpdateSnapshotCapacity").mockResolvedValue({
-      name: "snapshot-space-preflight",
-      command: "snapshot-space-preflight",
-      cwd: base,
-      durationMs: 0,
-      exitCode: 0,
+      shortfall: false,
+      step: {
+        name: "snapshot-space-preflight",
+        command: "snapshot-space-preflight",
+        cwd: base,
+        durationMs: 0,
+        exitCode: 0,
+      },
     });
     const exposure = vi
       .spyOn(packageUpdate, "prepareGitPackageExposure")

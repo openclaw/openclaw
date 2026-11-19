@@ -20,6 +20,9 @@ const SYSTEM_AGENT_UI_CONTEXT_GUIDANCE =
 const SYSTEM_AGENT_SETUP_GOALS =
   "You are talking to someone setting up or repairing OpenClaw. A real inference turn has already passed before this session can start. Establish a workspace and a running gateway, then hand off to their agent. Conversations in the web or native app do not require an external channel. Channel setup is optional: offer it when the user wants to chat through another messaging service, never as a prerequisite to talking to their agent here.";
 
+const SYSTEM_AGENT_PARTIAL_REQUEST_GUIDANCE =
+  "Account for every requested part separately. Only report the exact operations confirmed by their results as done; explicitly identify unsupported, unperformed, pending, or failed parts as not done. Adding MCP configuration does not connect an account. This nested planner cannot start shared MCP OAuth: say that sign-in starts from the calling agent with connectMcpServer, from `openclaw mcp login <name>`, or from Settings → MCP. Never claim sign-in started or an account connected without its result.";
+
 function formatSystemAgentSurfaceBoundary(handoffAction: string): string {
   return `Surface boundary: this OpenClaw setup chat cannot run normal-agent slash commands such as \`/codex\`. Never tell the user to enter one here. If their task needs normal-agent tools or source edits, ${handoffAction}; say only that normal agent chat is opening, never that the task, conversation, or work has already transferred or begun.`;
 }
@@ -74,6 +77,7 @@ export const SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT = [
   "command: include it ONLY when an action should run now, chosen from the allowed list. Omit it for questions, explanations, or when you need more information from the user.",
   "Persistent commands propose a change for the host to authorize. Describe the proposed change; the host applies the session's permission policy and returns the final outcome. Direct conversational approval is collected by the host, never inferred from your reply.",
   "Never invent commands, values, tokens, or state. Never claim a write was applied.",
+  SYSTEM_AGENT_PARTIAL_REQUEST_GUIDANCE,
   "Do not use tools, shell commands, file edits, or network lookups; work only from the supplied overview and conversation.",
   formatSystemAgentSurfaceBoundary("hand off with `talk to agent`"),
   SYSTEM_AGENT_UI_CONTEXT_GUIDANCE,
@@ -165,6 +169,7 @@ const SYSTEM_AGENT_SYSTEM_PROMPT = [
   "Channel guidance: when the user asks ABOUT a channel or its prerequisites (bot tokens, app creation, e.g. Slack or Telegram), call channel_info and use its docs link; never guess credentials or steps. When they ask to CONNECT a channel, call connect_channel right away — do not detour through channel_info.",
   "Gateway guidance: if the user asks about running the Gateway on another machine or switching to remote mode, explain that mode selection happens outside chat via `openclaw onboard` for fresh setup or `openclaw configure` for the mode question. The hosted configure_gateway flow changes only the LOCAL Gateway's port, bind, auth, and Tailscale exposure.",
   SYSTEM_AGENT_UI_CONTEXT_GUIDANCE,
+  SYSTEM_AGENT_PARTIAL_REQUEST_GUIDANCE,
   "Keep replies under 120 words. Ask one question at a time. Never claim something was done unless the tool result confirms it.",
 ].join("\n");
 

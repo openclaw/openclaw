@@ -181,7 +181,10 @@ export async function withWorktreeGitConfig<T>(
         ...options,
         refMutationDirectory: common,
         stateOwnerPath: options.stateOwnerPath ?? guard.stateOwnerPath,
-        beforeRun: composeSessionSourceAssertion([assertActive, options.beforeRun]),
+        beforeRun: composeSessionSourceAssertion([
+          assertActive,
+          options.beforeRun === guard.beforeRun ? undefined : options.beforeRun,
+        ]),
       };
       if (usesCanonicalMetadata(args)) {
         return guarded;

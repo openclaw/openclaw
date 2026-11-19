@@ -1,7 +1,23 @@
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
 import type { VoiceCallConfig } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
+import { isProviderStatusTerminal } from "../providers/shared/call-status.js";
 import type { NormalizedEvent, WebhookContext } from "../types.js";
+
+// Only initial TwiML fetches without gathered input enter realtime handling.
+export function getRealtimeTwimlParams(ctx: WebhookContext): URLSearchParams | null {
+  const form = new URLSearchParams(ctx.rawBody);
+  const direction = form.get("Direction");
+  const callStatus = form.get("CallStatus");
+  return (!direction || direction === "inbound" || direction.startsWith("outbound")) &&
+    ctx.query?.type !== "status" &&
+    ctx.query?.type !== "amd" &&
+    (!callStatus || !isProviderStatusTerminal(callStatus)) &&
+    !form.get("SpeechResult") &&
+    !form.get("Digits")
+    ? form
+    : null;
+}
 
 export async function acceptRealtimeInboundRequest(params: {
   request: WebhookContext;

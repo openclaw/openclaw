@@ -32,6 +32,11 @@ export interface ReleaseValidationWaiver {
   childRole: string;
   jobName: string;
   reason: string;
+  testFailures?: {
+    stepName: string;
+    signatures: { kind: "vitest"; file: string; test: string }[];
+    alternativeSignatures?: { kind: "vitest"; file: string; test: string }[][];
+  };
   evidence?: { runId: string; runAttempt: number };
   qualificationExemption?: QualificationExemptionEvidence;
 }
@@ -44,7 +49,13 @@ export interface ReleasePolicyJob {
 }
 export interface ReleaseChildPolicy {
   waivers: ReleaseValidationWaiver[];
-  aggregates: { jobName: string; stepName: string; causes: string[]; exactCauses?: boolean }[];
+  aggregates: {
+    jobName: string;
+    stepName: string;
+    causes: string[];
+    exactCauses?: boolean;
+    logSha256?: string;
+  }[];
   waivedJobNames: Set<string>;
   blockingJobs: ReleasePolicyJob[];
   advisoryJobs: ReleasePolicyJob[];

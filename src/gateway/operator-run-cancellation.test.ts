@@ -260,10 +260,31 @@ describe("operator access cancellation", () => {
         expect(retained.authority!.assertCurrent).not.toThrow();
         expect(retained.authority!.signal?.aborted).not.toBe(true);
         target.expectCurrent();
-        // The accepted turn still enforces the sender's device, profile and role.
+        const continuationClient = createSyntheticPluginRuntimeClient({
+          authenticatedUserProfile: occurrence.client.authenticatedUserProfile,
+          operatorRoleActor: { kind: "operator", profileId: restored.authority.profileId },
+          operatorRunAuthority: retained.authority!,
+          agentToolCaller: { agentId: "main", sessionKey: sender },
+          scopes: ["operator.write"],
+        });
+        const beforeRevocation = await f.register(
+          "before-device-revocation",
+          undefined,
+          {},
+          false,
+          true,
+        );
+        const admittedChild = await beforeRevocation.retain(undefined, continuationClient);
+        // Revocation refuses the next start without canceling already-admitted work.
         invalidateGatewayDeviceRevocation(occurrence.context, "recovery-device", "operator");
-        expect(retained.authority!.assertCurrent).toThrow();
-        expect(retained.authority!.signal?.aborted).toBe(true);
+        const next = await f.register("after-device-revocation", undefined, {}, false, true);
+        await expect(next.retain(undefined, continuationClient)).rejects.toThrow(
+          "Restart recovery operator source policy changed.",
+        );
+        expect(retained.authority!.assertCurrent).not.toThrow();
+        expect(retained.authority!.signal?.aborted).not.toBe(true);
+        expect(admittedChild.authority!.assertCurrent).not.toThrow();
+        expect(admittedChild.authority!.signal?.aborted).not.toBe(true);
       } finally {
         restored.release();
       }

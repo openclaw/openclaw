@@ -73,6 +73,7 @@ import {
   UPDATE_RUNNER_TIMEOUT_MS,
 } from "../../infra/update-run-timeouts.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import {
   createSystemPackageOwnershipInspection,
   type SystemPackageOwnershipInspection,
@@ -113,6 +114,7 @@ import {
   resolveManagedServicePackageUpdatePlan,
 } from "./update-command-service-plan.js";
 import { preflightWindowsUpdateTask } from "./update-command-windows-preflight.js";
+import { inspectInterruptedUpdateRecovery } from "./update-plugin-cohort-settlement.js";
 
 export {
   recordUpdateCommandTarget,
@@ -602,6 +604,11 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   // A post-core marker cannot bypass pending recovery without the live original
   // owner. Check both roots before config/autostart preparation or history.
   const packageActivationNotes: string[] = [];
+  const packageActivationSteps: UpdateStepResult[] = [];
+  // Read a killed update's recovery before package settlement claims the installation.
+  const settleInterruptedUpdate = postCoreUpdateResume
+    ? undefined
+    : await inspectInterruptedUpdateRecovery(discoveredRoot, opts, packageActivationSteps);
   const admitPackageActivation = async (root: string) => {
     if (!postCoreUpdateResume) {
       const settled = await settlePendingPackageActivation(
@@ -617,11 +624,20 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
         );
       });
       if (settled) {
-        const note = `${opts.dryRun ? "Would settle" : "Settled"} previous package update ${settled.operationId} (${settled.reason}); update can proceed past package recovery admission. Evidence ${opts.dryRun ? "would be retained" : "retained"} at ${settled.retained}.${settled.warning ? ` ${settled.warning}` : ""}`;
+        const note = `${opts.dryRun ? "Would settle" : "Settled"} previous package update ${settled.operationId} (${settled.reason}); update can proceed past package recovery admission.${settled.resumed ? ` ${settled.resumed}` : ""}${settled.retained ? ` Evidence ${opts.dryRun ? "would be retained" : "retained"} at ${settled.retained}.` : ""}${settled.warning ? ` ${settled.warning}` : ""}`;
         if (opts.dryRun) {
           packageActivationNotes.push(note);
         } else {
           defaultRuntime.error(note);
+          // The run does not exist yet; its target preparation records this step.
+          packageActivationSteps.push({
+            name: "package-publication-recovery",
+            command: "settle previous package publication",
+            cwd: root,
+            durationMs: 0,
+            exitCode: 0,
+            warnings: [note],
+          });
         }
       }
     }
@@ -679,6 +695,15 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
       throw err;
     }
   }
+  // Every refusal above stands first. Settle under the state selection admission will use.
+  await settleInterruptedUpdate?.((invocationCwd) =>
+    resolveUpdateCommandAdmissionEnv({
+      opts,
+      root: packageAdmission.serviceRoot ?? discoveredRoot,
+      invocationCwd,
+      pkgOwnership,
+    }),
+  );
   return {
     startedAt,
     postCoreUpdateResume,
@@ -694,6 +719,7 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
     servicePlan,
     pkgOwnership,
     ...(packageActivationNotes.length ? { packageActivationNotes } : {}),
+    ...(packageActivationSteps.length ? { packageActivationSteps } : {}),
   };
 }
 

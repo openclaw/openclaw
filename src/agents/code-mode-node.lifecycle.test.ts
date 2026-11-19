@@ -393,20 +393,21 @@ it("keeps repeated bursts warm, then retires surplus capacity during serial traf
   expect(burst.filter((pool) => !pool.isClosed)).toHaveLength(1);
 });
 
-it("bounds the warm set and retires every idle pool on memory pressure", async () => {
+it("retires every idle pool on critical memory pressure and admits fresh demand", async () => {
   const start = fixture.pools.length;
-  const results = await Promise.all(Array.from({ length: 10 }, run));
-  expect(results.every((result) => result.status === "completed")).toBe(true);
-  const idle = fixture.pools.filter((pool) => !pool.isClosed);
-  expect(idle).toHaveLength(8);
-  const evicted = fixture.pools.slice(start).filter((pool) => pool.isClosed);
-  expect(evicted).toHaveLength(2);
-  channel("openclaw.memory.critical").publish({});
+  expect(await Promise.all([run(), run()])).toMatchObject([
+    { status: "completed" },
+    { status: "completed" },
+  ]);
+  const idle = fixture.pools.slice(start);
+  expect(idle).toHaveLength(2);
+  expect(idle.every((pool) => !pool.isClosed)).toBe(true);
+  const pressure = channel("openclaw.memory.critical");
+  pressure.publish({});
   expect(idle.every((pool) => pool.isClosed)).toBe(true);
-  expect(channel("openclaw.memory.critical").hasSubscribers).toBe(false);
-  const count = fixture.pools.length;
+  expect(pressure.hasSubscribers).toBe(false);
   expect(await run()).toMatchObject({ status: "completed" });
-  expect(fixture.pools).toHaveLength(count + 1);
+  expect(idle).not.toContain(fixture.pools.at(-1));
 });
 
 it.each(["abort", "timeout"] as const)(

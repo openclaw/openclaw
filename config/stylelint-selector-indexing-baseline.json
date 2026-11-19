@@ -37,7 +37,6 @@
     "2d31880116178149981934d5c3e8997debe33640e3027865eec760281537eaa2": 1
   },
   "ui/src/styles/chat/composer-progress.css": {
-    "02b7b20f7546ba54774cfa7ed05dd14ee641562215307b4b59efdee2d6b19ef6": 1,
     "0f1e7634b7632c1363a5ac6c2cb86dd3a2c3f076a5f728853d5489b3faf6f607": 1,
     "2193772fe0a324606a3cd0b3f3b84ee86ef0d8e0b0108e760656d71eec946fba": 1,
     "e2312a5e195a2462144cbe728cbd9e7b554a308c05a825137732c7c91ffd9ddb": 1
@@ -139,9 +138,6 @@
   },
   "ui/src/styles/connection.css": {
     "8c2a7865ee13ade6b645c5cbeac910aa54d66402cecbb70174fc8accbcc6e96c": 1
-  },
-  "ui/src/styles/cron.css": {
-    "64eb29a32035f0c1c59c07fa5554eeabc5ffb56a7d107d338dcefc60e15d3694": 1
   },
   "ui/src/styles/model-providers.css": {
     "6795515297fbc5325b38294a98d57d1ccbbd974f6fc75ab9956d432ccb6afd39": 1

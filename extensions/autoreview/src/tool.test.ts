@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { assert, beforeEach, expect, it, vi } from "vitest";
@@ -46,6 +47,7 @@ let request: typeof baseRequest & Record<string, unknown>;
 let next: Record<string, unknown>;
 let result: ReturnType<typeof commandResult>;
 let helperFailure: string;
+let submissionFailure: "exit" | "throw" | undefined;
 type Response = { pass: number; status: string; output: string | null; model: string | null };
 let response: Response | undefined;
 let cwd: string | undefined;
@@ -68,6 +70,7 @@ beforeEach(() => {
   next = {};
   result = commandResult({ stdout: "complete", cleanup: "normal" });
   helperFailure = "";
+  submissionFailure = undefined;
   response = undefined;
   cwd = undefined;
   helperArgv = undefined;
@@ -101,9 +104,20 @@ beforeEach(() => {
         if (argv.includes("--native-submit")) {
           response = JSON.parse(input!);
           const done = response?.status === "done";
-          if (!done || response?.pass === request.passes) {
+          if (
+            (!done || response?.pass === request.passes) &&
+            (!submissionFailure || helperFailure)
+          ) {
             const details = helperFailure ? {} : reportDetails(request.model);
             helper.resolve(json({ code: 1, ...details }, done ? 1 : 2, helperFailure));
+          }
+          if (submissionFailure) {
+            // Let an already-completed helper settle before submission returns.
+            await setImmediate();
+            if (submissionFailure === "throw") {
+              throw new Error("response exchange was removed");
+            }
+            return { code: 1, stdout: "", stderr: "FileNotFoundError: response exchange" };
           }
           return { code: 0, stdout: "", stderr: "" };
         }
@@ -179,7 +193,10 @@ it.each([
   result.stderr = `${"x".repeat(5000)}\nAuthorization: Bearer unrelated-fake-secret-token`;
   const failure = await execute().catch((error: unknown) => error);
   assert(failure instanceof Error, "Expected reviewer failure");
-  expect(failure.message).toContain(`Reviewer command failed (${diagnostic}`);
+  expect(failure.message).toContain(`(${diagnostic}`);
+  expect(failure.message).toContain(
+    change.termination === "timeout" ? "Reviewer process timed out" : "Reviewer command failed",
+  );
   expect(failure.message).not.toContain("unrelated-fake-secret-token");
   expect(failure.message.length).toBeLessThan(4300);
   expect(response).toMatchObject({ status: "failed", output: null, model: null });
@@ -187,6 +204,28 @@ it.each([
 it("preserves helper diagnostics without a report", async () => {
   helperFailure = "source changed; rerun autoreview against the updated tree";
   await expect(execute()).rejects.toThrow(helperFailure);
+});
+it.each(["exit", "throw"] as const)(
+  "preserves the helper failure when late submission fails by %s",
+  async (failure) => {
+    helperFailure = "OpenClaw execution result timed out";
+    submissionFailure = failure;
+    await expect(execute()).rejects.toThrow(helperFailure);
+  },
+);
+it("preserves submission failure while the helper is still running", async () => {
+  submissionFailure = "throw";
+  await expect(execute()).rejects.toThrow("response exchange was removed");
+});
+it("preserves the reviewer timeout when failed-response delivery also fails", async () => {
+  request.engine_timeout_seconds = 4;
+  result.code = null;
+  result.termination = "timeout";
+  submissionFailure = "throw";
+  const failure = await execute().catch((error: unknown) => error);
+  assert(failure instanceof Error);
+  expect(failure.message).toContain("Reviewer process timed out after 4 seconds");
+  expect(failure.message).toContain("Response submission failed: response exchange was removed");
 });
 it.each(["installation", "authority"])("requires protected %s", (requirement) => {
   if (requirement === "installation") {
@@ -196,9 +235,20 @@ it.each(["installation", "authority"])("requires protected %s", (requirement) =>
   }
   expect(createAutoReviewTool(context)).toBeNull();
 });
-it.each([null, 900.25])("forwards settings with per-pass timeout %s", async (seconds) => {
+it.each([
+  [null, undefined],
+  [900.25, undefined],
+  [null, "host"],
+  [900.25, "host"],
+] as const)("forwards per-pass timeout %s with owner %s", async (seconds, owner) => {
   const model = "fixture/new-default";
-  Object.assign(request, { model, thinking: "high", passes: 2, engine_timeout_seconds: seconds });
+  Object.assign(request, {
+    model,
+    thinking: "high",
+    passes: 2,
+    engine_timeout_seconds: seconds,
+    timeout_owner: owner,
+  });
   await execute({ ...params, maxPriority: "P2", passes: 12, timeoutSeconds: 900 });
   expect(admitted.mock.calls[0]![0]).toEqual({ model, explicit: false });
   expect(helperArgv).toEqual(expect.arrayContaining(["--max-priority", "P2"]));
@@ -208,7 +258,9 @@ it.each([null, 900.25])("forwards settings with per-pass timeout %s", async (sec
   for (const [argv, options] of command.mock.calls) {
     expect(argv).toEqual(expect.arrayContaining(["--thinking", "high"]));
     const timeoutArgs = argv.filter((arg, i) => arg === "--timeout" || argv[i - 1] === "--timeout");
-    expect(timeoutArgs).toEqual(seconds === null ? [] : ["--timeout", "901"]);
+    expect(timeoutArgs).toEqual(
+      seconds === null ? [] : ["--timeout", owner === "host" ? "0" : "901"],
+    );
     expect(options).toMatchObject({ timeoutMs: seconds === null ? undefined : 900_250 });
   }
   expect(response).toMatchObject({ pass: 2, status: "done" });

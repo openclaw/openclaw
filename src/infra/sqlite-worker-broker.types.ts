@@ -10,6 +10,7 @@ import type {
   SqliteWorkerRequest,
   SqliteWorkerReply,
   SqliteWorkerCloseReceipt,
+  SqliteWorkerExecuteOptions,
 } from "./sqlite-worker-contract.js";
 import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
 import type {
@@ -140,7 +141,7 @@ export type StoreClient = {
   scopes: Set<Promise<void>>;
   execute(
     command: { type: PropertyKey; input: unknown },
-    options: { signal?: AbortSignal },
+    options: SqliteWorkerExecuteOptions,
     scope?: OperationScope,
   ): Promise<unknown>;
 };

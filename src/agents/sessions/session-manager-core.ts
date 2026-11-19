@@ -57,7 +57,6 @@ export const sessionManagerOpenTranscriptCohort = Symbol.for(
 );
 
 /** @internal Compaction planning retains its transcript and metadata from one read snapshot. */
-export const sessionManagerOpenCompaction = Symbol.for("openclaw.session-manager.open-compaction");
 
 /** @internal The owner that opened this view drops its loaded transcript once its turn has settled. */
 export const sessionManagerReleaseTranscript = Symbol.for(

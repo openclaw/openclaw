@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { create as createArchive } from "tar";
+import { create as createArchive } from "tar/raw";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { root } from "../infra/fs-safe.js";
 import { readPluginControlUiAssets } from "../plugins/control-ui-assets.js";

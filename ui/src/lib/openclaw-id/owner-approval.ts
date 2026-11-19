@@ -1,4 +1,6 @@
 // Browser-owned SAS approver. Private ephemeral state never leaves this origin or enters Solid.
+import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
+import { sleepWithAbort } from "@openclaw/retry";
 import {
   bytesToHex,
   MEMBER_BROWSER_REQUEST_TTL_SECONDS,
@@ -25,6 +27,7 @@ import {
   type ReceiveMailResponse,
   type SasStart,
 } from "../../../../packages/openclaw-id-protocol/src/index.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createDeviceMail, readOwnerApprovalContext, type DeviceMail } from "./device-mail.ts";
 import type { OpenClawIdRecoveryUse } from "./types.ts";
@@ -44,6 +47,8 @@ type Attempt = {
   busy: boolean;
   error?: string;
   submissionStarted?: boolean;
+  /** Sealed before the membership submit, so a lost submit response can still finish. */
+  sealed?: Awaited<ReturnType<typeof sealHandoff>>;
   cancelled?: boolean;
 };
 /** Public request projection: no keys, credentials, or handoff material. */
@@ -100,15 +105,19 @@ function appNode(
   return { peer_key, description };
 }
 const expiredRequest = "This device request expired or was cancelled.";
+const reconnecting = "Reconnecting to the Gateway. Try again in a moment.";
+const RETRY_MIN_MS = 1_000;
+const RETRY_MAX_MS = 15_000;
 
 /** Owns one cancellable mailbox reader and bounded SAS attempts for this original browser D. */
 export function createOwnerApproval(
-  client: GatewayBrowserClient,
+  initialClient: GatewayBrowserClient,
   onRequest: (request: OwnerApprovalRequest) => void,
   onKitUsed: (device: string | undefined) => void = () => {},
   onMemberDeviceAdded: (recoveryUse: OpenClawIdRecoveryUse | undefined) => void = () => {},
 ) {
   const abort = new AbortController();
+  let client = initialClient;
   const attempts = new Map<string, Attempt>();
   const expiredRequests = new Map<string, OwnerApprovalRequest>();
   const listeners = new Set<() => void>();
@@ -118,6 +127,10 @@ export function createOwnerApproval(
   let hostname: string | undefined;
   let started = false;
   let ownsLock = false;
+  let polling = false;
+  // Set while the lifetime admits a reconnected Gateway connection again.
+  let held = false;
+  let wake: (() => void) | undefined;
   const lifetime = Promise.withResolvers<void>();
   const publish = () => listeners.forEach((listener) => listener());
   const projectRequest = (id: string, a: Attempt): OwnerApprovalRequest => ({
@@ -369,23 +382,89 @@ export function createOwnerApproval(
     publish();
   };
 
-  // Existing Discovery long-poll protocol; failure stops it, with explicit Retry in the UI.
+  // A submit whose response was lost may still have admitted N; finish only an admitted one.
+  const finishAdmitted = async () => {
+    const pending = [...attempts].filter(
+      ([, a]) => a.submissionStarted && a.error && a.sealed && !a.cancelled && a.expires > now(),
+    );
+    if (pending.length === 0) {
+      return;
+    }
+    const { link } = await readOwnerApprovalContext(client);
+    for (const [id, a] of pending) {
+      const admitted = a.start.member_account_id
+        ? link.members
+            ?.find((m) => m.accountId === a.start.member_account_id)
+            ?.devices?.some((d) => d.peerKey === a.start.peer_key)
+        : link.ownerDevices?.some((d) => d.devicePub === a.start.device_pub);
+      // The context read is I/O: the attempt may have expired, ended or been held meanwhile.
+      if (admitted && attempts.get(id) === a && !a.cancelled && a.expires > now() && !held) {
+        await send(a, "sealed", a.sealed!);
+        drop(id, true);
+      }
+    }
+  };
+  // A Gateway timeout, an unavailable relay or a dropped connection is retried with backoff.
+  const transient = (failure: unknown) =>
+    failure instanceof GatewayProtocolRequestTimeoutError ||
+    (failure instanceof GatewayRequestError
+      ? failure.gatewayCode === "UNAVAILABLE" && failure.retryable
+      : !client.connected);
+  // Backoff ends early on stop or an explicit retry.
+  const pause = async (ms: number) => {
+    const early = new AbortController();
+    wake = () => early.abort();
+    await sleepWithAbort(ms, AbortSignal.any([abort.signal, early.signal])).catch(() => {});
+    wake = undefined;
+  };
+  // Existing Discovery long-poll protocol; other failures stop it, with explicit Retry in the UI.
   const poll = async () => {
-    mail = await createDeviceMail(client, abort.signal);
-    publish();
-    while (!abort.signal.aborted) {
-      const received = await mail.call<ReceiveMailResponse>("receive", undefined, cursor);
-      for (const [id, a] of attempts) {
-        if (a.expires <= now()) {
-          expire(id);
+    if (polling) {
+      wake?.();
+      return;
+    }
+    polling = true;
+    try {
+      let delay = RETRY_MIN_MS;
+      while (!abort.signal.aborted) {
+        if (held) {
+          await pause(RETRY_MAX_MS);
+          continue;
+        }
+        try {
+          if (!mail) {
+            mail = await createDeviceMail(() => client, abort.signal);
+            publish();
+          }
+          const received = await mail.call<ReceiveMailResponse>("receive", undefined, cursor);
+          delay = RETRY_MIN_MS;
+          if (error) {
+            error = null;
+            publish();
+          }
+          for (const [id, a] of attempts) {
+            if (a.expires <= now()) {
+              expire(id);
+            }
+          }
+          for (const message of received.messages) {
+            await receive(message);
+          }
+          if (received.cursor) {
+            cursor = received.cursor;
+          }
+          await finishAdmitted();
+        } catch (failure) {
+          if (abort.signal.aborted || (!held && !transient(failure))) {
+            throw failure;
+          }
+          failed(failure);
+          await pause(delay);
+          delay = Math.min(delay * 2, RETRY_MAX_MS);
         }
       }
-      for (const message of received.messages) {
-        await receive(message);
-      }
-      if (received.cursor) {
-        cursor = received.cursor;
-      }
+    } finally {
+      polling = false;
     }
   };
   const failed = (failure: unknown) => {
@@ -442,7 +521,18 @@ export function createOwnerApproval(
         void run().catch(failed);
       }
     },
-    /** Explicit retry after transport failure, never a repeat membership submission. */
+    /** Holds mail, handoff recovery and decisions until the reconnected client is admitted. */
+    suspend() {
+      held = true;
+    },
+    /** Continues on the admitted client for the same Gateway, retrying at once. */
+    resume(next: GatewayBrowserClient) {
+      client = next;
+      held = false;
+      wake?.();
+      this.retry();
+    },
+    /** Retry now after a failure or reconnect, never a repeat membership submission. */
     retry() {
       if (error && !abort.signal.aborted) {
         error = null;
@@ -480,6 +570,9 @@ export function createOwnerApproval(
       }
       const requireLive = () => {
         abort.signal.throwIfAborted();
+        if (held) {
+          throw new Error(reconnecting);
+        }
         if (attempts.get(id) !== a || a.cancelled || a.expires <= now()) {
           throw new Error(expiredRequest);
         }
@@ -488,6 +581,7 @@ export function createOwnerApproval(
       a.error = undefined;
       publish();
       try {
+        requireLive();
         if (!approve) {
           drop(id, true);
           try {
@@ -588,6 +682,12 @@ export function createOwnerApproval(
           },
           mail!.signer,
         );
+        const handoff: JsonValue = {
+          root_pub: ctx.link.rootPub,
+          binding: ctx.binding,
+          cert,
+        };
+        a.sealed = await sealHandoff(a.secret, a.transcript, handoff);
         requireLive();
         a.submissionStarted = true;
         await client.request(
@@ -596,14 +696,7 @@ export function createOwnerApproval(
           { signal: abort.signal, retainSentResultOnAbort: true },
         );
         requireLive();
-        const handoff: JsonValue = {
-          root_pub: ctx.link.rootPub,
-          binding: ctx.binding,
-          cert,
-        };
-        const sealed = await sealHandoff(a.secret, a.transcript, handoff);
-        requireLive();
-        await send(a, "sealed", sealed);
+        await send(a, "sealed", a.sealed);
         drop(id, true);
       } catch (failure) {
         const detail = failure instanceof Error ? failure.message : String(failure);

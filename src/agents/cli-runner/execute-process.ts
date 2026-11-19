@@ -385,6 +385,7 @@ export async function executeCliProcess(params: {
           beginCapture: params.toolTracking.beginGatewayCapture,
           registerTurnInterrupt: params.toolTracking.registerTurnInterrupt,
           waitForTurnInterrupt: params.toolTracking.waitForTurnInterrupt,
+          onInputSubmitted: params.toolTracking.onInputSubmitted,
         },
         ...(params.useManagedClaudeLiveSession
           ? {

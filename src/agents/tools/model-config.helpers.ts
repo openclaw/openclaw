@@ -83,7 +83,6 @@ export function hasAuthForProvider(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   runtimeLookup?: RuntimeProviderAuthLookup;
   capability?: string;
 }): boolean {
@@ -111,7 +110,6 @@ export function hasAuthForProvider(params: {
   }
   return hasAuthProfileForProvider({
     provider: params.provider,
-    agentDir: params.agentDir,
     authStore: params.authStore,
     capability: params.capability,
   });
@@ -119,9 +117,7 @@ export function hasAuthForProvider(params: {
 
 export function hasAuthProfileForProvider(params: {
   provider: string;
-  agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   type?: AuthProfileCredential["type"];
   capability?: string;
 }): boolean {
@@ -150,7 +146,6 @@ export function hasAuthProfileForProvider(params: {
 export async function prepareToolAuthProfileStore(options?: {
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
 }): Promise<AuthProfileStore | undefined> {
   return (
     options?.authProfileStore ??

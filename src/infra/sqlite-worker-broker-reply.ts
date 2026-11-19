@@ -285,6 +285,7 @@ export async function dispatchSqliteWorkerJob(
       ...postgresPoolTransferList(request.postgresPool),
       ...(request.operationAdmission ? [request.operationAdmission] : []),
       ...("input" in request ? [request.input.buffer] : []),
+      ...new Set(Object.values(request.transferredInput ?? {}).map((value) => value.buffer)),
       ...(request.type === "open" && request.preparation ? [request.preparation.buffer] : []),
     ]);
     if (request.postgresPool) {

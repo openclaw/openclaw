@@ -719,6 +719,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
+        operations: ["retainSessionColdNavigationInTransaction"],
+        evidence:
+          "Runtime callers execute in session-cold-storage-worker.ts under the archive mutation worker. The only direct non-worker caller is scripts/perf/restart-resume-measure.ts preparing its explicitly selected synthetic fixture before measurement; no Gateway call bypasses the worker owner.",
+      },
+      {
+        tier: "T3",
         operations: ["backfillSessionColdNavigationInTransaction"],
         evidence:
           "Only state-migrations.cold-navigation.ts calls backfill under Doctor maintenance custody and its per-archive transaction; the other caller is scripts/perf/session-cold-navigation.ts preparing explicitly selected synthetic state. Runtime cold archive publication calls retainSessionColdNavigationInTransaction from the archive mutation worker, not this backfill operation.",
@@ -3790,6 +3796,10 @@ const cliModules = new Map([
   [
     "scripts/perf/session-cold-navigation.ts",
     "Explicit developer-only measurement of cold archive publication, navigation backfill and bounded reads on synthetic state; no runtime imports or Gateway callers",
+  ],
+  [
+    "scripts/perf/session-cold-writer.mjs",
+    "Explicit developer-only writer-hold and restore benchmark on synthetic state; no runtime imports or Gateway callers",
   ],
   [
     "scripts/perf/session-cold-selection.ts",

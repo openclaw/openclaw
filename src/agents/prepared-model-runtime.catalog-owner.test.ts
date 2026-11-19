@@ -5,6 +5,7 @@ import {
   getPreparedModelRuntimeTestApi,
   usePreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
+
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -860,4 +861,37 @@ describe("captured startup inventory refresh", () => {
     expect(refreshed.routeVariants).toEqual([]);
     expect(refreshed.providerOutcomes).toEqual([{ provider: "custom", status: "ready" }]);
   });
+});
+
+it("does not publish a static catalog generation superseded while its hook is running", async () => {
+  mocks.configuredAgentIds = ["default"];
+  const refreshStatic = (config: OpenClawConfig) =>
+    refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true, catalogMode: "static" });
+  const staleConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+  const latestConfig = { agents: { defaults: { model: "openai/gpt-5.6" } } };
+  const defaultPrepareStaticCatalog = mocks.prepareStaticCatalog.getMockImplementation();
+  const started = createDeferred();
+  const finish = createDeferred();
+  mocks.prepareStaticCatalog.mockImplementationOnce(async (...args) => {
+    started.resolve();
+    await finish.promise;
+    return await defaultPrepareStaticCatalog!(...args);
+  });
+
+  const stale = refreshStatic(staleConfig);
+  // Surface refresh failures before hook entry instead of waiting for the test timeout.
+  await Promise.race([
+    started.promise,
+    stale.then(() => {
+      throw new Error("static catalog refresh completed before its hook");
+    }),
+  ]);
+  const latest = refreshStatic(latestConfig);
+  finish.resolve();
+
+  await expect(stale).rejects.toThrow("superseded");
+  await latest;
+  expect(getPreparedModelRuntimeSnapshot(fixture.agentInput("default", latestConfig))?.config).toBe(
+    latestConfig,
+  );
 });

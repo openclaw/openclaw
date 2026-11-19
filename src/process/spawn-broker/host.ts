@@ -240,9 +240,7 @@ class BrokerHost implements SpawnBrokerHost {
   ): Request {
     message.admission = getSpawnBrokerAdmission();
     const capacityError = childCapacityError(this.childAdmissions.values(), message.admission);
-    const request = createBrokerCommandRequest(message, initiateSpawn, (value, handle, initiate) =>
-      this.transmit(value, handle, initiate),
-    );
+    const request = createBrokerCommandRequest(message, initiateSpawn, this.transmit.bind(this));
     const { child, result, output } = request;
     const fail = (error: Error) => {
       request.resultSettled = true;
@@ -408,6 +406,7 @@ class BrokerHost implements SpawnBrokerHost {
       this.markNativeReady = undefined;
       receiver.clear();
       this.available = false;
+      this.resourceClaims?.closeAdmission();
       this.sendMessage = undefined;
       // Every failure retires the transport, including send/receive failures while
       // IPC is still connected. The broker ignores supervisor signals until this
@@ -477,6 +476,8 @@ class BrokerHost implements SpawnBrokerHost {
           request.result?.reject(error);
           request.child.fail(error);
         }
+        // Retained error stacks can keep this callback context alive after settlement.
+        requests.clear();
         // A failed transport is not a writer-close receipt. Join its native owner and
         // retained child cleanup before callers can remove or reuse output paths.
         if (outputRequests.length) {
@@ -488,6 +489,7 @@ class BrokerHost implements SpawnBrokerHost {
               request.output?.reject(error);
               request.child.settleFileOutput();
             }
+            outputRequests.length = 0;
           });
         }
         if (
