@@ -570,24 +570,18 @@ describe("realtime voice agent consult runtime", () => {
     });
   });
 
-  it.each([
-    { persisted: "low" as const, voice: undefined, forwarded: undefined },
-    { persisted: undefined, voice: undefined, forwarded: "high" },
-    { persisted: "low" as const, voice: "medium" as const, forwarded: "medium" },
-  ])(
-    "respects chat thinking below explicit voice config (%j)",
-    async ({ persisted, voice, forwarded }) => {
-      const session = createAgentRuntime();
-      const sessionKey = "agent:main:thinking";
-      session.sessionStore[sessionKey] = {
-        sessionId: "thinking-session",
-        updatedAt: 1,
-        thinkingLevel: persisted,
-      };
-      await runConsult(session.runtime, { agentId: "main", sessionKey, thinkLevel: voice }, true);
-      expect(requireEmbeddedAgentCall(session.runEmbeddedAgent).thinkLevel).toBe(forwarded);
-    },
-  );
+  it("keeps the high voice default for plugin bridges even when the parent chat sets thinking", async () => {
+    // Bridges run the embedded owner, which does not read session thinking.
+    const bridge = createAgentRuntime();
+    const sessionKey = "agent:main:bridge-thinking";
+    bridge.sessionStore[sessionKey] = {
+      sessionId: "bridge-thinking",
+      updatedAt: 1,
+      thinkingLevel: "low",
+    };
+    await runConsult(bridge.runtime, { agentId: "main", sessionKey });
+    expect(requireEmbeddedAgentCall(bridge.runEmbeddedAgent).thinkLevel).toBe("high");
+  });
 
   it("leaves the lock to the session runtime while preserving the high voice default", async () => {
     const sessionKey = "agent:main:session-runtime";

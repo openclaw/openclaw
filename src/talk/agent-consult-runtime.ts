@@ -629,9 +629,12 @@ async function consultRealtimeVoiceAgentInternal(
           prompt: buildRealtimeVoiceAgentConsultPrompt(params),
           provider: params.provider,
           model: params.model,
-          // Let the command owner retain persisted chat thinking unless voice config overrides it.
-          // Only the no-chat-setting fallback needs a normalized high override.
-          thinkLevel: params.thinkLevel ?? (sessionEntry.thinkingLevel ? undefined : "high"),
+          // Gateway session-runtime consults let the command owner apply the chat's persisted
+          // thinking. Plugin bridges run the embedded owner, which ignores session thinking, so
+          // they keep the high voice default.
+          thinkLevel:
+            params.thinkLevel ??
+            (dispatchesInSessionRuntime && sessionEntry.thinkingLevel ? undefined : "high"),
           fastMode: params.fastMode,
           verboseLevel: "off",
           reasoningLevel: "off",
