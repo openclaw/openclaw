@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import * as sessionEvents from "../../../auto-reply/reply/session-event-handoff.js";
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { readTranscriptEventRows } from "../../../config/sessions/session-accessor.sqlite-read.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
@@ -84,6 +85,19 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
     });
     await flushOwnedWork();
     expect(subagentRuns.get(child.runId)?.pauseReason).toBe("sessions_yield");
+    const restartInput = vi.spyOn(sessionEvents, "enqueueSessionEventForHost");
+    onTestFinished(() => restartInput.mockRestore());
+    const parent = getFixture().sessionStore[requesterSessionKey]!;
+    for (const data of [
+      { phase: "start" },
+      { phase: "end", yielded: true, livenessState: "paused", stopReason: "end_turn" },
+    ]) {
+      await persistGatewaySessionLifecycleEvent({
+        sessionKey: requesterSessionKey,
+        agentId: "main",
+        event: { runId: parentRunId, sessionId: parent.sessionId, ts: Date.now(), data },
+      });
+    }
     for (const data of [
       { phase: "start" },
       { phase: "end", yielded: true, livenessState: "paused", stopReason: "end_turn" },
@@ -106,6 +120,11 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
         sessionKey: child.childSessionKey,
       })?.entry.status,
     ).toBe("failed");
+    expect(
+      loadExactSessionEntryReadOnly({ agentId: "main", sessionKey: requesterSessionKey })?.entry
+        .status,
+    ).not.toBe("failed");
+    expect(restartInput).not.toHaveBeenCalled();
     expect(subagentRuns.get(child.runId)?.execution.outcome).toMatchObject({
       status: "error",
       error: expect.stringContaining(

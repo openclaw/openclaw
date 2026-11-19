@@ -332,6 +332,8 @@ describe("production lint suppressions", () => {
         "src/config/sessions/session-accessor.sqlite-active-events.ts|unicorn/no-array-reverse|1",
         "src/config/sessions/session-accessor.sqlite-schema-probes.test-support.ts|typescript/unbound-method|2",
         "src/config/sessions/session-accessor.sqlite-worker-request.ts|no-warning-comments|1",
+        // Reflect.apply forwards the intercepted native database receiver in the worker probe.
+        "src/config/sessions/session-model-context-compacted.test-support.ts|typescript/unbound-method|1",
         "src/config/sessions/session-transcript-reconcile.close-failure.test-support.mjs|typescript/unbound-method|1",
         "src/config/sessions/session-transcript-reconcile.sql-observer.test-support.ts|typescript/unbound-method|1",
         // Canonical entries must honor toJSON and omit non-JSON values exactly as persistence does.

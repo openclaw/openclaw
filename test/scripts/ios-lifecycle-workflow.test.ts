@@ -305,6 +305,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       "CloudflareAccessBrowserPresenterTests",
       "CloudflareAccessTransferTests",
       "CloudflareAccessSessionStoreTests",
+      "ChatSessionsCodingTests",
       "SettingsHubTests",
       "SettingsHubVisualProofTests/testIngressAuthorizedDashboardEntryPointsLoadTheSelectedGatewayPage",
       "GatewayAccessDeviceAuthBindingTests",
@@ -330,6 +331,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
     ]);
     expect(selectedTests(tests[1]!.args)).toEqual([
       "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings",
+      "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/testNestedCustomToolsExposeResultsQuietDetailsAndPendingAuthority",
       "-only-testing:OpenClawUITests/BootstrapSetupFailureUITests",
     ]);
     const restart = commands.findIndex((command) => command.tool === "python3");
@@ -456,6 +458,8 @@ it.skipIf(process.platform === "win32").each([
   { owner: "apps/ios/Tests/TalkModeConfigParsingTests.swift", groups: ["voice"] },
   { owner: "apps/ios/Tests/TalkTranscriptCompletionTests.swift", groups: ["voice"] },
   { owner: "apps/ios/Tests/ChatSendHydrationTests.swift", groups: ["lifecycle"] },
+  { owner: "apps/ios/Tests/ChatSessionsCodingTests.swift", groups: ["lifecycle"] },
+  { owner: "apps/ios/UITests/OpenClawSnapshotUITests+Chat.swift", groups: ["lifecycle"] },
   { owner: "apps/ios/ThirdParty/ESPProvision/ESPProvision/ESPDevice.swift", groups: [] },
   { owner: "apps/ios/Tests/ESPSetupWireTests.swift", groups: [] },
   { owner: "apps/ios/Tests/ESPSetupSessionTests.swift", groups: [] },
@@ -496,6 +500,12 @@ it.skipIf(process.platform === "win32").each([
     );
     if (owner.endsWith("/ChatComposerTextViewIOSTests.swift")) {
       expect(test.args).toContain("-only-testing:OpenClawTests/ChatComposerTextViewIOSTests");
+    }
+    if (
+      owner.endsWith("/ChatSessionsCodingTests.swift") ||
+      owner.endsWith("/OpenClawSnapshotUITests+Chat.swift")
+    ) {
+      expect(test.args).toContain("-only-testing:OpenClawTests/ChatSessionsCodingTests");
     }
   }
   if (!groups.length) {

@@ -135,7 +135,7 @@ export function prepareDoctorConfigMigrationResult(
     ) {
       const { collectModelBillingRouteMigrationWarnings } =
         await import("./model-billing-route-migration.js");
-      modelBillingRouteWarnings = params.runWithCurrentPluginMetadata(params.cfg, () =>
+      modelBillingRouteWarnings = await params.runWithCurrentPluginMetadata(params.cfg, () =>
         collectModelBillingRouteMigrationWarnings({
           before: billingRouteSource,
           after: billingRouteConfig,
