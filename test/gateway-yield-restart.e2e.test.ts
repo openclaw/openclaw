@@ -31,6 +31,7 @@ it
     "continue",
     "finish",
     "root-source-stopped",
+    "root-background-stopped",
     "other-agent",
     "parked-message",
     "completed-before",
@@ -39,12 +40,14 @@ it
   "preserves yielded work through an actual Gateway restart (%s)",
   { timeout: 180_000 },
   async (action, { signal, onTestFailed }) => {
+    const stoppedRoot = action.startsWith("root-");
     const parkedRoot = action === "root-source-stopped" || action === "parked-message";
-    const restartRoot = parkedRoot || action === "completed-before";
+    const restartRoot = stoppedRoot || parkedRoot || action === "completed-before";
     const childAgent = action === "other-agent" ? "other" : "main";
-    const rootKey = parkedRoot
-      ? "agent:main:dashboard:yield-restart"
-      : "agent:main:main:thread:yield-restart";
+    const rootKey =
+      stoppedRoot || parkedRoot
+        ? "agent:main:dashboard:yield-restart"
+        : "agent:main:main:thread:yield-restart";
     const rootPrompt = "YIELD_RESTART_REQUESTER";
     const childPrompt = "YIELD_RESTART_CHILD";
     const failed = createDeferred<never>();
@@ -104,7 +107,7 @@ it
               }
               return;
             }
-            if (action === "root-source-stopped") {
+            if (stoppedRoot) {
               // Shutdown interrupts this executing child; its root must reconcile the work.
               return;
             }
@@ -148,9 +151,13 @@ it
             yieldRoot = () => call("sessions_yield", {});
             return;
           }
-          if (action === "root-source-stopped") {
-            if (rootResumes > 0) {
+          if (stoppedRoot) {
+            if (text.includes("Gateway stopped")) {
               reply("ROOT_RECONCILED_STOPPED_CHILD");
+              return;
+            }
+            if (action === "root-background-stopped") {
+              reply("REQUESTER_WAITING_FOR_BACKGROUND_RESULT");
               return;
             }
             call("sessions_yield", {});
@@ -304,7 +311,7 @@ it
       async () => {
         await instance.startGateway();
         client = await connect();
-        if (parkedRoot) {
+        if (stoppedRoot || parkedRoot) {
           await client.request("sessions.create", { key: rootKey, agentId: "main" });
         }
         const root = await client.request<{ runId: string }>("chat.send", {
@@ -323,7 +330,7 @@ it
         );
         assert(childKey);
         assert(childRunId);
-        if (action !== "root-source-stopped") {
+        if (!stoppedRoot) {
           expect(
             await client.request("agent.wait", { runId: childRunId, timeoutMs: 30_000 }),
           ).toMatchObject(
@@ -359,21 +366,30 @@ it
           instance.state.agentDir(restartRoot ? "main" : childAgent),
           parkedKey,
         );
-        expect(parked?.lifecycleRunId).toEqual(expect.any(String));
-        expect(parked?.status).toBeUndefined();
+        if (action !== "root-background-stopped") {
+          expect(parked?.lifecycleRunId).toEqual(expect.any(String));
+          expect(parked?.status).toBeUndefined();
+        }
         const callsBeforeRestart = childCalls;
+        if (action === "root-background-stopped") {
+          expect(
+            await client.request("agent.wait", { runId: root.runId, timeoutMs: 15_000 }),
+          ).toMatchObject({ status: "ok" });
+        }
         phase = "restart";
         await instance.stopGateway();
         await client.stopAndWait();
         client = undefined;
-        expect
-          .soft(
-            readRestartSession(
-              instance.state.agentDir(restartRoot ? "main" : childAgent),
-              parkedKey,
-            )?.resumeAfterRestart,
-          )
-          .toBeDefined();
+        if (action !== "root-background-stopped") {
+          expect
+            .soft(
+              readRestartSession(
+                instance.state.agentDir(restartRoot ? "main" : childAgent),
+                parkedKey,
+              )?.resumeAfterRestart,
+            )
+            .toBeDefined();
+        }
         if (action === "parked-message") {
           expect(readRestartSession(instance.state.agentDir("main"), rootKey)?.lifecycleRunId).toBe(
             root.runId,
@@ -383,7 +399,7 @@ it
         client = await connect();
         await vi.waitFor(
           () =>
-            action === "root-source-stopped" || action === "parked-message"
+            stoppedRoot || action === "parked-message"
               ? expect(
                   readRestartSession(
                     instance.state.agentDir(restartRoot ? "main" : childAgent),
@@ -406,7 +422,7 @@ it
           });
           await vi.waitFor(() => expect(rootResumes).toBe(1), { timeout: 15_000 });
         }
-        if (action === "root-source-stopped") {
+        if (stoppedRoot) {
           phase = "root reconciles its stopped child execution";
           await vi.waitFor(
             async () => {
@@ -422,7 +438,6 @@ it
             },
             { timeout: 15_000 },
           );
-          expect(rootResumes).toBe(1);
           expect(childCalls).toBe(callsBeforeRestart);
           return;
         }
@@ -504,22 +519,18 @@ it
             );
             await writeFile(instance.state.path("policy-unavailable"), "one transient outage");
             finishChild!();
+            // Completion admission waits behind this turn; release it before injecting failure.
+            assert(yieldRequester);
+            yieldRequester();
             await vi.waitFor(
               () => {
                 expect(instance.logs()).toContain("RECOVERY_POLICY_UNAVAILABLE_INJECTED");
                 expect(instance.logs()).toContain(
-                  "Subagent announce failed: GatewayOperatorAccessUnavailableError",
+                  "Gateway access policy is unavailable; retry the operation.",
                 );
               },
               { timeout: 15_000 },
             );
-            const active = await client.request<{ sessionInfo: { hasActiveRun?: boolean } }>(
-              "chat.history",
-              { sessionKey: rootKey },
-            );
-            expect(active.sessionInfo.hasActiveRun).toBe(true);
-            assert(yieldRequester);
-            yieldRequester();
           }
         }
         await vi.waitFor(

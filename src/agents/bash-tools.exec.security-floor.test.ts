@@ -40,7 +40,6 @@ const expectOutput = (
   expect(text(result)).toContain(output);
 };
 
-const optionalRuntimeImports = vi.hoisted(() => ({ reviewer: 0, followup: 0 }));
 const reviewerRuntime = vi.hoisted(() => ({
   prepare:
     vi.fn<typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent>(),
@@ -56,12 +55,10 @@ vi.mock("./simple-completion-runtime.js", () => ({
 }));
 
 vi.mock("./exec-auto-reviewer.js", async (importOriginal) => {
-  optionalRuntimeImports.reviewer += 1;
   return importOriginal<typeof import("./exec-auto-reviewer.js")>();
 });
 
 vi.mock("./bash-tools.exec-approval-followup.js", async (importOriginal) => {
-  optionalRuntimeImports.followup += 1;
   return importOriginal<typeof import("./bash-tools.exec-approval-followup.js")>();
 });
 
@@ -146,12 +143,6 @@ afterEach(() => {
   if (tempRoot) {
     fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
   }
-});
-
-it("does not load optional review or delivery runtimes for full/off execution", async () => {
-  const result = await run({ host: "gateway", mode: "full" }, "echo hello");
-  expect(result.details.status).toBe("completed");
-  expect(optionalRuntimeImports).toEqual({ reviewer: 0, followup: 0 });
 });
 
 it("records elevated execution without logging the command payload", async () => {

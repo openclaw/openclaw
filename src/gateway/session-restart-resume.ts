@@ -499,12 +499,16 @@ async function resumeRestartStore(
             if (!selected) {
               return { result: undefined };
             }
-            const parked = (await hasInterruptedCommittedRequesterSettleInput(
-              { ...target, agentId, sessionKey, sessionId: selected.sessionId },
-              selected,
-            ))
-              ? undefined
-              : resolveSessionYieldWait(sessionKey, selected, agentId);
+            let parked = resolveSessionYieldWait(sessionKey, selected, agentId);
+            if (
+              parked &&
+              (await hasInterruptedCommittedRequesterSettleInput(
+                { ...target, agentId, sessionKey, sessionId: selected.sessionId },
+                selected,
+              ))
+            ) {
+              parked = undefined;
+            }
             const skip = restartResumeSkipReason(sessionKey, selected);
             const sameRun = selected.lifecycleRunId === snapshotEntry.lifecycleRunId;
             const resolved = resolveStartupRestartMarker(selected, sameRun, {

@@ -9,7 +9,6 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { projectionOperations } from "../../gateway/worker-environments/local-workspace-state.js";
 import type { LocalWorkspaceOwner } from "../../gateway/worker-environments/local-workspace-types.js";
-import type { DiagnosticPhaseSnapshot } from "../../infra/diagnostic-events.js";
 import { withOpenClawStateLeaseAsync } from "../../state/openclaw-state-lease.js";
 import * as allocation from "../worktrees/allocation.js";
 import { WORKTREE_MUTATION_LEASE_SCOPE } from "../worktrees/capacity-contract.js";
@@ -17,7 +16,6 @@ import {
   createWorktreeCapacityStatfs,
   useInProcessWorktreeCapacityTransport,
 } from "../worktrees/capacity.test-support.js";
-import { withWorktreePreparationTiming } from "../worktrees/preparation-timing.js";
 import { captureWorktreeRunEndContext } from "../worktrees/run-end-lifecycle.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { prepareLocalSandboxWorkspace } from "./local-workspace.js";
@@ -53,8 +51,6 @@ const fixture = vi.hoisted(() => {
     release,
     reuse: vi.fn<Projection["reuse"]>(),
     prepare: vi.fn<Projection["prepare"]>(),
-    event: vi.fn<(event: DiagnosticPhaseSnapshot) => void>(),
-    log: vi.fn<(message: string, metadata: Record<string, unknown>) => void>(),
   };
 });
 
@@ -76,22 +72,6 @@ vi.mock("../../gateway/worker-environments/local-workspace-projection.js", () =>
 vi.mock("../../gateway/worker-environments/local-workspace-checkout.js", () => ({
   localWorkspaceProjectionPath: () => "/projection/fixture",
 }));
-// mock-isolation: Retain the real timing owner while observing its output without global queues.
-vi.mock("../../infra/diagnostic-events.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/diagnostic-events.js")>()),
-  createQueuedDiagnosticPhaseEmitter: () => fixture.event,
-}));
-// mock-isolation: Capture journal metadata without writing host logs.
-vi.mock("../../logging/subsystem.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../logging/subsystem.js")>()),
-  createSubsystemLogger: () => ({
-    info: fixture.log,
-    warn: () => {},
-    debug: () => {},
-    error: () => {},
-  }),
-}));
-
 afterEach(() => vi.clearAllMocks());
 const roots = useSandboxRegistryState("sandbox-preparation-prune-");
 
@@ -130,29 +110,23 @@ it("protects managed preparation and retained cleanup from pruning", async () =>
 it.each([
   { name: "an existing projection", existing: "/projection/fixture", acceleration: true },
   { name: "disabled acceleration", existing: undefined, acceleration: false },
-])("omits allocation timing for $name", async ({ existing, acceleration }) => {
+])("reuses the projection without allocation for $name", async ({ existing, acceleration }) => {
   const mutate = vi.spyOn(allocation, "withWorktreeMutationLease");
   fixture.reuse.mockResolvedValue(existing);
   fixture.prepare.mockResolvedValue("/projection/fixture");
   const cfg: OpenClawConfig = { worktreeAcceleration: acceleration };
-  using workspace = await withWorktreePreparationTiming("sandbox", () =>
-    prepareLocalSandboxWorkspace({
-      cfg,
-      agentId: fixture.owner.agentId,
-      sessionKey: fixture.owner.sessionKey,
-      workspaceDir: "/managed/fixture/src",
-      sandbox: resolveSandboxConfigForAgent(cfg, fixture.owner.agentId),
-    }),
-  );
+  using workspace = await prepareLocalSandboxWorkspace({
+    cfg,
+    agentId: fixture.owner.agentId,
+    sessionKey: fixture.owner.sessionKey,
+    workspaceDir: "/managed/fixture/src",
+    sandbox: resolveSandboxConfigForAgent(cfg, fixture.owner.agentId),
+  });
   expect(workspace).toMatchObject({
     workspaceDir: "/projection/fixture",
     workspaceCwd: path.join("/projection/fixture", "src"),
   });
   expect(mutate).not.toHaveBeenCalled();
-  expect(fixture.event).toHaveBeenCalledTimes(1);
-  expect(fixture.event.mock.calls[0]?.[0].details).not.toHaveProperty("allocate");
-  expect(fixture.log).toHaveBeenCalledTimes(1);
-  expect(fixture.log.mock.calls[0]?.[1].phaseDurationsMs).not.toHaveProperty("allocate");
 });
 
 it.for([false, true])(

@@ -20,11 +20,15 @@ package.json
 packages/acp-core/package.json
 packages/acp-core/src/structured-auth-redaction.ts
 packages/agent-core/package.json
+packages/agent-core/src/harness/compaction/conversation-serialization.ts
+packages/agent-core/src/harness/compaction/file-operations.ts
 packages/agent-core/src/harness/env/kill-tree.ts
 packages/agent-core/src/harness/messages.ts
 packages/agent-core/src/harness/session/background-result-placement.ts
+packages/agent-core/src/harness/session/tool-pairing-facts.ts
 packages/agent-core/src/harness/session/tool-result-pairing.ts
 packages/agent-core/src/harness/session/transcript-model.ts
+packages/agent-core/src/harness/utils/truncate.ts
 packages/agent-core/src/operator-messages.ts
 packages/gateway-client/package.json
 packages/gateway-client/src/timeouts.ts
@@ -944,6 +948,8 @@ src/gateway/github-remote.ts
 src/gateway/github-repository-publication-snapshot.ts
 src/gateway/model-account-connect-errors.ts
 src/gateway/operator-scopes.ts
+src/gateway/openclaw-id/access-plugin.ts
+src/gateway/openclaw-id/member-role-presets.ts
 src/gateway/openclaw-id/tunnel-principal-schema.ts
 src/gateway/openclaw-id/tunnel-principal.ts
 src/gateway/operator-run-recovery-source.codec.ts
@@ -2066,6 +2072,7 @@ src/shared/model-key.ts
 src/shared/monotonic-time.ts
 src/shared/node-list-parse.ts
 src/shared/oauth-refresh-outcome.ts
+src/shared/openclaw-id-policy.ts
 src/shared/path-array-index.ts
 src/shared/permit-pool.ts
 src/shared/pid-alive.ts
