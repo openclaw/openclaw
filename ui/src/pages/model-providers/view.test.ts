@@ -798,6 +798,9 @@ describe("renderModelProviders", () => {
     const provider = container.querySelector('[data-provider-id="openai"]');
     expect(text(provider)).toContain("No models available");
     expect(text(provider)).not.toContain("Access failed");
+    const summary = provider?.querySelector(".provider-row__summary");
+    expect(summary).not.toBeNull();
+    expect(summary?.querySelector(".settings-status--danger")).toBeNull();
   });
 
   it.each([null])(
