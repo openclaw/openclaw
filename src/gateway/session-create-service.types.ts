@@ -284,6 +284,8 @@ export type GatewaySessionResetParams = {
     actor?: SessionCreatedActor;
     openclawIdPrincipal?: import("./openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
   };
+  /** Admitted scopes for resets that can clear an existing permission boundary. */
+  requestingOperatorScopes?: readonly string[];
   /** Authenticated durable operator identity for missing-session materialization. */
   requestingOperatorProfileId?: string;
   operatorAuthority?: AdmittedRunOperatorAuthority;

@@ -808,7 +808,12 @@ describe("handlePendingApprovalRequest", () => {
       name: "targets resolved approval events to visible approval clients when available",
       id: "approval-resolved-visible",
       requestedBy: { requestedByDeviceId: "device-owner" },
-      client: { connId: "conn-owner-approval", clientId: "client-owner", deviceId: "device-owner" },
+      client: {
+        connId: "conn-owner-approval",
+        clientId: "client-owner",
+        deviceId: "device-owner",
+        scopes: ["operator.admin"],
+      },
       otherClient: {
         connId: "conn-other-approval",
         clientId: "client-other",

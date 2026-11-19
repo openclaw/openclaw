@@ -38,7 +38,7 @@ require the `node` role.
 | `operator.cron`           | Manage owned automations in the Control UI; create conversation-owned automations through an authenticated agent turn. Included in `operator.write`; not global administration. |
 | `operator.admin`          | Administrative access. Satisfies every `operator.*` scope. Required for config mutation, updates, native hooks, reserved namespaces, and high-risk approvals.                   |
 | `operator.pairing`        | Device and node pairing management: list, approve, reject, remove, rotate, revoke.                                                                                              |
-| `operator.approvals`      | Exec and plugin approval APIs.                                                                                                                                                  |
+| `operator.approvals`      | Approval APIs, subject to session creator and turn-requester restrictions.                                                                                                      |
 | `operator.questions`      | Listing, reading, answering, and resolving interactive questions.                                                                                                               |
 | `operator.talk`           | Creating, steering, and closing Talk sessions without general Gateway write access. `operator.write` also satisfies this scope.                                                 |
 | `operator.talk.secrets`   | Reading Talk configuration with secrets included.                                                                                                                               |
@@ -408,6 +408,14 @@ administrative session access.
 
 Connection scopes and draft/incognito restrictions remain in force.
 
+Session write access does not grant permission to loosen someone else's session
+permission mode. Non-creators may only tighten it (`read-only` < `guarded` <
+`workspace` < `full`); clearing an explicit override requires the creator or an
+administrator. An unset default may only be changed to `read-only` by a
+non-creator because its effective policy may not match a named mode. Selecting
+`full` and changing `sandboxMode` still require `operator.admin`. See
+[Session permission modes](/gateway/permission-modes).
+
 To enable invitation-only discovery, set the guest role's `sessions.others` to
 `"invited"` after upgrading. Existing role definitions keep their current behavior.
 Assign the intended profiles to that role, then reconnect them. The creator or an
@@ -429,6 +437,17 @@ Discovery does not grant or revoke access to existing sessions: the role's
 separate session-read policy still governs which sessions the caller can read.
 The Control UI waits for a live agent roster after loading or reconnecting, so
 an older browser roster cannot restore agents excluded by the current role.
+
+### Session approvals
+
+`operator.approvals` does not grant access to every approval in a readable
+session. A person who did not create the session can list, inspect, and resolve
+only approvals raised by their own profile's turns. The creator can review any
+approval in that session with the required scope; `operator.admin` retains
+administrative approval access. This applies to exec, plugin, and other pending
+approvals, including clients with `sessions.others: "view"`, `"suggest"`, or
+`"write"`. Approval events and notifications use the same audience restriction.
+Approvals without a recorded requester profile are creator/admin-only.
 
 ### OpenClaw ID member roles
 

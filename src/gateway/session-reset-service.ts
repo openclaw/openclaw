@@ -11,7 +11,6 @@ import {
 import { tryPrepareFreshManagerRuntimeSession } from "../acp/control-plane/manager.runtime-resume-state.js";
 import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { rebindDurableAcpSessionMetaAfterReset } from "../acp/runtime/session-meta-reset.js";
-import { assertOperatorAccessProgramAllowed } from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
 import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
@@ -49,7 +48,6 @@ import { createSessionResetBoundaryId } from "../config/sessions/session-reset-b
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -99,6 +97,7 @@ import {
   closeAcpRuntimeForSession,
   closeChildAcpRuntimesForParent,
 } from "./session-reset-acp.js";
+import { resolveSessionResetAuthorizationError } from "./session-reset-authorization.js";
 import { deleteIncognitoSessionForReset } from "./session-reset-incognito.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import { ensureSessionRuntimeCleanup } from "./session-reset-runtime-cleanup.js";
@@ -265,21 +264,13 @@ async function performPreparedGatewaySessionReset({
       ? missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] })
       : undefined;
   };
-  const resolveResetAccessProgramError = (entry: SessionEntry | undefined) => {
-    try {
-      assertOperatorAccessProgramAllowed(params.operatorAuthority, entry?.cyberAccessProgram);
-      return undefined;
-    } catch (error) {
-      return errorShape(ErrorCodes.FORBIDDEN, formatErrorMessage(error));
-    }
-  };
   const resolveResetEntryAccessError = (entry: SessionEntry | undefined, canonicalKey: string) =>
-    resolveResetAccessProgramError(entry) ??
+    resolveSessionResetAuthorizationError(entry, params) ??
     resolveFastModeSelectionError(entry) ??
     resolveResetOwnershipError(entry, canonicalKey);
   const initialEntryError =
     resolveResetCreationError(initialResetEntry) ??
-    resolveResetAccessProgramError(initialResetEntry) ??
+    resolveSessionResetAuthorizationError(initialResetEntry, params) ??
     resolveResetOwnershipError(initialResetEntry) ??
     resolveFastModeSelectionError(initialResetEntry) ??
     resolveResetHarnessError(initialResetEntry);

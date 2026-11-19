@@ -38,13 +38,20 @@ import type {
   GatewaySessionTitleModelSelection,
 } from "./session-create-service.types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
+import { authorizeSessionPermissionModeChange } from "./session-permission-authorization.js";
 import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 
 /** Creation and adoption retain the settings mutation owner's native permission guard. */
 export async function prepareSessionCreateRuntimeSelection(params: {
   request: Pick<
     CreateGatewaySessionParams,
-    "cfg" | "model" | "agentRuntime" | "requestingOperatorScopes" | "waitForModelCatalog"
+    | "cfg"
+    | "model"
+    | "agentRuntime"
+    | "requestingOperatorScopes"
+    | "requestingOperatorProfileId"
+    | "operatorRoleActor"
+    | "waitForModelCatalog"
   >;
   agentId: string;
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -78,6 +85,24 @@ export async function prepareSessionCreateRuntimeSelection(params: {
     validateModelSelection: params.validateModelSelection,
     ...(context ? { placement: { context, sessionKey } } : {}),
   });
+  const validatePermissionAuthority = () =>
+    authorizeSessionPermissionModeChange({
+      existingEntry,
+      permissionMode: entry.permissionMode,
+      scopes: params.operatorAuthority?.scopes ?? request.requestingOperatorScopes,
+      profileId:
+        params.operatorAuthority?.profileId ??
+        (request.operatorRoleActor?.kind === "operator"
+          ? request.operatorRoleActor.profileId
+          : request.requestingOperatorProfileId),
+    });
+  const authorityError = validatePermissionAuthority();
+  if (authorityError) {
+    if (selection.ok) {
+      selection.release?.();
+    }
+    return { ok: false, error: authorityError };
+  }
   if (
     !selection.ok ||
     (entry.permissionMode === existingEntry?.permissionMode &&
@@ -100,7 +125,8 @@ export async function prepareSessionCreateRuntimeSelection(params: {
       storePath: params.storePath,
       lifecycleIdentities: [sessionKey, existingEntry?.sessionId],
     });
-    const validate = () => validatePermissions() || selection.validate?.();
+    const validate = () =>
+      validatePermissionAuthority() || validatePermissions() || selection.validate?.();
     const error = validate();
     if (error) {
       selection.release?.();

@@ -10,7 +10,7 @@ export const systemAgentApprovalHandlers: GatewayRequestHandlers = {
         ? await listVisiblePendingApprovalRequests({
             manager,
             client,
-            ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
+            getCfg: context.getRuntimeConfig,
           })
         : [],
       undefined,

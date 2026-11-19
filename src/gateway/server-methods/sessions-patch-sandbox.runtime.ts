@@ -11,7 +11,9 @@ import {
   listAgentRunsForSession,
 } from "../../infra/agent-run-registry.js";
 import { isSessionControllerWorkActive } from "../../sessions/session-controller.lifecycle.js";
+import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { authorizeSessionPermissionModeChange } from "../session-permission-authorization.js";
 import {
   readSessionWorkerPlacementAsync,
   type SessionWorkerPlacementContext,
@@ -37,6 +39,22 @@ export async function prepareSessionPatchExecutionPermissionChange(
     assertCurrent: () => ErrorShape | undefined;
   },
 ): Promise<PreparedSessionPatchExecutionPermission> {
+  const validatePermissionAuthority = () => {
+    const actor = resolveGatewayOperatorRoleActor(params.client);
+    return authorizeSessionPermissionModeChange({
+      existingEntry: params.existingEntry,
+      permissionMode: params.entry.permissionMode,
+      scopes: params.client === null ? undefined : (params.client.connect.scopes ?? []),
+      profileId:
+        actor?.kind === "operator"
+          ? actor.profileId
+          : params.client?.authenticatedUserProfile?.profileId,
+    });
+  };
+  const authorityError = validatePermissionAuthority();
+  if (authorityError) {
+    return { ok: false, error: authorityError };
+  }
   const permissionChanged = params.entry.permissionMode !== params.existingEntry?.permissionMode;
   const sandboxChanged =
     params.entry.sandboxMode !== params.existingEntry?.sandboxMode ||
@@ -55,7 +73,9 @@ export async function prepareSessionPatchExecutionPermissionChange(
           sessionId: params.existingEntry.sessionId,
         })
       : { ok: true as const };
-  return permission.ok ? { ...permission, validate } : permission;
+  return permission.ok
+    ? { ...permission, validate: () => validatePermissionAuthority() ?? validate?.() }
+    : permission;
 }
 
 export async function prepareSessionPatchSandboxChange(

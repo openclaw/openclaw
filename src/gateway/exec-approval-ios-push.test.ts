@@ -105,7 +105,7 @@ function mockPairedIosOperators(...paired: ReturnType<typeof pairedIosOperator>[
   mocks.pairing.mockResolvedValue({ pending: [], paired });
 }
 
-function mockPairedIosOperator(scopes = approvalScopes) {
+function mockPairedIosOperator(scopes: OperatorScope[] = ["operator.admin"]) {
   mockPairedIosOperators(pairedIosOperator(scopes));
 }
 
@@ -232,8 +232,8 @@ describe("createExecApprovalIosPushDelivery", () => {
     await expectRejectedRequest("approval-no-read");
   });
 
-  it("does not target iOS devices outside the request's reviewer binding", async () => {
-    mockPairedIosOperator();
+  it("does not target unprofiled non-admin devices even with approval scope", async () => {
+    mockPairedIosOperator(approvalScopes);
     const delivery = createExecApprovalIosPushDelivery({ log: {} });
     expect(
       await delivery.handleRequested({
@@ -352,7 +352,7 @@ describe("createExecApprovalIosPushDelivery", () => {
       gateway: {
         roles: {
           definitions: {
-            member: { scopes: approvalScopes, sessions: { others: "write" }, agents: "*" },
+            member: { scopes: ["operator.admin"], sessions: { others: "write" }, agents: "*" },
           },
         },
       },
@@ -360,8 +360,8 @@ describe("createExecApprovalIosPushDelivery", () => {
     setRuntimeConfigSnapshot(cfg);
     mockIdMemberIosDevice();
     mockPairedIosOperators(
-      pairedIosOperator(approvalScopes, "id-ios"),
-      pairedIosOperator(approvalScopes, "local-ios"),
+      pairedIosOperator(["operator.admin"], "id-ios"),
+      pairedIosOperator(["operator.admin"], "local-ios"),
     );
     const authStarted = createDeferred();
     const authReady = createDeferred();
@@ -399,10 +399,7 @@ describe("createExecApprovalIosPushDelivery", () => {
       expect(sent).toEqual(["local-ios"]);
 
       await delivery.handleResolved({ id: request.id });
-      expect(mocks.execWake.mock.calls.map(([push]) => push.nodeId)).toEqual([
-        "id-ios",
-        "local-ios",
-      ]);
+      expect(mocks.execWake.mock.calls.map(([push]) => push.nodeId)).toEqual(["local-ios"]);
     } finally {
       authReady.resolve();
       await requested;
@@ -418,14 +415,41 @@ describe("createExecApprovalIosPushDelivery", () => {
     },
     { audience: "another profile", creatorId: "other-profile", withSession: true, visible: false },
     { audience: "missing source", creatorId: "other-profile", withSession: false, visible: false },
+    {
+      audience: "own turn with write",
+      creatorId: "other-profile",
+      withSession: true,
+      raiserId: "member-profile",
+      others: "write",
+      visible: true,
+    },
+    {
+      audience: "another turn with write",
+      creatorId: "other-profile",
+      withSession: true,
+      raiserId: "unrelated",
+      others: "write",
+      visible: false,
+    },
+    {
+      audience: "unattributed turn with write",
+      creatorId: "other-profile",
+      withSession: true,
+      others: "write",
+      visible: false,
+    },
   ])(
     "uses the ID session ceiling for a $audience approval despite a linked admin role",
-    async ({ creatorId, withSession, visible }) => {
+    async ({ creatorId, withSession, visible, raiserId, others }) => {
       setRuntimeConfigSnapshot({
         gateway: {
           roles: {
             definitions: {
-              member: { scopes: approvalScopes, sessions: { others: "none" }, agents: "*" },
+              member: {
+                scopes: approvalScopes,
+                sessions: { others: others === "write" ? "write" : "none" },
+                agents: "*",
+              },
             },
           },
         },
@@ -461,6 +485,7 @@ describe("createExecApprovalIosPushDelivery", () => {
         release: () => {},
       } satisfies import("./session-sharing-preparation.js").SessionFactsRead<PreparedSessionMutationFacts>);
       const request = approvalRequest("approval-session-policy");
+      request.requestedByProfileId = raiserId;
       request.requestedByDeviceId = "other-requester";
       request.approvalReviewerDeviceIds = ["id-ios"];
       if (withSession) {
@@ -479,7 +504,7 @@ describe("createExecApprovalIosPushDelivery", () => {
   describe("createPluginApprovalIosPushDelivery", () => {
     it("targets only paired iOS operators with approval and read scopes", async () => {
       mockPairedIosOperators(
-        pairedIosOperator(approvalScopes, "ios-approved"),
+        pairedIosOperator(["operator.admin"], "ios-approved"),
         pairedIosOperator(["operator.read"], "ios-read-only"),
       );
 

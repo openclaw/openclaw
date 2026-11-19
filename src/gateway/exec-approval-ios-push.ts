@@ -27,7 +27,7 @@ import { APPROVALS_SCOPE, READ_SCOPE } from "./operator-scopes.js";
 // iOS approval push delivery targets paired operator devices with APNs
 // registrations. Request pushes require approval scope plus identity-read access
 // so the client can validate gateway ownership before presenting or resolving.
-// Cleanup pushes reuse original targets so badges can clear after scope changes.
+// Cleanup stays within the original targets and rechecks their current approval authority.
 const OPERATOR_ROLE = "operator";
 
 type GatewayLikeLogger = {
@@ -48,6 +48,7 @@ type DeliveryPlan = {
 };
 
 type ApprovalDeliveryState = {
+  request: ApprovalRequestLike;
   nodeIds: string[];
   requestPushPromise: Promise<{ attempted: number; delivered: number }>;
 };
@@ -235,9 +236,16 @@ function createApprovalIosPushDelivery<TRequest extends ApprovalRequestLike>(par
       return;
     }
     await deliveryState.requestPushPromise;
+    using authority = await prepareIosApprovalPushAuthority(deliveryState.request);
+    const targets: DeliveryTarget[] = [];
+    for (const target of await loadApnsRegistrations(deliveryState.nodeIds)) {
+      if (await authority.canSend(target.nodeId)) {
+        targets.push(target);
+      }
+    }
     const plan = await resolveDeliveryPlan({
       approvalKind: params.driver.approvalKind,
-      targets: await loadApnsRegistrations(deliveryState.nodeIds),
+      targets,
       log: params.log,
     });
     if (plan.targets.length === 0) {
@@ -250,6 +258,7 @@ function createApprovalIosPushDelivery<TRequest extends ApprovalRequestLike>(par
       approvalKind: params.driver.approvalKind,
       label: "cleanup",
       send: params.driver.sendResolved,
+      isCurrent: authority.canSend,
     });
   };
 
@@ -275,6 +284,7 @@ function createApprovalIosPushDelivery<TRequest extends ApprovalRequestLike>(par
         }
 
         const deliveryState: ApprovalDeliveryState = {
+          request,
           nodeIds: plan.targets.map((target) => target.nodeId),
           requestPushPromise: sendApprovalPushes({
             approvalId: request.id,

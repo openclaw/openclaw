@@ -20,6 +20,7 @@ import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { installTestApprovalClock } from "../exec-approval-manager.test-support.js";
 import { insertOperatorApproval } from "../operator-approval-store.js";
 import * as operatorApprovalStore from "../operator-approval-store.js";
+import { isApprovalRecordVisibleToClient } from "./approval-record-lookup.js";
 import {
   cancelAgentRuntimeBoundApprovals,
   cancelUnboundRunApprovals,
@@ -58,7 +59,14 @@ function createForwarder(overrides: Partial<ExecApprovalForwarder>): ExecApprova
 }
 
 function bindApprovalHandlers(handlers: Parameters<typeof bindHandlers>[0]) {
-  const request = bindHandlers(handlers);
+  const invoke = bindHandlers(handlers);
+  const request: ReturnType<typeof bindHandlers> = (method, body, client, context) =>
+    invoke(
+      method,
+      body,
+      client ?? createClient({ deviceId: "reviewer", scopes: ["operator.admin"] }),
+      context,
+    );
   return Object.assign(request, {
     resolve(
       id: string | undefined,
@@ -73,7 +81,7 @@ function bindApprovalHandlers(handlers: Parameters<typeof bindHandlers>[0]) {
       return request(
         "approval.resolve",
         { id, kind, decision },
-        deviceId ? createClient({ deviceId }) : undefined,
+        deviceId ? createClient({ deviceId, scopes: ["operator.admin"] }) : undefined,
         context,
       );
     },
@@ -111,7 +119,12 @@ function expectRecipients(
     [rejected, false],
   ] as const) {
     const client = expectDefined(createClient({ [field]: id }), "approval recipient");
-    expect(recipients?.filter?.(client, recipients.record)).toBe(included);
+    expect(
+      isApprovalRecordVisibleToClient({
+        client,
+        record: expectDefined(recipients?.record, "approval audience record"),
+      }),
+    ).toBe(included);
   }
 }
 
@@ -528,7 +541,7 @@ describe("unified approval handlers", () => {
     )({
       req: { id: "req-slow-forwarder", type: "req", method: "approval.resolve", params },
       params,
-      client: createClient({ deviceId: "reviewer" }),
+      client: createClient({ deviceId: "reviewer", scopes: ["operator.admin"] }),
       context: createContext(),
       isWebchatConnect: () => false,
       respond,

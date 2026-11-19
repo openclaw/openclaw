@@ -34,6 +34,23 @@ Node execution still checks the target policy before dispatch: caller
 requires approval even when the caller requests `full` / `off`.
 </Note>
 
+## Who can review session approvals
+
+The session creator and callers with `operator.admin` can review every approval
+raised in that session. Other people with approval scope can list or resolve only
+approvals raised by their own profile's turns, and only while they can read the
+session. A role's `sessions.others` setting (`view`, `suggest`, or `write`) does not
+grant access to another person's approvals.
+
+The Gateway records the initiating profile from authenticated turn authority,
+not from tool arguments or an approval request payload. Older or unattributed
+approvals are visible only to the session creator or an administrator. This rule
+covers exec, plugin, and system-agent requests, generic approval lookup and
+history, session events and replay, and Web Push/iOS approval notifications.
+Server-authenticated channel approval routes retain their separate reviewer
+custody checks; a profile restriction does not give an agent permission to
+approve its own action.
+
 ## Where it applies
 
 Exec approvals are enforced locally on the execution host:

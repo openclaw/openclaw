@@ -9,7 +9,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
-import { operatorSessionCap } from "../operator-role-policy.js";
+import type { OperatorApprovalRecord } from "../operator-approval-store.types.js";
+import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
+import { prepareSessionCreatorProfile } from "../session-creator.js";
+import { resolveSessionEventAgentScope } from "../session-request-agent.js";
+import type { SessionRowProjection } from "../session-row-projection.js";
 import type {
   PreparedSessionMutationFacts,
   SessionSharingTarget,
@@ -18,6 +22,7 @@ import {
   prepareSessionMutationFacts,
   type SessionFactsRead,
 } from "../session-sharing-preparation.js";
+import { prepareProjectedSessionSharing } from "../session-sharing-read.js";
 import { createSessionListEntryFilter, type prepareSessionSharing } from "../session-sharing.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import type { ApprovalRequestAuthority } from "./approval-request-authority.js";
@@ -41,21 +46,27 @@ export function canAccessApprovalSession(params: {
   client: GatewayClient | null;
   sessionKey?: string | null;
   agentId?: string | null;
+  requestedByProfileId?: string | null;
   prepared?: {
     sharing: ReturnType<typeof prepareSessionSharing>;
     target: (sessionKey: string, agentId?: string) => SessionSharingTarget | null;
   };
   readFacts?: (sessionKey: string, agentId?: string) => PreparedSessionMutationFacts | undefined;
 }): boolean {
-  const cap = operatorSessionCap(params.client, params.cfg);
-  if (cap !== "none" && cap !== "invited") {
+  // A null client is an internal native/channel call, not a human socket identity.
+  if (!params.client || params.client.connect.scopes?.includes(ADMIN_SCOPE)) {
     return true;
   }
-  const visibilityFilter = params.prepared
-    ? params.prepared.sharing.entryFilter
-    : createSessionListEntryFilter({ client: params.client, cfg: params.cfg });
-  if (!visibilityFilter) {
+  // The server-authenticated channel bridge retains its separate reviewer custody.
+  if (params.client?.internal?.approvalRuntime === true) {
     return true;
+  }
+  const actor = resolveGatewayOperatorRoleActor(params.client);
+  const profileId =
+    params.client?.authenticatedUserProfile?.profileId ??
+    (actor?.kind === "operator" ? actor.profileId : undefined);
+  if (!profileId) {
+    return false;
   }
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (!sessionKey) {
@@ -64,19 +75,64 @@ export function canAccessApprovalSession(params: {
   const agentId = normalizeOptionalString(params.agentId);
   const facts = params.readFacts?.(sessionKey, agentId);
   const target = params.prepared ? params.prepared.target(sessionKey, agentId) : facts?.target;
-  return Boolean(
-    target &&
-    (params.prepared
-      ? params.prepared.sharing.canReadTarget(target)
-      : createSessionListEntryFilter({
+  if (!target) {
+    return false;
+  }
+  const isProfile = prepareSessionCreatorProfile(
+    profileId,
+    params.client?.preparedSessionProfile?.aliases,
+  );
+  if (isProfile(target.entry.createdActor)) {
+    return true;
+  }
+  // Session readability, including sessions.others: write, never grants another person's turn.
+  if (
+    !params.requestedByProfileId ||
+    !isProfile({ type: "human", source: "profile", id: params.requestedByProfileId })
+  ) {
+    return false;
+  }
+  return params.prepared
+    ? params.prepared.sharing.canReadTarget(target)
+    : createSessionListEntryFilter(
+        {
           client: params.client,
           cfg: params.cfg,
           membership: facts?.membership,
-        })?.(target.storeKey, target.entry) !== false),
-  );
+        },
+        isProfile,
+      )?.(target.storeKey, target.entry) !== false;
 }
 
-type ApprovalSessionSource = { sessionKey?: string | null; agentId?: string | null };
+/** Synchronous event audiences consume the resident sharing owner, never fresh SQL. */
+export function prepareProjectedApprovalSessionAccess(params: {
+  cfg: OpenClawConfig;
+  client: GatewayClient | null;
+  projection?: SessionRowProjection;
+}): Parameters<typeof canAccessApprovalSession>[0]["prepared"] {
+  const { cfg, client, projection } = params;
+  if (!projection) {
+    return undefined;
+  }
+  return {
+    sharing: prepareProjectedSessionSharing({
+      cfg: projection.getPolicyConfig() ?? cfg,
+      client,
+      isMember: (target, identity) =>
+        projection.hasMembership(target.storePath, target.storeKey, identity),
+    }),
+    target: (key, owner) => {
+      const scope = resolveSessionEventAgentScope(cfg, key, owner);
+      return scope?.[1] ? projection.sharingTarget({ key, agentId: scope[1] }) : null;
+    },
+  };
+}
+
+type ApprovalSessionSource = {
+  sessionKey?: string | null;
+  agentId?: string | null;
+  requestedByProfileId?: string | null;
+};
 
 /** Retain receipt-updated sharing facts while approval I/O yields. */
 export async function prepareApprovalSessionAccess(params: {
@@ -95,7 +151,11 @@ export async function prepareApprovalSessionAccess(params: {
   };
   try {
     const cfg = params.getCfg?.() ?? params.cfg;
-    if (cfg && ["none", "invited"].includes(operatorSessionCap(params.client, cfg) ?? "")) {
+    if (
+      cfg &&
+      !params.client?.connect.scopes?.includes(ADMIN_SCOPE) &&
+      !params.client?.internal?.approvalRuntime
+    ) {
       for (const source of params.sources) {
         const sessionKey = normalizeOptionalString(source.sessionKey);
         const requestedAgentId = normalizeOptionalString(source.agentId);
@@ -136,12 +196,20 @@ export async function prepareApprovalSessionAccess(params: {
 }
 
 /** Payloads are kind-specific; every approval kind carries its source session in the same fields. */
-export function readApprovalRequestSource<TPayload>(record: ExecApprovalRecord<TPayload>) {
+export function readApprovalRequestSource(record: ExecApprovalRecord<unknown>) {
   const source = isRecord(record.request) ? record.request : undefined;
   return {
     sessionKey: normalizeOptionalString(source?.sessionKey),
     agentId: normalizeOptionalString(source?.agentId),
+    requestedByProfileId: record.requestedByProfileId,
   };
+}
+
+/** Durable reads use the same profile boundary as live pending records. */
+export function readOperatorApprovalRequestSource(
+  record: OperatorApprovalRecord,
+): ApprovalSessionSource {
+  return { ...record.source, requestedByProfileId: record.requester.profileId };
 }
 
 export function isApprovalRecordVisibleToClient<TPayload>(params: {
@@ -153,6 +221,13 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
 }): boolean {
   const scopes = params.client?.connect.scopes ?? [];
   if (scopes.includes(ADMIN_SCOPE)) {
+    return true;
+  }
+  if (
+    params.client?.internal?.agentRuntimeIdentity &&
+    params.record.requestedByConnId &&
+    params.record.requestedByConnId === params.client.connId
+  ) {
     return true;
   }
   if (
@@ -168,6 +243,9 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
     )
   ) {
     return false;
+  }
+  if (params.cfg && scopes.includes(APPROVALS_SCOPE) && params.client?.authenticatedUserProfile) {
+    return true;
   }
   const requestedByDeviceId = normalizeNullableString(params.record.requestedByDeviceId);
   const requestedByClientId = normalizeNullableString(params.record.requestedByClientId);

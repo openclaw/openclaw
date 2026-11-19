@@ -5,6 +5,10 @@ import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
@@ -37,6 +41,7 @@ import {
 import * as operatorApprovalStore from "./operator-approval-store.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
 const SIBLING_SESSION_KEY = "agent:main:parent:sibling";
 const tempDirs: string[] = [];
@@ -58,9 +63,28 @@ function createRuntime(
 ) {
   const { now = Date.now, ...runtimeParams } = params;
   vi.spyOn(Date, "now").mockImplementation(now);
+  const cfg = { agents: { entries: { main: {} } } };
+  setRuntimeConfigSnapshot(cfg);
+  const projection = createSessionRowProjectionFixture({
+    cfg,
+    store: {
+      [SOURCE_SESSION_KEY]: {
+        sessionId: "source",
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: "source-reviewer" },
+      },
+      [PARENT_SESSION_KEY]: {
+        sessionId: "parent",
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: "source-reviewer" },
+      },
+    },
+  });
+  subscriptions.push(() => projection.dispose());
   const subscribers = createSessionMessageSubscriberRegistry();
   const broadcastToConnIds = vi.fn<GatewayBroadcastToConnIdsFn>();
   const runtime = createOperatorApprovalSessionEventRuntime({
+    getSessionRowProjection: () => projection,
     ...runtimeParams,
     sessionMessageSubscribers: subscribers,
     broadcastToConnIds,
@@ -86,6 +110,7 @@ async function insertPendingApproval(params: {
   createdAtMs?: number;
   expiresAtMs?: number;
   reviewerDeviceIds?: string[];
+  requesterProfileId?: string;
 }): Promise<OperatorApprovalRecord> {
   const record = createPendingRecord({
     audienceSessionKeys: [SOURCE_SESSION_KEY],
@@ -144,6 +169,7 @@ describe("operator approval session events", () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
+    clearRuntimeConfigSnapshot();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { force: true, recursive: true });
     }
@@ -195,6 +221,7 @@ describe("operator approval session events", () => {
         sourceSessionKey: "child",
         reviewerDeviceIds: ["source-reviewer", "parent-reviewer"],
       });
+      pending.requester.profileId = "parent-reviewer";
       const terminal = createTerminalRecord(pending);
       runtime.publish({ phase: "terminal", record: pending });
       runtime.publish({ phase: "pending", record: terminal });
@@ -433,12 +460,12 @@ describe("operator approval session events", () => {
         prepared.release();
       }
     }
-    expect(prepare).toHaveBeenCalledTimes(3);
+    expect(prepare).toHaveBeenCalledTimes(2);
     nowMs = 10_000;
     const expired = await runtime.replay(SOURCE_SESSION_KEY, reviewer);
     expect(expired.replay.approvals).toEqual([]);
     expect(expired.isCurrent()).toBe(true);
-    expect(prepare).toHaveBeenCalledTimes(4);
+    expect(prepare).toHaveBeenCalledTimes(3);
     expired.release();
   });
 
@@ -502,7 +529,7 @@ describe("operator approval session events", () => {
       expect(retainedReplay.replay.approvals.map(({ id }) => id)).toEqual(["shared-replay"]);
       expect(otherReviewerReplay.replay.approvals).toEqual([]);
       expect(otherSessionReplay.replay.approvals).toEqual([]);
-      expect(delayed.mock.calls.length).toBe(3);
+      expect(delayed.mock.calls.length).toBe(2);
       const secondReplay = await runtime.replay(SOURCE_SESSION_KEY, clients[1]!);
       retainedReplay.release();
       retainedReplay.release();
@@ -526,7 +553,7 @@ describe("operator approval session events", () => {
       }
       runtime.publish({ phase: "terminal", record: terminal.record });
       expect(secondReplay.isCurrent()).toBe(false);
-      expect(otherReviewerReplay.isCurrent()).toBe(true);
+      expect(otherReviewerReplay.isCurrent()).toBe(false);
       expect(otherSessionReplay.isCurrent()).toBe(true);
     } finally {
       reply.resolve();
@@ -588,6 +615,7 @@ describe("operator approval session events", () => {
         audienceSessionKeys: [SOURCE_SESSION_KEY, PARENT_SESSION_KEY],
         expiresAtMs: 4_000,
         reviewerDeviceIds: [deviceId],
+        requesterProfileId: deviceId,
       });
       const observer = createReviewer("observer", deviceId);
       const requester = revoked ? createReviewer("requester", deviceId) : observer;
@@ -664,6 +692,7 @@ describe("operator approval session events", () => {
       60_000,
       "expiry-race",
     );
+    record.requestedByProfileId = "reviewer-device";
     const { decision } = await manager.register(record, 60_000);
     subscribers.subscribe("reviewer", SOURCE_SESSION_KEY, { includeApprovals: true });
     replayAtMs = record.expiresAtMs;
@@ -765,6 +794,7 @@ describe("operator approval session events", () => {
       3_000,
       "replay-expiry-with-waiter",
     );
+    record.requestedByProfileId = "parent-device";
     const decisionPromise = (await manager.register(record, 3_000)).decision;
     expect(executionEvents.map((event) => event.data)).toEqual([
       { approval: { id: record.id, state: "pending" } },

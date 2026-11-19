@@ -15,6 +15,10 @@ import { currentOwnerDevicePrincipal } from "./openclaw-id/tunnel-principal.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
+import {
+  isApprovalRecordVisibleToClient,
+  prepareProjectedApprovalSessionAccess,
+} from "./server-methods/approval-record-lookup.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import {
   disconnectStaleSharedGatewayAuthClients,
@@ -382,6 +386,17 @@ export function createGatewayRequestContext(
         (gatewayClient) =>
           (!opts.excludeConnId || gatewayClient.connId !== opts.excludeConnId) &&
           canDeliverApprovals(gatewayClient, opts.approvalKind ?? "exec") &&
+          (!opts.record ||
+            isApprovalRecordVisibleToClient({
+              record: opts.record,
+              client: gatewayClient,
+              cfg: getRuntimeConfig(),
+              prepared: prepareProjectedApprovalSessionAccess({
+                cfg: getRuntimeConfig(),
+                client: gatewayClient,
+                projection: runtime.getSessionRowProjection(),
+              }),
+            })) &&
           (!opts.filter || opts.filter(gatewayClient, opts.record)),
       ),
     getClientConnIds,
