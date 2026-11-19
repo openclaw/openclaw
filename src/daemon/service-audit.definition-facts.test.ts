@@ -15,6 +15,7 @@ import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 import {
   buildTaskScript,
   buildHiddenLauncherScript,
+  resolveStartupEntryPath,
   resolveTaskScriptPath,
   resolveTaskLauncherScriptPath,
 } from "./schtasks-layout.js";
@@ -411,6 +412,24 @@ it("reports failed native task inspection independently from legacy issues", asy
   expect(result.issues).toEqual([]);
   expect(result.definitionDriftError).toContain("inspection could not be completed");
   expect(JSON.stringify(result)).not.toContain("operator-secret");
+});
+
+it("does not report a Startup-folder login item as an unreadable task definition", async () => {
+  // Non-elevated installs fall back to a login item; Task Scheduler then has no such task.
+  native.task.mockResolvedValue({ code: 1, stdout: "", stderr: "task not found" });
+  const env = {
+    USERPROFILE: dirs.make("definition-facts-startup-home-"),
+    APPDATA: dirs.make("definition-facts-startup-appdata-"),
+  };
+  const startupPath = resolveStartupEntryPath(env);
+  await fs.mkdir(path.dirname(startupPath), { recursive: true });
+  await fs.writeFile(startupPath, "@rem synthetic Startup entry; never executed\r\n");
+  const result = await auditGatewayServiceConfig({
+    env,
+    command: { programArguments: ["node", "C:\\openclaw\\index.js", "gateway"] },
+    platform: "win32",
+  });
+  expect(result.definitionDriftError).toBeUndefined();
 });
 
 const discardedSettings: Array<[string, string[]?, string?, Record<string, string>?]> = [

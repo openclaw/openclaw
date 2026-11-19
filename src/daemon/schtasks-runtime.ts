@@ -196,6 +196,11 @@ export async function isRegisteredScheduledTask(env: GatewayServiceEnv): Promise
   }
 }
 
+/** A Startup-folder login item installed in place of the Scheduled Task. */
+export async function isStartupEntryOnly(env: GatewayServiceEnv): Promise<boolean> {
+  return !(await isRegisteredScheduledTask(env)) && (await isStartupEntryInstalled(env));
+}
+
 export async function launchFallbackTaskScript(
   env: GatewayServiceEnv,
   installedCommand?: GatewayServiceCommandConfig | null,
@@ -656,7 +661,10 @@ export async function readScheduledTaskRuntime(
   const probe = probeScheduledTaskState(resolveTaskName(env), opts?.timeoutMs);
   if (probe.status === "missing") {
     return (await isStartupEntryInstalled(env, deadlineMs, opts?.requireEffective))
-      ? resolveFallbackRuntime(env, undefined, "observe", deadlineMs)
+      ? {
+          ...(await resolveFallbackRuntime(env, undefined, "observe", deadlineMs)),
+          windowsStartupEntry: true,
+        }
       : { status: "stopped", missingUnit: true };
   }
   if (probe.status === "unknown") {
