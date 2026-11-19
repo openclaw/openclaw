@@ -540,11 +540,10 @@ describe("workboard tools", () => {
 
     const dispatch = await runTool(tools, "dispatch", {});
 
-    const promoted = dispatch.promoted as Array<{
-      metadata?: { claim?: { token?: string } };
-    }>;
-    expect(promoted).toEqual([expect.objectContaining({ id: card.id })]);
-    expect(promoted[0]?.metadata?.claim?.token).toBe("[redacted]");
+    expect(dispatch.promoted).toEqual([
+      expect.objectContaining({ id: card.id, claim: expect.objectContaining({ ownerId: "main" }) }),
+    ]);
+    expect(JSON.stringify(dispatch)).not.toContain("secret-token");
   });
 
   it("exposes board lifecycle, decomposition, runs, and notification tools", async () => {
