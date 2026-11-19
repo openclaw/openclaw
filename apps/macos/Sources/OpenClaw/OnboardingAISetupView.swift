@@ -324,7 +324,7 @@ struct OnboardingAISetupView: View {
     private func rowStep(_ row: OnboardingAIPicker.Row) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             self.rowHeader(row, open: true)
-            self.expandedContent(row, failure: self.failure(for: row))
+            self.cardContent(row, failure: self.failure(for: row))
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -362,7 +362,7 @@ struct OnboardingAISetupView: View {
                     } else if open, self.isConnecting {
                         Text("Connecting…")
                     } else {
-                        self.subtitle(for: row, expanded: open)
+                        self.subtitle(for: row, open: open)
                     }
                 }
                 .font(.caption)
@@ -375,7 +375,7 @@ struct OnboardingAISetupView: View {
     }
 
     @ViewBuilder
-    private func expandedContent(_ row: OnboardingAIPicker.Row, failure: OnboardingAISetupModel.Failure?) -> some View {
+    private func cardContent(_ row: OnboardingAIPicker.Row, failure: OnboardingAISetupModel.Failure?) -> some View {
         if self.model.activeAuthOption != nil {
             OnboardingProviderSetupSteps(model: self.model)
         } else if self.model.phase == .testing {
@@ -480,7 +480,7 @@ struct OnboardingAISetupView: View {
         }
     }
 
-    private func subtitle(for row: OnboardingAIPicker.Row, expanded: Bool) -> Text {
+    private func subtitle(for row: OnboardingAIPicker.Row, open: Bool) -> Text {
         switch row.id {
         case .chatGPT: Text("Use your ChatGPT plan")
         case .claude: Text("Use your Claude plan")
@@ -489,7 +489,7 @@ struct OnboardingAISetupView: View {
             } else {
                 Text("Use a Gemini API key")
             }
-        case .apiKey: if expanded {
+        case .apiKey: if open {
                 Text("Paste a key from your provider’s website")
             } else {
                 Text("OpenAI, Anthropic, OpenRouter and more")

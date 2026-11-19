@@ -2,7 +2,7 @@ import AppKit
 import OpenClawProtocol
 import SwiftUI
 
-/// Provider sign-in, model preparation, and activation steps, shown inside the picker row that started them.
+/// Provider sign-in, model preparation, and activation steps, shown in the picked provider's card.
 struct OnboardingProviderSetupSteps: View {
     @Bindable var model: OnboardingAISetupModel
     @State private var openedProviderAuthURL: URL?
