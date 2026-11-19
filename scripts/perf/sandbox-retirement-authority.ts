@@ -126,8 +126,8 @@ try {
   assert(container && browser, "Registry fixtures were not published");
   const authorityCycle = async () => {
     for (let check = 0; check < 4; check++) {
-      await registry.assertSandboxRegistryRetirementCurrent("container", container, database);
-      await registry.assertSandboxRegistryRetirementCurrent("browser", browser, database);
+      registry.assertSandboxRegistryRetirementCurrent("container", container, database);
+      registry.assertSandboxRegistryRetirementCurrent("browser", browser, database);
     }
   };
   const workspaceDir = entry(0).workspaceDir;
