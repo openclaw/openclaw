@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { sqlitePrimaryResultCode } from "./sqlite-error-diagnostics.js";
 import {
   isSqliteReadOnlyError,
   readSourceJournalMode,
@@ -94,8 +95,7 @@ export function tryInspectSqliteReadOnlyInProcess<T>(
 const SQLITE_CANTOPEN_RESULT_CODE = 14;
 
 function isSqliteCantOpenError(error: unknown): boolean {
-  const errcode = (error as { errcode?: unknown } | null)?.errcode;
-  return typeof errcode === "number" && (errcode & 0xff) === SQLITE_CANTOPEN_RESULT_CODE;
+  return sqlitePrimaryResultCode(error) === SQLITE_CANTOPEN_RESULT_CODE;
 }
 
 /** The isolated reader lets SQLite distinguish a hot journal from harmless residue. */
