@@ -80,10 +80,28 @@ const EXTENDED_1033_MOBILE_JOBS = new Map([
   ["android-access-native (16384, google_apis_ps16k)", "android-access-native"],
 ]);
 
+const NOV19_CI_FAILURES = new Map([
+  ["checks-ui-e2e-real-gateway (1/2)", "checks-ui-e2e-real-gateway"],
+  ["checks-node-compact-large-36 (node)", "checks-node-core-test-nondist-shard"],
+  ["checks-node-compact-large-41 (node)", "checks-node-core-test-nondist-shard"],
+]);
+
 // Reviewed release-tooling policy, loaded from P, never the candidate checkout.
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
 const RELEASE_VALIDATION_WAIVERS = [
+  ...[...NOV19_CI_FAILURES.keys()].map((jobName) => ({
+    targetVersion: "2026.11.6",
+    targetSha: "06afb10d3272cc9deaf38ca6a3b7b839d5935638",
+    childRole: "normalCi",
+    jobName,
+    reason:
+      "Dallin Romney authorized whole-shard acceptance on 2026-11-19 at 11:58 UTC. " +
+      "FRV 44493699274 observed desktop APT setup timeout, Node36 shutdown persistence " +
+      "deadline failure, and Node41 missing command output. These are accepted risks, " +
+      "not proven flakes or passing coverage. Preserve raw failures and required execution; " +
+      "other jobs, candidates, cancelled/missing evidence, and integrity gates remain blocking.",
+  })),
   {
     targetVersion: "2026.11.6",
     targetSha: "06afb10d3272cc9deaf38ca6a3b7b839d5935638",
@@ -604,14 +622,15 @@ function aggregateCauses(waiver) {
   if (
     waiver.targetVersion === "2026.11.6" &&
     waiver.childRole === "normalCi" &&
-    STABLE_116_CI_FAILURES.has(waiver.jobName)
+    (STABLE_116_CI_FAILURES.has(waiver.jobName) || NOV19_CI_FAILURES.has(waiver.jobName))
   ) {
     return [
       {
         jobName: "openclaw/ci-gate",
         stepName: "Verify selected CI lanes",
         causes: [
-          STABLE_116_CI_FAILURES.get(waiver.jobName) + " finished with failure (selected=true)",
+          (STABLE_116_CI_FAILURES.get(waiver.jobName) ?? NOV19_CI_FAILURES.get(waiver.jobName)) +
+            " finished with failure (selected=true)",
         ],
         exactCauses: true,
       },
