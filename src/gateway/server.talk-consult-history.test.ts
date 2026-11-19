@@ -142,7 +142,7 @@ beforeEach(async () => {
   // The suite reset deletes the workspace directory between cases; retire its durable identity
   // too, as real deletion does, so command-owned consults do not read it as a vanished workspace.
   await deleteWorkspaceState(
-    prepareWorkspaceStateDeletion(resolveAgentWorkspaceDir(getRuntimeConfig(), "main")),
+    await prepareWorkspaceStateDeletion(resolveAgentWorkspaceDir(getRuntimeConfig(), "main")),
   );
   context = createDirectChatContext({ getRuntimeConfig });
   const rowProjection = await createSessionRowProjection({

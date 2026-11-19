@@ -57,7 +57,10 @@ vi.mock("../../agents/agent-command.js", async () => {
   return {
     agentCommandFromGatewayIngress: createTalkCommandOwnerStandIn({
       run: (params) => mocks.runEmbeddedAgentCore(params),
-      prepareAdmission: (params) => mocks.prepareAgentRunAdmission(params),
+      prepareAdmission: (params) =>
+        mocks.prepareAgentRunAdmission(
+          params as { operationalRunInstance: OperationalRunInstanceRef },
+        ),
     }),
   };
 });

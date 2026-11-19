@@ -378,7 +378,7 @@ it("retains exactly one embedded yielded acknowledgement and late result through
     rearmGeneration: 1,
   };
   runEmbeddedAgent.mockImplementation(async (params) => {
-    const instance = expectDefined(params.preparedRunAdmission?.operationalRunInstance);
+    const instance = expectDefined(params.preparedRunAdmission?.operationalRunInstance, "prepared run instance");
     const handle = createEmbeddedRunHandle({ runId: params.runId });
     await withGatewayToolCallerIdentity(
       {
@@ -401,7 +401,7 @@ it("retains exactly one embedded yielded acknowledgement and late result through
           sessionKey,
           undefined,
           "main",
-          expectDefined(getCurrentSessionControllerOwner()),
+          expectDefined(getCurrentSessionControllerOwner(), "session controller owner"),
         );
       },
     );
@@ -559,7 +559,7 @@ it.each([
           text: "Foreign spoken request",
           mode: "steer",
           runTarget: {
-            runId: expectDefined(activeRunId),
+            runId: expectDefined(activeRunId, "active CLI run ID"),
             signal: new AbortController().signal,
             isCurrent: () => true,
           },
