@@ -312,73 +312,88 @@ describe("worker placement authority retained boundaries", () => {
     counters.expectIdle();
   });
 
-  it("rejects stale journal ownership without losing pending recovery work", async () => {
-    const insert = (table: string, values: Record<string, SQLInputValue>) => {
-      const columns = Object.keys(values).map((key) =>
-        key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`),
-      );
-      database.db
-        .prepare(
-          `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
-        )
-        .run(...Object.values(values));
-    };
-    const ids = ["journal-current", "journal-draining", "journal-stale"];
-    for (const sessionId of ids) {
-      const current = sessionId === "journal-current";
-      insert("worker_session_placements", {
-        ...sessionIdentity(sessionId),
-        state: current ? "active" : "draining",
-        transitionGeneration: current ? 7 : 8,
-        environmentId: `env-${sessionId}`,
-        activeOwnerEpoch: 7,
-        workspaceBaseManifestRef: `sha256:${"a".repeat(64)}`,
-        remoteWorkspaceDir: "/workspace",
-        workerBundleHash: "b".repeat(64),
-        createdAtMs: 0,
-        updatedAtMs: 0,
-        stateChangedAtMs: 0,
-      });
-      database.db
-        .prepare(`INSERT INTO worker_workspace_reconciliations
+  it.each([false, true])(
+    "rejects stale journal ownership with repository column %s",
+    async (repositoryColumn) => {
+      if (!repositoryColumn) {
+        database.db.exec(
+          "ALTER TABLE worker_workspace_pending_results DROP COLUMN repository_workspace_id",
+        );
+      }
+      const repositoryWorkspaceId = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+      const insert = (table: string, values: Record<string, SQLInputValue>) => {
+        const columns = Object.keys(values).map((key) =>
+          key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`),
+        );
+        database.db
+          .prepare(
+            `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+          )
+          .run(...Object.values(values));
+      };
+      const ids = ["journal-current", "journal-draining", "journal-stale"];
+      for (const sessionId of ids) {
+        const current = sessionId === "journal-current";
+        insert("worker_session_placements", {
+          ...sessionIdentity(sessionId),
+          state: current ? "active" : "draining",
+          transitionGeneration: current ? 7 : 8,
+          environmentId: `env-${sessionId}`,
+          activeOwnerEpoch: 7,
+          workspaceBaseManifestRef: `sha256:${"a".repeat(64)}`,
+          remoteWorkspaceDir: "/workspace",
+          workerBundleHash: "b".repeat(64),
+          createdAtMs: 0,
+          updatedAtMs: 0,
+          stateChangedAtMs: 0,
+        });
+        database.db
+          .prepare(`INSERT INTO worker_workspace_reconciliations
           (session_id, environment_id, owner_epoch, placement_generation, base_manifest_ref,
            current_manifest_ref, plan_json, base_pack, created_at_ms)
           VALUES (?, ?, 7, 7, 'base', 'current', '{}', X'', 0)`)
-        .run(sessionId, `env-${sessionId}`);
-      insert("worker_workspace_pending_results", {
-        sessionId,
-        environmentId: `env-${sessionId}`,
-        ownerEpoch: sessionId === "journal-stale" ? 8 : 7,
-        placementGeneration: 7,
-        claimId: `claim-${sessionId}`,
-        runId: `run-${sessionId}`,
-        gatewayInstanceId: "previous-gateway",
-        recoveryRequestedAtMs: current ? null : 11,
-        workspaceAcceptedAtMs: null,
-        stagedResultRef: current ? null : `refs/openclaw/worker-results/${sessionId}`,
-        createdAtMs: 0,
-      });
-    }
-    const store = createWorkerSessionPlacementStore({ database });
-    const counters = observeMainThreadSql();
-    const owners = await store.listWorkspaceReconciliationOwners();
-    const placements = await Promise.all(
-      owners.map((owner) => store.getWorkspaceReconciliationPlacement(owner)),
-    );
-    const accepted = new Set(
-      owners.filter((_owner, index) => placements[index]).map((owner) => owner.sessionId),
-    );
-    expect(accepted).toEqual(new Set(["journal-current", "journal-draining"]));
-    const projection = await store.readProjection(ids, { current: true });
-    expect(projection.workspaceJournalOwnerSessionIds).toEqual(accepted);
-    expect(projection.workspaceResultReconcilingSessionIds).toEqual(new Set(["journal-draining"]));
-    expect(projection.workspaceRecoveryPendingSessionIds).toEqual(new Set(ids));
-    expect(projection.pendingResults.get("journal-stale")?.ownerEpoch).toBe(8);
-    expect(
-      (await store.readRecoveryCandidates()).find((row) => row.sessionId === "journal-stale"),
-    ).toMatchObject({ workspaceRecoveryPending: true });
-    counters.expectIdle();
-  });
+          .run(sessionId, `env-${sessionId}`);
+        insert("worker_workspace_pending_results", {
+          sessionId,
+          environmentId: `env-${sessionId}`,
+          ownerEpoch: sessionId === "journal-stale" ? 8 : 7,
+          placementGeneration: 7,
+          claimId: `claim-${sessionId}`,
+          runId: `run-${sessionId}`,
+          gatewayInstanceId: "previous-gateway",
+          recoveryRequestedAtMs: current ? null : 11,
+          workspaceAcceptedAtMs: null,
+          stagedResultRef: current ? null : `refs/openclaw/worker-results/${sessionId}`,
+          ...(repositoryColumn && current ? { repositoryWorkspaceId } : {}),
+          createdAtMs: 0,
+        });
+      }
+      const store = createWorkerSessionPlacementStore({ database });
+      const counters = observeMainThreadSql();
+      const owners = await store.listWorkspaceReconciliationOwners();
+      const placements = await Promise.all(
+        owners.map((owner) => store.getWorkspaceReconciliationPlacement(owner)),
+      );
+      const accepted = new Set(
+        owners.filter((_owner, index) => placements[index]).map((owner) => owner.sessionId),
+      );
+      expect(accepted).toEqual(new Set(["journal-current", "journal-draining"]));
+      const projection = await store.readProjection(ids, { current: true });
+      expect(projection.workspaceJournalOwnerSessionIds).toEqual(accepted);
+      expect(projection.workspaceResultReconcilingSessionIds).toEqual(
+        new Set(["journal-draining"]),
+      );
+      expect(projection.workspaceRecoveryPendingSessionIds).toEqual(new Set(ids));
+      expect(projection.pendingResults.get("journal-stale")?.ownerEpoch).toBe(8);
+      expect(projection.pendingResults.get("journal-current")?.repositoryWorkspaceId).toBe(
+        repositoryColumn ? repositoryWorkspaceId : undefined,
+      );
+      expect(
+        (await store.readRecoveryCandidates()).find((row) => row.sessionId === "journal-stale"),
+      ).toMatchObject({ workspaceRecoveryPending: true });
+      counters.expectIdle();
+    },
+  );
 
   it("fences a placement created after absence was captured", async () => {
     const store = createWorkerSessionPlacementStore({ database });
@@ -467,6 +482,42 @@ describe("worker placement authority retained boundaries", () => {
       await startup;
       await coordinator.stop();
       await environments.close();
+    }
+  });
+
+  it("keeps local owner claims current in worker-backed reader snapshots", async () => {
+    const store = createWorkerSessionPlacementStore({ database });
+    const session = sessionIdentity("local-reader-placement");
+    const claim = await store.claimTurn({
+      ...session,
+      owner: { kind: "local" },
+      claimId: "local-reader-claim",
+      runId: "local-reader-run",
+    });
+    const readPlacements = async () => [
+      (await store.readProjection([session.sessionId, "absent"], { current: true })).placements.get(
+        session.sessionId,
+      ),
+      (await store.listAsync()).find((placement) => placement.sessionId === session.sessionId),
+      (await store.getWithMoveAsync(session.sessionId)).placement,
+    ];
+    const sessionRead = await store.prepareRuntimeRefresh(session.sessionId);
+    try {
+      sessionRead.placement!.agentId = "caller-agent";
+      sessionRead.placement!.turnClaim!.claimId = "caller-claim";
+      for (const placement of await readPlacements()) {
+        expect(placement).toMatchObject({
+          ...session,
+          turnClaim: { claimId: "local-reader-claim" },
+        });
+      }
+      await store.releaseTurn(claim);
+      expect(() => sessionRead.assertCurrent()).toThrow("placement authority changed");
+      for (const placement of await readPlacements()) {
+        expect(placement).toMatchObject({ ...session, turnClaim: null });
+      }
+    } finally {
+      sessionRead.release();
     }
   });
 
