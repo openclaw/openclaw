@@ -133,7 +133,10 @@ export function createUserTurnTranscriptRecorder(
   );
   const deliveryAcks = createSessionDeliveryAckReplacement(message);
   const replaceSessionDeliveryAckIds = (deliveryIds: readonly string[]): boolean => {
+    // Relinquishing an accepted input drops its receipt and staging; the retained ID
+    // still means committed bytes, which a reattaching retry must match.
     if (
+      acceptedPendingInputId ||
       pendingInput ||
       staging ||
       selfPersistencePromise ||

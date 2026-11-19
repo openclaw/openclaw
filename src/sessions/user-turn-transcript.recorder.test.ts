@@ -15,6 +15,9 @@ import {
   persistSessionTranscriptTurn,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { listSessionPendingInputs } from "../config/sessions/session-pending-input-history.js";
+import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
+import { settleUserTurnPendingInput } from "./user-turn-transcript-processing.js";
 import {
   buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
@@ -320,6 +323,57 @@ describe("createUserTurnTranscriptRecorder", () => {
       });
     } finally {
       recorder.finishPendingInput?.("interrupted");
+    }
+  });
+
+  it("keeps managed delivery receipts frozen after an accepted outage relinquishes custody", async () => {
+    const dir = tempDirs.make("openclaw-user-turn-managed-delivery-relinquished-");
+    const target = createSqliteTranscriptTarget({ dir });
+    await replaceSessionEntry(
+      {
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        storePath: target.storePath,
+      },
+      { sessionId: target.sessionId, updatedAt: 1 },
+    );
+    const recorder = createUserTurnTranscriptRecorder({
+      input: {
+        text: "managed completion",
+        idempotencyKey: "managed-delivery-relinquished:user",
+        sessionDeliveryAckIds: ["delivery-approved"],
+      },
+      target,
+    });
+    const stage = () =>
+      recorder.stageApproved?.({
+        runId: "managed-delivery-relinquished",
+        assertCurrent: () => {},
+      });
+
+    expect(await stage()).toBe(true);
+    // Accepted, then a transient outage: the recorder drops its receipt and staging
+    // while the row stays queued under the accepted input ID for its own retry.
+    await settleUserTurnPendingInput(
+      recorder,
+      undefined,
+      new GatewayOperatorAccessUnavailableError(),
+      false,
+      "cancelled",
+      true,
+    );
+    expect(recorder.getPendingInputMessage?.()).toBeUndefined();
+    expect((await listSessionPendingInputs(target)).items).toMatchObject([{ state: "queued" }]);
+    try {
+      expect(recorder.replaceSessionDeliveryAckIds?.(["delivery-too-late"])).toBe(false);
+      // The retry reattaches the accepted row with the receipts it committed.
+      expect(await stage()).toBe(true);
+      expect(recorder.getPendingInputMessage?.()).toMatchObject({
+        __openclaw: { sessionDeliveryAckIds: ["delivery-approved"] },
+      });
+    } finally {
+      recorder.finishPendingInput?.("interrupted", "failed");
+      await recorder.waitForPendingInputSettlement?.();
     }
   });
 
