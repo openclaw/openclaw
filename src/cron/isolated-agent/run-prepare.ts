@@ -28,7 +28,7 @@ import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import type { CronWorkspaceLease } from "../run-workspace.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
-import { isDetachedCronSessionTarget } from "../session-target.js";
+import { isDetachedCronSessionTarget, resolveCronDeliverySessionKey } from "../session-target.js";
 import { resolveCronRunToolsAllow } from "../tools-allow.js";
 import {
   resolveCronModelSelection,
@@ -74,7 +74,7 @@ import {
   resolveThinkingSelection,
 } from "./run.runtime.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
-import { prepareCronSession } from "./session.js";
+import { loadCronSessionEntryLatest, prepareCronSession } from "./session.js";
 
 type CronRunPreparation = Extract<
   Awaited<ReturnType<typeof resolveCronRunPreparation>>,
@@ -235,6 +235,20 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
 
   async function prepareAdmittedSession() {
     const now = Date.now();
+    if (input.job.operatorSource) {
+      // Refuse deleted conversations before preparation can recreate their row. Stored
+      // authority follows edits and resets, but deletion ends its retained custody.
+      const sourceKey = resolveCronDeliverySessionKey(input.job);
+      const source = sourceKey
+        ? await loadCronSessionEntryLatest(
+            resolveSessionStorePathCore(runtimeCfg.session?.store, { agentId }),
+            sourceKey,
+          )
+        : undefined;
+      if (!source?.sessionId) {
+        throw new Error("Scheduled operator source conversation is unavailable");
+      }
+    }
     // A child run never runs looser than its parent.
     const sandbox =
       resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor }) ??

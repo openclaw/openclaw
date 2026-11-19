@@ -76,6 +76,9 @@ export async function runCronSessionTurn(
     });
     assertCurrent();
     if (job.operatorSource) {
+      if (!expectedTarget.sessionId) {
+        throw new CronOperatorSourceError("Scheduled operator source conversation is unavailable");
+      }
       const { restoreCronOperatorSource } = await import("../gateway/cron-operator-source.js");
       const operator = await restoreCronOperatorSource({
         job,
@@ -201,7 +204,7 @@ export async function runCronSessionTurn(
       source: "cron",
       contextKey: `cron:${job.id}`,
       expectedTarget,
-      createIfMissing: true,
+      createIfMissing: !job.operatorSource,
       deliveryContext: route,
       abortSignal: params.abortSignal,
       scheduledAutomation: {

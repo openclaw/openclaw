@@ -119,6 +119,8 @@ it.each([
   "self removal then role revoked during merge",
   "self removal then session replaced during merge",
   "paused force run",
+  "deleted source force run",
+  "deleted source isolated force run",
   "restart",
   "guest",
   "legacy attribution",
@@ -134,6 +136,7 @@ it.each([
   "recurring trigger reload",
 ] as const)("scheduled continuation preserves the %s boundary", async (scenario) => {
   const restarting = scenario === "restart";
+  const deletedSource = scenario.startsWith("deleted source");
   const ownerEdit = scenario === "queued owner payload edit";
   const managerRename = scenario === "queued manager rename";
   const captureRace = scenario === "owner capture races manager payload";
@@ -279,7 +282,7 @@ it.each([
                   action: "add",
                   job: {
                     name: "Finish authorized landing",
-                    enabled: scenario !== "paused force run",
+                    enabled: scenario !== "paused force run" && !deletedSource,
                     schedule:
                       recurring || scenario === "role revoked"
                         ? { kind: "every", everyMs: 180_000 }
@@ -290,7 +293,10 @@ it.each([
                     ...(recurring
                       ? { trigger: { script: 'return { fire: true, message: "CI passed" };' } }
                       : {}),
-                    sessionTarget: "session:" + targetKey,
+                    sessionTarget:
+                      scenario === "deleted source isolated force run"
+                        ? "isolated"
+                        : "session:" + targetKey,
                     payload: {
                       kind: "agentTurn",
                       message: "Inspect and land the reviewed PR",
@@ -376,6 +382,14 @@ it.each([
     setRuntimeConfigSnapshot(config);
   } else if (scenario === "role revoked") {
     await setCanonicalUserProfileRole(profile.id, "blocked");
+  } else if (deletedSource) {
+    await accessor.deleteSessionEntryLifecycle({
+      archiveTranscript: false,
+      storePath: target.storePath,
+      target: { canonicalKey: SESSION, storeKeys: [SESSION] },
+    });
+    expect(await accessor.loadSessionEntry(target)).toBeUndefined();
+    expect(await session.loadCronSessionEntryLatest(target.storePath, SESSION)).toBeUndefined();
   } else if (scenario === "session edited" || scenario === "session replaced") {
     // Publish the replacement through the owner before admitting the next occurrence.
     await accessor.replaceSessionEntry(target, {
@@ -611,7 +625,7 @@ it.each([
       await execution.update(job.id, { enabled: true });
       expect(execution.getJob(job.id)?.operatorSource).toEqual(stored.operatorSource);
     }
-    if (scenario === "paused force run") {
+    if (scenario === "paused force run" || deletedSource) {
       expect(reloaded.enabled).toBe(false);
       await execution.run(job.id, "force");
     } else {
@@ -713,7 +727,11 @@ it.each([
       expect(entered).toBe(2);
       return;
     }
-    if (scenario === "role revoked") {
+    if (deletedSource) {
+      expect(entered).toBe(0);
+      expect(state.lastRunStatus, state.lastError).toBe("error");
+      expect(await accessor.loadSessionEntry(target)).toBeUndefined();
+    } else if (scenario === "role revoked") {
       expect(entered).toBe(0);
       expect(state.lastRunStatus, state.lastError).toBe("error");
       expect(state.lastError).toMatch(
