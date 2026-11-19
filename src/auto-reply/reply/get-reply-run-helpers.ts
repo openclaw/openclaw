@@ -187,3 +187,14 @@ export function finishReplyPreparation(typing: TypingController, createReply?: (
   typing.cleanup();
   return { kind: "reply", reply: createReply?.() } as const;
 }
+
+export function formatRoomEventLine(context: TemplateContext, body: string): string {
+  const messageId =
+    normalizeOptionalString(context.MessageSid) ?? normalizeOptionalString(context.MessageSidFull);
+  const sender =
+    normalizeOptionalString(context.SenderName) ??
+    normalizeOptionalString(context.SenderUsername) ??
+    normalizeOptionalString(context.SenderId);
+  const prefix = [messageId ? `#${messageId}` : undefined, sender].filter(Boolean).join(" ");
+  return prefix ? `${prefix}: ${body}` : body;
+}

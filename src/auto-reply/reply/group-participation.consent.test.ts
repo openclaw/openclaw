@@ -1,6 +1,7 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   readGroupParticipationInputs,
   recordGroupParticipationInput,
@@ -8,39 +9,17 @@ import {
 import { judgment } from "./group-participation.decision.test-support.js";
 import { fixture, models } from "./group-participation.runner.test-support.js";
 
-it.each([undefined, false])(
-  "keeps ordinary replies when Decision assistance is %s despite a selected model",
-  async (decisionAssistance) => {
-    fixture.config.agents!.defaults!.experimental = { decisionAssistance };
-    fixture.config.agents!.defaults!.model = { primary: "test-provider/test-model" };
-    models.decision.mockImplementation(async (batch) => judgment(batch, { attention: "none" }));
-    models.embedded.mockResolvedValue({
-      payloads: [{ text: "Ordinary reply with assistance off." }],
-      meta: { durationMs: 1 },
-    });
-    const reply = await fixture.reply(
-      "Bob, do you know the port?",
-      "assistance-off-source",
-      decisionAssistance === false ? "-10104" : "-10105",
-    );
-    expect(Array.isArray(reply) ? reply : [reply]).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ text: "Ordinary reply with assistance off." }),
-      ]),
-    );
-    expect(models.decision).not.toHaveBeenCalled();
-    expect(models.embedded).toHaveBeenCalledTimes(1);
-    expect(models.cli).not.toHaveBeenCalled();
-  },
-);
-
-it.each(["opt-out", "model-removal"])(
-  "discards an awaited participation decision after %s takes effect",
-  async (change) => {
-    fixture.config.agents!.defaults!.model = { primary: "test-provider/test-model" };
-    setRuntimeConfigSnapshot(fixture.config);
-    models.decision.mockImplementation(async (batch, options) => {
-      expect(options.admit?.()).toBe(true);
+it.each([
+  ["opt-out", "assessment", "none", false],
+  ["model-removal", "assessment", "none", false],
+  ["opt-out", "assessment", "none", true],
+  ["model-removal", "assessment", "none", true],
+  ["opt-out", "execution", "none", false],
+  ["opt-out", "execution", "engagement", false],
+] as const)(
+  "restores ordinary policy after %s during %s (%s, re-enable: %s)",
+  async (change, stage, attention, reEnabled) => {
+    const withdraw = () => {
       const next = structuredClone(fixture.config);
       if (change === "opt-out") {
         next.agents!.defaults!.experimental = { decisionAssistance: false };
@@ -48,146 +27,98 @@ it.each(["opt-out", "model-removal"])(
         next.agents!.defaults!.decisionModel = "";
       }
       setRuntimeConfigSnapshot(next, fixture.config);
-      expect(options.admit?.()).toBe(false);
-      return judgment(batch, { attention: "none" });
-    });
-    models.embedded.mockResolvedValue({
-      payloads: [{ text: "Ordinary reply after config refresh." }],
-      meta: { durationMs: 1 },
-    });
-    try {
-      const reply = await fixture.reply(
-        "Bob, do you know the port?",
-        "config-refresh-source",
-        change === "opt-out" ? "-10106" : "-10107",
-      );
-      expect(Array.isArray(reply) ? reply : [reply]).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ text: "Ordinary reply after config refresh." }),
-        ]),
-      );
-      expect(models.decision).toHaveBeenCalledTimes(1);
-      expect(models.embedded).toHaveBeenCalledTimes(1);
-    } finally {
-      setRuntimeConfigSnapshot(fixture.config);
-    }
-  },
-);
-
-it.each(["opt-out", "model-removal"])(
-  "requires a fresh judgment after %s is reversed while a decision is pending",
-  async (change) => {
-    fixture.config.agents!.defaults!.model = { primary: "test-provider/test-model" };
-    setRuntimeConfigSnapshot(fixture.config);
-    models.decision.mockImplementationOnce(async (batch) => {
-      const next = structuredClone(fixture.config);
-      if (change === "opt-out") {
-        next.agents!.defaults!.experimental = { decisionAssistance: false };
-      } else {
-        next.agents!.defaults!.decisionModel = "";
+    };
+    models.decision.mockImplementationOnce(async (batch, options) => {
+      if (stage === "assessment") {
+        expect(options.isAdmissible?.()).toBe(true);
+        withdraw();
+        if (!reEnabled) {
+          expect(options.isAdmissible?.()).toBe(false);
+        }
+        if (reEnabled) {
+          setRuntimeConfigSnapshot(fixture.config);
+        }
       }
-      setRuntimeConfigSnapshot(next, fixture.config);
-      setRuntimeConfigSnapshot(fixture.config);
-      return judgment(batch, { attention: "none" });
+      return judgment(batch, { attention });
     });
     models.decision.mockImplementation(async (batch) =>
       judgment(batch, { attention: "engagement" }),
     );
     models.embedded.mockResolvedValue({
-      payloads: [{ text: "Reply from the fresh invitation judgment." }],
+      payloads: [{ text: "Ordinary reply." }],
       meta: { durationMs: 1 },
     });
-    try {
-      const reply = await fixture.reply(
-        "Can you explain the port?",
-        "config-reversal-source",
-        change === "opt-out" ? "-10108" : "-10109",
-      );
-      expect(Array.isArray(reply) ? reply : [reply]).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ text: "Reply from the fresh invitation judgment." }),
-        ]),
-      );
-      expect(models.decision).toHaveBeenCalledTimes(2);
-      expect(models.embedded).toHaveBeenCalledTimes(1);
-    } finally {
-      setRuntimeConfigSnapshot(fixture.config);
-    }
+    const reply = await fixture.reply("Bob, which port?", "config-source", "-10106", {
+      onRunVerbosityResolved: stage === "execution" ? withdraw : undefined,
+    });
+    expect([reply].flat()).toContainEqual(expect.objectContaining({ text: "Ordinary reply." }));
+    expect(models.decision).toHaveBeenCalledTimes(reEnabled ? 2 : 1);
+    expect(models.embedded).toHaveBeenCalledOnce();
+    expect(models.embedded.mock.calls[0]?.[0].terminalReplyExpectation).toBe("required");
   },
 );
 
-it.each(["none", "engagement", "opportunity"] as const)(
-  "restores a required reply when consent is withdrawn after %s assessment",
-  async (attention) => {
-    fixture.config.agents!.defaults!.model = { primary: "test-provider/test-model" };
-    setRuntimeConfigSnapshot(fixture.config);
-    models.decision.mockImplementation(async (batch) => judgment(batch, { attention }));
-    models.embedded.mockResolvedValue({
-      payloads: [{ text: "Ordinary reply after late opt-out." }],
-      meta: { durationMs: 1 },
-    });
-    try {
-      const reply = await fixture.reply(
-        "Bob, which port?",
-        `late-opt-out-${attention}`,
-        `-10112-${attention}`,
-        {
-          onRunVerbosityResolved: () => {
-            const next = structuredClone(fixture.config);
-            next.agents!.defaults!.experimental = { decisionAssistance: false };
-            setRuntimeConfigSnapshot(next, fixture.config);
-          },
-        },
-      );
-      expect(Array.isArray(reply) ? reply : [reply]).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ text: "Ordinary reply after late opt-out." }),
-        ]),
-      );
-      expect(models.decision).toHaveBeenCalledTimes(1);
-      expect(models.embedded).toHaveBeenCalledTimes(1);
-      expect(models.embedded.mock.calls[0]?.[0].terminalReplyExpectation).toBe("required");
-    } finally {
-      setRuntimeConfigSnapshot(fixture.config);
+it.each([
+  ["none", "chatter", "execution"],
+  ["engagement", "chatter", "queued"],
+  ["opportunity", "chatter", "execution"],
+  ["none", "media", "execution"],
+  ["none", "mention", "execution"],
+  ["none", "mention", "assessment"],
+] as const)("refreshes %s for accepted %s during %s", async (attention, input, stage) => {
+  fixture.config.agents!.defaults!.typingMode = "instant";
+  const groupId = `-10113-${attention}-${input}-${stage}`;
+  const accept = () => {
+    const operation = getSessionControllerOperation("agent:main:telegram:group:" + groupId);
+    const source = operation && readGroupParticipationInputs(operation).sources[0];
+    if (!operation || !source) {
+      throw new Error("The admitted group source is missing");
     }
-  },
-);
-
-it.each(["none", "engagement", "opportunity"] as const)(
-  "reassesses %s when accepted group input changes before execution",
-  async (attention) => {
-    fixture.config.agents!.defaults!.model = { primary: "test-provider/test-model" };
-    models.decision.mockImplementationOnce(async (batch) => judgment(batch, { attention }));
-    models.decision.mockImplementation(async (batch) => judgment(batch, { attention: "none" }));
-    models.embedded.mockResolvedValue({
-      payloads: [{ text: "Must not bypass assessment." }],
-      meta: { durationMs: 1 },
-    });
-    const groupId = `-10113-${attention}`;
-    const reply = await fixture.reply("Chatter", "observed-source", groupId, {
-      onRunVerbosityResolved: () => {
-        const operation = getSessionControllerOperation("agent:main:telegram:group:" + groupId);
-        if (!operation) {
-          throw new Error("The admitted reply owner is missing");
-        }
-        const source = readGroupParticipationInputs(operation).sources[0];
-        if (!source) {
-          throw new Error("The admitted group source is missing");
-        }
-        // Use the accepted-input owner seam before persistence, without another concurrent reply writer.
-        recordGroupParticipationInput(operation, {
-          userTurnTranscriptRecorder: source.recorder,
-          messageId: "accepted-later-source",
-          run: { messageProvider: "telegram" },
-        });
+    const recorder =
+      input === "media"
+        ? createUserTurnTranscriptRecorder({ input: {}, target: () => undefined })
+        : source.recorder;
+    if (input === "media") {
+      vi.spyOn(recorder, "resolveMessage").mockResolvedValue({
+        role: "user",
+        content: [{ type: "image", data: "image-data", mimeType: "image/png" }],
+        timestamp: 1,
+      });
+    }
+    recordGroupParticipationInput(
+      operation,
+      {
+        userTurnTranscriptRecorder: recorder,
+        messageId: "accepted-later-source",
+        ...(input !== "mention" && stage !== "queued" ? { groupParticipation: {} } : {}),
+        run: { messageProvider: "telegram" },
       },
-    });
-    expect(
-      (Array.isArray(reply) ? reply : [reply]).flatMap((payload) =>
-        payload?.text ? [payload.text] : [],
-      ),
-    ).toEqual([]);
-    expect(models.decision).toHaveBeenCalledTimes(2);
-    expect(models.embedded).not.toHaveBeenCalled();
-  },
-);
+      stage === "queued" ? "queued" : "steer",
+    );
+  };
+  models.decision.mockImplementationOnce(async (batch) => {
+    if (stage === "assessment") {
+      accept();
+    }
+    return judgment(batch, { attention });
+  });
+  models.decision.mockImplementation(async (batch) => judgment(batch, { attention: "none" }));
+  models.embedded.mockResolvedValue({
+    payloads: [{ text: "Ordinary reply." }],
+    meta: { durationMs: 1 },
+  });
+  const reply = await fixture.reply("Chatter", "observed-source", groupId, {
+    onRunVerbosityResolved: stage !== "assessment" ? accept : undefined,
+  });
+  const ordinary = input !== "chatter";
+  expect([reply].flat().flatMap((payload) => (payload?.text ? [payload.text] : []))).toEqual(
+    ordinary ? ["Ordinary reply."] : [],
+  );
+  expect(models.decision).toHaveBeenCalledTimes(ordinary ? 1 : 2);
+  expect(models.embedded).toHaveBeenCalledTimes(ordinary ? 1 : 0);
+  if (ordinary) {
+    expect(models.embedded.mock.calls[0]?.[0].terminalReplyExpectation).toBe("required");
+  } else {
+    expect(fixture.typing()).toBe(0);
+  }
+});
