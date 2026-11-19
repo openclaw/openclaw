@@ -362,11 +362,8 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/startup-local-cli-pairing.test.ts",
   "src/gateway/system-run-approval-binding.contract.test.ts",
   "src/gateway/talk/client-agent-consult.terminal-writes.test.ts",
-  "src/gateway/talk/client-agent-runtime-dispatch.test.ts",
-  "src/gateway/talk/client-agent-runtime.scope.test.ts",
   "src/gateway/talk/client-authority.test.ts",
   "src/gateway/talk/client-gateway-control.agent-consult.test.ts",
-  "src/gateway/talk/client-gateway-control.mailbox.test.ts",
   "src/gateway/talk/client-permission-parity.test.ts",
   "src/gateway/talk/file-transcription.clawrouter.test.ts",
   "src/gateway/talk/handlers/client-consult-authority.test.ts",
@@ -386,7 +383,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/talk/relay/index.test.ts",
   "src/gateway/talk/relay/transcript-readiness.test.ts",
   "src/gateway/test-helpers.acquisition.test.ts",
-  "src/gateway/test/talk-client-agent-consult.requester-final.test.ts",
   "src/gateway/tool-resolution.cron-capture.test.ts",
   "src/gateway/tool-resolution.swarm-collector.test.ts",
   "src/gateway/tool-resolution.terminal.test.ts",
@@ -620,6 +616,7 @@ export const gatewayClientTestInclude = [
   "src/gateway/**/*gateway-cli-backend*.test.ts",
 ];
 export const gatewayClientTestExclude = [
+  ...databaseWorkerCoreTestFiles,
   ...gatewayDatabaseWorkerTestFiles,
   "src/gateway/**/*server*.test.ts",
   "src/gateway/server-methods/**/*.test.ts",
