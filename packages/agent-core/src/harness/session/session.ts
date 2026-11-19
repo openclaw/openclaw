@@ -8,7 +8,8 @@ import {
   createCustomMessage,
 } from "../messages.js";
 import type { SessionContext, SessionTreeEntry } from "../types.js";
-import { selectResetKeptEntries } from "./tool-result-pairing.js";
+import { selectResetKeptMessageFacts, type ToolPairingMessageFact } from "./tool-pairing-facts.js";
+import { collectToolPairingMessageFact, selectResetKeptEntries } from "./tool-result-pairing.js";
 import { isTranscriptArtifactProvider } from "./transcript-model.js";
 
 const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
@@ -63,25 +64,90 @@ export function projectSessionEntryMessage(entry: SessionTreeEntry): AgentMessag
   }
 }
 
-/** Select the canonical window using only navigation and tool-pairing facts. */
+export type SessionContextEntryFact = {
+  id: string;
+  type: SessionTreeEntry["type"];
+  firstKeptEntryId?: string;
+  role?: AgentMessage["role"];
+  pairing?: ToolPairingMessageFact;
+  excluded: boolean;
+  promptBoundary: boolean;
+  promptUpdate: boolean;
+};
+
+export function collectSessionContextEntryFact(entry: SessionTreeEntry): SessionContextEntryFact {
+  const message = entry.type === "message" ? entry.message : undefined;
+  return {
+    id: entry.id,
+    type: entry.type,
+    firstKeptEntryId:
+      entry.type === "compaction" || entry.type === "reset" ? entry.firstKeptEntryId : undefined,
+    role: message?.role,
+    pairing: message ? collectToolPairingMessageFact(message) : undefined,
+    excluded:
+      entry.type === "custom_message"
+        ? isExcludedCustomMessage(entry)
+        : Boolean(
+            message && "excludeFromContext" in message && message.excludeFromContext === true,
+          ),
+    promptBoundary:
+      entry.type === "custom" &&
+      entry.customType === "openclaw.system-prompt" &&
+      asOptionalRecord(entry.data)?.restart === true,
+    promptUpdate: getOpenClawSystemUpdateKind(entry) === "prompt-update",
+  };
+}
+
+export function selectResetKeptContextEntryFacts<T extends SessionContextEntryFact>(
+  entries: readonly T[],
+): T[] {
+  return selectResetKeptMessageFacts(
+    entries.flatMap((entry) =>
+      entry.type === "message" && entry.role
+        ? [{ entry, role: entry.role, pairing: entry.pairing, identity: entry }]
+        : [],
+    ),
+  ).map(({ entry }) => entry);
+}
+
+/** The release array adapter and payload-free worker share exactly one window selector. */
 export function* iterateSessionContextEntries<T extends SessionTreeEntry>(
   pathEntries: readonly T[],
+) {
+  const entries = pathEntries.map((source) => ({
+    ...collectSessionContextEntryFact(source),
+    source,
+  }));
+  for (const selected of iterateContextFacts(entries, (selectedFacts) => {
+    const selectedSources = new Set(
+      selectResetKeptEntries(selectedFacts.map((fact) => fact.source)),
+    );
+    return selectedFacts.filter((fact) => selectedSources.has(fact.source));
+  })) {
+    yield { entry: selected.entry.source, context: selected.context };
+  }
+}
+
+export function* iterateSessionContextEntryFacts<T extends SessionContextEntryFact>(
+  pathEntries: readonly T[],
+) {
+  yield* iterateContextFacts(pathEntries, selectResetKeptContextEntryFacts);
+}
+
+function* iterateContextFacts<T extends SessionContextEntryFact>(
+  pathEntries: readonly T[],
+  selectReset: (entries: readonly T[]) => T[],
 ): Generator<{ entry: T; context: "current" | "retained" | "reset-retained" }> {
   const { boundaryIndex, firstKeptIndex } = resolveSessionContextWindow(pathEntries);
   // A rebuilt prefix retires prompt overrides; retained turns still own their runtime facts.
   const operatorBoundaryIndex = Math.max(
     boundaryIndex,
-    pathEntries.findLastIndex(
-      (entry) =>
-        entry.type === "custom" &&
-        entry.customType === "openclaw.system-prompt" &&
-        asOptionalRecord(entry.data)?.restart === true,
-    ),
+    pathEntries.findLastIndex((entry) => entry.promptBoundary),
   );
   const boundary = pathEntries[boundaryIndex];
   const resetKept =
     boundary?.type === "reset"
-      ? new Set(selectResetKeptEntries(pathEntries.slice(firstKeptIndex, boundaryIndex)))
+      ? new Set(selectReset(pathEntries.slice(firstKeptIndex, boundaryIndex)))
       : undefined;
   if (boundary) {
     yield { entry: boundary, context: "current" };
@@ -96,7 +162,7 @@ export function* iterateSessionContextEntries<T extends SessionTreeEntry>(
     ) {
       continue;
     }
-    if (index < operatorBoundaryIndex && getOpenClawSystemUpdateKind(entry) === "prompt-update") {
+    if (index < operatorBoundaryIndex && entry.promptUpdate) {
       continue;
     }
     const hasMessage =
@@ -105,11 +171,8 @@ export function* iterateSessionContextEntries<T extends SessionTreeEntry>(
       entry.type === "branch_summary";
     if (
       !hasMessage ||
-      (entry.type === "custom_message" && isExcludedCustomMessage(entry)) ||
-      (!resetKept?.has(entry) &&
-        entry.type === "message" &&
-        "excludeFromContext" in entry.message &&
-        entry.message.excludeFromContext === true)
+      (entry.type === "custom_message" && entry.excluded) ||
+      (!resetKept?.has(entry) && entry.type === "message" && entry.excluded)
     ) {
       continue;
     }
@@ -166,7 +229,7 @@ export function projectSessionContextMessage<T extends SessionTreeEntry>(
 }
 
 /** Build model context from an ordered session branch and its latest state markers. */
-export function buildSessionContext(pathEntries: SessionTreeEntry[]): SessionContext {
+export function buildSessionContext(pathEntries: readonly SessionTreeEntry[]): SessionContext {
   let thinkingLevel = "off";
   let model: { provider: string; modelId: string } | null = null;
   for (const entry of pathEntries) {

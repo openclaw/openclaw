@@ -7,7 +7,7 @@ import type {
   QueuedCompactionHostOptions,
 } from "../agents/embedded-agent-runner/compact.types.js";
 import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
-import { withSessionCompactionPersistenceAsync } from "../agents/sessions/session-compaction-persistence.js";
+import { createSessionCompactionEntry } from "../agents/sessions/session-compaction-persistence.js";
 import { enqueueFollowupRun } from "../auto-reply/reply/queue.js";
 import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "../auto-reply/reply/queue/state.js";
@@ -139,13 +139,23 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
       throw new Error("expected SQLite session target");
     }
     const host = hostInput as QueuedCompactionHostOptions;
-    const manager = host.preparedSession?.sessionManager;
-    if (!manager || !host.withCompactionPersistenceAsync) {
+    const prepared = host.preparedSession;
+    if (!prepared?.source || !host.withCompactionPersistenceAsync) {
       throw new Error("expected prepared Gateway compaction persistence");
     }
-    expect(manager.getEntries()).toHaveLength(2);
-    await withSessionCompactionPersistenceAsync(manager, host.withCompactionPersistenceAsync, () =>
-      manager.appendCompactionAsync(
+    expect(prepared.sessionManager).toBeUndefined();
+    expect(prepared.source.entries).toHaveLength(2);
+    for (const entry of prepared.source.entries) {
+      expect(entry.message).not.toHaveProperty("content");
+      expect(entry.contextMessage).not.toHaveProperty("content");
+      for (const message of entry.conversation) {
+        expect(message).not.toHaveProperty("content");
+      }
+    }
+    await host.withCompactionPersistenceAsync({
+      scope: prepared.sessionTarget,
+      event: createSessionCompactionEntry(
+        prepared.source.leafEntryId,
         "summary",
         seedMessage.messageId,
         120,
@@ -154,7 +164,9 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
         undefined,
         80,
       ),
-    );
+      appendIntent: "active-branch",
+      expectedMutationAt: prepared.source.transcriptMutationAt,
+    });
     expect(loadSessionEntry(sessionScope)).toMatchObject({ compactionCount: 1, totalTokens: 80 });
     return {
       ok: true,

@@ -1,6 +1,7 @@
 import type { StatementSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { assert, expect, it, vi } from "vitest";
+import { readPreparedSessionCompactionInWorker } from "../../config/sessions/session-compaction-prepared.js";
 import { readPreparedSessionTranscriptChange } from "../../config/sessions/session-transcript-authority.js";
 import type { SessionTranscriptAuthority } from "../../config/sessions/session-transcript-authority.types.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -9,6 +10,8 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { initializePreparedCompactionMetadata } from "../embedded-agent-runner/prepared-compaction-metadata.js";
+import { createSessionHeader } from "./session-initial-metadata.js";
 import { withSessionState } from "./session-manager-fixtures.test-support.js";
 import { sessionManagerAppendInitialMetadata } from "./session-manager-metadata.js";
 import { SessionManager } from "./session-manager.js";
@@ -92,5 +95,71 @@ it("publishes durable metadata without host SQLite and preserves it after its wo
       requests.mockRestore();
       restoreSql();
     }
+  });
+});
+
+it("initializes bounded compaction metadata through the native owner without duplicating it", async () => {
+  await withSessionState("bounded-compaction-metadata", async ({ scope, state }) => {
+    const target = { ...scope, env: state.env };
+    const model = {
+      provider: "synthetic",
+      modelId: "reasoner",
+      modelApi: "openai-responses",
+      thinkingLevel: "max",
+    };
+    await initializePreparedCompactionMetadata(
+      target,
+      {
+        hasExistingSession: false,
+        hasThinkingEntry: false,
+        leafEntryId: null,
+        lastModelSnapshot: null,
+      },
+      model,
+      () => undefined,
+      createSessionHeader(target.sessionId, state.workspaceDir),
+    );
+    const manager = await SessionManager.openAsync(target, state.workspaceDir);
+    const entries = manager.getEntries();
+    expect(entries).toMatchObject([
+      { type: "model_change", provider: "synthetic", modelId: "reasoner", parentId: null },
+      { type: "thinking_level_change", thinkingLevel: "max", parentId: entries[0]?.id },
+      {
+        type: "custom",
+        customType: "model-snapshot",
+        parentId: entries[1]?.id,
+        data: { provider: "synthetic", modelId: "reasoner", modelApi: "openai-responses" },
+      },
+    ]);
+    const userId = await manager.appendMessageAsync({
+      role: "user",
+      content: "Keep this conversation.",
+      timestamp: 1,
+    });
+    await manager.appendCompactionAsync("Earlier conversation", userId, 100);
+    const populated = manager.getEntries();
+    const preflight = await readPreparedSessionCompactionInWorker(target, { kind: "preflight" });
+    assert(preflight.status === "preflight");
+    expect(preflight.source.metadata).toMatchObject({
+      hasExistingSession: true,
+      hasThinkingEntry: true,
+      lastModelSnapshot: {
+        provider: model.provider,
+        modelId: model.modelId,
+        modelApi: model.modelApi,
+      },
+    });
+    // Thinking and snapshots precede the retained compaction suffix but still initialize SDK state.
+    expect(preflight.source.entries.some((entry) => entry.type === "thinking_level_change")).toBe(
+      false,
+    );
+    await initializePreparedCompactionMetadata(
+      target,
+      preflight.source.metadata,
+      model,
+      () => undefined,
+    );
+    const reopened = await SessionManager.openAsync(target, state.workspaceDir);
+    expect(reopened.getEntries()).toEqual(populated);
   });
 });

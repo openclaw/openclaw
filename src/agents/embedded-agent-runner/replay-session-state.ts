@@ -72,35 +72,42 @@ export type ModelSnapshotEntry = {
   modelApi?: string | null;
   modelId?: string;
 };
-type ModelSnapshotState = {
+export type ModelSnapshotState = {
   lastSnapshot: ModelSnapshotEntry | null;
   latestSwitchTimestamp: number | null;
 };
 
 export function readModelSnapshotState(sessionManager: SessionManager): ModelSnapshotState {
-  let lastSnapshot: ModelSnapshotEntry | null = null;
-  let latestSwitchTimestamp: number | null = null;
   try {
-    for (const entry of sessionManager.getBranch()) {
-      if (entry?.type !== "custom" || entry?.customType !== MODEL_SNAPSHOT_CUSTOM_TYPE) {
-        continue;
-      }
-      // SAFETY: replay history writes model-snapshot custom entries with this payload contract.
-      const data = entry?.data as ModelSnapshotEntry | undefined;
-      if (data && typeof data === "object") {
-        if (
-          lastSnapshot &&
-          !isSameModelSnapshot(lastSnapshot, data) &&
-          Number.isFinite(data.timestamp)
-        ) {
-          latestSwitchTimestamp = data.timestamp;
-        }
-        lastSnapshot = data;
-      }
-    }
+    return readModelSnapshotStateFromEntries(sessionManager.getBranch());
   } catch (error) {
     rethrowIncognitoSessionError(error);
     return { lastSnapshot: null, latestSwitchTimestamp: null };
+  }
+}
+
+/** The native reader and SessionManager use the same snapshot history reducer. */
+export function readModelSnapshotStateFromEntries(
+  entries: Iterable<import("../sessions/session-manager-types.js").SessionEntry>,
+): ModelSnapshotState {
+  let lastSnapshot: ModelSnapshotEntry | null = null;
+  let latestSwitchTimestamp: number | null = null;
+  for (const entry of entries) {
+    if (entry?.type !== "custom" || entry?.customType !== MODEL_SNAPSHOT_CUSTOM_TYPE) {
+      continue;
+    }
+    // SAFETY: replay history writes model-snapshot custom entries with this payload contract.
+    const data = entry?.data as ModelSnapshotEntry | undefined;
+    if (data && typeof data === "object") {
+      if (
+        lastSnapshot &&
+        !isSameModelSnapshot(lastSnapshot, data) &&
+        Number.isFinite(data.timestamp)
+      ) {
+        latestSwitchTimestamp = data.timestamp;
+      }
+      lastSnapshot = data;
+    }
   }
   return { lastSnapshot, latestSwitchTimestamp };
 }

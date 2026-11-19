@@ -1,5 +1,6 @@
 import type { ConversationRecord } from "../../../config/sessions/conversation-registry.types.js";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
+import type { PreparedCompactionSource } from "../../../config/sessions/session-compaction-prepared.types.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { ContextEngineRuntimeContext } from "../../../context-engine/types.js";
 import type { CompactionRequestConstraints } from "../../sessions/compaction/request-budget.types.js";
@@ -39,7 +40,8 @@ export type CompactionAccountingReceipt = {
 export type PreparedCompactionSession = {
   sessionTarget: SessionTranscriptRuntimeTarget;
   entry: InternalSessionEntry;
-  sessionManager: SessionManager;
+  sessionManager?: SessionManager;
+  source?: PreparedCompactionSource;
   primaryConversation?: ConversationRecord;
 };
 

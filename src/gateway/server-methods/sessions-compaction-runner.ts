@@ -14,6 +14,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveCurrentSessionPrimaryConversation } from "../../config/sessions/conversation-registry.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import { readTranscriptStatsAsync } from "../../config/sessions/session-transcript-stats.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -31,7 +32,7 @@ type GatewaySessionCompactionParams = {
   storePath: string;
 };
 
-/** Prepare the legacy transcript once while the manual lifecycle owner is held. */
+/** Retain compact source facts while the manual lifecycle owner is held. */
 export async function prepareGatewaySessionCompaction(
   params: GatewaySessionCompactionParams,
 ): Promise<{
@@ -63,6 +64,36 @@ export async function prepareGatewaySessionCompaction(
     const stats = await readTranscriptStatsAsync(transcriptTarget);
     return { entry, reason: stats.eventCount === 0 ? "no transcript" : undefined };
   }
+  const reader = prepareSessionTranscriptHydration(
+    transcriptTarget,
+    { compaction: true },
+    params.abortSignal,
+  );
+  if (reader.readCompaction) {
+    const prepared = await reader.readCompaction({ kind: "preflight" });
+    if (prepared.status !== "preflight") {
+      throw new Error("Expected compaction preflight facts");
+    }
+    const { entry, runtimeEntry, source } = prepared;
+    if (!entry || !runtimeEntry) {
+      return { entry };
+    }
+    const preparedSession = usesLegacyRuntime(entry)
+      ? {
+          sessionTarget: prepared.sessionTarget,
+          entry: runtimeEntry,
+          primaryConversation: prepared.primaryConversation,
+          source,
+        }
+      : undefined;
+    return {
+      entry,
+      preparedSession,
+      reason:
+        source.eventCount === 0 ? "no transcript" : preparedSession ? prepared.reason : undefined,
+    };
+  }
+  // Incognito is already an in-memory actor and retains its array contract.
   const prepared = await SessionManager[sessionManagerOpenCompaction](transcriptTarget, {
     signal: params.abortSignal,
   });

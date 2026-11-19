@@ -612,6 +612,7 @@ serveOwnedWorkerTasks(
             };
           }
           if (
+            request.kind === "compaction-preparation" ||
             request.kind === "transcript-hydration" ||
             request.kind === "transcript-maintenance" ||
             request.kind === "current-turn-entry" ||

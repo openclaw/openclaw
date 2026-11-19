@@ -9,6 +9,10 @@ import type {
 import type { SessionTranscriptMessageEvent } from "./session-accessor.sqlite-projection-read.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type {
+  SessionPreparedCompactionInput,
+  SessionPreparedCompactionValue,
+} from "./session-compaction-prepared.types.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import type {
   PreparedSessionTranscriptHydration,
@@ -130,6 +134,7 @@ export type SessionTranscriptMaintenanceWorkerInput = SessionTranscriptRuntimeHy
 };
 
 export type SessionTranscriptHydrationWorkerRequest =
+  | SessionPreparedCompactionInput
   | SessionTranscriptHydrationWorkerInput
   | SessionTranscriptMaintenanceWorkerInput
   | SessionTranscriptCurrentTurnEntryWorkerInput
@@ -137,6 +142,7 @@ export type SessionTranscriptHydrationWorkerRequest =
   | SessionTranscriptLatestActiveMessageWorkerInput;
 
 export type SessionTranscriptHydrationWorkerValues = {
+  "compaction-preparation": SessionPreparedCompactionValue;
   "transcript-hydration": SessionTranscriptHydrationWorkerResult;
   "transcript-maintenance": SessionTranscriptMaintenanceFacts;
   "current-turn-entry": SessionTranscriptCurrentTurnEntryRead;
@@ -148,6 +154,10 @@ export type SessionTranscriptHydrationWorkerValues = {
 };
 
 export type SessionTranscriptHydrationReaders = {
+  readCompaction: (
+    input: Omit<SessionPreparedCompactionInput, "kind" | "database">,
+    signal?: AbortSignal,
+  ) => Promise<SessionPreparedCompactionValue>;
   readTranscript: (
     input: Omit<SessionTranscriptHydrationWorkerInput, "kind" | "database">,
     signal?: AbortSignal,

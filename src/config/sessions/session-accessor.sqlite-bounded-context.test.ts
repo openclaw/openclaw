@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { expect, it as baseIt, vi } from "vitest";
+import { prepareCompaction } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { serializeConversationWithinBudget } from "../../../packages/agent-core/src/harness/compaction/utils.js";
+import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
+import { sanitizeCompactionMessages } from "../../agents/compaction-planning.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
@@ -20,7 +24,10 @@ import {
   readTranscriptStatsSync,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
-import { readSessionTranscriptBoundedActiveContextCore as boundedContext } from "./session-accessor.sqlite-active-context.js";
+import {
+  readSessionTranscriptBoundedActiveContextCore as boundedContext,
+  readSessionTranscriptCompactionPlan,
+} from "./session-accessor.sqlite-active-context.js";
 import {
   readRecentSessionTranscriptActiveEvents as recentEvents,
   readSessionTranscriptMessageEventPage as messagePage,
@@ -213,6 +220,160 @@ function observePayloadAcquisition(
     pendingRows: pending.size,
   };
 }
+
+it("extracts compaction facts synchronously one row at a time without changing selection", async ({
+  scope,
+}) => {
+  const marker = "compaction-fact-payload-";
+  const messages = Array.from({ length: 16 }, (_, index) =>
+    user(`fact-${index}`, index === 0 ? null : `fact-${index - 1}`, `${marker}${index}`),
+  );
+  await persist(scope, messages);
+  await waitProjection(scope);
+  const { events, ...expected } = boundedContext(scope, { compaction: true });
+  const connection = openOpenClawAgentDatabase(scope).db;
+  const facts: Array<{ rawSeq: number; serializedBytes: number; type: unknown }> = [];
+  const observed = observePayloadAcquisition(connection, marker, () => {
+    const actual = readSessionTranscriptCompactionPlan(scope, {
+      compaction: true,
+      onEntry: (event, row) => {
+        facts.push({ ...row, type: (event as { type?: unknown }).type });
+      },
+    });
+    expect(actual).toEqual(expected);
+  });
+  expect(facts).toHaveLength(events.length);
+  expect(facts.reduce((sum, fact) => sum + fact.serializedBytes, 0)).toBe(serializedBytes(events));
+  expect(new Set(facts.map((fact) => fact.rawSeq)).size).toBe(events.length);
+  expect(JSON.stringify(facts)).not.toContain(marker);
+  expect(observed.decodedRows).toBe(messages.length);
+  expect(observed.peakPendingBytes).toBe(observed.largestRowBytes);
+  expect(observed.pendingRows).toBe(0);
+  expect(() =>
+    readSessionTranscriptCompactionPlan(scope, {
+      compaction: true,
+      // Deliberately violate the synchronous callback contract to prove rejection.
+      // oxlint-disable-next-line typescript/no-misused-promises
+      onEntry: () => Promise.resolve(),
+    }),
+  ).toThrow("Transcript snapshot consumers must remain synchronous");
+});
+
+it("finalizes native compaction with pending and appended rows without retaining payloads", async ({
+  scope,
+}) => {
+  const payload = "worker-only-payload-" + "x".repeat(12000);
+  await persist(
+    scope,
+    Array.from({ length: 16 }, (_, index) =>
+      user("worker-" + index, index === 0 ? null : "worker-" + (index - 1), payload + index),
+    ),
+  );
+  await waitProjection(scope);
+  const reader = prepareSessionTranscriptHydration(scope, { compaction: true });
+  const readCompaction = reader.readCompaction;
+  assert(readCompaction);
+  const preflight = await readCompaction({ kind: "preflight" });
+  assert.equal(preflight.status, "preflight");
+  if (preflight.status !== "preflight") {
+    throw new Error("Expected preflight");
+  }
+  expect(preflight.source.entries).toHaveLength(16);
+  expect(preflight.reads.extractedRows).toBe(17);
+  expect(JSON.stringify(preflight.source)).not.toContain(payload);
+  const settings = { enabled: true, reserveTokens: 0, keepRecentTokens: 1 };
+  const plan = await readCompaction({
+    kind: "plan",
+    settings,
+    source: preflight.source,
+    work: { pendingUserEntryId: "worker-15" },
+  });
+  if (plan.status !== "prepared") {
+    throw new Error("Expected prepared compaction");
+  }
+  expect(plan.reads.extractedRows).toBe(0);
+  const manager = await SessionManager.openAsync(scope, undefined, { compaction: true });
+  const eager = prepareCompaction(manager.getBranch(), settings);
+  assert(eager.ok && eager.value);
+  expect(plan.preparation.firstKeptEntryId).toBe(eager.value.firstKeptEntryId);
+  expect(plan.preparation.tokensBefore).toBe(eager.value.tokensBefore);
+  for (const maxChars of [300, 2048, 100000]) {
+    const result = await readCompaction({
+      kind: "render",
+      entries: plan.selections.history,
+      version: plan.source.version,
+      maxChars,
+    });
+    if (result.status !== "rendered") {
+      throw new Error("Expected rendered conversation");
+    }
+    expect(result.conversation).toEqual(
+      serializeConversationWithinBudget(
+        convertToLlm(sanitizeCompactionMessages(eager.value.messagesToSummarize)),
+        maxChars,
+      ),
+    );
+    if (maxChars === 300) {
+      expect(result.reads.selectedRows).toBe(0);
+    }
+    expect(result.reads.extractedRows).toBe(0);
+  }
+  expect(plan.plan.pendingEntryId).toBe("worker-15");
+  expect(plan.preparation.firstKeptEntryId).toBe("worker-15");
+  const finalize = (firstKeptEntryId = plan.preparation.firstKeptEntryId) =>
+    readCompaction({
+      kind: "finalize",
+      version: plan.source.version,
+      retainedSequences: plan.plan.retainedSequences,
+      summary: {
+        summary: "Earlier requests summarized.",
+        firstKeptEntryId,
+        tokensBefore: plan.preparation.tokensBefore,
+      },
+      work: { itemId: "worker-summary", pendingEntryId: plan.plan.pendingEntryId },
+    });
+  const beforeAppend = await finalize();
+  assert(beforeAppend.status === "finalized");
+  // The replacement consists of the summary and the unprocessed pending request.
+  expect(beforeAppend.messageCountAfter).toBe(2);
+  await persist(scope, [
+    user("appended", "worker-15", "new request"),
+    assistant("appended-reply", "appended", "new response ".repeat(100)),
+  ]);
+  await waitProjection(scope);
+  const afterAppend = await finalize();
+  assert(afterAppend.status === "finalized");
+  expect(afterAppend.messageCountAfter).toBe(4);
+  expect(afterAppend.tokensAfter).toBeGreaterThan(beforeAppend.tokensAfter);
+  expect(afterAppend.reportingTokensAfter).toBeGreaterThan(beforeAppend.reportingTokensAfter);
+  expect(afterAppend.reads.extractedRows).toBe(0);
+  expect(afterAppend.reads.selectedRows).toBe(plan.plan.retainedSequences.length + 2);
+  await expect(finalize("appended")).rejects.toThrow(
+    "Compaction must retain the unprocessed pending user request.",
+  );
+  await expect(
+    readCompaction({ kind: "plan", settings, source: preflight.source }),
+  ).rejects.toThrow();
+  const appendedRender = await readCompaction({
+    kind: "render",
+    entries: plan.selections.history,
+    version: plan.source.version,
+    maxChars: 2048,
+  });
+  expect(appendedRender.status).toBe("rendered");
+  // Reset is a transcript event, not a message payload. It invalidates the old path.
+  await appendTranscriptEvent(scope, reset("changed", "appended-reply"));
+  await waitProjection(scope);
+  await expect(finalize()).rejects.toThrow("Session transcript changed during context read");
+  await expect(
+    readCompaction({
+      kind: "render",
+      entries: plan.selections.history,
+      version: plan.source.version,
+      maxChars: 2048,
+    }),
+  ).rejects.toThrow();
+});
 
 it("enforces context count and byte budgets and releases rejected reads for later appends", async ({
   scope,

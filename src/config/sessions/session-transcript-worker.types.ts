@@ -66,6 +66,7 @@ import type { listSessionPendingInputReceipts } from "./session-accessor.sqlite-
 import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import type { SessionPreparedCompactionInput } from "./session-compaction-prepared.types.js";
 import type {
   SessionEntryListWorkerInput,
   SessionEntryListWorkerResult,
@@ -274,6 +275,7 @@ type TrajectoryEventsWorkerInput = {
 };
 
 export type SessionHistoryWorkerInput =
+  | SessionPreparedCompactionInput
   | SessionRetirementReadWorkerInput
   | TrajectoryRetentionWorkerInput
   | TrajectoryEventsWorkerInput

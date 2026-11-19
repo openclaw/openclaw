@@ -1,13 +1,7 @@
 import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
-import { isRealConversationMessage } from "../compaction-real-conversation.js";
-import {
-  buildSessionContext as buildCoreSessionContext,
-  type AgentMessage,
-  type SessionTreeEntry as CoreSessionTreeEntry,
-} from "../runtime/index.js";
+import type { AgentMessage } from "../runtime/index.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
-import type { ExtensionContext } from "../sessions/index.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import { formatContextMessage } from "./compaction-safeguard-messages.js";
 
@@ -191,45 +185,4 @@ export function buildSplitTurnContextSection(
     truncatedMarker: SPLIT_TURN_TRUNCATED_MARKER,
     truncatedLoss: "split-turn-head",
   });
-}
-
-/**
- * The boundary-scoped range a preparation was meant to cover: everything the
- * current context holds before its kept tail, minus the prior summary message
- * (that is re-distilled separately). Bounded by construction — it can never
- * reach behind the last reset/compaction boundary.
- */
-export function collectPreparationRangeMessages(
-  sessionManager: ExtensionContext["sessionManager"],
-  firstKeptEntryId: string,
-): AgentMessage[] {
-  const entries = readSessionBranch(sessionManager);
-  const firstKeptIndex = entries.findIndex((entry) => entry.id === firstKeptEntryId);
-  if (firstKeptIndex < 0) {
-    return [];
-  }
-  // Keep replay boundaries even when their retained entries precede the physical marker.
-  // The core projector, not the preparation cut, owns which older entries remain visible.
-  return projectBranchEntries(
-    entries.filter(
-      (entry, index) =>
-        index < firstKeptIndex || entry.type === "compaction" || entry.type === "reset",
-    ),
-  ).filter((message) => message.role !== "compactionSummary");
-}
-
-export function readSessionBranch(
-  sessionManager: ExtensionContext["sessionManager"],
-): CoreSessionTreeEntry[] {
-  return sessionManager.getBranch();
-}
-
-export function projectBranchEntries(entries: CoreSessionTreeEntry[]): AgentMessage[] {
-  return buildCoreSessionContext(entries).messages;
-}
-
-export function containsRealConversation(messages: AgentMessage[]): boolean {
-  return messages.some((message, index, allMessages) =>
-    isRealConversationMessage(message, allMessages, index),
-  );
 }

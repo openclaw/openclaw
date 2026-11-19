@@ -108,6 +108,18 @@ function failTranscriptReadForSession(sessionId: string, reader: "hydration" | "
       const prepared = realHydration(...params);
       return {
         ...prepared,
+        ...(prepared.readCompaction
+          ? {
+              readCompaction: async (
+                ...args: Parameters<NonNullable<typeof prepared.readCompaction>>
+              ) => {
+                if (params[0].sessionId === sessionId) {
+                  throw transcriptReadError();
+                }
+                return prepared.readCompaction!(...args);
+              },
+            }
+          : {}),
         read: async (options) => {
           if (params[0].sessionId === sessionId && options?.compaction) {
             throw transcriptReadError();

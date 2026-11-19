@@ -23,6 +23,10 @@ import {
   seedSessionActorTranscriptContext,
 } from "./session-actor-transcript-replica.js";
 import { readRestoredSessionTranscriptInWorker } from "./session-cold-storage-read.js";
+import type {
+  SessionPreparedCompactionInput,
+  SessionPreparedCompactionValue,
+} from "./session-compaction-prepared.types.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import type { SessionTranscriptContextSelection } from "./session-history-read.types.js";
 import type { SessionTranscriptMaintenanceRead } from "./session-transcript-hydration.types.js";
@@ -55,6 +59,10 @@ import {
 } from "./transcript-write-context.js";
 
 type SessionTranscriptHydrationReader = {
+  /** Native read workers only; memory transcripts keep their existing array path. */
+  readCompaction?: (
+    operation: SessionPreparedCompactionInput["operation"],
+  ) => Promise<SessionPreparedCompactionValue>;
   target: CapturedSessionTranscriptTargetBinding;
   assertCurrent: () => void;
   read: (options?: { compaction?: true }) => Promise<PreparedSessionTranscriptHydration>;
@@ -391,6 +399,10 @@ export function prepareSessionTranscriptHydration(
   return {
     target,
     read,
+    readCompaction: (operation) =>
+      readInOwner((owner, resolvedScope) =>
+        owner.readCompaction({ target, resolvedScope, admission, operation }, signal),
+      ),
     readCohort,
     readCurrentTurnEntry,
     readMaintenance,

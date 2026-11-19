@@ -81,3 +81,44 @@ export function expectedNativeCompactionOptions(
     },
   };
 }
+
+// Bind the array-backed fixture history without replacing caller accounting or authority.
+export async function createCompactHooksDirectRunner(
+  compact: typeof import("./compact.js").compactEmbeddedAgentSessionDirect,
+  defaults: () => { sessionKey: string; storePath: string },
+): Promise<typeof compact> {
+  const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+  const { SessionManager: FixtureSessionManager } = await import("../sessions/index.js");
+  const { attachCompactionAccountingRecorder, readCompactionAccountingRecorder } =
+    await import("./run/compaction-accounting-bridge.js");
+  const { captureOwnedTranscriptWriteAssertion } =
+    await import("../../config/sessions/transcript-write-context.js");
+  return async (params) => {
+    setRuntimeConfigSnapshot(params.config ?? {});
+    const sessionTarget = {
+      ...params.sessionTarget,
+      agentId: params.sessionTarget?.agentId ?? "main",
+      sessionId: params.sessionId,
+      sessionKey: params.sessionTarget?.sessionKey ?? params.sessionKey ?? defaults().sessionKey,
+      storePath: params.sessionTarget?.storePath ?? defaults().storePath,
+    };
+    const contextEngineRuntimeContext = params.contextEngineRuntimeContext ?? {};
+    const accounting = readCompactionAccountingRecorder(contextEngineRuntimeContext);
+    let assertWrite: (() => void) | undefined;
+    // The array fixture owns this history. Capture the normal write assertion when execution
+    // enters its owner, while retaining any pending-request or custom-session accounting.
+    attachCompactionAccountingRecorder(contextEngineRuntimeContext, {
+      ...accounting,
+      memoryTranscript: accounting?.memoryTranscript ?? {
+        sessionTarget,
+        sessionManager: await FixtureSessionManager.openAsync(sessionTarget),
+        assertActive: () => (assertWrite ??= captureOwnedTranscriptWriteAssertion(sessionTarget))(),
+      },
+    });
+    return compact({
+      agentId: "main",
+      ...params,
+      contextEngineRuntimeContext,
+    });
+  };
+}

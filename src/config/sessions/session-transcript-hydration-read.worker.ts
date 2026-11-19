@@ -13,6 +13,11 @@ export async function readSessionTranscriptHydrationRequest(
   channel: WorkerTaskChannel | undefined,
   control: WorkerTaskControl,
 ): Promise<SessionTranscriptWorkerValues[SessionTranscriptHydrationWorkerRequest["kind"]]> {
+  if (request.kind === "compaction-preparation") {
+    const { readPreparedSessionCompaction } =
+      await import("./session-compaction-prepared.worker.js");
+    return readPreparedSessionCompaction(request, control);
+  }
   if (request.kind === "transcript-maintenance") {
     const { withOpenClawAgentDatabaseReadOnly } =
       await import("../../state/openclaw-agent-db-readonly.js");

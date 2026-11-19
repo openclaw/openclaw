@@ -1,6 +1,5 @@
 import { join } from "node:path";
 import { vi, type Mock } from "vitest";
-import type { ContextEngine } from "../../context-engine/types.js";
 import type { createOpenClawCodingToolsInternal } from "../agent-tools.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { clearAgentHarnesses } from "../harness/registry.js";
@@ -23,6 +22,8 @@ import {
 } from "./compact.hooks.memory.test-support.js";
 import {
   acquireCompactHooksPreparedModelRuntime,
+  contextEngineCompactMock,
+  resolveContextEngineMock,
   createCompactHooksResolvedModel,
   getCurrentPluginMetadataSnapshotMock,
   mockCompactHooksContextEngine,
@@ -40,6 +41,11 @@ import type { resolveModelAsync } from "./model.js";
 import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 
 export {
+  contextEngineCompactMock,
+  resolveContextEngineMock,
+} from "./compact.hooks.metadata.test-support.js";
+
+export {
   getMemorySearchManagerMock,
   resolveMemorySearchConfigMock,
 } from "./compact.hooks.memory.test-support.js";
@@ -48,23 +54,12 @@ type MockEmbeddedAgentStreamFn = Mock<
   (model?: unknown, context?: unknown, options?: unknown) => unknown
 >;
 
-export const contextEngineCompactMock: Mock<ContextEngine["compact"]> = vi.fn(async () => ({
-  ok: true as boolean,
-  compacted: true as boolean,
-  reason: undefined as string | undefined,
-  result: { summary: "engine-summary", tokensBefore: 120, tokensAfter: 50 },
-}));
-
 export const hookRunner = {
   hasHooks: vi.fn<(hookName?: string) => boolean>(),
   runBeforeCompaction: vi.fn(async () => undefined),
   runAfterCompaction: vi.fn(async () => undefined),
 };
 
-export const resolveContextEngineMock = vi.fn(async () => ({
-  info: { ownsCompaction: true as boolean },
-  compact: contextEngineCompactMock,
-}));
 export const resolveModelMock: Mock<
   (provider?: string, modelId?: string, agentDir?: string, cfg?: unknown) => MockResolvedModel
 > = vi.fn(createCompactHooksResolvedModel);
@@ -299,7 +294,9 @@ export const resolveSandboxContextMock = vi.fn<
 export const maybeCompactAgentHarnessSessionMock: Mock<
   (params?: unknown, options?: unknown) => Promise<unknown>
 > = vi.fn(async () => undefined);
-export const enqueueCommandInLaneMock = vi.fn((_lane: unknown, task: () => unknown) => task());
+export const enqueueCommandInLaneMock = vi.fn<
+  typeof import("../../process/command-queue.js").enqueueCommandInLane
+>((_lane, task) => task());
 
 function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
   const modelApi = params.modelApi ?? params.model?.api ?? undefined;
@@ -739,9 +736,9 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     validateReplayTurns: validateReplayTurnsMock,
   }));
 
-  vi.doMock("./stream-resolution.js", () => ({
+  vi.doMock("./stream-resolution.js", async () => ({
+    ...(await vi.importActual<typeof import("./stream-resolution.js")>("./stream-resolution.js")),
     resolveEmbeddedAgentApiKey: resolveCompactHooksApiKeyMock,
-    resolveEmbeddedAgentBaseStreamFn: vi.fn(() => vi.fn()),
     resolveEmbeddedAgentStream: resolveEmbeddedAgentStreamMock,
   }));
 
@@ -775,8 +772,8 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     })),
   }));
 
-  // mock-isolation: Keep extension state isolated while safeguard tests install their own factories.
-  vi.doMock("./extensions.js", () => ({
+  vi.doMock("./extensions.js", async () => ({
+    ...(await vi.importActual<typeof import("./extensions.js")>("./extensions.js")),
     buildEmbeddedExtensionFactories: buildEmbeddedExtensionFactoriesMock,
   }));
 

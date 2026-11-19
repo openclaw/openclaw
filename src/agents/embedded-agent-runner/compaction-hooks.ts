@@ -17,6 +17,10 @@ import type { AgentMessage } from "../runtime/index.js";
 import { estimateCompactedRequestTokens } from "../sessions/compaction/request-budget.js";
 import type { CompactionRequestBudget } from "../sessions/compaction/request-budget.types.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
+import {
+  estimateTokenCountSafe,
+  buildBeforeCompactionHookMetrics,
+} from "./compaction-hook-metrics.js";
 import { log } from "./logger.js";
 
 type PostCompactionSession = {
@@ -174,37 +178,7 @@ type CompactionHookRunner = Partial<
   Pick<HookRunner, "hasHooks" | "runBeforeCompaction" | "runAfterCompaction">
 >;
 
-function estimateTokenCountSafe(
-  messages: AgentMessage[],
-  estimateTokensFn: (message: AgentMessage) => number,
-): number | undefined {
-  try {
-    let total = 0;
-    for (const message of messages) {
-      total += estimateTokensFn(message);
-    }
-    return total;
-  } catch {
-    return undefined;
-  }
-}
-
-/** Builds before-hook metrics while tolerating providers that cannot estimate all messages. */
-export function buildBeforeCompactionHookMetrics(params: {
-  originalMessages: AgentMessage[];
-  currentMessages: AgentMessage[];
-  observedTokenCount?: number;
-  estimateTokensFn: (message: AgentMessage) => number;
-}) {
-  return {
-    messageCountOriginal: params.originalMessages.length,
-    tokenCountOriginal: estimateTokenCountSafe(params.originalMessages, params.estimateTokensFn),
-    messageCountBefore: params.currentMessages.length,
-    tokenCountBefore:
-      params.observedTokenCount ??
-      estimateTokenCountSafe(params.currentMessages, params.estimateTokensFn),
-  };
-}
+export { buildBeforeCompactionHookMetrics } from "./compaction-hook-metrics.js";
 
 /** Estimates compacted-session token count and rejects impossible growth from stale estimates. */
 export function estimateTokensAfterCompaction(params: {

@@ -18,6 +18,10 @@ import {
   user,
 } from "./shard-fixtures.test-support.js";
 import {
+  runSummarizationCompletion,
+  runSummarizationCompletionFromSource,
+} from "./summarization-completion.js";
+import {
   MAX_SUMMARY_INPUT_CHARS,
   serializeConversation,
   serializeConversationWithinBudget,
@@ -122,6 +126,63 @@ async function summarize(messages: AgentMessage[], model: Model, previousSummary
 }
 
 describe("summary request input budget", () => {
+  it("rerenders lazy sources with eager parity after provider overflow", async () => {
+    const messages = createLongSession(80);
+    const model = createModel(262_144);
+    const params = {
+      prompt: "Preserve decisions and unresolved work.",
+      previousSummary: "Earlier decisions.",
+      model,
+      maxTokens: 8_192,
+      apiKey: undefined,
+      errorLabel: "Summarization",
+    };
+    let eagerCalls = 0;
+    const eager = createCapturingStream(() => eagerCalls++ === 0);
+    const eagerResult = await runSummarizationCompletion({
+      ...params,
+      messages,
+      streamFn: eager.streamFn,
+    });
+    let lazyCalls = 0;
+    const lazy = createCapturingStream(() => lazyCalls++ === 0);
+    const budgets: number[] = [];
+    const lazyResult = await runSummarizationCompletionFromSource(
+      { ...params, streamFn: lazy.streamFn },
+      async (maxChars) => {
+        budgets.push(maxChars);
+        return serializeConversationWithinBudget(convertToLlm(messages), maxChars);
+      },
+    );
+    expect(lazyResult).toEqual(eagerResult);
+    expect(lazyResult).toEqual({ ok: true, value: "summary" });
+    expect(lazy.prompts).toEqual(eager.prompts);
+    expect(budgets).toHaveLength(2);
+    expect(budgets[1]).toBeLessThan(budgets[0] ?? 0);
+  });
+
+  it("cancels lazy source work before starting a provider request", async () => {
+    const controller = new AbortController();
+    const { streamFn, prompts } = createCapturingStream();
+    const result = await runSummarizationCompletionFromSource(
+      {
+        prompt: "Summarize.",
+        model: createModel(262_144),
+        maxTokens: 8_192,
+        apiKey: undefined,
+        errorLabel: "Summarization",
+        signal: controller.signal,
+        streamFn,
+      },
+      async () => {
+        await Promise.resolve();
+        controller.abort();
+        return { text: "source", omittedEntries: 0, trimmedEntries: 0 };
+      },
+    );
+    expect(result.ok).toBe(false);
+    expect(prompts).toEqual([]);
+  });
   it("sends terminal facts from long ordinary tool results to the summarizer", async () => {
     const output = `REPORT-START\n${"ordinary observation\n".repeat(600)}RESULT_CODE=STUDY-01-OK`;
     const messages = [toolResult(output)];

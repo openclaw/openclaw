@@ -16,7 +16,7 @@ import {
   sameSessionTranscriptTargetBinding,
 } from "../../config/sessions/transcript-target-binding.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
-import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
+import { createSessionHeader } from "./session-initial-metadata.js";
 import {
   isIndexedSessionEntry,
   migrateToCurrentVersion,
@@ -452,14 +452,7 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
   private initializeSession(options?: NewSessionOptions): string | undefined {
     this.sessionId = options?.id ?? this.persistenceTarget?.sessionId ?? createManagedSessionId();
     this.migrated = false;
-    const header: SessionHeader = {
-      type: "session",
-      version: CURRENT_SESSION_VERSION,
-      id: this.sessionId,
-      timestamp: new Date().toISOString(),
-      cwd: this.cwd,
-      parentSession: options?.parentSession,
-    };
+    const header = createSessionHeader(this.sessionId, this.cwd, options?.parentSession);
     this.fileEntries = [header];
     this.opaqueFileEntries = [];
     this.clearNavigation();

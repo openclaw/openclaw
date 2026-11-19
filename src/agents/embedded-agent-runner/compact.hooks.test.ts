@@ -46,6 +46,7 @@ import {
 } from "./compact.hooks.assertions.test-support.js";
 import {
   acquiredPreparedModelRuntime,
+  createCompactHooksDirectRunner,
   expectedNativeCompactionOptions,
   useCompactHooksSessionFixture,
 } from "./compact.hooks.fixture.test-support.js";
@@ -395,10 +396,10 @@ beforeAll(async () => {
   const loaded = await loadCompactHooksHarness();
   compactTesting = await import("./compact.hooks.owner-test-support.js");
   configRuntime = await import("../../config/runtime-snapshot.js");
-  compactEmbeddedAgentSessionDirect = (params) => {
-    configRuntime.setRuntimeConfigSnapshot(params.config ?? {});
-    return loaded.compactEmbeddedAgentSessionDirect({ agentId: "main", ...params });
-  };
+  compactEmbeddedAgentSessionDirect = await createCompactHooksDirectRunner(
+    loaded.compactEmbeddedAgentSessionDirect,
+    () => ({ sessionKey: TEST_SESSION_KEY, storePath: TEST_STORE_PATH }),
+  );
   compactEmbeddedAgentSession = (params, host) => {
     configRuntime.setRuntimeConfigSnapshot(params.config ?? {});
     return loaded.compactEmbeddedAgentSession(params, host);
@@ -1501,8 +1502,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
         },
       });
     enqueueCommandInLaneMock.mockImplementation(
-      (lane, task, ...[options]: [CommandQueueEnqueueOptions?]) =>
-        enqueue(String(lane), task, options),
+      (lane, task, ...[options]: [CommandQueueEnqueueOptions?]) => enqueue(lane, task, options),
     );
     const overrides = {
       abortSignal: controller.signal,

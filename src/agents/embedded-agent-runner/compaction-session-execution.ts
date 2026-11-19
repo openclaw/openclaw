@@ -47,6 +47,7 @@ import { DefaultResourceLoader } from "../sessions/resource-loader.js";
 import { createAgentSession } from "../sessions/sdk.js";
 import { setSessionModelUsageSink } from "../sessions/session-model-usage.js";
 import { normalizeUsage, type UsageLike } from "../usage.js";
+import { executeBoundedCompactionSession } from "./bounded-compaction-execution.js";
 import { isSummaryTimeoutFailure, resolveCompactionFailure } from "./compact-reasons.js";
 import { dedupeDuplicateUserMessagesForCompaction } from "./compaction-duplicate-user-messages.js";
 import {
@@ -64,6 +65,7 @@ import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { log } from "./logger.js";
 import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js";
+import { needsCompactionSessionAdapter } from "./prepared-compaction-session.js";
 import { declarePromptHistoryRewrite } from "./prompt-cache-observability.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "./replay-history.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
@@ -132,6 +134,68 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       memoryTranscript?.assertActive ?? captureOwnedTranscriptWriteAssertion(sessionTarget);
     assertActive();
     const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
+    const settingsManager = createPreparedEmbeddedAgentSettingsManager({
+      agentId: sessionAgentId,
+      sessionId: params.sessionId,
+      cwd: effectiveCwd,
+      agentDir,
+      cfg: params.config,
+      pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
+        config: params.config,
+        env: process.env,
+        workspaceDir: effectiveWorkspace,
+      }),
+      contextTokenBudget,
+    });
+    const { llmRuntime } = getModelRegistryRuntime(modelRegistry);
+    const providerStreamFn = registerProviderStreamForModel({
+      model: effectiveModel,
+      cfg: params.config,
+      agentDir,
+      workspaceDir: effectiveWorkspace,
+      apiRegistry: getModelRegistryRuntime(modelRegistry).apiRegistry,
+    });
+    const recordUsage = accountingRecorder?.recordUsage
+      ? (usage: UsageLike) => {
+          const normalized = normalizeUsage(usage);
+          if (normalized) {
+            accountingRecorder.recordUsage?.(normalized);
+          }
+        }
+      : undefined;
+    const preparedStream = { agent: { streamFn: providerStreamFn ?? llmRuntime.streamSimple } };
+    const streamPreparation = {
+      ...runtime,
+      llmRuntime,
+      providerStreamFn,
+      sessionId: params.sessionId,
+      resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
+      config: params.config,
+      modelCallUrgency:
+        params.trigger === "manual" ? "foreground" : (params.modelCallUrgency ?? "background"),
+    } satisfies Omit<Parameters<typeof prepareCompactionSessionAgent>[0], "session">;
+    const transport = await prepareCompactionSessionAgent({
+      ...streamPreparation,
+      session: preparedStream,
+      thinkLevel,
+    });
+    if (!needsCompactionSessionAdapter(runtime, transport.effectiveExtraParams, sessionTarget)) {
+      return await executeBoundedCompactionSession(
+        runtime,
+        sessionTarget,
+        settingsManager,
+        assertActive,
+        recordCompaction,
+        recordUsage,
+        {
+          ...preparedStream,
+          replayEnabled: resolveCompactionReplayEligibility(effectiveModel, {
+            extraParams: transport.effectiveExtraParams,
+            apiKey: transport.transportApiKey,
+          }),
+        },
+      );
+    }
     // Exclude obsolete history without clipping the current context or previous summary.
     const preparedSessionManager =
       memoryTranscript?.sessionManager ??
@@ -159,32 +223,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         params.seedCompaction ?? accountingRecorder?.withCompactionPersistenceAsync,
     });
     compactionSessionManager = sessionManager;
-    const recordUsage = accountingRecorder?.recordUsage
-      ? (usage: UsageLike) => {
-          const normalized = normalizeUsage(usage);
-          if (normalized) {
-            accountingRecorder.recordUsage?.(normalized);
-          }
-        }
-      : undefined;
     if (recordUsage) {
       setSessionModelUsageSink(sessionManager, recordUsage);
     }
-    const settingsManager = createPreparedEmbeddedAgentSettingsManager({
-      agentId: sessionAgentId,
-      sessionId: params.sessionId,
-      cwd: effectiveCwd,
-      agentDir,
-      cfg: params.config,
-      pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
-        config: params.config,
-        env: process.env,
-        workspaceDir: effectiveWorkspace,
-      }),
-      contextTokenBudget,
-    });
-    // Sets compaction/pruning runtime state and returns extension factories
-    // that must be passed to the resource loader for the safeguard to be active.
+    // The resource loader activates safeguard state through these extension factories.
     const extensionFactories = buildEmbeddedExtensionFactories({
       cfg: params.config,
       sessionManager,
@@ -201,9 +243,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       extensionFactories,
     });
     await resourceLoader.reload();
-    // contextEngineInfo is intentionally omitted: this guard runs inside the
-    // compaction LLM session, which is not the user-facing agent session and
-    // has no associated context engine.
+    // This compaction-only session has no user-facing context engine.
     applyAgentAutoCompactionGuard({
       settingsManager,
       silentOverflowProneProvider: isSilentOverflowProneModel({
@@ -226,17 +266,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       },
       undefined,
     );
-    // The session runtime treats `tools` as a name allowlist during session creation. Pass the
-    // exact OpenClaw-managed registrations so custom tools survive startup.
+    // Pass registered tool names so custom tools survive the session allowlist.
     const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(customTools));
 
-    const providerStreamFn = registerProviderStreamForModel({
-      model: effectiveModel,
-      cfg: params.config,
-      agentDir,
-      workspaceDir: effectiveWorkspace,
-      apiRegistry: getModelRegistryRuntime(modelRegistry).apiRegistry,
-    });
     while (true) {
       // A thinking retry starts a new attempt; setup/endpoint failures must not reuse its predecessor's cause.
       setCompactionSafeguardCancellation(sessionManager, undefined);
@@ -281,16 +313,9 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         // Compaction builds the same embedded system prompt, so it must flow
         // through the same transport/payload shaping stack as normal turns.
         const { effectiveExtraParams, transportApiKey } = await prepareCompactionSessionAgent({
-          ...runtime,
+          ...streamPreparation,
           session,
-          llmRuntime: getModelRegistryRuntime(modelRegistry).llmRuntime,
-          providerStreamFn,
-          sessionId: params.sessionId,
-          resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
-          config: params.config,
           thinkLevel,
-          modelCallUrgency:
-            params.trigger === "manual" ? "foreground" : (params.modelCallUrgency ?? "background"),
         });
         const compactionReplayEnabled = resolveCompactionReplayEligibility(effectiveModel, {
           extraParams: effectiveExtraParams,
@@ -399,11 +424,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           observedTokenCount,
           estimateTokensFn: estimateTokens,
         });
-        const hookSessionKey = sessionTarget.sessionKey;
         const hookContext = () => ({
           hookRunner,
           sessionId: params.sessionId,
-          sessionKey: hookSessionKey,
+          sessionKey: sessionTarget.sessionKey,
           sessionAgentId,
           workspaceDir: effectiveWorkspace,
           messageProvider: resolvedMessageProvider,

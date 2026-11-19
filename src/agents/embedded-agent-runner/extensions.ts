@@ -4,7 +4,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
-import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
+import compactionSafeguardExtension, {
+  executeCompactionSafeguard,
+  runCompactionSafeguard,
+} from "../agent-hooks/compaction-safeguard.js";
 import { resolveEffectiveCompactionMode } from "../agent-settings.js";
 import {
   finalizeToolTerminalPresentation,
@@ -17,6 +20,34 @@ import type { ExtensionFactory, SessionManager } from "../sessions/index.js";
 import { isToolResultError } from "../tool-result-error.js";
 import { recordEmbeddedToolReceipt } from "./tool-send-receipts.js";
 
+/** The builtin loader exposes the same configuration to array and prepared execution. */
+export function resolveEmbeddedCompactionSafeguard(params: {
+  cfg: OpenClawConfig | undefined;
+  workspaceDir: string;
+  model: ProviderRuntimeModel | undefined;
+}) {
+  if (resolveEffectiveCompactionMode(params.cfg) !== "safeguard") {
+    return undefined;
+  }
+  const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+  const qualityGuardCfg = compactionCfg?.qualityGuard;
+  return {
+    factory: compactionSafeguardExtension,
+    execute: runCompactionSafeguard,
+    executePrepared: executeCompactionSafeguard,
+    runtime: {
+      identifierPolicy: compactionCfg?.identifierPolicy,
+      qualityGuardEnabled: qualityGuardCfg?.enabled ?? true,
+      qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
+      model: params.model,
+      recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
+      workspaceDir: params.workspaceDir,
+      postCompactionSections: compactionCfg?.postCompactionSections,
+      provider: compactionCfg?.provider,
+    },
+  };
+}
+
 export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
@@ -28,20 +59,10 @@ export function buildEmbeddedExtensionFactories(params: {
   runId?: string;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
-  if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
-    const compactionCfg = params.cfg?.agents?.defaults?.compaction;
-    const qualityGuardCfg = compactionCfg?.qualityGuard;
-    setCompactionSafeguardRuntime(params.sessionManager, {
-      identifierPolicy: compactionCfg?.identifierPolicy,
-      qualityGuardEnabled: qualityGuardCfg?.enabled ?? true,
-      qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
-      model: params.model,
-      recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
-      workspaceDir: params.workspaceDir,
-      postCompactionSections: compactionCfg?.postCompactionSections,
-      provider: compactionCfg?.provider,
-    });
-    factories.push(compactionSafeguardExtension);
+  const safeguard = resolveEmbeddedCompactionSafeguard(params);
+  if (safeguard) {
+    setCompactionSafeguardRuntime(params.sessionManager, safeguard.runtime);
+    factories.push(safeguard.factory);
   }
   const { agentId, sessionKey, runId, sessionManager } = params;
   // Snapshot the prepared session once; tool results must never rediscover

@@ -27,7 +27,6 @@ import {
 } from "../../sessions/input-provenance.js";
 import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
 import { isSilentAssistantTranscriptMessage } from "../../shared/chat-message-content.js";
-import { sanitizeGoogleAssistantFirstOrdering as sanitizeGoogleTurnOrdering } from "../../shared/google-turn-ordering.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import {
   isTranscriptOnlyOpenClawAssistantMessage,
@@ -47,7 +46,10 @@ import {
   validateAnthropicTurns,
   validateGeminiTurns,
 } from "../embedded-agent-helpers/turns.js";
-import { resolveImageSanitizationLimits } from "../image-sanitization.js";
+import {
+  type ImageSanitizationLimits,
+  resolveImageSanitizationLimits,
+} from "../image-sanitization.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
   sanitizeToolCallInputs,
@@ -58,7 +60,6 @@ import type { SessionManager } from "../sessions/index.js";
 import { stripStaleThinkingSignaturesForCompactionReplay } from "../thinking-signatures.js";
 import {
   extractToolCallsFromAssistant,
-  extractToolResultId,
   sanitizeToolCallIdsForCloudCodeAssist,
 } from "../tool-call-id.js";
 import { createCompletedToolCallPredicate } from "../tool-call-shared.js";
@@ -72,12 +73,14 @@ import {
   type UsageLike,
 } from "../usage.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "./empty-assistant-turn.js";
+import { finishGenericReplayHistory } from "./replay-history-invariants.js";
 import {
   createProviderReplaySessionState,
   isSameModelSnapshot,
   MODEL_SNAPSHOT_CUSTOM_TYPE,
   readModelSnapshotState,
   type ModelSnapshotEntry,
+  type ModelSnapshotState,
 } from "./replay-session-state.js";
 import {
   dropReasoningFromHistory,
@@ -85,6 +88,8 @@ import {
   shouldPreserveLatestAssistantThinking,
   stripInvalidThinkingSignatures,
 } from "./thinking.js";
+
+export { finishGenericReplayHistory } from "./replay-history-invariants.js";
 
 const MANAGED_DISPLAY_BLOCK_TYPES = new Set([
   "attachment",
@@ -507,85 +512,21 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
   return touched ? out : messages;
 }
 
-function formatOpenAIResponsesReplayInvariantError(params: {
-  reason: "dangling_tool_call" | "orphan_tool_result";
-  toolCallId?: string;
-  messageIndex: number;
-}): Error {
-  const toolCallId = params.toolCallId ? ` toolCallId=${params.toolCallId}` : "";
-  return new Error(
-    `invalid_replay_transcript: OpenAI Responses replay contains ${params.reason}${toolCallId} at message index ${params.messageIndex}`,
-  );
-}
-
-function assertOpenAIResponsesToolUseResultInvariant(messages: AgentMessage[]): AgentMessage[] {
-  const pending = new Map<string, number>();
-  const assertNoPendingCalls = () => {
-    const dangling = pending.entries().next().value;
-    if (dangling) {
-      throw formatOpenAIResponsesReplayInvariantError({
-        reason: "dangling_tool_call",
-        toolCallId: dangling[0],
-        messageIndex: dangling[1],
-      });
-    }
-  };
-
-  for (let i = 0; i < messages.length; i += 1) {
-    const message = messages[i];
-    const role = (message as { role?: unknown } | undefined)?.role;
-
-    if (role !== "toolResult") {
-      assertNoPendingCalls();
-    }
-
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-
-    if (role === "toolResult") {
-      const toolCallId = extractToolResultId(
-        message as Extract<AgentMessage, { role: "toolResult" }>,
-      );
-      if (!toolCallId || !pending.delete(toolCallId)) {
-        throw formatOpenAIResponsesReplayInvariantError({
-          reason: "orphan_tool_result",
-          ...(toolCallId ? { toolCallId } : {}),
-          messageIndex: i,
-        });
-      }
-      continue;
-    }
-
-    if (role !== "assistant") {
-      continue;
-    }
-
-    for (const toolCall of extractToolCallsFromAssistant(
-      message as Extract<AgentMessage, { role: "assistant" }>,
-    )) {
-      pending.set(toolCall.id, i);
-    }
-  }
-
-  assertNoPendingCalls();
-  return messages;
-}
-
 /**
  * Applies the generic replay-history cleanup pipeline before provider-owned
  * replay hooks run.
  */
-export async function sanitizeSessionHistory(
+export async function prepareGenericReplayHistory(
   params: ProviderReplayHookParams & {
     messages: AgentMessage[];
     allowedToolNames?: Iterable<string>;
-    sessionManager: SessionManager;
+    snapshotState: ModelSnapshotState;
+    imageLimits?: ImageSanitizationLimits;
     sessionId: string;
     policy?: TranscriptPolicy;
     preserveLatestAssistantThinking?: boolean;
   },
-): Promise<AgentMessage[]> {
+) {
   // Keep docs/reference/transcript-hygiene.md in sync with any logic changes here.
   const policy = resolveReplayPolicy(params);
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
@@ -600,9 +541,7 @@ export async function sanitizeSessionHistory(
     params.modelApi === "openai-chatgpt-responses" ||
     params.modelApi === "azure-openai-responses";
   const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
-  const snapshotState = hasSnapshot
-    ? readModelSnapshotState(params.sessionManager)
-    : { lastSnapshot: null, latestSwitchTimestamp: null };
+  const snapshotState = params.snapshotState;
   const priorSnapshot = snapshotState.lastSnapshot;
   const currentSnapshot: ModelSnapshotEntry | null = hasSnapshot
     ? {
@@ -631,7 +570,7 @@ export async function sanitizeSessionHistory(
       preserveNativeAnthropicToolUseIds: policy.preserveNativeAnthropicToolUseIds,
       preserveSignatures: policy.preserveSignatures,
       sanitizeThoughtSignatures: policy.sanitizeThoughtSignatures,
-      ...resolveImageSanitizationLimits(params.config),
+      ...(params.imageLimits ?? resolveImageSanitizationLimits(params.config)),
     },
   );
   const preserveLatestAssistantThinking =
@@ -684,6 +623,32 @@ export async function sanitizeSessionHistory(
   messages = ensureAssistantUsageSnapshots(
     stripStaleAssistantUsageBeforeLatestCompaction(stripToolResultDetails(messages)),
   );
+  return {
+    messages,
+    policy,
+    modelSnapshot:
+      currentSnapshot && (!priorSnapshot || modelChanged) ? currentSnapshot : undefined,
+  };
+}
+
+export async function sanitizeSessionHistory(
+  params: ProviderReplayHookParams & {
+    messages: AgentMessage[];
+    allowedToolNames?: Iterable<string>;
+    sessionManager: SessionManager;
+    sessionId: string;
+    policy?: TranscriptPolicy;
+    preserveLatestAssistantThinking?: boolean;
+  },
+): Promise<AgentMessage[]> {
+  const prepared = await prepareGenericReplayHistory({
+    ...params,
+    snapshotState:
+      params.provider || params.modelApi || params.modelId
+        ? readModelSnapshotState(params.sessionManager)
+        : { lastSnapshot: null, latestSwitchTimestamp: null },
+  });
+  let messages = prepared.messages;
   const provider = params.provider?.trim();
   if (provider) {
     const pluginParams = createProviderReplayPluginParams({ ...params, provider });
@@ -704,37 +669,19 @@ export async function sanitizeSessionHistory(
       replaySession.close();
     }
   }
-  // Provider replay hooks may rewrite history, so reassert the same pairing policy afterward.
-  if (isOpenAIResponsesApi) {
-    if (policy.repairToolUseResultPairing) {
-      messages = sanitizeToolUseResultPairingForModel(messages, true);
-    }
-    assertOpenAIResponsesToolUseResultInvariant(messages);
-  }
-
-  if (currentSnapshot && (!priorSnapshot || modelChanged)) {
+  messages = finishGenericReplayHistory(messages, prepared.policy, params.modelApi);
+  if (prepared.modelSnapshot) {
     try {
       await params.sessionManager.appendCustomEntryAsync(
         MODEL_SNAPSHOT_CUSTOM_TYPE,
-        currentSnapshot,
+        prepared.modelSnapshot,
       );
     } catch (error) {
       rethrowIncognitoSessionError(error);
-      // ignore persistence failures
+      // Replay snapshot publication has always been best effort.
     }
   }
-
-  if (!policy.applyGoogleTurnOrdering) {
-    return messages;
-  }
-
-  // Strict OpenAI-compatible providers (vLLM, Gemma, etc.) also reject
-  // conversations that start with an assistant turn (e.g. delivery-mirror
-  // messages after /new). Provider hooks may already have applied a
-  // provider-owned ordering rewrite above; keep this generic fallback for the
-  // strict OpenAI-compatible path and for any provider that leaves assistant-
-  // first repair to core. See #38962.
-  return sanitizeGoogleTurnOrdering(messages);
+  return messages;
 }
 
 /**
@@ -764,13 +711,25 @@ export async function validateReplayTurns(
     }
   }
 
-  const validatedGemini = policy.validateGeminiTurns
-    ? validateGeminiTurns(params.messages)
-    : params.messages;
+  return validateGenericReplayTurns(
+    params.messages,
+    policy,
+    params.modelApi,
+    params.preserveUserTurns,
+  );
+}
+
+export function validateGenericReplayTurns(
+  messages: AgentMessage[],
+  policy: TranscriptPolicy,
+  modelApi?: string | null,
+  preserveUserTurns?: boolean,
+): AgentMessage[] {
+  const validatedGemini = policy.validateGeminiTurns ? validateGeminiTurns(messages) : messages;
   return policy.validateAnthropicTurns
     ? validateAnthropicTurns(validatedGemini, {
-        mergeConsecutiveTurns: shouldMergeConsecutiveTurns(policy, params.modelApi),
-        mergeConsecutiveUserTurns: !params.preserveUserTurns,
+        mergeConsecutiveTurns: shouldMergeConsecutiveTurns(policy, modelApi),
+        mergeConsecutiveUserTurns: !preserveUserTurns,
       })
     : validatedGemini;
 }

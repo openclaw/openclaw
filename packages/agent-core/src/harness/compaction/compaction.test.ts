@@ -8,8 +8,13 @@ import {
   type SessionTreeEntry,
 } from "../types.js";
 import {
+  collectCompactionPreparationEntryFact,
+  prepareCompactionEntryFacts,
+} from "./compaction-preparation.js";
+import {
   calculateContextTokens,
   compactWithoutSummary,
+  compactFromSource,
   MAX_COMPACTION_SUMMARY_CHARS,
   estimateContextTokens,
   estimateTokens,
@@ -38,6 +43,88 @@ import {
 } from "./shard-fixtures.test-support.js";
 import { compactionEntry, modelReply, userEntry } from "./summary-capture.test-support.js";
 import { createFileOps } from "./utils.js";
+
+it("prepares row facts with the same selections, accounting and metadata as eager history", () => {
+  const history = [
+    createMessageEntry(user("old request"), 0),
+    assistantEntry("old answer", 1),
+    createMessageEntry(user("latest request " + "x".repeat(2000)), 2),
+    assistantEntry("work " + "x".repeat(2000), 3),
+    createMessageEntry(user("continue"), 4),
+    assistantEntry("recent answer", 5),
+  ];
+  const retained = history[2];
+  assert(retained);
+  const reset = resetEntry(6, retained.id);
+  const variants = [
+    history,
+    [...history, reset, createMessageEntry(user("new task"), 7), assistantEntry("new answer", 8)],
+  ];
+  for (const entries of variants) {
+    const facts = entries.map((entry, index) =>
+      collectCompactionPreparationEntryFact(entry, index),
+    );
+    for (const keepRecentTokens of [1, 100, 1000]) {
+      const settings = { enabled: true, reserveTokens: 0, keepRecentTokens };
+      const eager = prepareCompaction(entries, settings, "unresolved");
+      const streamed = prepareCompactionEntryFacts(facts, settings, "unresolved");
+      assert(eager.ok && streamed.ok);
+      if (!eager.value || !streamed.value) {
+        expect(streamed.value).toEqual(eager.value);
+        continue;
+      }
+      const { messagesToSummarize, turnPrefixMessages, ...eagerMetadata } = eager.value;
+      const {
+        historyEntryIndexes,
+        turnPrefixEntryIndexes,
+        firstKeptEntryIndex,
+        ...streamedMetadata
+      } = streamed.value;
+      expect(streamedMetadata).toEqual(eagerMetadata);
+      expect(entries[firstKeptEntryIndex]?.id).toBe(eager.value.firstKeptEntryId);
+      expect(
+        historyEntryIndexes
+          .map((index) => entries[index])
+          .map((entry) => (entry?.type === "message" ? entry.message : undefined)),
+      ).toEqual(messagesToSummarize);
+      expect(
+        turnPrefixEntryIndexes
+          .map((index) => entries[index])
+          .map((entry) => (entry?.type === "message" ? entry.message : undefined)),
+      ).toEqual(turnPrefixMessages);
+    }
+  }
+});
+
+it("assembles payload-free source summaries with eager artifact parity", async () => {
+  for (const isSplitTurn of [false, true]) {
+    const preparation = {
+      firstKeptEntryId: "kept-entry",
+      messagesToSummarize: [user("history")],
+      turnPrefixMessages: isSplitTurn ? [user("prefix")] : [],
+      isSplitTurn,
+      tokensBefore: 100,
+      previousSummary: "previous",
+      fileOps: createFileOps(),
+      settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
+    };
+    const eager = await compactWith(preparation, createCompactionModel(), {
+      streamFn: () => responseStream(assistant("summary")),
+    });
+    const { messagesToSummarize, turnPrefixMessages, ...metadata } = preparation;
+    const calls: string[] = [];
+    const lazy = await compactFromSource(
+      metadata,
+      { history: messagesToSummarize.length, turnPrefix: turnPrefixMessages.length },
+      async (source) => {
+        calls.push(source);
+        return { ok: true, value: "summary" };
+      },
+    );
+    expect(lazy).toEqual(eager);
+    expect(calls).toEqual(isSplitTurn ? ["history", "turnPrefix"] : ["history"]);
+  }
+});
 
 function prepare(
   entries: SessionTreeEntry[],

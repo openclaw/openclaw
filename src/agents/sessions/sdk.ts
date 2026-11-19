@@ -28,6 +28,7 @@ import { AgentSession } from "./agent-session.js";
 import type { ExtensionRunner } from "./extensions/index.js";
 import { convertToLlmWithBlockImages } from "./messages.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
+import { prepareSessionInitialMetadata } from "./session-initial-metadata.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import { sessionManagerAppendInitialMetadata } from "./session-manager-metadata.js";
@@ -276,28 +277,32 @@ export async function createAgentSession(
   });
   setInternalBeforeToolBatch(agent, options.beforeToolBatch);
 
+  const initialMetadata = prepareSessionInitialMetadata(
+    { hasExistingSession, hasThinkingEntry },
+    { provider: model.provider, modelId: model.id, thinkingLevel },
+  );
   let metadataCommit: SessionMetadataCommit | undefined;
   const initializeMetadata = () => {
     // Prepared history needs no write permit when its initial metadata already exists.
     // Otherwise restoration waits behind unrelated writes, including reclamation.
-    if (hasExistingSession && hasThinkingEntry) {
+    if (!initialMetadata) {
       return Promise.resolve();
     }
     assertInitialSessionCurrent();
     return withSessionMetadataPublication(
       sessionManager,
-      { type: "thinking_level_change", thinkingLevel },
+      initialMetadata.change,
       (commit) => {
         metadataCommit = commit;
       },
       () =>
-        hasExistingSession
-          ? sessionManager.appendThinkingLevelChange(thinkingLevel)
-          : sessionManager[sessionManagerAppendInitialMetadata](
-              model.provider,
-              model.id,
-              thinkingLevel,
-            ),
+        initialMetadata.initialModelChange
+          ? sessionManager[sessionManagerAppendInitialMetadata](
+              initialMetadata.initialModelChange.provider,
+              initialMetadata.initialModelChange.modelId,
+              initialMetadata.change.thinkingLevel,
+            )
+          : sessionManager.appendThinkingLevelChange(initialMetadata.change.thinkingLevel),
     );
   };
   try {

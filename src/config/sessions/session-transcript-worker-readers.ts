@@ -383,6 +383,10 @@ const readers: Readers & ThisType<ReaderContext> = {
       !input.limits || streamSelection ? receiveChunk : undefined,
     );
   },
+  readCompaction: reader(
+    (input) => ({ kind: "compaction-preparation", ...input }),
+    (value) => value,
+  ),
   readMaintenance: reader(
     (input) => ({ kind: "transcript-maintenance", ...input }),
     (value) => value,

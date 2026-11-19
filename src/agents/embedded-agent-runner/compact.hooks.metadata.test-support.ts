@@ -1,4 +1,5 @@
 import { vi, type Mock } from "vitest";
+import type { ContextEngine } from "../../context-engine/types.js";
 import {
   createPluginExecutionFrame,
   getPluginExecutionFrame,
@@ -36,6 +37,23 @@ export function mockCompactHooksPluginMetadata(): void {
     runOutsidePluginMetadataSnapshotScope: <T>(run: () => T): T => run(),
   }));
 }
+
+export const contextEngineCompactMock: Mock<ContextEngine["compact"]> = vi.fn(async () => ({
+  ok: true as boolean,
+  compacted: true as boolean,
+  reason: undefined as string | undefined,
+  result: { summary: "engine-summary", tokensBefore: 120, tokensAfter: 50 },
+}));
+
+export const resolveContextEngineMock = vi.fn<
+  () => Promise<{
+    info: { ownsCompaction: boolean; id?: string };
+    compact: ContextEngine["compact"];
+  }>
+>(async () => ({
+  info: { ownsCompaction: true },
+  compact: contextEngineCompactMock,
+}));
 
 export function mockCompactHooksContextEngine(resolveContextEngine: () => Promise<unknown>): void {
   // mock-isolation: The compaction fixture does not initialize live plugin registrations.

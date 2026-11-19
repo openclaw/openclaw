@@ -241,6 +241,7 @@ type ActiveContextReadOptions = SessionTranscriptContextSelection & {
   readOnly?: boolean;
   resolvedScope?: ResolvedTranscriptReadScope;
   transaction?: CurrentTranscriptProjection["database"];
+  onEntry?: (event: TranscriptEvent, row: { rawSeq: number; serializedBytes: number }) => void;
   onRead?: (
     projection: CurrentTranscriptProjection,
     rows: Array<{ rawSeq: number; serializedBytes: number }>,
@@ -513,6 +514,21 @@ function readActiveContext(
         const event: TranscriptEvent = JSON.parse(readTranscriptPayload(row));
         const entry = asOptionalRecord(event);
         const selected = selectedBySeq.get(row.seq);
+        // Extract payload-free compaction facts before advancing the native cursor.
+        // The callback shares this snapshot and must not retain an async reader.
+        const consumed = options.onEntry?.(event, {
+          rawSeq: row.seq,
+          serializedBytes:
+            row.seq === header?.seq
+              ? headerBytes
+              : row.seq === boundary?.seq
+                ? boundary.serialized_bytes
+                : selected!.serialized_bytes,
+        });
+        if (isPromiseLike(consumed)) {
+          void Promise.resolve(consumed).catch(() => {});
+          throw new Error("Transcript snapshot consumers must remain synchronous");
+        }
         // Preserve only the two full anchors needed by cache-TTL projection; all
         // other payloads can be released as this cursor advances. Selection is
         // newest-first, independently of the payload cursor order.
