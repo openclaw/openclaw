@@ -60,6 +60,12 @@ runtime policies, within the existing 150-second test budget.
 Other runners, preparation modes, parallel jobs, and full validation keep their
 standalone boundary ownership.
 
+Hosted compact Gateway-methods groups retain the existing 96-file ceiling and
+dedicated rows above 32 files even when a full dual-runtime dispatch uses the
+compact PR layout. File membership, worker limits, row caps, and deadlines are
+unchanged. Smaller tails and hourly main validation keep their existing packing;
+these bounds do not replace fresh whole-row timing qualification.
+
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
 would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
 

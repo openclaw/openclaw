@@ -357,6 +357,15 @@ export async function preflightOpenClawDatabaseSchemas(
         Object.assign(result, inspection.schemas);
         Object.assign(stateMetrics, inspection.startupMetrics);
         stateInspectionErrors.push(...inspection.inspectionErrors);
+        inspection.schemas.indeterminate.forEach((row, index) => {
+          const error = inspection.inspectionErrors[index];
+          indeterminateCauses.set(
+            row,
+            options.requireStartupMigrationReadiness
+              ? schemaRead.annotateStartupStateInspectionFailure(error, statePath, options.signal)
+              : error,
+          );
+        });
         if (
           startup &&
           inspection.inspectionErrors.length === 0 &&
@@ -515,13 +524,18 @@ export async function preflightOpenClawDatabaseSchemas(
             options.preserveSourceArtifacts !== true &&
             scheduling?.canDefer(row),
         };
-        // Native read-only opens can change source SHM read marks. Explicit
-        // artifact preservation must use the WAL-aware private snapshot below.
-        if (
-          !schemaInspection &&
-          (getDatabaseEngineInput("agent") || options.preserveSourceArtifacts !== true)
-        ) {
-          schemaInspection = await inspectSchema(schemaInput, options.signal);
+        // Explicit artifact preservation reads a live WAL family through a read-only index
+        // and leaves every other family to the private snapshot below. A full copy of a
+        // store the serving Gateway keeps writing never stabilizes.
+        if (!schemaInspection) {
+          schemaInspection = await inspectSchema(
+            {
+              ...schemaInput,
+              preserveSourceArtifacts:
+                options.preserveSourceArtifacts === true && !getDatabaseEngineInput("agent"),
+            },
+            options.signal,
+          );
         }
         if (!schemaInspection) {
           // The parent retains cleanup ownership for the isolated snapshot worker.

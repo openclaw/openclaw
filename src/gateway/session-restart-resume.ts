@@ -18,6 +18,7 @@ import {
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { captureSessionQueuedInputsForRestart } from "../config/sessions/session-pending-input-history.js";
+import { createRestartResumeMarker } from "../config/sessions/session-restart-resume-scope.js";
 import {
   derivePersistedSessionLifecyclePatch,
   restartResumeSkipReason,
@@ -61,6 +62,7 @@ import {
 import {
   discoverRestartSessionStores,
   prepareRestartStores,
+  resolveStartupRestartMarker,
   type PreparedRestartStore,
   type RestartResumeParams,
   type RestartStoreTarget,
@@ -71,17 +73,11 @@ import {
   recordRestartYieldFailure,
 } from "./session-restart-resume-failure.js";
 import { createRestartResumeSummary } from "./session-restart-resume-log.js";
+import { GATEWAY_RESTART_RESUME_TEXT } from "./session-restart-resume-prompt.js";
 import {
   captureSessionRestartOperatorSource,
   prepareSessionSystemTurnAuthority,
 } from "./session-system-turn-authority.js";
-
-const GATEWAY_RESTART_RESUME_TEXT =
-  "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue. Child runs do not resume independently. Inspect their saved work; send a fresh instruction to the same retained child session when appropriate. A stopped execution is not a yielded pause, and restarting it does not transfer workspace or publication ownership.";
-// Old shutdown bumped updatedAt, but abandoned cycles can survive for weeks. Limit adoption
-// to six hours before process start; longer stops lose this one-time upgrade resume.
-// Remove this bridge once stable includes the graceful-restart redesign (#185730).
-const LEGACY_RESTART_RESUME_WINDOW_MS = 6 * 60 * 60 * 1000;
 
 type SessionIdentity = {
   agentId: string;
@@ -258,10 +254,10 @@ async function persistRunningSessions(
               sessionKey,
               entry: {
                 ...entry,
-                resumeAfterRestart: {
+                resumeAfterRestart: createRestartResumeMarker({
                   operatorSource:
                     session.operatorSource ?? entry.resumeAfterRestart?.operatorSource,
-                },
+                }),
               },
             });
           }
@@ -452,7 +448,7 @@ export async function resumeMarkedSessions(
 
 async function resumeRestartStore(
   { context, signal, log }: RestartResumeParams,
-  { target, entries, orphaned, windows, sessions }: PreparedRestartStore,
+  { target, entries, orphaned, outOfScope, windows, sessions }: PreparedRestartStore,
   deferred: Map<string, () => Promise<void>>,
 ): Promise<boolean> {
   let completed = true;
@@ -462,6 +458,7 @@ async function resumeRestartStore(
   );
   const summary = createRestartResumeSummary("startup");
   const queuedKeys = new Set(orphaned.map(({ sessionKey }) => sessionKey));
+  const ended = new Set(outOfScope);
   for (const { sessionKey } of entries) {
     summary.record(
       parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId,
@@ -475,6 +472,7 @@ async function resumeRestartStore(
       const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId;
       let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>> | undefined;
       let interrupted = false;
+      let stale = false;
       try {
         await waitForAgentInputAdmission(agentId, {
           sessionKey,
@@ -501,40 +499,26 @@ async function resumeRestartStore(
             if (!selected) {
               return { result: undefined };
             }
-            const parked = (await hasInterruptedCommittedRequesterSettleInput(
-              { ...target, agentId, sessionKey, sessionId: selected.sessionId },
-              selected,
-            ))
-              ? undefined
-              : resolveSessionYieldWait(sessionKey, selected, agentId);
+            let parked = resolveSessionYieldWait(sessionKey, selected, agentId);
+            if (
+              parked &&
+              (await hasInterruptedCommittedRequesterSettleInput(
+                { ...target, agentId, sessionKey, sessionId: selected.sessionId },
+                selected,
+              ))
+            ) {
+              parked = undefined;
+            }
             const skip = restartResumeSkipReason(sessionKey, selected);
-            const orphanedRun =
-              (!parked || parked === "resume") &&
-              selected.lifecycleRunId &&
-              selected.lifecycleRunId === snapshotEntry.lifecycleRunId &&
-              selected.status === undefined &&
-              !skip &&
-              !hasAgentRunContextExecutionOwner(selected.lifecycleRunId) &&
-              (!selected.activeWriterRunId ||
-                !hasAgentRunContextExecutionOwner(selected.activeWriterRunId));
-            const marker: InternalSessionEntry["resumeAfterRestart"] =
-              selected.resumeAfterRestart ??
-              (parked ||
-              (orphanedRun &&
-                windows?.some(
-                  (window) =>
-                    selected.startedAt !== undefined &&
-                    selected.startedAt >= window.startedAt &&
-                    selected.startedAt < window.endedAt,
-                )) ||
-              (selected.mainRestartRecovery &&
-                selected.abortedLastRun === true &&
-                selected.status === "interrupted" &&
-                selected.updatedAt <= performance.timeOrigin &&
-                selected.updatedAt >= performance.timeOrigin - LEGACY_RESTART_RESUME_WINDOW_MS)
-                ? {}
-                : undefined);
-            if (!marker && !selected.mainRestartRecovery && !orphanedRun) {
+            const sameRun = selected.lifecycleRunId === snapshotEntry.lifecycleRunId;
+            const resolved = resolveStartupRestartMarker(selected, sameRun, {
+              parked,
+              skip,
+              windows,
+            });
+            const { orphanedRun, marker } = resolved;
+            stale = resolved.stale;
+            if (!marker && !stale && !selected.mainRestartRecovery && !orphanedRun) {
               return { result: undefined };
             }
             const entry = {
@@ -551,7 +535,7 @@ async function resumeRestartStore(
                     entry: selected,
                     currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
                     event: {
-                      runId: selected.lifecycleRunId,
+                      runId: orphanedRun,
                       ts: Date.now(),
                       data: { phase: "end", aborted: true, stopReason: "restart" },
                     },
@@ -571,6 +555,11 @@ async function resumeRestartStore(
           },
         });
         if (!resumed) {
+          if (stale) {
+            ended.add(sessionKey);
+            summary.record(agentId, sessionKey, "scope-changed");
+            continue;
+          }
           summary.record(
             agentId,
             sessionKey,
@@ -704,11 +693,13 @@ async function resumeRestartStore(
     }
     for (const session of orphaned) {
       const agentId = parseAgentSessionKey(session.sessionKey)?.agentId ?? target.agentId;
+      // Input queued behind work from another restart resume scope ended with it.
+      const endCause = ended.has(session.sessionKey) ? "restart-unrecoverable" : undefined;
       try {
         const remaining = await continueSessionQueuedInputs(
           context,
           { ...target, ...session, agentId },
-          { signal, assertCurrent: () => signal.throwIfAborted() },
+          { signal, assertCurrent: () => signal.throwIfAborted(), endCause },
         );
         if (remaining) {
           completed = false;

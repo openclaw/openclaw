@@ -266,6 +266,12 @@ and the ordered manifest hash; each child records its sequence range, counts,
 file hash, and sizes. Backups embed each chunk in its own blob. Parents without
 children keep the original single-file representation.
 
+Interrupted file-archive cleanup is discovered incrementally: each maintenance
+pass examines at most 128 archive records and 65,536 transcript rows, resuming by
+session ID and event sequence. Discovery wraps after the final archive; restarting
+the process resets its position. Newly archived transcripts are cleaned immediately.
+Cleanup still commits in batches of at most 256 rows and yields between batches.
+
 The default archive directory is
 `~/.openclaw/agents/<agentId>/sessions/cold/`, with filenames
 `<sha256>.jsonl.zst`. A database in a directory named `agent` uses its sibling
@@ -311,6 +317,11 @@ Retention remains seven days from creation, capped at 100 entries per profile,
 Restarts preserve retained entries, dismissals, and their original expiry times.
 Loading stored state does not replay browser notifications or scan transcripts
 to reconstruct old mentions.
+
+Concurrent Inbox list requests share one maintenance pass. Dismissals and other
+mutations retain FIFO ordering; a list arriving after a queued mutation joins a
+new read wave. Unchanged reads prepare only their viewer's retained targets, and
+each response checks current access before publication.
 
 ### ACP replay accounting
 

@@ -190,6 +190,16 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   if (settledBatch.length === 0 || settledBatch.some(isClaimedByLiveRequesterTurn)) {
     return false;
   }
+  if (subagentRuns.isCompletionAuthorityRetired(currentSettledEntry)) {
+    await completeBatch(settledBatch, currentState, {
+      delivered: false,
+      path: "none",
+      disposition: "permanent_failure",
+      error:
+        "Child result delivery lost its Gateway owner. Inspect the saved child results and retry.",
+    });
+    return false;
+  }
 
   const resolveGatewayContext = getSharedGatewayContextResolver(settledBatch);
   const hadGatewayContext = resolveGatewayContext ? Boolean(resolveGatewayContext()) : false;
@@ -296,6 +306,9 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   if (!pauseNotice && settledBatch.every(hasConsumedRequesterInput)) {
     // The input is already in the requester transcript. Restart continuation belongs
     // to the Gateway; resubmitting it can conflict with the committed payload.
+    if (settledBatch.some((entry) => entry.delivery?.disposition === "ambiguous")) {
+      return false;
+    }
     await completeBatch(settledBatch, selectedState, { delivered: true, path: "direct" });
     return true;
   }
@@ -379,9 +392,14 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       requester,
       readCurrent: requesterCurrent.readCurrent,
     });
+    let dispatchAccepted = false;
     const isRequesterCurrent = () => {
       if (!sourceReceiptAdmission.isRequesterCurrent()) {
         return false;
+      }
+      // The accepted turn owns delivery; normal requester-run turnover cannot revoke it.
+      if (dispatchAccepted) {
+        return true;
       }
       if (followup) {
         try {
@@ -487,13 +505,16 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       ) {
         return true;
       }
-      if (!isBatchDeliveryClosed() && isRequesterCurrent()) {
+      const deliveryClosed = isBatchDeliveryClosed();
+      if (!deliveryClosed && isRequesterCurrent()) {
         return false;
       }
-      // Requester turnover closes this attempt, not the child's pending question.
-      if (!pauseNotice || isBatchDeliveryClosed() || !sourceReceiptAdmission.isRequesterCurrent()) {
-        await completeBatch(settledBatch, state);
+      if (!deliveryClosed && sourceReceiptAdmission.isRequesterCurrent()) {
+        // Turnover before acceptance leaves findings owed to the same session's next turn.
+        await params.transitionBatch(settledBatch, state, refreshBatch);
+        return true;
       }
+      await completeBatch(settledBatch, state);
       return true;
     };
     if (
@@ -513,7 +534,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       });
     }
     let dispatchPrepared = false;
-    let dispatchAccepted = false;
     const attemptCount =
       state.status === "dispatching" ? state.attemptCount : Math.max(1, state.attemptCount + 1);
     let delivery: Awaited<ReturnType<typeof deliverSubagentAnnouncement>>;

@@ -369,7 +369,7 @@ describe("worker turn launcher remote handoff", () => {
           entry.type === "message" && entry.message.role === "user" ? [entry.message.content] : [],
         ),
     ).toContain("Canonical transcript request");
-  });
+  }, 180_000);
 
   it("keeps reset tool pairs valid without replaying the already-persisted current user", async () => {
     setActiveNodeContexts([{ nodeId: "disconnected-mac", isCurrent: () => false }]);

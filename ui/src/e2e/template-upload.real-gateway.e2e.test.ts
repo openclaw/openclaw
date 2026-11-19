@@ -3,7 +3,7 @@ import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { expect, it } from "vitest";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
 import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.ts";

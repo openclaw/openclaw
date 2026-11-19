@@ -157,8 +157,11 @@ it("forwards live status and invalidates config.get on watcher commit", async ()
       setRuntimeConfigSnapshot(candidate);
       commit("gateway.roles", candidate);
       expect(gatewayContext.getCommittedRuntimeConfig()).toBe(candidate);
-      expect(original.authority.signal?.aborted).toBe(true);
-      expect(duringActivation.authority.signal?.aborted).toBe(true);
+      expect(original.authority.signal?.aborted).toBe(false);
+      expect(duringActivation.authority.signal?.aborted).toBe(false);
+      expect(original.authority.assertCurrent).not.toThrow();
+      expect(duringActivation.authority.assertCurrent).not.toThrow();
+      await expect(capture()).rejects.toThrow();
     } finally {
       original.release();
       duringActivation?.release();

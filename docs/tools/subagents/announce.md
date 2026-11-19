@@ -23,6 +23,9 @@ have no terminal non-delivery disposition. Once the transcript owner commits the
 input, it immediately records `state: "consumed"` and the consuming run in the
 registry, before the requester source settles. Registry readers use that stored
 fact directly.
+An ordinary requester run ending or a later follow-up taking over does not discard
+the waiting results. An accepted completion turn keeps its delivery; findings not
+yet accepted remain pending for the requester's next turn.
 Consumption is distinct from sending a reply to the user. A later cancellation
 does not turn a consumed private result into failed delivery; restart recovery
 and the existing completion retention window remain unchanged.
@@ -44,7 +47,9 @@ before it calls the model. A committed result is never dispatched again. If the 
 then fails before it answers (for example the provider is unavailable), the result
 is delivered: the turn shows its own error in the chat, and the next turn reads the
 results from the transcript. If the turn answered but the answer did not reach the
-channel, or the turn ended for a recorded reason, that outcome is kept.
+channel, or the turn ended for a recorded reason, that outcome is kept. An
+unconfirmed channel send stays ambiguous even after the requester consumes the
+child result.
 
 Results that no turn committed stay owed. Cancellation before dispatch, worker
 timeout, preparation invalidation and other retryable refusals keep the wake pending
