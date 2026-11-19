@@ -327,7 +327,9 @@ export function startOpenClawStateReadOperation(
     );
     transport = selectedTransport;
     unregisterSource = source.own(() => resource.close());
-    stateAccess = await authority.acquire(() => prepareStateDatabaseReadAccess(context.admission));
+    // Prepare cold process custody before assertions consume its async path admission.
+    // Schema contention is retried when borrowing or dispatching the actual read.
+    stateAccess = await prepareStateDatabaseReadAccess(context.admission);
     signal.throwIfAborted();
     context.maintenanceScope?.assertAdmission();
     context.admission.assertCurrent();

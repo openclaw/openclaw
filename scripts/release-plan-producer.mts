@@ -35,6 +35,7 @@ const TOOLING_MODULE_PATHS = [
   "scripts/lib/actions-artifact-archive.mjs",
   "scripts/lib/bounded-response.mjs",
   "scripts/lib/canonical-json.mjs",
+  "scripts/lib/ci-node-test-evidence.mjs",
   "scripts/lib/full-release-child-request.mjs",
   "scripts/lib/npm-publish-plan.mjs",
   "scripts/lib/plain-gh.mjs",
