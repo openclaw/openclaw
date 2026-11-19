@@ -82,6 +82,8 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     target: { sessionKey: string; agentId?: string; sessionId: string };
     consume: (entry: InternalSessionEntry) => unknown;
   };
+  /** Set by session authorization inside a request that already passed run admission. */
+  admitted?: true;
 }): Promise<{
   error: ErrorShape | null;
   sessionScope?: SessionOperatorScope;
@@ -119,6 +121,7 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   // Check once: a run's authority is decided when its request starts and holds until it ends.
   const runtimeIdentity = params.client?.internal?.agentRuntimeIdentity;
   if (
+    !params.admitted &&
     runtimeIdentity &&
     params.context.validateAgentRuntimeApprovalAuthority &&
     !params.context.validateAgentRuntimeApprovalAuthority(runtimeIdentity)
