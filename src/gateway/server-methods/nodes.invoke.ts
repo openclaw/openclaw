@@ -34,10 +34,7 @@ import {
   respondUnavailableOnNodeInvokeErrorWithProvenance,
   parseGatewayPayload,
 } from "./nodes.helpers.js";
-import {
-  captureNodeSystemRunEventSource,
-  resolveNodeInvokeRuntimeAuthorityError,
-} from "./nodes.invoke-authority.js";
+import { captureNodeSystemRunEventSource } from "./nodes.invoke-authority.js";
 import { shouldQueueAsPendingForegroundAction } from "./nodes.invoke-foreground.js";
 import { emitTalkPttNodeEvent } from "./nodes.invoke-talk-events.js";
 import { toPendingParamsJSON } from "./nodes.pending.js";
@@ -382,8 +379,6 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             return;
           }
         }
-        const runtimeAuthorityError = () =>
-          resolveNodeInvokeRuntimeAuthorityError({ context, client });
         if (rejectDisabledUpload()) {
           return;
         }
@@ -474,14 +469,6 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           respondIfInvokeExpired();
           return;
         }
-        // Preserve the caller capability check at the final transport handoff.
-        const authorityError = runtimeAuthorityError();
-        if (authorityError) {
-          respondError(respond, ErrorCodes.INVALID_REQUEST, authorityError, {
-            details: { code: "APPROVAL_AUTHORITY_CLOSED" },
-          });
-          return;
-        }
         if (rejectDisabledUpload()) {
           return;
         }
@@ -504,9 +491,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             idleTimeoutMs: nodeInvokeStream.idleTimeoutMs,
           }),
           isDispatchAuthorized: () =>
-            isUploadAllowed() &&
-            (nodeInvokeStream?.isRuntimeCurrent() ?? true) &&
-            runtimeAuthorityError() === undefined,
+            isUploadAllowed() && (nodeInvokeStream?.isRuntimeCurrent() ?? true),
           onDispatchReady: (invokeId) => {
             nodeCommandDispatched = true;
             nodeInvokeStream?.onDispatchReady(invokeId);

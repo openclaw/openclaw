@@ -7,25 +7,7 @@ import {
 import type { NodeSystemRunEventSource } from "../node-invoke.types.js";
 import { captureGatewayOperatorContinuation } from "../operator-run-recovery.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
-import type {
-  GatewayClient,
-  GatewayRequestContext,
-  GatewayRequestHandlerOptions,
-} from "./types.js";
-
-export function resolveNodeInvokeRuntimeAuthorityError(params: {
-  context: Pick<GatewayRequestContext, "validateAgentRuntimeApprovalAuthority">;
-  client: GatewayClient | null;
-}): string | undefined {
-  const callerIdentity = params.client?.internal?.agentRuntimeIdentity;
-  if (
-    callerIdentity &&
-    params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) !== true
-  ) {
-    return "agent runtime approval authority closed before node dispatch";
-  }
-  return undefined;
-}
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
 /** Capture the original caller before the node connection becomes the event producer. */
 export async function captureNodeSystemRunEventSource(
