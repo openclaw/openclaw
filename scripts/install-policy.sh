@@ -312,11 +312,13 @@ should_prefer_offline_pnpm_install() {
 resolve_git_openclaw_ref() {
     local requested="${OPENCLAW_VERSION:-latest}"
     local resolved_version=""
+    local beta_by_flag=0
     # --beta selects the beta channel for git installs too; the npm and Bun
     # engines read it the same way before their dist-tag lookup. An explicit
     # version or branch still wins, as it does for those engines.
     if [[ "${USE_BETA:-0}" == "1" && ( -z "${OPENCLAW_VERSION:-}" || "${OPENCLAW_VERSION}" == "latest" || "${OPENCLAW_VERSION}" == "next" ) ]]; then
         requested=beta
+        beta_by_flag=1
     fi
 
     case "$requested" in
@@ -324,6 +326,17 @@ resolve_git_openclaw_ref() {
             resolved_version="$(installer_npm view "openclaw" "dist-tags.${requested:-latest}" 2>/dev/null || true)"
             if [[ -n "$resolved_version" ]]; then
                 echo "v${resolved_version}"
+            elif [[ "$beta_by_flag" == "1" ]]; then
+                # Flag-selected beta with no resolvable beta dist-tag (e.g. no
+                # npm on a fresh host, since ref resolution precedes ensure_node)
+                # falls back through latest resolution, matching the documented
+                # contract; an explicit --version beta keeps its literal meaning.
+                resolved_version="$(installer_npm view "openclaw" "dist-tags.latest" 2>/dev/null || true)"
+                if [[ -n "$resolved_version" ]]; then
+                    echo "v${resolved_version}"
+                else
+                    echo "main"
+                fi
             elif [[ -z "$requested" || "$requested" == "latest" ]]; then
                 echo "main"
             else
